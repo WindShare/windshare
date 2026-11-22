@@ -129,7 +129,7 @@ export class BrowserDirectZipOperation implements BoundReceiveOperation {
   }
 
   readonly plans: PlanExecutionAuthority = {
-    openDirectTree: unavailable, openDirectAtomic: unavailable,
+    openDirectTree: unavailable,
     openWorkspaceOriginal: unavailable, openWorkspaceZip: unavailable, preparePortable: unavailable,
     openDirectResumableZip: async (intent, signal) => {
       signal.throwIfAborted()

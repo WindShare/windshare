@@ -32,7 +32,6 @@ export type ReceiveLifecycleTerminalStateName =
 
 export type ReceiveLifecyclePlanName =
   | 'direct-tree'
-  | 'direct-atomic'
   | 'workspace-then-publish'
   | 'portable-handoff'
   | 'direct-resumable-zip'
@@ -86,7 +85,6 @@ const RECEIVE_TERMINAL_STATES = new Set<string>([
 
 const RECEIVE_PLAN_NAMES = new Set<string>([
   'direct-tree',
-  'direct-atomic',
   'workspace-then-publish',
   'portable-handoff',
   'direct-resumable-zip',

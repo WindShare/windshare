@@ -113,12 +113,12 @@ describe('diagnostic context projection', () => {
       }),
       output: source({
         generation: 7n,
-        planKind: 'direct-atomic',
+        planKind: 'workspace-then-publish',
       }),
     })
 
     expect(context).toEqual({
-      output: { generation: '7', plan_kind: 'direct_atomic' },
+      output: { generation: '7', plan_kind: 'workspace_then_publish' },
     })
   })
 

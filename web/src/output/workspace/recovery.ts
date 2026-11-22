@@ -53,17 +53,6 @@ export type AbandonedOperationObservation =
       lastVerifiedRecordDigest: string
     }>
   | Readonly<{
-      kind: 'target-rolled-back'
-      receiptDigest: string
-      lastVerifiedRecordDigest: string
-    }>
-  | Readonly<{
-      kind: 'atomic-commit'
-      outcome: 'committed' | 'not-committed' | 'unknown'
-      receiptDigest: string
-      lastVerifiedRecordDigest: string
-    }>
-  | Readonly<{
       kind: 'restart-preparation'
       preparationId: string
       cleanupReceiptDigest: string
@@ -151,7 +140,6 @@ function recoverObservedState(
   switch (state.kind) {
     case 'receiving': return recoverReceiving(state, observation, context)
     case 'finalizing-tree': return recoverFinalizingTree(state, observation)
-    case 'committing-atomic': return recoverAtomicCommit(state, observation)
     case 'preparing': return recoverPreparation(state, observation)
     case 'materialization-sealed':
     case 'packaging': return recoverPackaging(state, observation)
@@ -171,16 +159,6 @@ function recoverReceiving(
   observation: AbandonedOperationObservation,
   context: RecoveryContext,
 ): RecoveryReduction {
-  if (context.planKind === 'direct-atomic') {
-    if (observation.kind !== 'target-rolled-back') {
-      return attentionReduction(state, 'target-ownership-unknown', lastDigest(observation))
-    }
-    return reduction(nextReceiveLifecycleState(state, {
-      kind: 'restart-required',
-      reason: 'direct-atomic-rolled-back',
-      receiptDigest: observation.receiptDigest,
-    }), 'restart-required')
-  }
   if (observation.kind !== 'verified-receive') {
     const reason = context.planKind === 'direct-tree'
       ? 'target-ownership-unknown'
@@ -223,27 +201,6 @@ function recoverFinalizingTree(
     selectionFacts: observation.selectionFacts,
     partialReceiptDigest: observation.receiptDigest,
   }), 'resume-receive')
-}
-
-function recoverAtomicCommit(
-  state: Extract<ReceiveLifecycleState, { kind: 'committing-atomic' }>,
-  observation: AbandonedOperationObservation,
-): RecoveryReduction {
-  if (observation.kind !== 'atomic-commit' || observation.outcome === 'unknown') {
-    return attentionReduction(state, 'publication-unknown', lastDigest(observation))
-  }
-  if (observation.outcome === 'committed') {
-    return reduction(nextReceiveLifecycleState(state, {
-      kind: 'published',
-      receiptDigest: observation.receiptDigest,
-      cleanupState: 'cleanup-pending',
-    }), 'published')
-  }
-  return reduction(nextReceiveLifecycleState(state, {
-    kind: 'restart-required',
-    reason: 'direct-atomic-rolled-back',
-    receiptDigest: observation.receiptDigest,
-  }), 'restart-required')
 }
 
 function recoverPreparation(
@@ -435,15 +392,8 @@ function assertDurableRecoveryPlan(
       state.kind !== 'published') {
     throw new TypeError('lifecycle state does not belong to DirectTree recovery')
   }
-  if (planKind === 'direct-atomic' &&
-      state.kind !== 'receiving' &&
-      state.kind !== 'committing-atomic' &&
-      state.kind !== 'published') {
-    throw new TypeError('lifecycle state does not belong to DirectAtomic recovery')
-  }
   if (planKind === 'workspace-then-publish' &&
       (state.kind === 'finalizing-tree' ||
-       state.kind === 'committing-atomic' ||
        state.kind === 'partial-directory' ||
        state.kind === 'restart-required')) {
     throw new TypeError('lifecycle state does not belong to Workspace recovery')

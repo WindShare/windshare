@@ -17,7 +17,6 @@ import {
 
 describe('v2 cancellation settlement', () => {
   it.each([
-    { planKind: 'direct-atomic', lifecycle: 'restart-required' },
     { planKind: 'workspace-then-publish', lifecycle: 'resumable-receive' },
     { planKind: 'portable-handoff', lifecycle: 'restart-required' },
   ] as const)('pauses $planKind at its own stable cut during an authenticated range read', async ({
@@ -77,7 +76,7 @@ describe('v2 cancellation settlement', () => {
     const readers = readerFixture([file])
     const plans = planAuthorityFixture()
     const intent = await receiveIntentFixture({
-      planKind: 'direct-atomic',
+      planKind: 'workspace-then-publish',
       artifactKind: 'original-file',
       selection,
       file,
@@ -95,9 +94,9 @@ describe('v2 cancellation settlement', () => {
     }).run(controller.signal)
 
     expect(result.worker.status).toBe('Paused')
-    expect(result.lifecycle.kind).toBe('restart-required')
+    expect(result.lifecycle.kind).toBe('discarded')
     expect(plans.settlements).toEqual([])
-    expect(plans.pauses).toEqual(['direct-atomic'])
+    expect(plans.pauses).toEqual([])
     expect(readers.revisionRequests).toEqual([])
     expect(readers.blockRequests).toEqual([])
   })

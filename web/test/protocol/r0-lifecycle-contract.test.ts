@@ -157,15 +157,6 @@ describe('R0 scheduling, recovery, and lifecycle contract', () => {
           completion: 'prefix-visible',
         },
         {
-          artifact: 'original-file',
-          layout: 'single-file-proof',
-          plan: 'direct-atomic',
-          binding: 'atomic-target',
-          guaranteeProfiles: ['managed-atomic'],
-          preparation: 'none',
-          completion: 'published-after-verified-commit',
-        },
-        {
           artifact: 'zip-archive',
           layout: 'result-root',
           plan: 'direct-resumable-zip',

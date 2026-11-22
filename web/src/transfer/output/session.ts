@@ -25,7 +25,6 @@ import {
   type MaterializationDirectory,
 } from '../directory-admission'
 import type {
-  DirectAtomicPlan,
   DirectResumableZipPlan,
   DirectTreePlan,
   MaterializationPlan,
@@ -134,14 +133,6 @@ export interface DirectTreeExecution extends PlanExecutionBase<DirectTreePlan> {
   stop?(request: PlanStopRequest, signal: AbortSignal): Promise<ReceiveLifecycleState>
 }
 
-export interface DirectAtomicExecution extends PlanExecutionBase<DirectAtomicPlan> {
-  readonly planKind: 'direct-atomic'
-  settle(
-    request: PlanSettlementRequest<SuccessfulTransferWorkerSettlement>,
-    signal: AbortSignal,
-  ): Promise<ReceiveLifecycleState>
-}
-
 export interface DirectResumableZipExecution extends
   PlanExecutionBase<DirectResumableZipPlan, DirectZipOutputSessionV1> {
   readonly planKind: 'direct-resumable-zip'
@@ -175,7 +166,6 @@ export interface PortableExecution extends PlanExecutionBase<PortableHandoffPlan
 
 export type PlanExecution =
   | DirectTreeExecution
-  | DirectAtomicExecution
   | DirectResumableZipExecution
   | WorkspaceExecution
   | PortableExecution
@@ -228,10 +218,6 @@ export interface PlanExecutionAuthority {
     intent: ReceiveIntentForPlan<DirectTreePlan>,
     signal: AbortSignal,
   ): Promise<DirectTreeExecution>
-  openDirectAtomic(
-    intent: ReceiveIntentForPlan<DirectAtomicPlan>,
-    signal: AbortSignal,
-  ): Promise<DirectAtomicExecution>
   openDirectResumableZip(
     intent: DirectZipIntent,
     signal: AbortSignal,

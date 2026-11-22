@@ -1,5 +1,4 @@
 import {
-  createDirectAtomicPlan,
   createDirectTreePlan,
   createDirectResumableZipPlan,
   createPortableHandoffPlan,
@@ -115,9 +114,6 @@ async function bindPlan(
     case 'direct-tree':
       requireDestinationBinding(route, candidate)
       return createDirectTreePlan(action.artifact, candidate.reservation)
-    case 'direct-atomic':
-      requireDestinationBinding(route, candidate)
-      return createDirectAtomicPlan(action.artifact, candidate.reservation)
     case 'workspace-then-publish':
       if (candidate.kind !== 'workspace-binding' ||
           candidate.workspaceRouteId !== route.workspace.routeId ||
@@ -151,7 +147,7 @@ async function bindPlan(
 }
 
 function requireDestinationBinding(
-  route: Extract<OfferedMaterializationRoute, { kind: 'direct-tree' | 'direct-atomic' }>,
+  route: Extract<OfferedMaterializationRoute, { kind: 'direct-tree' }>,
   candidate: CandidateMaterializationBinding,
 ): asserts candidate is Extract<CandidateMaterializationBinding, { kind: 'destination-reservation' }> {
   if (candidate.kind !== 'destination-reservation' ||

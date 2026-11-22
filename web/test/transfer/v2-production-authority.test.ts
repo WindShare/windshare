@@ -38,7 +38,6 @@ import { snapshotMaterializationRootRelativePath } from '../../src/transfer/job/
 import {
   disabledOutputExecutionProfile,
   outputSessionIdentity,
-  type DirectAtomicExecution,
   type DirectTreeExecution,
   type ExactPreparationEvidence,
   type OutputSessionIdentity,
@@ -303,18 +302,12 @@ describe('production plan execution authority', () => {
       new AbortController().signal,
     )
 
-    const directAtomicIntent = await receiveIntentFixture({
-      planKind: 'direct-atomic',
-      artifactKind: 'original-file',
-      selection,
-      file,
-    })
-    const atomicAuthority = await createPlanExecutionAuthority({
-      intent: directAtomicIntent,
+    const missingRouteAuthority = await createPlanExecutionAuthority({
+      intent: directTreeIntent,
       routes: routeRegistry(),
     })
-    await expect(atomicAuthority.openDirectAtomic(
-      asDirectAtomic(directAtomicIntent),
+    await expect(missingRouteAuthority.openDirectTree(
+      asDirectTree(directTreeIntent),
       new AbortController().signal,
     )).rejects.toBeInstanceOf(PlanRouteUnavailableError)
 
@@ -378,29 +371,29 @@ describe('production plan execution authority', () => {
 
   it('rejects a foreign operation before invoking an acquired route', async () => {
     const file = fileEntry(identity(11), 'payload.bin', 4n)
-    const selection = selectOnlyFile(file)
+    const selection = new SelectionPolicy(true)
     const bound = await receiveIntentFixture({
-      planKind: 'direct-atomic',
-      artifactKind: 'original-file',
+      planKind: 'direct-tree',
+      artifactKind: 'directory-tree',
       selection,
       file,
     })
     const foreign = await receiveIntentFixture({
-      planKind: 'direct-atomic',
-      artifactKind: 'original-file',
+      planKind: 'direct-tree',
+      artifactKind: 'directory-tree',
       selection,
       file,
     })
     const open = vi.fn(async (
-      intent: Parameters<NonNullable<PlanExecutionRouteRegistry['directAtomic']>['open']>[0],
-    ) => directAtomicExecution(intent))
+      intent: Parameters<NonNullable<PlanExecutionRouteRegistry['directTree']>['open']>[0],
+    ) => directTreeExecution(intent))
     const authority = await createPlanExecutionAuthority({
       intent: bound,
-      routes: routeRegistry({ directAtomic: { open } }),
+      routes: routeRegistry({ directTree: { open } }),
     })
 
-    await expect(authority.openDirectAtomic(
-      asDirectAtomic(foreign),
+    await expect(authority.openDirectTree(
+      asDirectTree(foreign),
       new AbortController().signal,
     )).rejects.toThrow('another receive operation')
     expect(open).not.toHaveBeenCalled()
@@ -409,21 +402,21 @@ describe('production plan execution authority', () => {
   it('snapshots the acquired callback instead of following later registry mutation', async () => {
     const file = fileEntry(identity(11), 'payload.bin', 4n)
     const intent = await receiveIntentFixture({
-      planKind: 'direct-atomic',
-      artifactKind: 'original-file',
-      selection: selectOnlyFile(file),
+      planKind: 'direct-tree',
+      artifactKind: 'directory-tree',
+      selection: new SelectionPolicy(true),
       file,
     })
-    const original = vi.fn(async () => directAtomicExecution(intent))
-    const replacement = vi.fn(async () => directAtomicExecution(intent))
+    const original = vi.fn(async () => directTreeExecution(intent))
+    const replacement = vi.fn(async () => directTreeExecution(intent))
     const route = { open: original }
     const authority = await createPlanExecutionAuthority({
       intent,
-      routes: routeRegistry({ directAtomic: route }),
+      routes: routeRegistry({ directTree: route }),
     })
     route.open = replacement
 
-    await authority.openDirectAtomic(asDirectAtomic(intent), new AbortController().signal)
+    await authority.openDirectTree(asDirectTree(intent), new AbortController().signal)
     expect(original).toHaveBeenCalledOnce()
     expect(replacement).not.toHaveBeenCalled()
   })
@@ -755,15 +748,6 @@ function directTreeExecution(intent: ReceiveIntent): DirectTreeExecution {
   }
 }
 
-function directAtomicExecution(intent: ReceiveIntent): DirectAtomicExecution {
-  return {
-    planKind: 'direct-atomic',
-    output: testOutput(),
-    pause: async () => discardedState(intent),
-    settle: async () => publishedState(intent),
-  }
-}
-
 function workspaceExecution(intent: ReceiveIntent): WorkspaceExecution {
   return {
     planKind: 'workspace-then-publish',
@@ -842,14 +826,6 @@ function asDirectTree(intent: ReceiveIntent): Parameters<
 >[0] {
   return intent as Parameters<
     Awaited<ReturnType<typeof createPlanExecutionAuthority>>['openDirectTree']
-  >[0]
-}
-
-function asDirectAtomic(intent: ReceiveIntent): Parameters<
-  Awaited<ReturnType<typeof createPlanExecutionAuthority>>['openDirectAtomic']
->[0] {
-  return intent as Parameters<
-    Awaited<ReturnType<typeof createPlanExecutionAuthority>>['openDirectAtomic']
   >[0]
 }
 

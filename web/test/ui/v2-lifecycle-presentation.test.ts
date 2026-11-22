@@ -387,7 +387,7 @@ describe('retained usage and lifecycle-valid actions', () => {
     })
     expect(presentation.actions.map((action) => action.kind)).toEqual(['save', 'delete'])
 
-    expect(present(state, ZIP, 'direct-atomic', { ownedBytes: 1_024n }).usage).toBeNull()
+    expect(present(state, ZIP, 'direct-tree', { ownedBytes: 1_024n }).usage).toBeNull()
   })
 
   it('offers continuation and explicit discard for retained progress', () => {

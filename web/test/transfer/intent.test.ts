@@ -18,7 +18,6 @@ import {
   createArtifactChoiceIdentity,
   createCatalogRootDirectoryTreeArtifact,
   createDirectorySelectionResultRoot,
-  createDirectAtomicPlan,
   createDirectResumableZipPlan,
   createDirectTreePlan,
   createFSAOwnedFileBinding,
@@ -167,7 +166,6 @@ describe('ReceiveIntent canonical authority', () => {
       reservedName: 'report.txt',
       collisionIndex: 0,
     })
-    const directAtomic = await createDirectAtomicPlan(original, atomicReservation)
     const workspace = await createWorkspaceBinding({
       operationId,
       workspaceId: identity(26),
@@ -216,7 +214,6 @@ describe('ReceiveIntent canonical authority', () => {
       ...fsaReservation,
       fsaLayoutVersion: 0,
     } as never, resultTree)).rejects.toThrow(/layout version/u)
-    expect(directAtomic.kind).toBe('direct-atomic')
     expect(atomicReservation.requestedName).toBe('report.txt')
     expect(directZip.kind).toBe('direct-resumable-zip')
     expect(directBinding.guarantees).toEqual(fsaOwnedFileGuarantees())
@@ -257,8 +254,6 @@ describe('ReceiveIntent canonical authority', () => {
     expect(browserHandoffGuarantees().delivery).toBe('browser-handoff')
 
     await expect(createDirectTreePlan(singleTree, atomicReservation)).rejects.toThrow()
-    await expect(createDirectAtomicPlan(resultTree, fsaReservation)).rejects.toThrow()
-    await expect(createDirectAtomicPlan(archive, atomicReservation)).rejects.toThrow()
     await expect(createWorkspaceBinding({
       operationId,
       workspaceId: identity(28),
@@ -273,7 +268,6 @@ describe('ReceiveIntent canonical authority', () => {
 
     for (const [artifact, plan, intentSelection] of [
       [resultTree, directTree, selectionSpec],
-      [original, directAtomic, selectionSpec],
       [archive, directZip, selectionSpec],
       [archive, workspacePlan, selectionSpec],
       [original, portablePlan, pathSelectionSpec],
@@ -302,20 +296,24 @@ describe('ReceiveIntent canonical authority', () => {
       sourcePath: 'report.txt',
       suggestedName: 'report.txt',
     })
-    const reservation = await createManagedAtomicReservation({
+    const treeArtifact = await createSingleFileDirectoryTreeArtifact({
+      fileId: identity(60),
+      sourcePath: 'report.txt',
+      outputName: 'report.txt',
+    })
+    const reservation = await createFSANamedEntryReservation({
       operationId: identity(61),
       reservationId: identity(62),
-      artifact,
+      artifact: treeArtifact,
       authorityRef: identity(63, 32),
-      nameChooser: 'application-chosen',
-      requestedName: 'report.txt',
-      reservedName: 'report.txt',
+      logicalReservedName: 'report.txt',
+      physicalName: 'report.txt',
       collisionIndex: 0,
     })
-    const directPlan = await createDirectAtomicPlan(artifact, reservation)
+    const directPlan = await createDirectTreePlan(treeArtifact, reservation)
     const directIntent = await createReceiveIntent({
       selection: selectionSpec,
-      artifact,
+      artifact: treeArtifact,
       plan: directPlan,
     })
     const workspace = await createWorkspaceBinding({
@@ -368,7 +366,7 @@ describe('ReceiveIntent canonical authority', () => {
       )],
       ['unsorted selection rules', swapNodeSelectionRules(directBytes)],
       ['zero operation identity', zeroDirectOperationIdentity(directBytes)],
-      ['wrong managed guarantee', mutateManagedGuaranteeNameChooser(directBytes, 3)],
+      ['wrong reservation guarantee', mutateReservationGuaranteeNameChooser(directBytes, 3)],
       ['artifact and plan mismatch', malformedReceiveIntentEnvelope(
         selectionSpec.canonicalBytes,
         otherArtifact.canonicalBytes,
@@ -385,7 +383,7 @@ describe('ReceiveIntent canonical authority', () => {
         1,
       )],
       ['portable limit drift', mutatePortableArtifactLimit(portableIntent.canonicalBytes)],
-      ['artifact name drift', mutateOriginalArtifactName(directBytes)],
+      ['artifact name drift', mutateOriginalArtifactName(workspaceIntent.canonicalBytes)],
     ]
 
     for (const [name, encoded] of malformed) {
@@ -465,17 +463,13 @@ describe('ReceiveIntent input integrity', () => {
       sourcePath: 'report.txt',
       suggestedName: 'report.txt',
     })
-    const reservation = await createManagedAtomicReservation({
+    const workspace = await createWorkspaceBinding({
       operationId: identity(41),
-      reservationId: identity(42),
+      workspaceId: identity(42),
       artifact,
-      authorityRef: identity(43, 32),
-      nameChooser: 'application-chosen',
-      requestedName: 'report.txt',
-      reservedName: 'report.txt',
-      collisionIndex: 0,
+      repositoryRef: identity(43, 32),
     })
-    const plan = await createDirectAtomicPlan(artifact, reservation)
+    const plan = await createWorkspaceThenPublishPlan(artifact, workspace)
     const intent = await createReceiveIntent({ selection: selectionSpec, artifact, plan })
     const forgedDigest = { ...intent, digest: identity(44, 32) } as ReceiveIntent
     const forgedOperation = { ...intent, operationId: identity(45) } as ReceiveIntent
@@ -630,7 +624,7 @@ function zeroDirectOperationIdentity(value: Uint8Array): Uint8Array {
   return mutated
 }
 
-function mutateManagedGuaranteeNameChooser(value: Uint8Array, byte: number): Uint8Array {
+function mutateReservationGuaranteeNameChooser(value: Uint8Array, byte: number): Uint8Array {
   const binding = planBinding(value)
   let offset = binding.payloadOffset +
     recordFieldsOffset(DESTINATION_RESERVATION_TEST_DOMAIN) + 1

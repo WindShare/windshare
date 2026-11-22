@@ -82,7 +82,7 @@ export async function planZipLayout(input: PlanZipLayoutInput): Promise<SealedZi
 }
 
 /**
- * Progressive DirectAtomic authority. Appends are immutable and canonical-order only;
+ * Progressive archive layout ledger. Appends are immutable and canonical-order only;
  * discovery or member failure permanently removes the ability to produce close proof.
  */
 export class ZipLayoutLedgerV1 {

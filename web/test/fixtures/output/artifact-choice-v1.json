@@ -35,21 +35,6 @@
     },
     {
       "expected": {
-        "artifactChoiceId": "dcQ_3FoLv3QOsDlvHjo4HBPWs4evMgjqlxwyqF6XVCY",
-        "canonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LWNob2ljZS92MQABAAAAAAAAAAEBAAAAAAAAAAECAAAAAAAAAAEDAAAAAAAAAAEA"
-      },
-      "input": {
-        "artifactKind": "original-file",
-        "guaranteeProfile": "managed-atomic",
-        "materializationKind": "direct-atomic",
-        "preparation": "none"
-      },
-      "name": "original-file-direct-atomic",
-      "policyAvailability": "not-required",
-      "routeSupport": "available"
-    },
-    {
-      "expected": {
         "artifactChoiceId": "YyVnGAPMuLOWbpEwGDuAOiLdmvI5_cWN7cip-W4n18s",
         "canonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LWNob2ljZS92MQABAAAAAAAAAAEBAAAAAAAAAAEDAAAAAAAAAAEDAAAAAAAAAAEA"
       },

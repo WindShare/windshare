@@ -21,9 +21,7 @@ import { FaultScope, OutputFaultCode, outputFault } from '../../src/transfer/fai
 import {
   createCatalogRootDirectoryTreeArtifact,
   createDestinationReservationID,
-  createDirectAtomicPlan,
   createDirectTreePlan,
-  createManagedAtomicReservation,
   createNativeContainerRootReservation,
   createOperationID,
   createOriginalFileArtifact,
@@ -49,7 +47,6 @@ import {
   outputSessionIdentity,
   snapshotOpenedOutputRevision,
   snapshotOutputFile,
-  type DirectAtomicExecution,
   type DirectTreeExecution,
   type ExactPreparationEvidence,
   type ExactSingleFileEvidence,
@@ -226,24 +223,6 @@ export async function receiveIntentFixture(input: {
         authorityRef: digestIdentity(41),
       })
       plan = await createDirectTreePlan(artifact, reservation)
-      break
-    }
-    case 'direct-atomic': {
-      let requestedName = 'invalid'
-      if (artifact.kind === 'original-file' || artifact.kind === 'zip-archive') {
-        requestedName = artifact.suggestedName
-      }
-      const reservation = await createManagedAtomicReservation({
-        operationId,
-        reservationId: createDestinationReservationID(),
-        artifact,
-        authorityRef: digestIdentity(42),
-        nameChooser: 'application-chosen',
-        requestedName,
-        reservedName: requestedName,
-        collisionIndex: 0,
-      })
-      plan = await createDirectAtomicPlan(artifact, reservation)
       break
     }
     case 'workspace-then-publish': {
@@ -678,23 +657,6 @@ export function planAuthorityFixture(input: {
       }
       return execution
     },
-    openDirectAtomic: async (intent) => {
-      routes.push('direct-atomic')
-      const execution: DirectAtomicExecution = {
-        planKind: 'direct-atomic',
-        output,
-        settle: async ({ worker }) => {
-          settlements.push(`direct-atomic:${worker.status}`)
-          if (input.failSettlement === true) throw new Error('fixture settlement failure')
-          return publishedState(intent)
-        },
-        pause: async (request, signal) => {
-          pauseSignals.push(signal)
-          return pause(intent, request)
-        },
-      }
-      return execution
-    },
     openDirectResumableZip: async () => {
       routes.push('direct-resumable-zip')
       throw new TypeError('generic plan fixture has no direct ZIP writer runtime')
@@ -972,7 +934,6 @@ function pauseState(
         selectionFacts,
         expiresAt: 1000,
       })
-    case 'direct-atomic': return restartState(intent, 'direct-atomic-rolled-back')
     case 'portable-handoff': return restartState(intent, 'portable-aborted')
     case 'direct-resumable-zip': return restartState(intent, 'target-deleted')
   }

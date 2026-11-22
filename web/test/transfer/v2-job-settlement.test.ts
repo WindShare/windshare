@@ -301,7 +301,7 @@ describe('v2 plan settlement', () => {
     const readers = readerFixture([file], [], { failRevisionFor: file.idText })
     const plans = planAuthorityFixture()
     const intent = await receiveIntentFixture({
-      planKind: 'direct-atomic',
+      planKind: 'workspace-then-publish',
       artifactKind: 'original-file',
       selection,
       file,
@@ -317,9 +317,9 @@ describe('v2 plan settlement', () => {
     }).run()
 
     expect(result.worker.status).toBe('CompletedWithErrors')
-    expect(result.lifecycle.kind).toBe('restart-required')
+    expect(result.lifecycle.kind).toBe('resumable-receive')
     expect(plans.settlements).toEqual([])
-    expect(plans.pauses).toEqual(['direct-atomic'])
+    expect(plans.pauses).toEqual(['workspace-then-publish'])
   })
 
   it.each([
@@ -369,7 +369,7 @@ describe('v2 plan settlement', () => {
     const readers = readerFixture([file])
     const plans = planAuthorityFixture({ failSettlement: true })
     const intent = await receiveIntentFixture({
-      planKind: 'direct-atomic',
+      planKind: 'workspace-then-publish',
       artifactKind: 'original-file',
       selection,
       file,
@@ -385,10 +385,10 @@ describe('v2 plan settlement', () => {
     }).run()
 
     expect(result.worker.status).toBe('Succeeded')
-    expect(result.lifecycle.kind).toBe('restart-required')
+    expect(result.lifecycle.kind).toBe('resumable-receive')
     expect(result.abortReason).toEqual(expect.any(Error))
-    expect(plans.settlements).toEqual(['direct-atomic:Succeeded'])
-    expect(plans.pauses).toEqual(['direct-atomic'])
+    expect(plans.settlements).toEqual(['workspace-then-publish:Succeeded'])
+    expect(plans.pauses).toEqual(['workspace-then-publish'])
     expect(plans.output.commits).toEqual([file.idText])
   })
 
@@ -562,7 +562,7 @@ describe('v2 terminal settlement authority', () => {
     const readers = readerFixture([file], [], { failRevisionFor: file.idText })
     const plans = planAuthorityFixture({ hangPause: true })
     const intent = await receiveIntentFixture({
-      planKind: 'direct-atomic',
+      planKind: 'portable-handoff',
       artifactKind: 'original-file',
       selection,
       file,
@@ -581,8 +581,8 @@ describe('v2 terminal settlement authority', () => {
     expect(result.worker.status).toBe('CompletedWithErrors')
     expect(result.lifecycle.kind).toBe('needs-attention')
     expect(plans.settlements).toEqual([])
-    expect(plans.pauses).toEqual(['direct-atomic'])
-    expect(plans.unknownSettlements).toEqual(['direct-atomic'])
+    expect(plans.pauses).toEqual(['portable-handoff'])
+    expect(plans.unknownSettlements).toEqual(['portable-handoff'])
     expect(plans.pauseSignals).toHaveLength(1)
     expect(plans.pauseSignals[0]?.aborted).toBe(true)
   })
@@ -595,7 +595,7 @@ describe('v2 terminal settlement authority', () => {
     const readers = readerFixture([file], [], { failRevisionFor: file.idText })
     const plans = planAuthorityFixture({ invalidPauseLifecycle: true })
     const intent = await receiveIntentFixture({
-      planKind: 'direct-atomic',
+      planKind: 'workspace-then-publish',
       artifactKind: 'original-file',
       selection,
       file,
@@ -613,8 +613,8 @@ describe('v2 terminal settlement authority', () => {
     expect(result.worker.status).toBe('CompletedWithErrors')
     expect(result.lifecycle.kind).toBe('needs-attention')
     expect(plans.settlements).toEqual([])
-    expect(plans.pauses).toEqual(['direct-atomic'])
-    expect(plans.unknownSettlements).toEqual(['direct-atomic'])
+    expect(plans.pauses).toEqual(['workspace-then-publish'])
+    expect(plans.unknownSettlements).toEqual(['workspace-then-publish'])
   })
 
   it('preserves the transfer failure when both output settlement paths fail', async () => {
@@ -625,7 +625,7 @@ describe('v2 terminal settlement authority', () => {
     const readers = readerFixture([file], [], { failRevisionFor: file.idText })
     const plans = planAuthorityFixture({ failPause: true, failUnknownSettlement: true })
     const intent = await receiveIntentFixture({
-      planKind: 'direct-atomic',
+      planKind: 'workspace-then-publish',
       artifactKind: 'original-file',
       selection,
       file,

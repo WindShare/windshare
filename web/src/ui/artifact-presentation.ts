@@ -233,7 +233,6 @@ function artifactChoiceLabel(choice: ArtifactChoice, suggestedName: string | nul
       case 'workspace-then-publish': return t.zipAfterReceive
       case 'portable-handoff': return t.checkZip
       case 'direct-tree':
-      case 'direct-atomic':
         break
     }
   }

@@ -139,7 +139,6 @@ function executionStage(facts: TaskFacts, language: Language): StageCopy {
     case 'destination-space-required': return stage('needs-action', t.freeSpace,
       t.spaceResume, state.kind)
     case 'finalizing-tree':
-    case 'committing-atomic':
     case 'materialization-sealed':
     case 'packaging':
     case 'artifact-sealed':

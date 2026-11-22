@@ -29,10 +29,8 @@ import {
 import { FaultScope, OutputFaultCode, outputFault } from '../../src/transfer/failure/fault'
 import {
   createDirectorySelectionResultRoot,
-  createDirectAtomicPlan,
   createDirectTreePlan,
   createFSANamedEntryReservation,
-  createManagedAtomicReservation,
   createOriginalFileArtifact,
   createReceiveIntent,
   createResultRootDirectoryTreeArtifact,
@@ -132,26 +130,6 @@ describe('DirectoryAdmission v2 binding', () => {
     const workspaceIntent = await workspaceIntentForOriginal()
     await expect(createDirectoryAdmissionScope(workspaceIntent))
       .rejects.toThrow(/Original files/u)
-
-    const original = workspaceIntent.artifact
-    if (original.kind !== 'original-file') throw new Error('fixture artifact mismatch')
-    const reservation = await createManagedAtomicReservation({
-      operationId: identity(60),
-      reservationId: identity(61),
-      artifact: original,
-      authorityRef: identity(62, 32),
-      nameChooser: 'application-chosen',
-      requestedName: 'report.txt',
-      reservedName: 'report.txt',
-      collisionIndex: 0,
-    })
-    const directOriginal = await createReceiveIntent({
-      selection: workspaceIntent.selection,
-      artifact: original,
-      plan: await createDirectAtomicPlan(original, reservation),
-    })
-    await expect(createDirectoryAdmissionScope(directOriginal))
-      .rejects.toThrow(/DirectAtomic original-file output/u)
   })
 
   it('rejects every directory admission for a single-file root expectation', async () => {

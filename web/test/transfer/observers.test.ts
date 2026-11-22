@@ -196,6 +196,6 @@ describe('transfer observer separation', () => {
 function minimalIntent(): ReceiveIntent {
   return {
     artifact: { kind: 'original-file' },
-    plan: { kind: 'direct-atomic' },
+    plan: { kind: 'workspace-then-publish' },
   } as ReceiveIntent
 }

@@ -22,7 +22,6 @@ import {
   type ArtifactSpec,
   type CanonicalBytes,
   type DestinationReservation,
-  type DirectAtomicPlan,
   type DirectResumableZipPlan,
   type DirectTreePlan,
   type MaterializationPlan,
@@ -69,28 +68,6 @@ export async function createDirectTreePlan(
   return canonicalValue({
     version: MATERIALIZATION_PLAN_VERSION,
     kind: 'direct-tree' as const,
-    reservation,
-    preparation: 'none' as const,
-  }, canonicalBytes)
-}
-
-export async function createDirectAtomicPlan(
-  artifactInput: ArtifactSpec,
-  reservationInput: DestinationReservation,
-): Promise<DirectAtomicPlan> {
-  const artifact = await validateArtifactSpec(artifactInput)
-  const reservation = await validateDestinationReservation(reservationInput, artifact)
-  if (artifact.kind !== 'original-file' || reservation.kind !== 'atomic-target') {
-    throw new TypeError('direct-atomic requires an original-file artifact and atomic reservation')
-  }
-  const canonicalBytes = canonicalRecord(MATERIALIZATION_PLAN_DOMAIN, [
-    Uint8Array.of(2),
-    frame(reservation.canonicalBytes),
-    frame(Uint8Array.of(0)),
-  ])
-  return canonicalValue({
-    version: MATERIALIZATION_PLAN_VERSION,
-    kind: 'direct-atomic' as const,
     reservation,
     preparation: 'none' as const,
   }, canonicalBytes)
@@ -178,10 +155,6 @@ export async function validateMaterializationPlan(
       if (input.preparation !== 'none') throw new TypeError('direct-tree preparation is invalid')
       rebuilt = await createDirectTreePlan(artifact, input.reservation)
       break
-    case 'direct-atomic':
-      if (input.preparation !== 'none') throw new TypeError('direct-atomic preparation is invalid')
-      rebuilt = await createDirectAtomicPlan(artifact, input.reservation)
-      break
     case 'workspace-then-publish':
       rebuilt = await createWorkspaceThenPublishPlan(artifact, input.workspace, input.publicationGuarantee)
       if (input.preparation !== rebuilt.preparation) {
@@ -207,7 +180,6 @@ export async function validateMaterializationPlan(
 export function materializationPlanOperationID(plan: MaterializationPlan): string {
   switch (plan.kind) {
     case 'direct-tree':
-    case 'direct-atomic':
       return plan.reservation.operationId
     case 'workspace-then-publish':
       return plan.workspace.operationId
@@ -221,7 +193,6 @@ export function materializationPlanOperationID(plan: MaterializationPlan): strin
 export function materializationPlanArtifactDigest(plan: MaterializationPlan): string {
   switch (plan.kind) {
     case 'direct-tree':
-    case 'direct-atomic':
       return plan.reservation.artifactDigest
     case 'workspace-then-publish':
       return plan.workspace.artifactDigest
@@ -235,7 +206,6 @@ export function materializationPlanArtifactDigest(plan: MaterializationPlan): st
 export function materializationPlanBindingDigest(plan: MaterializationPlan): string {
   switch (plan.kind) {
     case 'direct-tree':
-    case 'direct-atomic':
       return plan.reservation.digest
     case 'workspace-then-publish':
       return plan.workspace.digest

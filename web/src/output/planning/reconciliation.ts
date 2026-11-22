@@ -164,7 +164,6 @@ export function sameStableArtifactChoiceIdentity(
 function choiceGuaranteeProfile(plan: OfferedMaterializationPlanSemantics): GuaranteeProfile {
   switch (plan.kind) {
     case 'direct-tree':
-    case 'direct-atomic':
     case 'direct-resumable-zip':
       return plan.target.legalProfile
     case 'workspace-then-publish':
@@ -271,8 +270,6 @@ function routesWithSemantics(
   switch (semantics.kind) {
     case 'direct-tree':
       return directTreeRoutes(semantics, environment)
-    case 'direct-atomic':
-      return directAtomicRoutes(semantics, environment)
     case 'workspace-then-publish':
       return workspaceRoutes(semantics, environment)
     case 'portable-handoff':
@@ -290,16 +287,6 @@ function directTreeRoutes(
     (target.kind === 'native-directory-container' || target.kind === 'fsa-parent-directory') &&
       sameTargetSemantics(semantics.target, target)
       ? [Object.freeze({ kind: 'direct-tree' as const, target })]
-      : []))
-}
-
-function directAtomicRoutes(
-  semantics: Extract<OfferedMaterializationPlanSemantics, { kind: 'direct-atomic' }>,
-  environment: EnvironmentOffers,
-): readonly OfferedMaterializationRoute[] {
-  return Object.freeze(environment.targets.flatMap((target) =>
-    target.kind === 'managed-atomic-file-target' && sameTargetSemantics(semantics.target, target)
-      ? [Object.freeze({ kind: 'direct-atomic' as const, target })]
       : []))
 }
 
@@ -352,7 +339,6 @@ function portableRoutes(
 function routeFitsLowerBound(route: OfferedMaterializationRoute, lowerBound: bigint): boolean {
   switch (route.kind) {
     case 'direct-tree':
-    case 'direct-atomic':
     case 'direct-resumable-zip':
       return outputLowerBoundFits(route.target.hardMaximumOutputBytes, lowerBound)
     case 'workspace-then-publish':

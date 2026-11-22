@@ -168,8 +168,6 @@ export function materializationPlanSemantics(
   switch (route.kind) {
     case 'direct-tree':
       return Object.freeze({ kind: route.kind, target: targetSemantics(route.target) })
-    case 'direct-atomic':
-      return Object.freeze({ kind: route.kind, target: targetSemantics(route.target) })
     case 'workspace-then-publish':
       return Object.freeze({
         kind: route.kind,
@@ -195,8 +193,6 @@ export function sameMaterializationPlanSemantics(
   switch (left.kind) {
     case 'direct-tree':
       return right.kind === 'direct-tree' && sameTargetSemantics(left.target, right.target)
-    case 'direct-atomic':
-      return right.kind === 'direct-atomic' && sameTargetSemantics(left.target, right.target)
     case 'workspace-then-publish':
       return right.kind === 'workspace-then-publish' &&
         sameWorkspaceSemantics(left.workspace, right.workspace) &&
@@ -227,7 +223,6 @@ export function materializationRouteIdentity(
 ): MaterializationRouteIdentity {
   switch (route.kind) {
     case 'direct-tree':
-    case 'direct-atomic':
     case 'direct-resumable-zip':
       return Object.freeze({ kind: 'direct', targetRouteId: route.target.routeId })
     case 'workspace-then-publish':

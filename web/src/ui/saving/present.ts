@@ -194,12 +194,6 @@ function routeCopy(
             badges: [t.quick, t.noResume],
             notes: [t.tabCancels],
           }
-    case 'direct-atomic':
-      return {
-        summary: t.atomicSummary,
-        badges: [t.noResume],
-        notes: [t.atomicProgress],
-      }
   }
 }
 

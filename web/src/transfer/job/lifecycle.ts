@@ -13,12 +13,6 @@ const DIRECT_TREE_PAUSE_STATES: ReadonlySet<ReceiveLifecycleState['kind']> = new
   'needs-attention',
 ])
 
-const DIRECT_ATOMIC_PAUSE_STATES: ReadonlySet<ReceiveLifecycleState['kind']> = new Set([
-  'restart-required',
-  'discarded',
-  'needs-attention',
-])
-
 const DIRECT_ZIP_PAUSE_STATES: ReadonlySet<ReceiveLifecycleState['kind']> = new Set([
   'resumable-receive',
   'authorization-required',
@@ -108,9 +102,6 @@ export function validateCompletionLifecycle(
         throw new TypeError('partial DirectTree settlement must remain partial or resumable')
       }
       break
-    case 'direct-atomic':
-      if (state.kind !== 'published') throw new TypeError('DirectAtomic settlement must be published')
-      break
     case 'direct-resumable-zip':
       if (state.kind !== 'published') {
         throw new TypeError('successful Direct ZIP settlement must be verified publication')
@@ -140,9 +131,6 @@ export function validatePauseLifecycle(
   switch (intent.plan.kind) {
     case 'direct-tree':
       allowed = DIRECT_TREE_PAUSE_STATES
-      break
-    case 'direct-atomic':
-      allowed = DIRECT_ATOMIC_PAUSE_STATES
       break
     case 'direct-resumable-zip':
       allowed = DIRECT_ZIP_PAUSE_STATES

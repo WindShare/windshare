@@ -27,7 +27,6 @@ import {
   type ReceiveLifecycleStatePayload,
 } from '../../src/output/workspace'
 import {
-  createManagedAtomicReservation,
   createPortableBinding,
   createOriginalFileArtifact,
   createReceiveIntent,
@@ -87,7 +86,10 @@ const ROOT_ID = identityText(1)
 export const FILE_ID = identityText(2)
 const SESSION_ID = identityText(3)
 
-export const MANAGED_ENVIRONMENT = environment({ targets: [managedTarget()] })
+export const MANAGED_ENVIRONMENT = environment({
+  targets: [managedTarget()],
+  workspace: workspaceOffer(),
+})
 export const WORKSPACE_ENVIRONMENT = environment({
   targets: [handoffTarget()],
   workspace: workspaceOffer(),
@@ -185,7 +187,6 @@ export class FakeReceiveComposition implements ReceiveCompositionPort {
     this.startedRankings.push(Object.freeze([...preClickRanking]))
     this.authorityStartStacks.push(this.clickStack())
     const authority = new FakeStartedAuthority(
-      offered,
       intent => {
         const runtime = new FakeBoundRuntime(intent)
         if (display !== undefined) runtime.display = display
@@ -202,16 +203,13 @@ export class FakeStartedAuthority implements ArtifactPresentationAuthority {
   readonly ready: Promise<void>
   readonly releaseReasons: unknown[] = []
   readonly commitActions: ResolvedArtifactAction[] = []
-  readonly #offered: OfferedArtifactChoice
   readonly #runtime: (intent: ReceiveIntent) => FakeBoundRuntime
   runtime: FakeBoundRuntime | undefined
 
   constructor(
-    offered: OfferedArtifactChoice,
     runtime: (intent: ReceiveIntent) => FakeBoundRuntime,
     ready: Promise<void> = Promise.resolve(),
   ) {
-    this.#offered = offered
     this.#runtime = runtime
     this.ready = ready
   }
@@ -219,7 +217,7 @@ export class FakeStartedAuthority implements ArtifactPresentationAuthority {
   async commit(input: RouteCommitInput): Promise<RouteCommitResult> {
     input.signal.throwIfAborted()
     this.commitActions.push(input.action)
-    const candidate = await candidateBindingForTest(input.action, this.#offered.suggestedName)
+    const candidate = await candidateBindingForTest(input.action)
     input.signal.throwIfAborted()
     const bound = await input.freezeAtFence(candidate)
     input.signal.throwIfAborted()
@@ -315,7 +313,7 @@ export class FakeBoundRuntime implements BoundReceiveOperation {
     return {
       lifecycle: next(this.lifecycle, {
         kind: 'restart-required',
-        reason: this.intent.plan.kind === 'portable-handoff' ? 'portable-aborted' : 'direct-atomic-rolled-back',
+        reason: this.intent.plan.kind === 'portable-handoff' ? 'portable-aborted' : 'content-session-ended',
         receiptDigest: identityText(75, 32),
       }),
     }
@@ -528,7 +526,7 @@ export class FakeTransferRun {
           })
         : next(lifecycle, {
             kind: 'restart-required',
-            reason: this.intent.plan.kind === 'portable-handoff' ? 'portable-aborted' : 'direct-atomic-rolled-back',
+            reason: this.intent.plan.kind === 'portable-handoff' ? 'portable-aborted' : 'content-session-ended',
             receiptDigest: identityText(75, 32),
           }), reason)
     }, { once: true })
@@ -645,28 +643,9 @@ export async function startTransfer(
 
 export async function candidateBindingForTest(
   action: ResolvedArtifactAction,
-  suggestedName: string | null,
 ): Promise<CandidateMaterializationBinding> {
   const artifact = action.artifact
   switch (action.route.kind) {
-    case 'direct-atomic': {
-      const reservation = await createManagedAtomicReservation({
-        operationId: identityText(40),
-        reservationId: identityText(41),
-        artifact,
-        authorityRef: identityText(42, 32),
-        nameChooser: action.route.target.guarantees.nameChooser as
-          'application-chosen' | 'user-chosen',
-        requestedName: suggestedName ?? FILE_ENTRY.name,
-        reservedName: suggestedName ?? FILE_ENTRY.name,
-        collisionIndex: 0,
-      })
-      return Object.freeze({
-        kind: 'destination-reservation',
-        targetRouteId: action.route.target.routeId,
-        reservation,
-      })
-    }
     case 'workspace-then-publish': {
       const workspace = await createWorkspaceBinding({
         operationId: identityText(43),

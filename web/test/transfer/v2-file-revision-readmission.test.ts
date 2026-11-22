@@ -76,7 +76,7 @@ it.each(['agreement', 'unavailable', 'changed-on-retry'] as const)(
         yield { offset: 2n, data: Uint8Array.of(3, 4) }
       },
     }
-    const intent = await receiveIntentFixture({ planKind: 'direct-atomic', artifactKind: 'original-file', selection, file })
+    const intent = await receiveIntentFixture({ planKind: 'workspace-then-publish', artifactKind: 'original-file', selection, file })
     const trace: TransferTraceEvent[] = []
     const progress: TransferProgress[] = []
     const running = transferJobFixture({
@@ -142,7 +142,7 @@ it('continues readmitting across multiple reopens while durable progress advance
       return next.beginFile(file, signal)
     },
   } satisfies OutputSession
-  const intent = await receiveIntentFixture({ planKind: 'direct-atomic', artifactKind: 'original-file', selection, file: payload })
+  const intent = await receiveIntentFixture({ planKind: 'workspace-then-publish', artifactKind: 'original-file', selection, file: payload })
   const result = await transferJobFixture({
     catalog: catalog.catalog, selection, intent, plans: planAuthorityFixture({ output }),
     revisions: { open: async (file, signal) => {
@@ -188,7 +188,7 @@ it('deducts all earlier task attempts from recoverableBytes when a later readmis
       return testOutput([], { durability: 'ProcessRestart', initialRanges: retained }).beginFile(file, signal)
     },
   } satisfies OutputSession
-  const intent = await receiveIntentFixture({ planKind: 'direct-atomic', artifactKind: 'original-file', selection, file: payload })
+  const intent = await receiveIntentFixture({ planKind: 'workspace-then-publish', artifactKind: 'original-file', selection, file: payload })
   const progress: TransferProgress[] = []
   const result = await transferJobFixture({
     catalog: catalog.catalog, selection, intent, plans: planAuthorityFixture({ output }),
@@ -235,7 +235,7 @@ it('tracks recovered ranges re-downloaded after an earlier coverage loss across 
     readmitFile: (file, _paused, signal) =>
       testOutput([], { durability: 'ProcessRestart', initialRanges: [] }).beginFile(file, signal),
   } satisfies OutputSession
-  const intent = await receiveIntentFixture({ planKind: 'direct-atomic', artifactKind: 'original-file', selection, file: payload })
+  const intent = await receiveIntentFixture({ planKind: 'workspace-then-publish', artifactKind: 'original-file', selection, file: payload })
   const progress: TransferProgress[] = []
   const result = await transferJobFixture({
     catalog: catalog.catalog, selection, intent, plans: planAuthorityFixture({ output }),

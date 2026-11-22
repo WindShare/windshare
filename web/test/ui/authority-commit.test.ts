@@ -37,7 +37,7 @@ describe('authority commit transaction', () => {
     const authority: AuthorityCommitRoute = {
       commit: async input => {
         input.registerProvisionalOwnedEffects(provisional)
-        const candidate = await candidateBindingForTest(input.action, 'report.txt')
+        const candidate = await candidateBindingForTest(input.action)
         const frozen = await input.freezeAtFence(candidate)
         return { kind: 'bound-operation', operation: new FakeBoundRuntime(frozen.intent) }
       },
@@ -130,7 +130,7 @@ describe('authority commit transaction', () => {
     const authority: ArtifactPresentationAuthority = {
       ready: Promise.resolve(),
       commit: async input => {
-        const candidate = await candidateBindingForTest(input.action, 'report.txt')
+        const candidate = await candidateBindingForTest(input.action)
         const frozen = await input.freezeAtFence(candidate)
         return { kind: 'bound-operation', operation: new FakeBoundRuntime(frozen.intent) }
       },
@@ -159,7 +159,7 @@ describe('authority commit transaction', () => {
     const authority: ArtifactPresentationAuthority = {
       ready: Promise.resolve(),
       commit: async input => {
-        const candidate = await candidateBindingForTest(input.action, 'report.txt')
+        const candidate = await candidateBindingForTest(input.action)
         await input.freezeAtFence(candidate)
         await input.freezeAtFence(candidate)
         throw new Error('unreachable')
@@ -183,7 +183,7 @@ describe('authority commit transaction', () => {
     const authority: ArtifactPresentationAuthority = {
       ready: Promise.resolve(),
       commit: async input => {
-        const candidate = await candidateBindingForTest(input.action, 'report.txt')
+        const candidate = await candidateBindingForTest(input.action)
         const frozen = await input.freezeAtFence(candidate)
         const lifecycle = initialReceiveLifecycleState({
           operationId: identityText(99),
@@ -238,7 +238,7 @@ function provisionalAuthority(
   overrides: Partial<ProvisionalOwnedEffectAuthority> = {},
 ): ProvisionalOwnedEffectAuthority {
   return {
-    operationId: identityText(40),
+    operationId: identityText(43),
     choiceId: action.choiceId,
     installedRoute: materializationRouteIdentity(action.route),
     settleActivationFailure: () => Promise.resolve(),

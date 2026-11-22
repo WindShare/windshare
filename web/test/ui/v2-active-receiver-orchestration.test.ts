@@ -56,7 +56,7 @@ describe('v2 receiver active operation orchestration', () => {
     expect(run.intent).toBe(runtime.intent)
     expect(controller.getSnapshot().output.receiveIntent?.digest).toBe(runtime.intent.digest)
     expect(controller.getSnapshot().output.lifecyclePresentation?.actions.map(action => action.kind))
-      .toEqual([])
+      .toEqual(['pause'])
 
     run.resolve(next(runtime.lifecycle, {
       kind: 'download-started',

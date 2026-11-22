@@ -998,8 +998,7 @@ function finalProof(input: {
 
 function materializationBindingDigest(intent: ReceiveIntent): string {
   switch (intent.plan.kind) {
-    case 'direct-tree':
-    case 'direct-atomic': return intent.plan.reservation.digest
+    case 'direct-tree': return intent.plan.reservation.digest
     case 'workspace-then-publish': return intent.plan.workspace.digest
     case 'portable-handoff': return intent.plan.portable.digest
     case 'direct-resumable-zip': return intent.plan.binding.digest

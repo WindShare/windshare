@@ -21,7 +21,6 @@ import type {
 } from '../model/artifacts/choices'
 import type {
   BrowserHandoffTargetOffer,
-  DirectAtomicMaterializationRoute,
   DirectResumableZipMaterializationRoute,
   FSADirectoryContainerOffer,
   ManagedAtomicTargetOffer,
@@ -43,7 +42,6 @@ import { resolveArtifactChoiceIdentity } from './reconciliation'
 import { recommendZipRoutes } from './zip-route-recommendation'
 
 type CompleteMaterializationRoute =
-  | DirectAtomicMaterializationRoute
   | DirectResumableZipMaterializationRoute
   | WorkspaceThenPublishMaterializationRoute
   | PortableHandoffMaterializationRoute
@@ -174,8 +172,6 @@ function chooseOriginalFileRoute(
 ): CompleteMaterializationRoute | null {
   // The priority affects presentation only. Reconciliation selects the already
   // chosen family directly, so a later higher-priority route cannot replace it.
-  const atomicTarget = chooseAtomicTarget(environment, byteCountLowerBound)
-  if (atomicTarget !== null) return Object.freeze({ kind: 'direct-atomic', target: atomicTarget })
   const workspaceRoute = chooseWorkspaceRoute(environment, byteCountLowerBound)
   if (workspaceRoute !== null) return workspaceRoute
   return choosePortableRoute(environment, byteCountLowerBound)
@@ -282,7 +278,6 @@ function completeArtifactOperation(
 
 function recoveryForCompleteRoute(route: CompleteMaterializationRoute): RecoverySemantics {
   switch (route.kind) {
-    case 'direct-atomic': return 'restart-required'
     case 'workspace-then-publish': return 'workspace-resumable'
     case 'portable-handoff': return 'none'
     case 'direct-resumable-zip': return 'checkpoint-resumable'
@@ -293,8 +288,6 @@ function preparationForCompleteRoute(
   route: CompleteMaterializationRoute,
 ): PreparationRequirement {
   switch (route.kind) {
-    case 'direct-atomic':
-      return noPreparation()
     case 'workspace-then-publish':
       return Object.freeze({
         manifest: 'none',

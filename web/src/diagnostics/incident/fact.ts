@@ -182,7 +182,6 @@ const lifecycleKinds = [
   'resumable-receive',
   'source-invalidated',
   'finalizing-tree',
-  'committing-atomic',
   'materialization-sealed',
   'packaging',
   'resumable-package',
@@ -205,7 +204,6 @@ const lifecycleReasonsByKind = {
   'resumable-start': ['paused', 'failed'],
   'partial-directory': ['failures', 'stopped'],
   'restart-required': [
-    'direct-atomic-rolled-back',
     'portable-aborted',
     'source-revision-changed',
     'preparation-invalidated',

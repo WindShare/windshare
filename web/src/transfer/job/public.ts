@@ -44,7 +44,6 @@ export {
 } from '../settlement/plan-authority'
 
 export type {
-  DirectAtomicExecutionRoute,
   DirectTreeExecutionRoute,
   PlanExecutionRouteRegistry,
   PortableOriginalExecutionRoute,

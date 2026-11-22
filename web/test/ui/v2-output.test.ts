@@ -84,7 +84,7 @@ describe('artifact product presentation', () => {
     const download = requireChoices(presentArtifactOffers(await offerArtifacts(
       single,
       COMPLETE_DISCOVERY,
-      environment({ targets: [managedTarget()] }),
+      environment({ targets: [managedTarget()], workspace: workspaceOffer() }),
     )))
     const folder = requireChoices(presentArtifactOffers(await offerArtifacts(
       single,
@@ -759,7 +759,7 @@ async function singleFileObservation(epoch: bigint): Promise<Readonly<{
 }>> {
   const selection = await selectionSpec()
   const projected = projection(selection, singleFileProof(), 128n, epoch)
-  const outputEnvironment = environment({ targets: [managedTarget()] })
+  const outputEnvironment = environment({ targets: [managedTarget()], workspace: workspaceOffer() })
   const offers = await offerArtifacts(projected, COMPLETE_DISCOVERY, outputEnvironment)
   const offered = requireOfferedChoice(offers)
   const reconciled = await reconcileArtifactChoice({

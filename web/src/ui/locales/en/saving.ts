@@ -42,8 +42,6 @@ export const saving = {
   noResume: 'Not resumable',
   tabCancels: 'Refreshing or closing the tab cancels the download.',
   portableFile: 'Downloads directly via your browser. Keep this tab open until it finishes.',
-  atomicSummary: 'Saves directly to the location you choose. Must restart if interrupted.',
-  atomicProgress: 'An interrupted transfer does not keep partial progress.',
   original: 'Original file',
   folderResult: 'Files in a folder',
   zipResult: 'ZIP archive',

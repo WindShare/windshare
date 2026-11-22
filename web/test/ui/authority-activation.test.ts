@@ -154,7 +154,7 @@ describe('authority activation coordinator', () => {
     const authority: ArtifactPresentationAuthority = {
       ready: Promise.resolve(),
       async commit(input) {
-        const candidate = await candidateBindingForTest(input.action, 'report.txt')
+        const candidate = await candidateBindingForTest(input.action)
         const frozen = await input.freezeAtFence(candidate)
         const lifecycle = initialReceiveLifecycleState({
           operationId: frozen.intent.operationId,
@@ -230,7 +230,7 @@ describe('authority activation transactionality', () => {
           })
           return { kind: 'retryable-precut', receiverOperationId: identityText(61) }
         }
-        const candidate = await candidateBindingForTest(input.action, 'report.txt')
+        const candidate = await candidateBindingForTest(input.action)
         const frozen = await input.freezeAtFence(candidate)
         return { kind: 'bound-operation', operation: new FakeBoundRuntime(frozen.intent) }
       },
@@ -268,7 +268,7 @@ describe('authority activation transactionality', () => {
     const authority: ArtifactPresentationAuthority = {
       ready: Promise.resolve(),
       commit: async input => {
-        const candidate = await candidateBindingForTest(input.action, 'report.txt')
+        const candidate = await candidateBindingForTest(input.action)
         const frozen = await input.freezeAtFence(candidate)
         runtime = new FakeBoundRuntime(frozen.intent)
         fenceReached.resolve()
@@ -321,7 +321,7 @@ describe('authority activation transactionality', () => {
       const authority: ArtifactPresentationAuthority = {
         ready: Promise.resolve(),
         commit: async input => {
-          const candidate = await candidateBindingForTest(input.action, 'report.txt')
+          const candidate = await candidateBindingForTest(input.action)
           const frozen = await input.freezeAtFence(candidate)
           const lifecycle = initialReceiveLifecycleState({
             operationId: frozen.intent.operationId,
@@ -380,7 +380,7 @@ describe('authority activation transactionality', () => {
       const authority: ArtifactPresentationAuthority = {
         ready: Promise.resolve(),
         commit: async input => {
-          const candidate = await candidateBindingForTest(input.action, 'report.txt')
+          const candidate = await candidateBindingForTest(input.action)
           const frozen = await input.freezeAtFence(candidate)
           const runtime = new FakeBoundRuntime(frozen.intent)
           runtime.settleTransferAdmissionFailure = () => {
@@ -454,7 +454,7 @@ describe('post-fence activation ownership', () => {
       const authority: ArtifactPresentationAuthority = {
         ready: Promise.resolve(),
         commit: async input => {
-          const candidate = await candidateBindingForTest(input.action, 'report.txt')
+          const candidate = await candidateBindingForTest(input.action)
           const frozen = await input.freezeAtFence(candidate)
           runtime = new FakeBoundRuntime(frozen.intent)
           fenceReached.resolve()
@@ -482,16 +482,16 @@ describe('post-fence activation ownership', () => {
         harness.planning[1]?.resolve(harness.observations[1]!.offers)
         const observed = harness.observations[1]!.outcome
         if (observed.kind !== 'resolved') throw new Error('replacement did not resolve')
-        if (observed.action.route.kind !== 'direct-atomic') {
-          throw new Error('replacement did not retain the managed route')
+        if (observed.action.route.kind !== 'workspace-then-publish') {
+          throw new Error('replacement did not retain the workspace route')
         }
         const action = incompatibility === 'route'
           ? Object.freeze({
               ...observed.action,
               route: Object.freeze({
                 ...observed.action.route,
-                target: Object.freeze({
-                  ...observed.action.route.target,
+                publicationTarget: Object.freeze({
+                  ...observed.action.route.publicationTarget,
                   routeId: 'replacement-route',
                 }),
               }),

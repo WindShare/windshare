@@ -243,8 +243,6 @@ function describeLifecycle(
         t.finishingFolderHint,
         'neutral',
       )
-    case 'committing-atomic':
-      return copy(t.savingName(name), t.committing, 'neutral')
     case 'materialization-sealed':
       return copy(t.received, t.receivedHint, 'neutral')
     case 'packaging':
@@ -514,8 +512,6 @@ function restartRequiredDescription(
 ): string {
   const t = receiverCopy[language].lifecycle
   switch (reason) {
-    case 'direct-atomic-rolled-back':
-      return t.rolledBack
     case 'portable-aborted':
       return t.aborted
     case 'source-revision-changed':

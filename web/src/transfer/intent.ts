@@ -44,7 +44,6 @@ export type {
   ContainerRootReservation,
   DeliveryMode,
   DestinationReservation,
-  DirectAtomicPlan,
   DirectResumableZipPlan,
   DirectZipPolicyDigests,
   AvailableDirectZipPolicyDigests,
@@ -135,7 +134,6 @@ export {
 } from './intent/destination'
 export {
   canonicalReceiveIntentBytes,
-  createDirectAtomicPlan,
   createDirectResumableZipPlan,
   createDirectTreePlan,
   createPortableHandoffPlan,

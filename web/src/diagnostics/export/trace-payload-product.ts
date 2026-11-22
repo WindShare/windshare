@@ -52,7 +52,6 @@ const LIFECYCLE_STATES = [
   'resumable_start',
   'source_invalidated',
   'finalizing_tree',
-  'committing_atomic',
   'materialization_sealed',
   'packaging',
   'resumable_package',

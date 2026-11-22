@@ -15,7 +15,6 @@ import { ExactPreparationCollector } from './job/preparation'
 import type { AsyncBoundedQueue } from './job/scheduler'
 import type { SelectionMeasure } from './measure'
 import type {
-  DirectAtomicPlan,
   DirectResumableZipPlan,
   DirectTreePlan,
   OriginalFileArtifact,
@@ -35,7 +34,6 @@ import {
 } from './output/session'
 
 type DirectTreeIntent = ReceiveIntent & Readonly<{ plan: DirectTreePlan }>
-type DirectAtomicIntent = ReceiveIntent & Readonly<{ plan: DirectAtomicPlan }>
 type DirectResumableZipIntent = ReceiveIntent & Readonly<{
   plan: DirectResumableZipPlan
   artifact: ZipArchiveArtifact
@@ -48,7 +46,6 @@ type PortableIntent = ReceiveIntent & Readonly<{ plan: PortableHandoffPlan }>
 type MaterializationPlanAdmission = Pick<
   PlanExecutionAuthority,
   | 'openDirectTree'
-  | 'openDirectAtomic'
   | 'openDirectResumableZip'
   | 'openWorkspaceOriginal'
   | 'openWorkspaceZip'
@@ -125,7 +122,6 @@ export class TransferJobMaterialization {
   async run(intent: ReceiveIntent): Promise<TransferJobResult> {
     switch (intent.plan.kind) {
       case 'direct-tree': return this.#runDirectTree(intent as DirectTreeIntent)
-      case 'direct-atomic': return this.#runDirectAtomic(intent as DirectAtomicIntent)
       case 'direct-resumable-zip':
         return this.#runDirectResumableZip(intent as DirectResumableZipIntent)
       case 'workspace-then-publish': return this.#runWorkspace(intent as WorkspaceIntent)
@@ -158,20 +154,6 @@ export class TransferJobMaterialization {
     const measure = this.#context.discovery.measure()
     this.#context.execution.finishingStarted()
     await this.#context.execution.finalizeDirectories()
-    return this.#context.execution.completeWorkers(measure)
-  }
-
-  async #runDirectAtomic(intent: DirectAtomicIntent): Promise<TransferJobResult> {
-    const execution = validatePlanExecutionBinding(
-      intent,
-      await this.#context.admission.openDirectAtomic(intent, this.#context.signal),
-    )
-    this.#context.execution.bind(execution)
-    this.#context.execution.materializationStarted()
-    const root = this.#context.root.authenticated(await this.#context.root.load())
-    await this.#context.discovery.run(root, this.#context.discovery.createDirectFileQueue())
-    const measure = this.#context.discovery.measure()
-    this.#context.execution.finishingStarted()
     return this.#context.execution.completeWorkers(measure)
   }
 

@@ -202,17 +202,25 @@ describe('plan-specific output boundary', () => {
     const selection = new SelectionPolicy(false)
     selection.toggle(file, [identityText(2)])
     const intent = await receiveIntentFixture({
-      planKind: 'direct-atomic',
+      planKind: 'workspace-then-publish',
       artifactKind: 'original-file',
       selection,
       file,
     })
     const authority = planAuthorityFixture()
-    const execution = await authority.openDirectAtomic(
-      intent as Parameters<typeof authority.openDirectAtomic>[0],
+    const admitted = await authority.openWorkspaceOriginal(
+      intent as Parameters<typeof authority.openWorkspaceOriginal>[0],
+      {
+        fileId: file.idText,
+        containingDirectoryId: identityText(2),
+        generation: identityText(90),
+        catalogSize: file.expectedSize,
+        sourcePath: [file.name],
+      },
       new AbortController().signal,
     )
-    expect(validatePlanExecutionBinding(intent, execution).planKind).toBe('direct-atomic')
-    expect('format' in execution.output).toBe(false)
+    if (admitted.kind !== 'accepted') throw new Error('expected accepted workspace execution')
+    expect(validatePlanExecutionBinding(intent, admitted.execution).planKind).toBe('workspace-then-publish')
+    expect('format' in admitted.execution.output).toBe(false)
   })
 })

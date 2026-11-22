@@ -217,64 +217,6 @@
       },
       "expected": {
         "artifactCanonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LXNwZWMvdjEAAQEAAAAAAAAAEEFCQ0RFRkdISUpLTE1OT1AAAAAAAAAAJgAAAAAAAAACAAAAAAAAAARkb2NzAAAAAAAAAApyZXBvcnQudHh0AAAAAAAAAApyZXBvcnQudHh0",
-        "artifactChoiceCanonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LWNob2ljZS92MQABAAAAAAAAAAEBAAAAAAAAAAECAAAAAAAAAAEDAAAAAAAAAAEA",
-        "artifactChoiceId": "dcQ_3FoLv3QOsDlvHjo4HBPWs4evMgjqlxwyqF6XVCY",
-        "artifactDigest": "aBtHP5lyJZADcMPuTfeVXpPbmRxRck5lfar34xQeUBY",
-        "bindingCanonicalBytesB64Url": "d2luZHNoYXJlL2Rlc3RpbmF0aW9uLXJlc2VydmF0aW9uL3Y0AAEDAAAAAAAAABBjZGVmZ2hpamtsbW5vcHFyAAAAAAAAABBzdHV2d3h5ent8fX5_gIGCAAAAAAAAACBoG0c_mXIlkANww-5N95Vek9uZHFFyTmV9qvfjFB5QFgAAAAAAAAABAwAAAAAAAAAgg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp-goaIAAAAAAAAAPwAAAAAAAAABAwAAAAAAAAABAQAAAAAAAAABAQAAAAAAAAABAQAAAAAAAAABAQAAAAAAAAABAQAAAAAAAAABAQAAAAAAAAAKcmVwb3J0LnR4dAAAAAAAAAAKcmVwb3J0LnR4dAAAAAAAAAAEAAAAAA",
-        "bindingDigest": "8OB7SLxOz4veuQU6I4ppXT-yNt5qnruZ-73scNbqgmo",
-        "operationId": "Y2RlZmdoaWprbG1ub3Bxcg",
-        "planCanonicalBytesB64Url": "d2luZHNoYXJlL21hdGVyaWFsaXphdGlvbi1wbGFuL3Y0AAECAAAAAAAAASd3aW5kc2hhcmUvZGVzdGluYXRpb24tcmVzZXJ2YXRpb24vdjQAAQMAAAAAAAAAEGNkZWZnaGlqa2xtbm9wcXIAAAAAAAAAEHN0dXZ3eHl6e3x9fn-AgYIAAAAAAAAAIGgbRz-ZciWQA3DD7k33lV6T25kcUXJOZX2q9-MUHlAWAAAAAAAAAAEDAAAAAAAAACCDhIWGh4iJiouMjY6PkJGSk5SVlpeYmZqbnJ2en6ChogAAAAAAAAA_AAAAAAAAAAEDAAAAAAAAAAEBAAAAAAAAAAEBAAAAAAAAAAEBAAAAAAAAAAEBAAAAAAAAAAEBAAAAAAAAAAEBAAAAAAAAAApyZXBvcnQudHh0AAAAAAAAAApyZXBvcnQudHh0AAAAAAAAAAQAAAAAAAAAAAAAAAEA",
-        "receiveIntentCanonicalBytesB64Url": "d2luZHNoYXJlL3JlY2VpdmUtaW50ZW50L3Y0AAQAAAAAAAAAjHdpbmRzaGFyZS9zZWxlY3Rpb24tc3BlYy92MQABAAAAAAAAABAQERITFBUWFxgZGhscHR4fAAAAAAAAABAgISIjJCUmJygpKissLS4vAAAAAAAAAAECAAAAAAAAAAEAAAAAAAAAAAIAAAAAAAAAD2RvY3MvcmVwb3J0LnR4dAAAAAAAAAAGcGhvdG9zAAAAAAAAAHV3aW5kc2hhcmUvYXJ0aWZhY3Qtc3BlYy92MQABAQAAAAAAAAAQQUJDREVGR0hJSktMTU5PUAAAAAAAAAAmAAAAAAAAAAIAAAAAAAAABGRvY3MAAAAAAAAACnJlcG9ydC50eHQAAAAAAAAACnJlcG9ydC50eHQAAAAAAAABXHdpbmRzaGFyZS9tYXRlcmlhbGl6YXRpb24tcGxhbi92NAABAgAAAAAAAAEnd2luZHNoYXJlL2Rlc3RpbmF0aW9uLXJlc2VydmF0aW9uL3Y0AAEDAAAAAAAAABBjZGVmZ2hpamtsbW5vcHFyAAAAAAAAABBzdHV2d3h5ent8fX5_gIGCAAAAAAAAACBoG0c_mXIlkANww-5N95Vek9uZHFFyTmV9qvfjFB5QFgAAAAAAAAABAwAAAAAAAAAgg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp-goaIAAAAAAAAAPwAAAAAAAAABAwAAAAAAAAABAQAAAAAAAAABAQAAAAAAAAABAQAAAAAAAAABAQAAAAAAAAABAQAAAAAAAAABAQAAAAAAAAAKcmVwb3J0LnR4dAAAAAAAAAAKcmVwb3J0LnR4dAAAAAAAAAAEAAAAAAAAAAAAAAABAA",
-        "receiveIntentDigest": "7ClE3SrLe0vbRt4EsKhwAkHH14qRtYwgQ8PIJfFygIE",
-        "selectionCanonicalBytesB64Url": "d2luZHNoYXJlL3NlbGVjdGlvbi1zcGVjL3YxAAEAAAAAAAAAEBAREhMUFRYXGBkaGxwdHh8AAAAAAAAAECAhIiMkJSYnKCkqKywtLi8AAAAAAAAAAQIAAAAAAAAAAQAAAAAAAAAAAgAAAAAAAAAPZG9jcy9yZXBvcnQudHh0AAAAAAAAAAZwaG90b3M",
-        "selectionDigest": "osjKZfS8adSJjGAaWDRIO-Nwag5aOHNDt8l-Ige-N6c"
-      },
-      "name": "original-file-direct-atomic",
-      "plan": {
-        "kind": "direct-atomic",
-        "preparation": "none",
-        "reservation": {
-          "authorityKind": "managed-atomic-target",
-          "authorityRef": "g4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp-goaI",
-          "collisionIndex": 0,
-          "guarantees": {
-            "artifactAvailability": "verified-complete-only",
-            "cleanupContract": "rollback-to-absent-before-publication",
-            "delivery": "managed-target",
-            "nameChooser": "application-chosen",
-            "profile": "managed-atomic",
-            "replacement": "atomic-no-replace",
-            "targetVisibility": "hidden-until-verified-publication"
-          },
-          "kind": "atomic-target",
-          "operationId": "Y2RlZmdoaWprbG1ub3Bxcg",
-          "requestedName": "report.txt",
-          "reservationId": "c3R1dnd4eXp7fH1-f4CBgg",
-          "reservedName": "report.txt"
-        }
-      },
-      "selection": {
-        "rules": {
-          "defaultSelected": false,
-          "mode": "catalog-path",
-          "paths": [
-            "photos",
-            "docs/report.txt"
-          ]
-        },
-        "shareInstance": "EBESExQVFhcYGRobHB0eHw",
-        "syntheticRoot": "ICEiIyQlJicoKSorLC0uLw"
-      }
-    },
-    {
-      "artifact": {
-        "fileId": "QUJDREVGR0hJSktMTU5PUA",
-        "kind": "original-file",
-        "sourcePath": "docs/report.txt",
-        "suggestedName": "report.txt"
-      },
-      "expected": {
-        "artifactCanonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LXNwZWMvdjEAAQEAAAAAAAAAEEFCQ0RFRkdISUpLTE1OT1AAAAAAAAAAJgAAAAAAAAACAAAAAAAAAARkb2NzAAAAAAAAAApyZXBvcnQudHh0AAAAAAAAAApyZXBvcnQudHh0",
         "artifactChoiceCanonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LWNob2ljZS92MQABAAAAAAAAAAEBAAAAAAAAAAEDAAAAAAAAAAEEAAAAAAAAAAEA",
         "artifactChoiceId": "Dvbx-UlDN2_rNykBcKT0U_8JC_fYgSLi4DKuf4wKHes",
         "artifactDigest": "aBtHP5lyJZADcMPuTfeVXpPbmRxRck5lfar34xQeUBY",

@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest'
 import {
   createFSANamedEntryReservation,
   createFSAOwnedFileBinding,
-  createManagedAtomicReservation,
   createNativeNamedEntryReservation,
   createPortableBinding,
   createSelectionSpec,
@@ -32,10 +31,9 @@ import {
 } from './fixture'
 
 describe('receive intent binding', () => {
-  it('binds all four plan families to canonical operation and artifact identities', async () => {
+  it('binds all browser plan families to canonical operation and artifact identities', async () => {
     const selection = await selectionSpec()
     const directTree = await resolvedAction(selection, environment({ targets: [fsaTarget()] }))
-    const directAtomic = await resolvedAction(selection, environment({ targets: [managedTarget()] }))
     const workspace = await resolvedAction(selection, environment({
       targets: [handoffTarget()], workspace: workspaceOffer(),
     }))
@@ -59,19 +57,6 @@ describe('receive intent binding', () => {
           }),
         },
         planKind: 'direct-tree',
-      },
-      {
-        action: directAtomic,
-        candidate: {
-          kind: 'destination-reservation',
-          targetRouteId: 'managed',
-          reservation: await createManagedAtomicReservation({
-            operationId: identity(23), reservationId: identity(24), artifact: directAtomic.artifact,
-            authorityRef: identity(25, 32), nameChooser: 'application-chosen',
-            requestedName: 'report.txt', reservedName: 'report.txt', collisionIndex: 0,
-          }),
-        },
-        planKind: 'direct-atomic',
       },
       {
         action: workspace,
@@ -168,13 +153,19 @@ describe('receive intent binding', () => {
 
   it('rejects selection and resolved-artifact digest mismatches before plan binding', async () => {
     const selection = await selectionSpec()
-    const action = await resolvedAction(selection, environment({ targets: [managedTarget()] }))
-    const reservation = await createManagedAtomicReservation({
-      operationId: identity(40), reservationId: identity(41), artifact: action.artifact,
-      authorityRef: identity(42, 32), nameChooser: 'application-chosen',
-      requestedName: 'report.txt', reservedName: 'report.txt', collisionIndex: 0,
+    const action = await resolvedAction(selection, environment({
+      targets: [handoffTarget()], workspace: workspaceOffer(),
+    }))
+    const workspace = await createWorkspaceBinding({
+      operationId: identity(40), workspaceId: identity(41), artifact: action.artifact,
+      repositoryRef: identity(42, 32),
     })
-    const candidate = { kind: 'destination-reservation' as const, targetRouteId: 'managed', reservation }
+    const candidate = {
+      kind: 'workspace-binding' as const,
+      workspaceRouteId: 'workspace',
+      publicationTargetRouteId: 'handoff',
+      workspace,
+    }
     const otherSelection = await createSelectionSpec({
       shareInstance: identity(3), syntheticRoot: identity(4),
       rules: { mode: 'node-id', defaultSelected: true, rules: [] },
@@ -266,26 +257,32 @@ describe('receive intent binding', () => {
 
   it('rejects a resolved route that no longer represents the frozen choice semantics', async () => {
     const selection = await selectionSpec()
-    const action = await resolvedAction(selection, environment({ targets: [managedTarget('managed-a')] }))
-    if (action.route.kind !== 'direct-atomic') throw new Error('expected direct atomic route')
+    const action = await resolvedAction(selection, environment({
+      targets: [managedTarget('managed-a')], workspace: workspaceOffer(),
+    }))
+    if (action.route.kind !== 'workspace-then-publish') throw new Error('expected workspace route')
     const forgedAction: ResolvedArtifactAction = {
       ...action,
       route: {
-        kind: 'direct-atomic',
-        target: environment({ targets: [managedTarget('managed-b', 'user-chosen')] })
-          .targets[0] as Extract<typeof action.route.target, { kind: 'managed-atomic-file-target' }>,
+        ...action.route,
+        publicationTarget: environment({ targets: [managedTarget('managed-b', 'user-chosen')] })
+          .targets[0] as Extract<typeof action.route.publicationTarget, { kind: 'managed-atomic-file-target' }>,
       },
     }
-    const reservation = await createManagedAtomicReservation({
-      operationId: identity(70), reservationId: identity(71), artifact: action.artifact,
-      authorityRef: identity(72, 32), nameChooser: 'user-chosen',
-      requestedName: 'report.txt', reservedName: 'report.txt', collisionIndex: 0,
+    const workspace = await createWorkspaceBinding({
+      operationId: identity(70), workspaceId: identity(71), artifact: action.artifact,
+      repositoryRef: identity(72, 32),
     })
 
     await expect(bindReceiveIntent({
       selection,
       action: forgedAction,
-      candidate: { kind: 'destination-reservation', targetRouteId: 'managed-b', reservation },
+      candidate: {
+        kind: 'workspace-binding',
+        workspaceRouteId: 'workspace',
+        publicationTargetRouteId: 'managed-b',
+        workspace,
+      },
     })).rejects.toThrow(/frozen plan semantics/u)
   })
 })

@@ -214,11 +214,6 @@ export interface DirectTreePlanSemantics {
   readonly target: NativeDirectoryTargetSemantics | FSADirectoryTargetSemantics
 }
 
-export interface DirectAtomicPlanSemantics {
-  readonly kind: 'direct-atomic'
-  readonly target: ManagedAtomicTargetSemantics
-}
-
 export interface WorkspaceThenPublishPlanSemantics {
   readonly kind: 'workspace-then-publish'
   readonly workspace: WorkspacePlanSemantics
@@ -238,7 +233,6 @@ export interface DirectResumableZipPlanSemantics {
 
 export type OfferedMaterializationPlanSemantics =
   | DirectTreePlanSemantics
-  | DirectAtomicPlanSemantics
   | WorkspaceThenPublishPlanSemantics
   | PortableHandoffPlanSemantics
   | DirectResumableZipPlanSemantics
@@ -246,11 +240,6 @@ export type OfferedMaterializationPlanSemantics =
 export interface DirectTreeMaterializationRoute {
   readonly kind: 'direct-tree'
   readonly target: NativeDirectoryContainerOffer | FSADirectoryContainerOffer
-}
-
-export interface DirectAtomicMaterializationRoute {
-  readonly kind: 'direct-atomic'
-  readonly target: ManagedAtomicTargetOffer
 }
 
 export interface WorkspaceThenPublishMaterializationRoute {
@@ -272,7 +261,6 @@ export interface DirectResumableZipMaterializationRoute {
 
 export type OfferedMaterializationRoute =
   | DirectTreeMaterializationRoute
-  | DirectAtomicMaterializationRoute
   | WorkspaceThenPublishMaterializationRoute
   | PortableHandoffMaterializationRoute
   | DirectResumableZipMaterializationRoute

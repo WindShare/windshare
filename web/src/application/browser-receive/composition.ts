@@ -371,8 +371,6 @@ function startProductionAuthority(
         binding,
         display,
       )
-    case 'direct-atomic':
-      throw unavailableRoute()
   }
 }
 

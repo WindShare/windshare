@@ -19,7 +19,6 @@ import {
 
 const ROUTES = [
   { planKind: 'direct-tree', artifactKind: 'directory-tree', paused: 'partial-directory' },
-  { planKind: 'direct-atomic', artifactKind: 'original-file', paused: 'restart-required' },
   { planKind: 'direct-resumable-zip', artifactKind: 'zip-archive', paused: 'resumable-receive' },
   { planKind: 'workspace-then-publish', artifactKind: 'original-file', paused: 'resumable-receive' },
   { planKind: 'workspace-then-publish', artifactKind: 'zip-archive', paused: 'resumable-receive' },
@@ -78,7 +77,7 @@ describe('production execution handoff cancellation', () => {
   )
 
   it('does not acquire output when Pause already precedes admission', async () => {
-    const f = await fixture(ROUTES[4])
+    const f = await fixture(ROUTES[3])
     f.controller.abort(new TransferPauseRequestedError())
     const result = await f.job.run(f.controller.signal)
 
@@ -115,7 +114,6 @@ async function fixture(route: typeof ROUTES[number], rejectPreparation = false) 
   }
   const routes: PlanExecutionRouteRegistry = {
     directTree: { open: (...args) => handoff(backend.openDirectTree(...args)) },
-    directAtomic: { open: (...args) => handoff(backend.openDirectAtomic(...args)) },
     directResumableZip: { open: async intent => {
       backend.routes.push('direct-resumable-zip')
       const execution: DirectResumableZipExecution = {

@@ -44,8 +44,6 @@ export const saving: typeof English = {
   noResume: '不支持续传',
   tabCancels: '刷新或关闭标签页会取消下载。',
   portableFile: '直接通过浏览器下载。请保持此标签页打开直至完成。',
-  atomicSummary: '直接保存到所选位置。中断后需重新下载。',
-  atomicProgress: '传输中断后无法保留部分进度。',
   original: '原文件',
   folderResult: '文件夹',
   zipResult: 'ZIP 压缩包',

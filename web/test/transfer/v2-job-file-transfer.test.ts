@@ -144,7 +144,7 @@ describe('v2 authenticated file transfer', () => {
     }
     const plans = planAuthorityFixture({ output })
     const intent = await receiveIntentFixture({
-      planKind: 'direct-atomic',
+      planKind: 'workspace-then-publish',
       artifactKind: 'original-file',
       selection,
       file,
@@ -160,7 +160,7 @@ describe('v2 authenticated file transfer', () => {
     }).run()
 
     expect(result.worker.status).toBe('Succeeded')
-    expect(result.lifecycle.kind).toBe('published')
+    expect(result.lifecycle.kind).toBe('materialization-sealed')
     expect(events.slice(0, 4)).toEqual([
       'begin-request',
       `revision:${file.idText}`,
@@ -178,7 +178,7 @@ describe('v2 authenticated file transfer', () => {
     })
     expect(readers.revisionRequests).toEqual([file.idText])
     expect(readers.releases).toEqual([file.idText])
-    expect(plans.settlements).toEqual(['direct-atomic:Succeeded'])
+    expect(plans.settlements).toEqual(['workspace-then-publish:Succeeded'])
   })
 
   registerRevisionCapacityJobTests()
@@ -234,7 +234,7 @@ describe('v2 authenticated file transfer', () => {
     })
     const plans = planAuthorityFixture({ output })
     const intent = await receiveIntentFixture({
-      planKind: 'direct-atomic',
+      planKind: 'workspace-then-publish',
       artifactKind: 'original-file',
       selection,
       file,
@@ -268,7 +268,7 @@ describe('v2 authenticated file transfer', () => {
     })
     const plans = planAuthorityFixture({ output })
     const intent = await receiveIntentFixture({
-      planKind: 'direct-atomic',
+      planKind: 'workspace-then-publish',
       artifactKind: 'original-file',
       selection,
       file,
@@ -315,7 +315,7 @@ describe('v2 authenticated file transfer', () => {
     const output = testOutput()
     const plans = planAuthorityFixture({ output })
     const intent = await receiveIntentFixture({
-      planKind: 'direct-atomic',
+      planKind: 'workspace-then-publish',
       artifactKind: 'original-file',
       selection,
       file,
@@ -360,7 +360,7 @@ describe('v2 authenticated file transfer', () => {
     const output = testOutput()
     const plans = planAuthorityFixture({ output })
     const intent = await receiveIntentFixture({
-      planKind: 'direct-atomic',
+      planKind: 'workspace-then-publish',
       artifactKind: 'original-file',
       selection,
       file,
@@ -384,7 +384,6 @@ describe('v2 authenticated file transfer', () => {
   })
 
   it.each([
-    'direct-atomic',
     'workspace-then-publish',
     'portable-handoff',
   ] as const)('never seals or publishes %s after a selected revision failure', async (planKind) => {
@@ -438,7 +437,7 @@ describe('v2 authenticated file transfer', () => {
     }
     const plans = planAuthorityFixture({ output })
     const intent = await receiveIntentFixture({
-      planKind: 'direct-atomic',
+      planKind: 'workspace-then-publish',
       artifactKind: 'original-file',
       selection,
       file,
@@ -454,13 +453,13 @@ describe('v2 authenticated file transfer', () => {
     }).run()
 
     expect(result.worker.status).toBe('Paused')
-    expect(result.lifecycle.kind).toBe('restart-required')
+    expect(result.lifecycle.kind).toBe('resumable-receive')
     expect(readers.revisionRequests).toEqual([file.idText])
     expect(readers.blockRequests).toEqual([])
     expect(readers.releases).toEqual([file.idText])
     expect(events).not.toContain('transaction-created')
     expect(plans.settlements).toEqual([])
-    expect(plans.pauses).toEqual(['direct-atomic'])
+    expect(plans.pauses).toEqual(['workspace-then-publish'])
   })
 })
 
@@ -516,7 +515,7 @@ function registerCheckpointSchedulingTests(): void {
       checkpointPolicy: prefixCopyCheckpointPolicy(pendingBytes),
     })
     const intent = await receiveIntentFixture({
-      planKind: 'direct-atomic', artifactKind: 'original-file', selection, file,
+      planKind: 'workspace-then-publish', artifactKind: 'original-file', selection, file,
     })
 
     const result = await transferJobFixture({
@@ -548,7 +547,7 @@ function registerCheckpointSchedulingTests(): void {
     })
     const progress: TransferProgress[] = []
     const intent = await receiveIntentFixture({
-      planKind: 'direct-atomic', artifactKind: 'original-file', selection, file,
+      planKind: 'workspace-then-publish', artifactKind: 'original-file', selection, file,
     })
     const running = transferJobFixture({
       catalog: catalog.catalog,
@@ -585,7 +584,7 @@ function registerCheckpointSchedulingTests(): void {
       automaticCheckpointDecisions: ['deferred', 'advanced'],
     })
     const intent = await receiveIntentFixture({
-      planKind: 'direct-atomic', artifactKind: 'original-file', selection, file,
+      planKind: 'workspace-then-publish', artifactKind: 'original-file', selection, file,
     })
 
     const result = await transferJobFixture({
@@ -616,7 +615,7 @@ function registerCheckpointSchedulingTests(): void {
       automaticCheckpointDecisions: ['finished', 'advanced'],
     })
     const intent = await receiveIntentFixture({
-      planKind: 'direct-atomic', artifactKind: 'original-file', selection, file,
+      planKind: 'workspace-then-publish', artifactKind: 'original-file', selection, file,
     })
 
     const result = await transferJobFixture({
@@ -646,7 +645,7 @@ function registerRevisionCapacityJobTests(): void {
     const output = testOutput()
     const plans = planAuthorityFixture({ output })
     const intent = await receiveIntentFixture({
-      planKind: 'direct-atomic', artifactKind: 'original-file', selection, file,
+      planKind: 'workspace-then-publish', artifactKind: 'original-file', selection, file,
     })
     let opens = 0
     const revisions: RevisionReader = {

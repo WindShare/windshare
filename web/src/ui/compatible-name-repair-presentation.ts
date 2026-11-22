@@ -38,7 +38,7 @@ export function presentCompatibleNameRepair(input: Readonly<{
   const summary = compatibleNameRepairSummary(input.summary)
   const live = input.context !== 'retained-operation' &&
     (input.state === null || input.state.kind === 'receiving' ||
-     input.state.kind === 'finalizing-tree' || input.state.kind === 'committing-atomic' ||
+     input.state.kind === 'finalizing-tree' ||
      input.state.kind === 'preparing' || input.state.kind === 'intent-frozen')
   const terminal = input.state !== null && terminalRepairLifecycle(input.state)
   const actionMode = receiveRepairMode(input.state, summary,

@@ -72,7 +72,6 @@ export async function decodeArtifactChoiceIdentity(
 function materializationGuaranteeProfile(plan: MaterializationPlan): GuaranteeProfile {
   switch (plan.kind) {
     case 'direct-tree':
-    case 'direct-atomic':
       return plan.reservation.guarantees.profile
     case 'workspace-then-publish':
       return plan.publicationGuarantee
@@ -93,9 +92,6 @@ function legalArtifactChoiceTuple(input: {
     case 'direct-tree':
       return input.artifactKind === 'directory-tree' && input.preparation === 'none' &&
         (input.guaranteeProfile === 'native-tree' || input.guaranteeProfile === 'fsa-tree')
-    case 'direct-atomic':
-      return input.artifactKind === 'original-file' && input.guaranteeProfile === 'managed-atomic' &&
-        input.preparation === 'none'
     case 'workspace-then-publish':
       return (input.artifactKind === 'original-file' || input.artifactKind === 'zip-archive') &&
         (input.guaranteeProfile === 'managed-atomic' || input.guaranteeProfile === 'browser-handoff') &&
@@ -120,7 +116,6 @@ function artifactKindByte(value: ArtifactKind): number {
 function materializationKindByte(value: MaterializationKind): number {
   switch (value) {
     case 'direct-tree': return 1
-    case 'direct-atomic': return 2
     case 'workspace-then-publish': return 3
     case 'portable-handoff': return 4
     case 'direct-resumable-zip': return 5
@@ -157,7 +152,6 @@ function artifactKindFromByte(value: number): ArtifactKind {
 function materializationKindFromByte(value: number): MaterializationKind {
   switch (value) {
     case 1: return 'direct-tree'
-    case 2: return 'direct-atomic'
     case 3: return 'workspace-then-publish'
     case 4: return 'portable-handoff'
     case 5: return 'direct-resumable-zip'

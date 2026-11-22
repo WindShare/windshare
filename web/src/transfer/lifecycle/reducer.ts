@@ -119,7 +119,7 @@ function startReceive(
   context: LifecycleReducerContext,
 ): ReceiveLifecycleState {
   requireState(state, 'intent-frozen')
-  if ((context.planKind === 'direct-tree' || context.planKind === 'direct-atomic') &&
+  if (context.planKind === 'direct-tree' &&
       context.preparationRequired) {
     throw new TypeError('direct plans do not acquire a preparation content gate')
   }
@@ -298,12 +298,6 @@ function discoveryCompleted(
       activeLeaseId: context.activeLeaseId,
     })
   }
-  if (context.planKind === 'direct-atomic') {
-    return nextReceiveLifecycleState(state, {
-      kind: 'committing-atomic',
-      activeLeaseId: context.activeLeaseId,
-    })
-  }
   throw new TypeError('discovery completion is not a workspace/portable state boundary')
 }
 
@@ -360,7 +354,7 @@ function materializationCompleted(
   context: LifecycleReducerContext,
 ): ReceiveLifecycleState {
   requireState(state, 'receiving')
-  if (context.planKind === 'direct-tree' || context.planKind === 'direct-atomic') {
+  if (context.planKind === 'direct-tree') {
     return discoveryCompleted(state, context)
   }
   return state
@@ -371,8 +365,6 @@ function restartRequired(
   event: Extract<LifecycleEvent, { kind: 'restart-boundary-verified' }>,
   planKind: PlanKind,
 ): ReceiveLifecycleState {
-  const directAtomicState = planKind === 'direct-atomic' &&
-    (state.kind === 'receiving' || state.kind === 'committing-atomic')
   const portableState = planKind === 'portable-handoff' &&
     (state.kind === 'receiving' ||
      (state.kind === 'handing-off' && state.attemptKind === 'portable'))
@@ -382,11 +374,8 @@ function restartRequired(
      state.kind === 'authorization-required' ||
      state.kind === 'target-verification-required' ||
      state.kind === 'destination-space-required')
-  if (!directAtomicState && !portableState && !directZipDeleted) {
-    throw new TypeError('restart boundary is legal only for DirectAtomic or Portable')
-  }
-  if (event.reason === 'direct-atomic-rolled-back' && !directAtomicState) {
-    throw new TypeError('atomic rollback reason requires a DirectAtomic boundary')
+  if (!portableState && !directZipDeleted) {
+    throw new TypeError('restart boundary is legal only for Portable or DirectResumableZip')
   }
   if (event.reason === 'portable-aborted' && !portableState) {
     throw new TypeError('portable abort reason requires a portable handoff')

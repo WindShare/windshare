@@ -17,11 +17,11 @@ import { materializationRouteIdentity } from '../../src/output/planning/guarante
 import { offerArtifacts } from '../../src/output/planning/offers'
 import { type ArtifactChoice } from '../../src/output/model/artifacts/choices'
 import {
-  createDirectAtomicPlan,
-  createManagedAtomicReservation,
   createOriginalFileArtifact,
   createReceiveIntent,
   createSelectionSpec,
+  createWorkspaceBinding,
+  createWorkspaceThenPublishPlan,
   type ReceiveIntent,
 } from '../../src/transfer/intent'
 import { FaultScope, SourceFaultCode, sourceFault } from '../../src/transfer/failure/fault'
@@ -51,6 +51,7 @@ import {
   managedTarget,
   projection,
   singleFileProof,
+  workspaceOffer,
 } from '../output/planning/fixture'
 
 const FILE_ID = identity(2)
@@ -62,7 +63,6 @@ const TRANSFER_MEASURE: SelectionMeasure = Object.freeze({
 })
 const UNAVAILABLE_PLANS: PlanExecutionAuthority = Object.freeze({
   openDirectTree: unavailableExecution,
-  openDirectAtomic: unavailableExecution,
   openDirectResumableZip: unavailableExecution,
   openWorkspaceOriginal: unavailableExecution,
   openWorkspaceZip: unavailableExecution,
@@ -323,35 +323,27 @@ async function preparedOutput(): Promise<Readonly<{
   const offers = await offerArtifacts(
     projected,
     COMPLETE_DISCOVERY,
-    environment({ targets: [managedTarget()] }),
+    environment({ targets: [managedTarget()], workspace: workspaceOffer() }),
   )
-  if (offers.kind !== 'artifact-actions' || offers.primary.route.kind !== 'direct-atomic') {
-    throw new Error('result-adoption fixture did not select a direct atomic artifact')
+  if (offers.kind !== 'artifact-actions' || offers.primary.route.kind !== 'workspace-then-publish') {
+    throw new Error('result-adoption fixture did not select a workspace artifact')
   }
   const offered = offers.primary
-  if (offered.route.kind !== 'direct-atomic') {
-    throw new Error('result-adoption fixture lost its direct atomic route')
+  if (offered.route.kind !== 'workspace-then-publish') {
+    throw new Error('result-adoption fixture lost its workspace route')
   }
   const artifact = await createOriginalFileArtifact({
     fileId: FILE_ID,
     sourcePath: 'report.txt',
     suggestedName: offered.suggestedName ?? 'report.txt',
   })
-  const nameChooser = offered.route.target.guarantees.nameChooser
-  if (nameChooser === 'browser-chosen') {
-    throw new Error('managed result-adoption fixture requires an application-owned name')
-  }
-  const reservation = await createManagedAtomicReservation({
+  const workspace = await createWorkspaceBinding({
     operationId: identity(10),
-    reservationId: identity(11),
+    workspaceId: identity(11),
     artifact,
-    authorityRef: identity(12, 32),
-    nameChooser,
-    requestedName: offered.suggestedName ?? 'report.txt',
-    reservedName: offered.suggestedName ?? 'report.txt',
-    collisionIndex: 0,
+    repositoryRef: identity(12, 32),
   })
-  const plan = await createDirectAtomicPlan(artifact, reservation)
+  const plan = await createWorkspaceThenPublishPlan(artifact, workspace, 'managed-atomic')
   const intent = await createReceiveIntent({
     selection,
     artifact,

@@ -85,7 +85,6 @@ function lifecyclePayload(state: ReceiveLifecycleState): readonly CanonicalBytes
     case 'preparing': return [identityFrame(state.preparationId, 16, 'preparation ID')]
     case 'receiving':
     case 'finalizing-tree':
-    case 'committing-atomic':
       return [identityFrame(state.activeLeaseId, 16, 'lease ID')]
     case 'resumable-receive': return resumableReceivePayload(state)
     case 'source-invalidated': return [digestFrame(state.checkpointSetDigest, 'checkpoint set digest')]
@@ -248,7 +247,6 @@ function recoveryDiscoveryStateFromByte(value: number): RecoveryDiscoveryState {
 
 function restartReasonByte(reason: RestartRequiredReason): number {
   switch (reason) {
-    case 'direct-atomic-rolled-back': return 1
     case 'portable-aborted': return 2
     case 'source-revision-changed': return 3
     case 'preparation-invalidated': return 4
@@ -307,11 +305,6 @@ function decodeMaterializationState(
     case 5: return Object.freeze({
       ...base,
       kind: 'finalizing-tree',
-      activeLeaseId: reader.identity(16, 'lease ID'),
-    })
-    case 6: return Object.freeze({
-      ...base,
-      kind: 'committing-atomic',
       activeLeaseId: reader.identity(16, 'lease ID'),
     })
     case 7: return Object.freeze({
@@ -635,17 +628,14 @@ function partialReasonFromByte(value: number): 'failures' | 'stopped' {
 }
 
 function restartReasonFromByte(value: number): RestartRequiredReason {
-  const reasons: readonly RestartRequiredReason[] = [
-    'direct-atomic-rolled-back',
-    'portable-aborted',
-    'source-revision-changed',
-    'preparation-invalidated',
-    'content-session-ended',
-    'target-deleted',
-  ]
-  const reason = reasons[value - 1]
-  if (reason === undefined) throw new TypeError('restart reason is invalid')
-  return reason
+  switch (value) {
+    case 2: return 'portable-aborted'
+    case 3: return 'source-revision-changed'
+    case 4: return 'preparation-invalidated'
+    case 5: return 'content-session-ended'
+    case 6: return 'target-deleted'
+    default: throw new TypeError('restart reason is invalid')
+  }
 }
 
 function directZipCheckpointPhaseByte(

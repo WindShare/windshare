@@ -95,24 +95,6 @@ describe('abandoned receive recovery', () => {
     }))
   })
 
-  it('does not retry an unknown atomic commit', () => {
-    const committing = state({
-      kind: 'committing-atomic',
-      activeLeaseId: identity(16, 6),
-    })
-    const reduction = recoverAbandonedOperation(committing, {
-      kind: 'atomic-commit',
-      outcome: 'unknown',
-      receiptDigest: identity(32, 7),
-      lastVerifiedRecordDigest: identity(32, 8),
-    }, context('direct-atomic', NOW))
-
-    expect(reduction.state).toEqual(expect.objectContaining({
-      kind: 'needs-attention',
-      reason: 'publication-unknown',
-    }))
-  })
-
   it('requires recovered package evidence to name the exact materialization seal', () => {
     const sealed = state({
       kind: 'materialization-sealed',

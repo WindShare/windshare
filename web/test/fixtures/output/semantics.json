@@ -105,17 +105,6 @@
           "preparation": "none"
         },
         {
-          "artifact": "original-file",
-          "binding": "atomic-target",
-          "completion": "published-after-verified-commit",
-          "guaranteeProfiles": [
-            "managed-atomic"
-          ],
-          "layout": "single-file-proof",
-          "plan": "direct-atomic",
-          "preparation": "none"
-        },
-        {
           "artifact": "zip-archive",
           "artifactAvailability": "verified-complete-only",
           "binding": "fsa-owned-file",
@@ -256,7 +245,6 @@
       "publishedCleanupPendingRemains": "published",
       "restartReasons": {
         "content-session-ended": 5,
-        "direct-atomic-rolled-back": 1,
         "portable-aborted": 2,
         "preparation-invalidated": 4,
         "source-revision-changed": 3,
@@ -273,7 +261,6 @@
           "byte": 14,
           "plans": [
             "direct-tree",
-            "direct-atomic",
             "workspace-then-publish",
             "direct-resumable-zip"
           ],
@@ -289,7 +276,6 @@
         {
           "byte": 17,
           "plans": [
-            "direct-atomic",
             "portable-handoff",
             "direct-resumable-zip"
           ],
@@ -299,7 +285,6 @@
           "byte": 18,
           "plans": [
             "direct-tree",
-            "direct-atomic",
             "workspace-then-publish",
             "portable-handoff",
             "direct-resumable-zip"
@@ -310,7 +295,6 @@
           "byte": 20,
           "plans": [
             "direct-tree",
-            "direct-atomic",
             "workspace-then-publish",
             "direct-resumable-zip"
           ],

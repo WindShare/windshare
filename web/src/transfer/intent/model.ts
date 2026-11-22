@@ -298,12 +298,6 @@ export interface DirectTreePlan extends MaterializationPlanBase {
   readonly preparation: 'none'
 }
 
-export interface DirectAtomicPlan extends MaterializationPlanBase {
-  readonly kind: 'direct-atomic'
-  readonly reservation: AtomicTargetReservation
-  readonly preparation: 'none'
-}
-
 export interface WorkspaceThenPublishPlan extends MaterializationPlanBase {
   readonly kind: 'workspace-then-publish'
   readonly workspace: WorkspaceBinding
@@ -326,7 +320,6 @@ export interface DirectResumableZipPlan extends MaterializationPlanBase {
 
 export type MaterializationPlan =
   | DirectTreePlan
-  | DirectAtomicPlan
   | WorkspaceThenPublishPlan
   | PortableHandoffPlan
   | DirectResumableZipPlan

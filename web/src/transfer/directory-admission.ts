@@ -147,10 +147,6 @@ export async function createDirectoryAdmissionScope(
       )
       break
     }
-    case 'direct-atomic':
-      throw new DirectoryAdmissionBindingError(
-        'DirectAtomic original-file output does not use directory admission',
-      )
     case 'workspace-then-publish': {
       if (intent.artifact.kind !== 'zip-archive') {
         throw new DirectoryAdmissionBindingError('Original files do not use directory admission')

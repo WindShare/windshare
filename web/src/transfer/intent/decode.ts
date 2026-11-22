@@ -68,7 +68,6 @@ import {
   type WorkspaceBinding,
 } from './model'
 import {
-  createDirectAtomicPlan,
   createDirectResumableZipPlan,
   createDirectTreePlan,
   createPortableHandoffPlan,
@@ -491,15 +490,6 @@ async function decodeMaterializationPlanBytes(
       )
       if (cursor.readFramedByte() !== 0) invalidDecodedCanonicalBytes()
       plan = await createDirectTreePlan(artifact, reservation)
-      break
-    }
-    case 2: {
-      const reservation = await decodeDestinationReservationBytes(
-        cursor.readFrame(cursor.remaining),
-        artifact,
-      )
-      if (cursor.readFramedByte() !== 0) invalidDecodedCanonicalBytes()
-      plan = await createDirectAtomicPlan(artifact, reservation)
       break
     }
     case 3: {

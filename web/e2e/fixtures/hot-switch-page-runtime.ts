@@ -10,12 +10,12 @@ import { offerArtifacts } from '../../src/output/planning/offers'
 import { reconcileArtifactChoice } from '../../src/output/planning/reconciliation'
 import {
   AUTHORITY_REFERENCE_BYTES,
-  createDestinationReservationID,
-  createManagedAtomicReservation,
+  browserHandoffGuarantees,
   createOperationID,
   createOutputSessionID,
   createSelectionSpec,
-  managedAtomicGuarantees,
+  createWorkspaceBinding,
+  createWorkspaceID,
   selectionRulesSpecFromPolicy,
   type ReceiveIntent,
   type SelectionSpec,
@@ -26,7 +26,7 @@ import {
   type ReceiveLifecycleState,
   type ReceiveLifecycleStatePayload,
 } from '../../src/transfer/lifecycle/state'
-import type { DirectAtomicExecution, PlanExecutionAuthority } from '../../src/transfer/output/session'
+import type { PlanExecutionAuthority, WorkspaceExecution } from '../../src/transfer/output/session'
 import { discoverAuthenticatedSelection, SelectionProjectionController } from '../../src/transfer/projection'
 import type { SelectionProjectionState } from '../../src/transfer/projection/contracts'
 import { createPlanExecutionAuthority } from '../../src/transfer/settlement/plan-authority'
@@ -51,6 +51,7 @@ import {
 
 const HOT_SWITCH_RECEIPT_DOMAIN = 'windshare/e2e/hot-switch-receipt/v1'
 const STREAM_TARGET_OFFER_ID = 'hot-switch-managed-atomic-stream'
+const WORKSPACE_ROUTE_ID = 'hot-switch-workspace'
 const TEXT_ENCODER = new TextEncoder()
 
 type JoinedReceiver = Awaited<ReturnType<BrowserReceiverGateway['join']>>
@@ -75,7 +76,7 @@ interface HotSwitchWindow extends Window {
   __windshareSealHotSwitchRelayCut?: () => Promise<void>
 }
 
-interface BoundDirectAtomicOperation {
+interface BoundHotSwitchOperation {
   readonly intent: ReceiveIntent
   readonly plans: PlanExecutionAuthority
   readonly selection: FrozenSelectionPolicy
@@ -136,7 +137,7 @@ async function runTransfer(
   try {
     const gateway = createGateway(input, bridge, relayCut, peerRelease, peerHarness)
     joined = await gateway.join(input.key, window.location.href)
-    const operation = await bindDirectAtomicOperation(
+    const operation = await bindHotSwitchOperation(
       input,
       joined,
       delivery,
@@ -203,12 +204,12 @@ async function runTransfer(
   }
 }
 
-async function bindDirectAtomicOperation(
+async function bindHotSwitchOperation(
   input: HotSwitchPageTransferRuntimeInput,
   joined: JoinedReceiver,
   delivery: DeliveryBuffer,
   outputFence: OutputFence,
-): Promise<BoundDirectAtomicOperation> {
+): Promise<BoundHotSwitchOperation> {
   const selection = joined.selection.snapshot()
   const selectionSpec = await createSelectionSpec({
     shareInstance: joined.descriptor.shareInstanceId,
@@ -235,53 +236,60 @@ async function bindDirectAtomicOperation(
   const environment = createEnvironmentOffers({
     targets: [{
       routeId: STREAM_TARGET_OFFER_ID,
-      kind: 'managed-atomic-file-target',
-      guarantees: managedAtomicGuarantees('application-chosen'),
-      persistence: 'operation-scoped',
+      kind: 'browser-handoff',
+      guarantees: browserHandoffGuarantees(),
+      persistence: 'none',
+      supportsWorkspacePackage: true,
+      supportsPortableArtifact: true,
+      objectUrlLeaseMilliseconds: 60_000n,
       hardMaximumOutputBytes: BigInt(input.transferBytes),
     }],
+    workspace: {
+      routeId: WORKSPACE_ROUTE_ID,
+      kind: 'origin-private-workspace',
+      persistence: 'durable-owned-repository',
+      minimumQuotaReserveBytes: 0n,
+      quotaAvailabilityEstimateBytes: BigInt(input.transferBytes) * 4n,
+    },
   })
-  const { action, suggestedName } = await resolveHotSwitchDirectAtomicChoice(
+  const { action } = await resolveHotSwitchWorkspaceChoice(
     selectionSpec,
     current,
     environment,
   )
 
-  const reservation = await createManagedAtomicReservation({
+  const workspace = await createWorkspaceBinding({
     operationId: createOperationID(),
-    reservationId: createDestinationReservationID(),
+    workspaceId: createWorkspaceID(),
     artifact: action.artifact,
-    authorityRef: randomAuthorityReference(),
-    nameChooser: 'application-chosen',
-    requestedName: suggestedName,
-    reservedName: suggestedName,
-    collisionIndex: 0,
+    repositoryRef: randomAuthorityReference(),
   })
   const bound = await bindReceiveIntent({
     selection: selectionSpec,
     action,
     candidate: {
-      kind: 'destination-reservation',
-      targetRouteId: STREAM_TARGET_OFFER_ID,
-      reservation,
+      kind: 'workspace-binding',
+      workspaceRouteId: WORKSPACE_ROUTE_ID,
+      publicationTargetRouteId: STREAM_TARGET_OFFER_ID,
+      workspace,
     },
   })
-  if (bound.intent.plan.kind !== 'direct-atomic') {
-    throw new Error('Hot-switch intent binding did not remain direct-atomic')
+  if (bound.intent.plan.kind !== 'workspace-then-publish') {
+    throw new Error('Hot-switch intent binding did not remain workspace-then-publish')
   }
   const intent = bound.intent
   const plans = await createPlanExecutionAuthority({
     intent,
     routes: {
-      directAtomic: {
-        open: async (routeIntent, signal) => {
+      workspaceOriginal: {
+        admit: async (routeIntent, _evidence, signal) => {
           signal.throwIfAborted()
           const output = delivery.outputSession(createOutputSessionID(), outputFence)
-          return Object.freeze({
-            planKind: 'direct-atomic' as const,
+          const execution: WorkspaceExecution = Object.freeze({
+            planKind: 'workspace-then-publish' as const,
             output,
             settle: async (
-              _request: Parameters<DirectAtomicExecution['settle']>[0],
+              _request: Parameters<WorkspaceExecution['settle']>[0],
               settlementSignal: AbortSignal,
             ) => {
               settlementSignal.throwIfAborted()
@@ -292,19 +300,19 @@ async function bindDirectAtomicOperation(
               })
             },
             pause: async (
-              request: Parameters<DirectAtomicExecution['pause']>[0],
+              request: Parameters<WorkspaceExecution['pause']>[0],
               settlementSignal: AbortSignal,
             ) => {
               settlementSignal.throwIfAborted()
               await output.pauseActiveTransaction(request.reason)
               settlementSignal.throwIfAborted()
               return lifecycleState(routeIntent, {
-                kind: 'restart-required',
-                reason: 'direct-atomic-rolled-back',
-                receiptDigest: await operationReceipt(routeIntent, 'rolled-back'),
+                kind: 'discarded',
+                cleanupReceiptDigest: await operationReceipt(routeIntent, 'discarded'),
               })
             },
           })
+          return Object.freeze({ kind: 'accepted' as const, execution })
         },
       },
       lifecycle: {
@@ -333,7 +341,7 @@ async function bindDirectAtomicOperation(
   return Object.freeze({ intent, plans, selection })
 }
 
-async function resolveHotSwitchDirectAtomicChoice(
+async function resolveHotSwitchWorkspaceChoice(
   selection: SelectionSpec,
   state: SelectionProjectionState,
   environment: EnvironmentOffers,
@@ -351,7 +359,7 @@ async function resolveHotSwitchDirectAtomicChoice(
   }
   const offered = offers.primary
   if (offered.choice.operation !== 'download-original' ||
-      offered.route.kind !== 'direct-atomic' ||
+      offered.route.kind !== 'workspace-then-publish' ||
       offered.choice.artifactKind !== 'original-file' || offered.suggestedName === null) {
     throw new Error('Hot-switch fixture received an incompatible artifact choice')
   }

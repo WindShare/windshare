@@ -49,7 +49,7 @@ export function receiveRepairMode(
 ): CompatibleNameRepairActionMode {
   const live = context === 'live-operation' &&
     (state === null || state.kind === 'receiving' || state.kind === 'finalizing-tree' ||
-     state.kind === 'committing-atomic' || state.kind === 'preparing' || state.kind === 'intent-frozen')
+     state.kind === 'preparing' || state.kind === 'intent-frozen')
   return compatibleNameRepairActionMode(live, state !== null && terminalRepairLifecycle(state), summary)
 }
 

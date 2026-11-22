@@ -5,7 +5,6 @@ export type ReceiveInterruption = 'pause' | 'stop'
 const PAUSE = Object.freeze(['pause'] as const)
 const STOP = Object.freeze(['stop'] as const)
 const PAUSE_AND_STOP = Object.freeze(['pause', 'stop'] as const)
-const NO_CONTROLS = Object.freeze([])
 
 export function receiveInterruptionControls(plan: PlanKind): readonly ReceiveInterruption[] {
   switch (plan) {
@@ -13,7 +12,6 @@ export function receiveInterruptionControls(plan: PlanKind): readonly ReceiveInt
     case 'direct-resumable-zip':
     case 'workspace-then-publish': return PAUSE
     case 'portable-handoff': return STOP
-    case 'direct-atomic': return NO_CONTROLS
   }
 }
 
@@ -65,7 +63,7 @@ export function receiveStorageSettlement(state: ReceiveLifecycleState): ReceiveS
     case 'partial-directory':
       return { task: 'ended', retention: 'complete-results', cleanup: 'settled' }
     case 'restart-required':
-      return state.reason === 'direct-atomic-rolled-back' || state.reason === 'portable-aborted' || state.reason === 'target-deleted'
+      return state.reason === 'portable-aborted' || state.reason === 'target-deleted'
         ? { task: 'ended', retention: 'none', cleanup: 'settled' }
         : { task: 'ended', retention: 'reconcile', cleanup: 'retryable' }
     case 'discarded':

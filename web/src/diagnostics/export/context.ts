@@ -22,7 +22,6 @@ export const LIFECYCLE_CONTEXT_STATES = Object.freeze([
   'resumable-receive',
   'source-invalidated',
   'finalizing-tree',
-  'committing-atomic',
   'materialization-sealed',
   'packaging',
   'resumable-package',
@@ -55,7 +54,6 @@ export type ProgressDiscoveryState =
 
 export const OUTPUT_PLAN_KINDS = Object.freeze([
   'direct-tree',
-  'direct-atomic',
   'workspace-then-publish',
   'portable-handoff',
   'direct-resumable-zip',
@@ -134,7 +132,6 @@ export interface DiagnosticContextV1 {
       | 'resumable_start'
       | 'source_invalidated'
       | 'finalizing_tree'
-      | 'committing_atomic'
       | 'materialization_sealed'
       | 'packaging'
       | 'resumable_package'

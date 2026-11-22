@@ -39,7 +39,6 @@ import {
   createCompleteDirectoryResultRoot,
   createArtifactChoiceIdentity,
   createDirectorySelectionResultRoot,
-  createDirectAtomicPlan,
   createDirectTreePlan,
   createFSANamedEntryReservation,
   createManagedAtomicReservation,
@@ -437,14 +436,6 @@ async function materializationPlan(
       )
       return { plan: await createDirectTreePlan(artifact, reservation), binding: reservation }
     }
-    case 'direct-atomic': {
-      const reservation = await destinationReservation(
-        requiredRecord(input.reservation, 'destination reservation'),
-        artifact,
-      )
-      if (reservation.kind !== 'atomic-target') throw new Error('direct-atomic vector lacks an atomic target')
-      return { plan: await createDirectAtomicPlan(artifact, reservation), binding: reservation }
-    }
     case 'workspace-then-publish': {
       const workspaceInput = requiredRecord(input.workspace, 'workspace binding')
       const workspace = await createWorkspaceBinding({
@@ -484,7 +475,7 @@ function artifactKind(value: string): ArtifactKind {
 }
 
 function materializationKind(value: string): MaterializationKind {
-  if (value !== 'direct-tree' && value !== 'direct-atomic' &&
+  if (value !== 'direct-tree' &&
       value !== 'workspace-then-publish' && value !== 'portable-handoff' &&
       value !== 'direct-resumable-zip') {
     throw new Error('materialization kind is invalid')

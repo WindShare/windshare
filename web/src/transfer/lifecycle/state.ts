@@ -13,7 +13,6 @@ export type NeedsAttentionReason =
   | 'publication-unknown'
   | 'cleanup-unknown'
 export type RestartRequiredReason =
-  | 'direct-atomic-rolled-back'
   | 'portable-aborted'
   | 'source-revision-changed'
   | 'preparation-invalidated'
@@ -61,7 +60,6 @@ export const RECEIVE_STATE_PREPARING = 2 as const
 export const RECEIVE_STATE_RECEIVING = 3 as const
 export const RECEIVE_STATE_RESUMABLE_RECEIVE = 4 as const
 export const RECEIVE_STATE_FINALIZING_TREE = 5 as const
-export const RECEIVE_STATE_COMMITTING_ATOMIC = 6 as const
 export const RECEIVE_STATE_MATERIALIZATION_SEALED = 7 as const
 export const RECEIVE_STATE_PACKAGING = 8 as const
 export const RECEIVE_STATE_RESUMABLE_PACKAGE = 9 as const
@@ -87,7 +85,6 @@ const RECEIVE_STATE_BYTES_BY_KIND = Object.freeze({
   'receiving': RECEIVE_STATE_RECEIVING,
   'resumable-receive': RECEIVE_STATE_RESUMABLE_RECEIVE,
   'finalizing-tree': RECEIVE_STATE_FINALIZING_TREE,
-  'committing-atomic': RECEIVE_STATE_COMMITTING_ATOMIC,
   'materialization-sealed': RECEIVE_STATE_MATERIALIZATION_SEALED,
   'packaging': RECEIVE_STATE_PACKAGING,
   'resumable-package': RECEIVE_STATE_RESUMABLE_PACKAGE,
@@ -160,7 +157,6 @@ export type ReceiveLifecycleState =
       checkpointPhase: DirectZipCheckpointPhase
     }>
   | Readonly<LifecycleStateBase & { kind: 'finalizing-tree'; activeLeaseId: string }>
-  | Readonly<LifecycleStateBase & { kind: 'committing-atomic'; activeLeaseId: string }>
   | Readonly<LifecycleStateBase & {
       kind: 'materialization-sealed'
       sealedMaterializationDigest: string

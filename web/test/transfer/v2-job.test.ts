@@ -21,7 +21,6 @@ import {
 describe('plan-specific transfer routing', () => {
   it.each<readonly [TestPlanKind, TestArtifactKind, string]>([
     ['direct-tree', 'directory-tree', 'published'],
-    ['direct-atomic', 'original-file', 'published'],
     ['workspace-then-publish', 'original-file', 'materialization-sealed'],
     ['portable-handoff', 'original-file', 'download-started'],
   ])('routes %s without deriving a representation from the output session', async (
