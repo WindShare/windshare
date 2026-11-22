@@ -16,25 +16,6 @@ import {
   type FileCheckpointV2,
 } from '../../src/output/persistence/checkpoint'
 import {
-  canonicalDirectoryAdmissionMessageV2,
-  createDirectoryAdmission,
-  createDirectoryAdmissionScope,
-  deriveDirectoryAdmissionToken,
-  DirectorySettlementKind,
-  finalizedDirectorySettlement,
-  isolatedDirectorySettlement,
-  sameDirectoryAdmission,
-  snapshotMaterializationPath,
-  validateDirectorySettlement,
-  verifyDirectoryAdmissionToken,
-  type CanonicalModifiedTime,
-  type DirectoryAdmission,
-  type DirectoryAdmissionLayout,
-  type DirectoryAdmissionScope,
-  type MaterializationDirectory,
-} from '../../src/transfer/directory-admission'
-import { FaultDomain, FaultScope, OutputFaultCode, outputFault } from '../../src/transfer/failure/fault'
-import {
   createCatalogRootDirectoryTreeArtifact,
   createCompleteDirectoryResultRoot,
   createArtifactChoiceIdentity,
@@ -68,16 +49,13 @@ import {
   type ResultRootLayout,
   type SelectionRulesSpec,
 } from '../../src/transfer/intent'
-import { b64ToBytes, loadVectorFile, type VectorCase } from '../vectors'
+import { loadVectorFile, type VectorCase } from '../vectors'
 
 const receiveIntentVectors = loadVectorFile(
   new URL('../fixtures/output/receive-intent-v4.json', import.meta.url),
 )
 const artifactChoiceVectors = loadVectorFile(
   new URL('../fixtures/output/artifact-choice-v1.json', import.meta.url),
-)
-const admissionVectors = loadVectorFile(
-  new URL('../fixtures/output/directory-admission-v2.json', import.meta.url),
 )
 const checkpointVectors = loadVectorFile(
   new URL('../fixtures/output/file-checkpoint-v2.json', import.meta.url),
@@ -118,35 +96,6 @@ describe('Browser-local ReceiveIntentV4 vectors', () => {
   for (const vector of receiveIntentVectors.cases) {
     it(`replays ${vector.name}`, async () => {
       await replayReceiveIntent(vector)
-    })
-  }
-})
-
-describe('Browser-local DirectoryAdmissionV2 vectors', () => {
-  for (const vector of admissionVectors.cases) {
-    it(`replays ${vector.name}`, async () => {
-      const intentVector = receiveIntentCase(requiredString(vector.receiveIntentCase, 'receive intent case'))
-      const intent = await replayReceiveIntent(intentVector)
-      const { admission, directory, scope, secret } = await buildDirectoryAdmission(
-        vector,
-        admissionVectors.cases,
-        intent,
-      )
-
-      expect(scope.receiveIntentDigest).toBe(intent.digest)
-      expect(scope.rootExpectation).toMatchObject({
-        kind: 'materialized-directory',
-        directoryId: intent.syntheticRoot,
-        relativePath: [],
-      })
-      expect(vector.schemaVersion).toBe(2)
-      expect(encodeBase64Url(canonicalDirectoryAdmissionMessageV2(scope, directory)))
-        .toBe(requiredString(vector.messageB64Url, 'directory admission message'))
-      expect(await deriveDirectoryAdmissionToken(secret, scope, directory))
-        .toBe(requiredString(vector.token, 'directory admission token'))
-      expect(await verifyDirectoryAdmissionToken(secret, scope, directory, admission.token)).toBe(true)
-      expect(admission.token).toBe(requiredString(vector.token, 'directory admission token'))
-      replayDirectorySettlement(vector, admission)
     })
   }
 })
@@ -558,79 +507,6 @@ async function destinationReservation(
   }
 }
 
-async function buildDirectoryAdmission(
-  vector: VectorCase,
-  allCases: readonly VectorCase[],
-  intent: ReceiveIntent,
-): Promise<{
-  admission: DirectoryAdmission
-  directory: MaterializationDirectory
-  scope: DirectoryAdmissionScope
-  secret: Uint8Array
-}> {
-  const scopeInput = requiredRecord(vector.scope, 'directory admission scope')
-  const scope = await createDirectoryAdmissionScope(intent)
-  expect(scope).toEqual({
-    receiveIntentDigest: requiredString(scopeInput.receiveIntentDigest, 'scope ReceiveIntent digest'),
-    layoutVersion: requiredLayoutVersion(scopeInput.layoutVersion),
-    layout: directoryAdmissionLayout(scopeInput.layout),
-    rootExpectation: directoryRootExpectation(scopeInput.rootExpectation),
-  } satisfies DirectoryAdmissionScope)
-  const parentName = vector.parentCase
-  const parentAdmission = parentName === null || parentName === undefined
-    ? undefined
-    : (await buildDirectoryAdmission(
-        requiredCase(allCases, requiredString(parentName, 'parent case')),
-        allCases,
-        intent,
-      )).admission
-  const directoryInput = requiredRecord(vector.directory, 'materialization directory')
-  const modifiedTime = canonicalModifiedTime(directoryInput.modifiedTime)
-  const directory: MaterializationDirectory = {
-    directoryId: requiredString(directoryInput.directoryId, 'directory ID'),
-    generation: requiredString(directoryInput.generation, 'directory generation'),
-    path: snapshotMaterializationPath(requiredStringArray(directoryInput.path, 'directory path')),
-    ...(parentAdmission === undefined ? {} : { parentAdmission }),
-    ...(modifiedTime === undefined ? {} : { modifiedTime }),
-  }
-  const secret = b64ToBytes(requiredString(vector.secretB64Url, 'directory admission secret'))
-  return {
-    admission: await createDirectoryAdmission(secret, scope, directory),
-    directory,
-    scope,
-    secret,
-  }
-}
-
-function replayDirectorySettlement(vector: VectorCase, admission: DirectoryAdmission): void {
-  const expected = requiredRecord(vector.settlement, 'directory settlement')
-  let settlement
-  switch (requiredString(expected.kind, 'directory settlement kind')) {
-    case DirectorySettlementKind.Finalized:
-      settlement = finalizedDirectorySettlement(admission)
-      break
-    case DirectorySettlementKind.IsolatedFailure: {
-      const fault = requiredRecord(expected.fault, 'directory settlement fault')
-      expect(fault).toEqual({
-        domain: FaultDomain.Output,
-        scope: FaultScope.DirectoryLocal,
-        code: OutputFaultCode.DirectoryMetadata,
-      })
-      settlement = isolatedDirectorySettlement(
-        admission,
-        outputFault(FaultScope.DirectoryLocal, OutputFaultCode.DirectoryMetadata),
-      )
-      break
-    }
-    default:
-      throw new Error('directory settlement kind is invalid')
-  }
-  const validated = validateDirectorySettlement(admission, settlement)
-  expect(validated.kind).toBe(expected.kind)
-  expect(validated.admission.token).toBe(requiredString(expected.admissionToken, 'settlement admission token'))
-  expect(sameDirectoryAdmission(validated.admission, admission)).toBe(true)
-}
-
 function checkpointRecord(vector: VectorCase): FileCheckpointV2 {
   return newFileCheckpointV2({
     ownershipMarker: requiredString(vector.ownershipMarker, 'checkpoint ownership marker'),
@@ -666,68 +542,6 @@ function checkpointRecord(vector: VectorCase): FileCheckpointV2 {
     quarantineOrigin: requiredNumber(vector.quarantineOrigin, 'checkpoint quarantine origin'),
     retirementReason: requiredNumber(vector.retirementReason, 'checkpoint retirement reason'),
   })
-}
-
-function canonicalModifiedTime(value: unknown): CanonicalModifiedTime | undefined {
-  if (value === null || value === undefined) return undefined
-  const input = requiredRecord(value, 'modified time')
-  const precision = requiredNumber(input.precision, 'modified time precision')
-  if (precision !== 1 && precision !== 2 && precision !== 3) {
-    throw new Error('modified time precision is invalid')
-  }
-  return {
-    seconds: BigInt(requiredString(input.seconds, 'modified time seconds')),
-    nanoseconds: requiredNumber(input.nanoseconds, 'modified time nanoseconds'),
-    precision,
-  }
-}
-
-function directoryRootExpectation(
-  value: unknown,
-): DirectoryAdmissionScope['rootExpectation'] {
-  const input = requiredRecord(value, 'directory root expectation')
-  const kind = requiredString(input.kind, 'directory root expectation kind')
-  if (kind === 'none') {
-    if (input.anchorKind !== 'single-file') {
-      throw new Error('no-root expectation must belong to a single-file layout')
-    }
-    return { kind: 'none', anchorKind: 'single-file' }
-  }
-  if (kind !== 'materialized-directory') {
-    throw new Error('directory root expectation kind is invalid')
-  }
-  const anchorKind = requiredString(input.anchorKind, 'directory root anchor kind')
-  if (anchorKind !== 'directory' &&
-      anchorKind !== 'synthetic-root' &&
-      anchorKind !== 'catalog-root') {
-    throw new Error('directory root anchor kind is invalid')
-  }
-  return {
-    kind,
-    anchorKind,
-    directoryId: requiredString(input.directoryId, 'expected root directory'),
-    relativePath: snapshotMaterializationPath(requiredStringArray(
-      input.relativePath,
-      'expected root relative path',
-    )),
-  }
-}
-
-function requiredLayoutVersion(value: unknown): 2 {
-  if (value !== 2) throw new Error('directory admission layout version is invalid')
-  return value
-}
-
-function directoryAdmissionLayout(value: unknown): DirectoryAdmissionLayout {
-  switch (value) {
-    case 'directory-tree-single-file':
-    case 'directory-tree-result-root':
-    case 'directory-tree-catalog-root':
-    case 'zip-result-root':
-      return value
-    default:
-      throw new Error('directory admission layout is invalid')
-  }
 }
 
 function receiveIntentCase(name: string): VectorCase {

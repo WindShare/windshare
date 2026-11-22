@@ -335,7 +335,7 @@ class PersistentMaterializationOutput implements OutputSession {
             }
             const parent = snapshot.directory.parentAdmission === undefined
               ? undefined
-              : this.#directoryLedgerByAdmission.get(snapshot.directory.parentAdmission.token)
+              : this.#directoryLedgerByAdmission.get(snapshot.directory.parentAdmission.admissionId)
             if (snapshot.directory.parentAdmission !== undefined && parent === undefined) {
               throw new TypeError('directory ledger parent has no durable admission')
             }
@@ -366,18 +366,18 @@ class PersistentMaterializationOutput implements OutputSession {
           },
         )
         if (durableDirectory !== undefined) {
-          this.#directoryLedgerByAdmission.set(admission.token, durableDirectory)
-        } else if (!this.#directoryLedgerByAdmission.has(admission.token)) {
+          this.#directoryLedgerByAdmission.set(admission.admissionId, durableDirectory)
+        } else if (!this.#directoryLedgerByAdmission.has(admission.admissionId)) {
           throw new TypeError('directory admission has no durable ledger entry')
         }
         if (!samePath(admission.path, materializationRelativePath)) {
           throw new TypeError('directory admission path disagrees with materialized relative path')
         }
-        const existingPath = this.#directoryPathByAdmission.get(admission.token)
+        const existingPath = this.#directoryPathByAdmission.get(admission.admissionId)
         if (existingPath !== undefined && !samePath(existingPath, materializationRelativePath)) {
           throw new TypeError('directory admission changed its materialized relative path')
         }
-        this.#directoryPathByAdmission.set(admission.token, materializationRelativePath)
+        this.#directoryPathByAdmission.set(admission.admissionId, materializationRelativePath)
         return admission
       },
       finalizeDirectory: async (admission, signal) => {
@@ -385,7 +385,7 @@ class PersistentMaterializationOutput implements OutputSession {
           admission,
           await ledger.finalizeDirectory(admission, signal),
         )
-        const durableDirectory = this.#directoryLedgerByAdmission.get(admission.token)
+        const durableDirectory = this.#directoryLedgerByAdmission.get(admission.admissionId)
         if (durableDirectory === undefined) {
           throw new TypeError('directory finalization has no durable ledger admission')
         }
@@ -398,7 +398,7 @@ class PersistentMaterializationOutput implements OutputSession {
                 fault: settlement.fault,
               }),
         )
-        const materializationRelativePath = this.#directoryPathByAdmission.get(admission.token)
+        const materializationRelativePath = this.#directoryPathByAdmission.get(admission.admissionId)
         if (materializationRelativePath === undefined) {
           throw new TypeError('directory settlement has no materialized relative-path binding')
         }

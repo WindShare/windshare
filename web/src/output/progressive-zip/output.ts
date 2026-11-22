@@ -13,8 +13,8 @@ import {
   snapshotDirectoryMaterializationRequest, type IncrementalDirectoryOutput,
 } from '../../transfer/output/session'
 import {
-  createDirectoryAdmission, createDirectoryAdmissionScope, createDirectoryAdmissionSecret,
-  finalizedDirectorySettlement, isImmediateChildPath, verifyDirectoryAdmissionReceipt,
+  createDirectoryAdmissionAuthority, createDirectoryAdmissionScope,
+  finalizedDirectorySettlement, isImmediateChildPath,
   type DirectoryAdmission, type CanonicalModifiedTime,
 } from '../../transfer/directory-admission'
 import { FaultDomain, SourceFaultCode } from '../../transfer/failure/fault'
@@ -53,12 +53,11 @@ export async function createProgressiveZipOutput(input: {
     throw new TypeError('ZIP output does not belong to the frozen receive operation')
   }
   const identity = outputSessionIdentity(input.identity)
-  const scope = await createDirectoryAdmissionScope(intent)
-  const secret = createDirectoryAdmissionSecret()
+  const authority = createDirectoryAdmissionAuthority(await createDirectoryAdmissionScope(intent))
   const capacity = new ZipCapacityWindow(CONCURRENT_FILE_PIPELINES,
     (stage, activeEntries) => archive.observeCapacityWindow(stage, activeEntries))
-  const verify = async (receipt: DirectoryAdmission) => {
-    if (!await verifyDirectoryAdmissionReceipt(secret, scope, receipt)) {
+  const verify = (receipt: DirectoryAdmission) => {
+    if (!authority.verify(receipt)) {
       throw new TypeError('ZIP directory receipt does not belong to this execution')
     }
   }
@@ -67,8 +66,8 @@ export async function createProgressiveZipOutput(input: {
       await capacity.beforeDirectory(signal)
       const request = snapshotDirectoryMaterializationRequest(input)
       signal.throwIfAborted()
-      if (request.directory.parentAdmission !== undefined) await verify(request.directory.parentAdmission)
-      const receipt = await createDirectoryAdmission(secret, scope, request.directory)
+      if (request.directory.parentAdmission !== undefined) verify(request.directory.parentAdmission)
+      const receipt = authority.issue(request.directory)
       await archive.admitDirectory({
           entryId: `directory:${request.directory.directoryId}`,
           path: request.logicalArtifactPath,
@@ -82,7 +81,7 @@ export async function createProgressiveZipOutput(input: {
     },
     finalizeDirectory: async (admission, signal) => {
       signal.throwIfAborted()
-      await verify(admission)
+      verify(admission)
       return finalizedDirectorySettlement(admission)
     },
   }
@@ -101,7 +100,7 @@ function createZipFileOutput(input: {
   readonly archive: ProgressiveZipArchive
   readonly identity: OutputSessionIdentity
   readonly capacity: ZipCapacityWindow
-  readonly verify: (admission: DirectoryAdmission) => Promise<void>
+  readonly verify: (admission: DirectoryAdmission) => void
   readonly missingFiles: Map<string, MissingContentFile>
   readonly onUnallocatedFailure: () => void
 }): OutputSession {
@@ -126,7 +125,7 @@ function createZipFileOutput(input: {
     const request = snapshotOutputFileRequest(input)
     const parent = request.parentAdmission
     if (parent === undefined) throw new TypeError('ZIP file lacks authenticated parent admission')
-    await verify(parent)
+    verify(parent)
     if (!isImmediateChildPath(parent.path, request.materializationRelativePath)) {
       throw new TypeError('ZIP file is outside its authenticated parent directory')
     }

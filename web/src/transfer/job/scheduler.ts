@@ -57,8 +57,8 @@ export function pendingFileMetadataBytes(file: PendingFile): bigint {
     ...file.parent.logicalArtifactPath,
     ...(file.parent.kind === 'materialized' ? file.parent.materializationRelativePath : []),
     ...(admission === undefined ? [] : [
-      admission.token,
-      ...(admission.parentToken === undefined ? [] : [admission.parentToken]),
+      admission.admissionId,
+      ...(admission.parentAdmissionId === undefined ? [] : [admission.parentAdmissionId]),
     ]),
   ]
   let bytes = PENDING_FILE_STRUCTURAL_METADATA_BYTES +

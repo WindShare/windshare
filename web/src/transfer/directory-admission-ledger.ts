@@ -1,8 +1,6 @@
 import {
-  DIRECTORY_ADMISSION_SECRET_BYTES,
   DirectoryAdmissionBindingError,
-  createDirectoryAdmission,
-  createDirectoryAdmissionSecret,
+  createDirectoryAdmissionAuthority,
   directoryAdmissionRetainedMetadataBytes,
   finalizedDirectorySettlement,
   isImmediateChildPath,
@@ -15,6 +13,7 @@ import {
   snapshotMaterializationPath,
   validateDirectoryAdmissionBinding,
   type DirectoryAdmission,
+  type DirectoryAdmissionAuthority,
   type DirectoryAdmissionScope,
   type DirectorySettlement,
   type MaterializationDirectory,
@@ -43,8 +42,6 @@ export class DirectoryAdmissionLimitError extends Error {
 }
 
 export interface DirectoryAdmissionLedgerOptions {
-  /** Deterministic injection is reserved for canonical replay and focused tests. */
-  readonly secret?: Uint8Array<ArrayBufferLike>
   readonly maximumAdmissions?: number
   readonly maximumMetadataBytes?: number
 }
@@ -98,9 +95,9 @@ interface BindingReservation {
 /** Owns bounded, session-local generation authority without becoming capacity admission. */
 export class DirectoryAdmissionLedger {
   readonly #scope: DirectoryAdmissionScope
-  readonly #secret: Uint8Array<ArrayBuffer>
+  readonly #authority: DirectoryAdmissionAuthority
   readonly #claimsByKey = new Map<string, DirectoryClaim>()
-  readonly #claimsByToken = new Map<string, DirectoryClaim>()
+  readonly #claimsById = new Map<string, DirectoryClaim>()
   readonly #pendingAdmissions = new Map<string, Promise<DirectoryAdmission>>()
   readonly #pendingFinalizations = new Map<string, Promise<DirectorySettlement>>()
   readonly #bindingByDirectory = new Map<string, string>()
@@ -114,9 +111,7 @@ export class DirectoryAdmissionLedger {
     options: DirectoryAdmissionLedgerOptions = {},
   ) {
     this.#scope = snapshotDirectoryAdmissionScope(scope)
-    this.#secret = options.secret === undefined
-      ? createDirectoryAdmissionSecret()
-      : snapshotAdmissionSecret(options.secret)
+    this.#authority = createDirectoryAdmissionAuthority(this.#scope)
     this.#maximumAdmissions = boundedLimit(
       options.maximumAdmissions,
       MAX_DIRECTORY_ADMISSIONS,
@@ -176,14 +171,8 @@ export class DirectoryAdmissionLedger {
     const admission = validateDirectoryAdmissionBinding(
       this.#scope,
       directory,
-      await createDirectoryAdmission(this.#secret, this.#scope, directory),
+      this.#authority.issue(directory),
     )
-    const tokenOwner = this.#claimsByToken.get(admission.token)
-    if (tokenOwner !== undefined && tokenOwner.key !== key) {
-      throw new DirectoryAdmissionBindingError(
-        'directory admission token is already bound to another claim',
-      )
-    }
     // The receipt is complete before mutation, but becomes visible only after
     // the materializer accepts the exact generation.
     await materialize?.(directory, signal)
@@ -198,7 +187,7 @@ export class DirectoryAdmissionLedger {
       change: claimChange(),
     }
     this.#claimsByKey.set(key, claim)
-    this.#claimsByToken.set(admission.token, claim)
+    this.#claimsById.set(admission.admissionId, claim)
     if (parent !== undefined) {
       parent.directUnsettledChildren += 1
       this.#notify(parent)
@@ -209,8 +198,9 @@ export class DirectoryAdmissionLedger {
   #validateParent(directory: MaterializationDirectory): DirectoryClaim | undefined {
     const receipt = directory.parentAdmission
     if (receipt === undefined) return undefined
-    const parent = this.#claimsByToken.get(receipt.token)
-    if (parent === undefined || !sameDirectoryAdmission(parent.admission, receipt) ||
+    const parent = this.#claimsById.get(receipt.admissionId)
+    if (parent === undefined || !this.#authority.verify(receipt) ||
+        !sameDirectoryAdmission(parent.admission, receipt) ||
         !isImmediateChildPath(parent.admission.path, directory.path)) {
       throw new DirectoryAdmissionBindingError(
         'directory parent was not admitted by this ledger',
@@ -231,7 +221,7 @@ export class DirectoryAdmissionLedger {
     }
     const fresh = previousDirectory === undefined && previousPath === undefined
     const metadataBytes = fresh
-      ? directoryAdmissionRetainedMetadataBytes(this.#scope, directory)
+      ? directoryAdmissionRetainedMetadataBytes(directory)
       : 0
     if (fresh) this.#reserveMetadata(metadataBytes)
     this.#bindingByDirectory.set(directory.directoryId, key)
@@ -372,8 +362,8 @@ export class DirectoryAdmissionLedger {
   }
 
   #fileParent(file: DirectoryFileReference, requireMutable: boolean): DirectoryClaim {
-    const parent = this.#claimsByToken.get(file.parentAdmission.token)
-    if (parent === undefined ||
+    const parent = this.#claimsById.get(file.parentAdmission.admissionId)
+    if (parent === undefined || !this.#authority.verify(file.parentAdmission) ||
         !sameDirectoryAdmission(parent.admission, file.parentAdmission) ||
         !sameMaterializationPath(parent.admission.path, file.path.slice(0, -1))) {
       throw new DirectoryAdmissionBindingError(
@@ -426,8 +416,9 @@ export class DirectoryAdmissionLedger {
 
   #claimForAdmission(input: DirectoryAdmission): DirectoryClaim {
     const admission = snapshotDirectoryAdmission(input)
-    const claim = this.#claimsByToken.get(admission.token)
-    if (claim === undefined || !sameDirectoryAdmission(claim.admission, admission)) {
+    const claim = this.#claimsById.get(admission.admissionId)
+    if (claim === undefined || !this.#authority.verify(admission) ||
+        !sameDirectoryAdmission(claim.admission, admission)) {
       throw new DirectoryAdmissionBindingError(
         'directory finalization references a forged or foreign receipt',
       )
@@ -499,19 +490,6 @@ function abortPromise(
   }
 }
 
-function snapshotAdmissionSecret(
-  input: Uint8Array<ArrayBufferLike>,
-): Uint8Array<ArrayBuffer> {
-  if (!(input instanceof Uint8Array) ||
-      input.byteLength !== DIRECTORY_ADMISSION_SECRET_BYTES ||
-      input.every((byte) => byte === 0)) {
-    throw new DirectoryAdmissionBindingError(
-      'directory admission secret must be a non-zero 32-byte value',
-    )
-  }
-  return Uint8Array.from(input)
-}
-
 function boundedLimit(value: number | undefined, maximum: number, label: string): number {
   const limit = value ?? maximum
   if (!Number.isSafeInteger(limit) || limit <= 0 || limit > maximum) {
@@ -525,7 +503,7 @@ function admissionKey(input: MaterializationDirectory): string {
     input.directoryId,
     input.generation,
     input.path,
-    input.parentAdmission?.token ?? null,
+    input.parentAdmission?.admissionId ?? null,
     modifiedTimeKey(input),
   ])
 }

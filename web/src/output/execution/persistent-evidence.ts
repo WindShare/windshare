@@ -182,7 +182,7 @@ export function compareDirectorySettlementEvidence(
   const rightPath = right.artifactPath.join('/')
   if (leftPath < rightPath) return -1
   if (leftPath > rightPath) return 1
-  return left.settlement.admission.token.localeCompare(right.settlement.admission.token)
+  return left.settlement.admission.admissionId.localeCompare(right.settlement.admission.admissionId)
 }
 
 export function sameMaterializedEntry(

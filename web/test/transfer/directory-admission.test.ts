@@ -1,14 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import { decodeBase64Url, encodeBase64Url } from '../../src/crypto/bytes'
-import { sha256 } from '../../src/crypto/digest'
-import * as admissionContract from '../../src/transfer/directory-admission'
+import { encodeBase64Url } from '../../src/crypto/bytes'
 import {
   DIRECTORY_ADMISSION_LAYOUT_VERSION,
-  DIRECTORY_ADMISSION_SCHEMA_VERSION,
   DirectoryAdmissionBindingError,
-  canonicalDirectoryAdmissionMessageV2,
-  createDirectoryAdmission,
+  createDirectoryAdmissionAuthority,
   createDirectoryAdmissionScope,
   finalizedDirectorySettlement,
   isolatedDirectorySettlement,
@@ -16,8 +12,6 @@ import {
   snapshotMaterializationPath,
   validateDirectoryAdmissionBinding,
   validateDirectorySettlement,
-  verifyDirectoryAdmissionToken,
-  verifyDirectoryAdmissionReceipt,
   type CanonicalModifiedTime,
   type DirectoryAdmissionScope,
   type MaterializationDirectory,
@@ -41,8 +35,6 @@ import {
   type ReceiveIntent,
 } from '../../src/transfer/intent'
 
-const SECRET = Uint8Array.from({ length: 32 }, (_, index) => index + 1)
-
 function identity(seed: number, width = 16): string {
   const value = new Uint8Array(width)
   value[0] = seed
@@ -50,10 +42,12 @@ function identity(seed: number, width = 16): string {
   return encodeBase64Url(value)
 }
 
-describe('DirectoryAdmission v2 binding', () => {
-  it('derives a closed scope from a legal intent and matches the independent canonical message', async () => {
+describe('DirectoryAdmission binding and session authority', () => {
+  it('derives a closed scope from a legal intent and verifies session-local receipts', async () => {
     const intent = await directTreeIntent()
     const scope = await createDirectoryAdmissionScope(intent)
+    const authority = createDirectoryAdmissionAuthority(scope)
+    const otherAuthority = createDirectoryAdmissionAuthority(scope)
     const modifiedTime: CanonicalModifiedTime = {
       seconds: -1_234n,
       nanoseconds: 567_000_000,
@@ -64,7 +58,7 @@ describe('DirectoryAdmission v2 binding', () => {
       generation: identity(40),
       path: snapshotMaterializationPath([]),
     }
-    const root = await createDirectoryAdmission(SECRET, scope, rootDirectory)
+    const root = authority.issue(rootDirectory)
     const childDirectory: MaterializationDirectory = {
       directoryId: identity(41),
       generation: identity(42),
@@ -72,15 +66,14 @@ describe('DirectoryAdmission v2 binding', () => {
       parentAdmission: root,
       modifiedTime,
     }
-    const child = await createDirectoryAdmission(SECRET, scope, childDirectory)
-    expect(await verifyDirectoryAdmissionReceipt(SECRET, scope, child)).toBe(true)
-    expect(await verifyDirectoryAdmissionReceipt(SECRET, scope, { ...child, parentToken: child.token })).toBe(false)
-    expect(await verifyDirectoryAdmissionReceipt(SECRET, scope, { ...child, path: snapshotMaterializationPath(['other']) })).toBe(false)
-    expect(await verifyDirectoryAdmissionReceipt(SECRET.slice().fill(1), scope, child)).toBe(false)
+    const child = authority.issue(childDirectory)
 
-    expect(intent.digest).toBe('vhhExXaw0i8sWcgd8Payakwul9IpNWKlE1WyPkMc_M4')
-    expect(root.token).toBe('qVfgMF4KQoXMTFpQu9G0syTxS8w5t9X6K5gnCJCYU6g')
-    expect(child.token).toBe('LXmZtH7L3nXY66NOXhNSliwUHyeAXdt1sClzpXxwvr4')
+    expect(authority.verify(root)).toBe(true)
+    expect(authority.verify(child)).toBe(true)
+    expect(otherAuthority.verify(child)).toBe(false)
+    expect(authority.verify({ ...child })).toBe(false)
+    expect(authority.verify({ ...child, parentAdmissionId: child.admissionId })).toBe(false)
+    expect(authority.verify({ ...child, path: snapshotMaterializationPath(['other']) })).toBe(false)
 
     expect(scope).toMatchObject({
       receiveIntentDigest: intent.digest,
@@ -93,37 +86,27 @@ describe('DirectoryAdmission v2 binding', () => {
         relativePath: [],
       },
     })
-    expect(child.schemaVersion).toBe(DIRECTORY_ADMISSION_SCHEMA_VERSION)
-    const message = canonicalDirectoryAdmissionMessageV2(scope, childDirectory)
-    expect(message).toEqual(expectedDirectoryAdmissionMessage(scope, childDirectory))
-    expect(encodeBase64Url(await sha256(message)))
-      .toBe('xvYKa9-QLfT5reKn9crdsf0Sth9l-zYdZjWP9nLmuYA')
-    expect(validateDirectoryAdmissionBinding(scope, childDirectory, child)).toEqual(child)
-    expect(await verifyDirectoryAdmissionToken(SECRET, scope, childDirectory, child.token)).toBe(true)
-    expect(await verifyDirectoryAdmissionToken(
-      Uint8Array.from(SECRET, (byte, index) => index === 0 ? byte ^ 1 : byte),
-      scope,
-      childDirectory,
-      child.token,
-    )).toBe(false)
+    expect(validateDirectoryAdmissionBinding(scope, childDirectory, child)).toBe(child)
+    expect(authority.verify(validateDirectoryAdmissionBinding(scope, childDirectory, child))).toBe(true)
 
     const forgedScope = { ...scope } as DirectoryAdmissionScope
-    await expect(createDirectoryAdmission(SECRET, forgedScope, rootDirectory))
-      .rejects.toThrow(/derived from a validated receive intent/u)
-    await expect(createDirectoryAdmission(SECRET, scope, {
+    expect(() => createDirectoryAdmissionAuthority(forgedScope))
+      .toThrow(/derived from a validated receive intent/u)
+    expect(() => authority.issue({
       ...rootDirectory,
       directoryId: identity(43),
-    })).rejects.toThrow(/expected materialized root/u)
-    await expect(createDirectoryAdmission(SECRET, scope, {
+    })).toThrow(/expected materialized root/u)
+    expect(() => authority.issue({
       ...rootDirectory,
       path: snapshotMaterializationPath(['docs-selection']),
-    })).rejects.toThrow(/expected materialized root/u)
-    await expect(createDirectoryAdmission(SECRET, scope, {
+    })).toThrow(/expected materialized root/u)
+    expect(() => authority.issue({
       directoryId: identity(44),
       generation: identity(45),
       path: snapshotMaterializationPath(['child']),
-    })).rejects.toThrow(/expected materialized root/u)
-    expect('canonicalDirectoryAdmissionMessageV1' in admissionContract).toBe(false)
+    })).toThrow(/expected materialized root/u)
+    expect(() => otherAuthority.issue(childDirectory))
+      .toThrow(/not issued by this admission authority/u)
   })
 
   it('rejects prepared and original-file plans', async () => {
@@ -135,26 +118,28 @@ describe('DirectoryAdmission v2 binding', () => {
   it('rejects every directory admission for a single-file root expectation', async () => {
     const scope = await createDirectoryAdmissionScope(await singleFileDirectTreeIntent())
     expect(scope.rootExpectation).toEqual({ kind: 'none', anchorKind: 'single-file' })
+    const authority = createDirectoryAdmissionAuthority(scope)
 
-    await expect(createDirectoryAdmission(SECRET, scope, {
+    expect(() => authority.issue({
       directoryId: identity(2),
       generation: identity(69),
       path: snapshotMaterializationPath([]),
-    })).rejects.toThrow(/expected materialized root/u)
+    })).toThrow(/expected materialized root/u)
   })
 
-  it('retains exact v2 receipts and only the closed isolated metadata settlement', async () => {
+  it('retains exact receipts and only the closed isolated metadata settlement', async () => {
     const scope = await createDirectoryAdmissionScope(await directTreeIntent())
+    const authority = createDirectoryAdmissionAuthority(scope)
     const directory: MaterializationDirectory = {
       directoryId: identity(10),
       generation: identity(70),
       path: snapshotMaterializationPath([]),
     }
-    const admission = await createDirectoryAdmission(SECRET, scope, directory)
-    const retry = await createDirectoryAdmission(Uint8Array.from(SECRET), scope, directory)
-    const rebound = Object.freeze({ ...retry, generation: identity(71) })
+    const admission = authority.issue(directory)
+    const copy = Object.freeze({ ...admission })
+    const rebound = Object.freeze({ ...admission, generation: identity(71) })
 
-    expect(sameDirectoryAdmission(admission, retry)).toBe(true)
+    expect(sameDirectoryAdmission(admission, copy)).toBe(true)
     expect(sameDirectoryAdmission(admission, rebound)).toBe(false)
     expect(() => validateDirectoryAdmissionBinding(scope, directory, rebound))
       .toThrow(DirectoryAdmissionBindingError)
@@ -173,13 +158,10 @@ describe('DirectoryAdmission v2 binding', () => {
   })
 })
 
-describe('DirectoryAdmissionLedger v2', () => {
-  it('bounds exact retained metadata and preserves generation/path/settlement invariants', async () => {
+describe('DirectoryAdmissionLedger', () => {
+  it('bounds retained metadata and preserves generation/path/settlement invariants', async () => {
     const scope = await createDirectoryAdmissionScope(await directTreeIntent())
-    const ledger = new DirectoryAdmissionLedger(scope, {
-      secret: SECRET,
-      maximumAdmissions: 2,
-    })
+    const ledger = new DirectoryAdmissionLedger(scope, { maximumAdmissions: 2 })
     const signal = new AbortController().signal
     const rootDirectory: MaterializationDirectory = {
       directoryId: identity(10),
@@ -209,6 +191,9 @@ describe('DirectoryAdmissionLedger v2', () => {
       generation: identity(85),
     }, signal)).rejects.toThrow(/already bound/u)
 
+    expect(() => ledger.finalizeDirectory({ ...child }, signal))
+      .toThrow(/forged or foreign receipt/u)
+
     const lease = ledger.acquireFileMutation({
       path: ['child', 'report.txt'],
       parentAdmission: child,
@@ -228,10 +213,7 @@ describe('DirectoryAdmissionLedger v2', () => {
     expect((await childSettlement).kind).toBe('isolated-failure')
     expect((await ledger.finalizeDirectory(root, signal)).kind).toBe('finalized')
 
-    const bounded = new DirectoryAdmissionLedger(scope, {
-      secret: SECRET,
-      maximumMetadataBytes: 1,
-    })
+    const bounded = new DirectoryAdmissionLedger(scope, { maximumMetadataBytes: 1 })
     await expect(bounded.admitDirectory(rootDirectory, signal))
       .rejects.toBeInstanceOf(DirectoryAdmissionLimitError)
   })
@@ -306,102 +288,4 @@ function selectionSpec() {
     syntheticRoot: identity(2),
     rules: { mode: 'node-id', defaultSelected: true, rules: [] },
   })
-}
-
-function expectedDirectoryAdmissionMessage(
-  scope: DirectoryAdmissionScope,
-  directory: MaterializationDirectory,
-): Uint8Array {
-  const parent = directory.parentAdmission === undefined
-    ? new Uint8Array()
-    : decodeIdentity(directory.parentAdmission.token)
-  return concat([
-    new TextEncoder().encode('windshare/directory-admission/v2\0'),
-    Uint8Array.of(2),
-    frame(decodeIdentity(scope.receiveIntentDigest)),
-    frame(Uint8Array.of(DIRECTORY_ADMISSION_LAYOUT_VERSION)),
-    frame(Uint8Array.of(layoutByte(scope.layout))),
-    ...rootExpectationFields(scope.rootExpectation),
-    frame(decodeIdentity(directory.directoryId)),
-    frame(decodeIdentity(directory.generation)),
-    frame(parent),
-    frame(directory.path.length === 0
-      ? Uint8Array.of(1)
-      : concat([Uint8Array.of(2), frame(canonicalPath(directory.path))])),
-    frame(canonicalModifiedTime(directory.modifiedTime)),
-  ])
-}
-
-function rootExpectationFields(
-  root: DirectoryAdmissionScope['rootExpectation'],
-): readonly Uint8Array[] {
-  if (root.kind === 'none') {
-    return [frame(Uint8Array.of(1)), frame(new Uint8Array()), frame(new Uint8Array())]
-  }
-  let anchor = 4
-  if (root.anchorKind === 'directory') anchor = 2
-  if (root.anchorKind === 'synthetic-root') anchor = 3
-  return [
-    frame(Uint8Array.of(anchor)),
-    frame(decodeIdentity(root.directoryId)),
-    frame(root.relativePath.length === 0
-      ? Uint8Array.of(1)
-      : concat([Uint8Array.of(2), frame(canonicalPath(root.relativePath))])),
-  ]
-}
-
-function canonicalPath(path: readonly string[]): Uint8Array {
-  return concat([
-    uint64(BigInt(path.length)),
-    ...path.map((segment) => frame(new TextEncoder().encode(segment))),
-  ])
-}
-
-function canonicalModifiedTime(modified: CanonicalModifiedTime | undefined): Uint8Array {
-  if (modified === undefined) return Uint8Array.of(1)
-  const seconds = new Uint8Array(8)
-  new DataView(seconds.buffer).setBigInt64(0, modified.seconds)
-  const nanoseconds = new Uint8Array(4)
-  new DataView(nanoseconds.buffer).setUint32(0, modified.nanoseconds)
-  return concat([
-    Uint8Array.of(2),
-    frame(seconds),
-    frame(nanoseconds),
-    frame(Uint8Array.of(modified.precision)),
-  ])
-}
-
-function layoutByte(layout: DirectoryAdmissionScope['layout']): number {
-  switch (layout) {
-    case 'directory-tree-single-file': return 1
-    case 'directory-tree-result-root': return 2
-    case 'directory-tree-catalog-root': return 3
-    case 'zip-result-root': return 4
-  }
-}
-
-function decodeIdentity(value: string): Uint8Array {
-  const decoded = decodeBase64Url(value)
-  if (decoded === undefined) throw new TypeError('fixture identity is invalid')
-  return decoded
-}
-
-function frame(value: Uint8Array): Uint8Array {
-  return concat([uint64(BigInt(value.byteLength)), value])
-}
-
-function uint64(value: bigint): Uint8Array {
-  const output = new Uint8Array(8)
-  new DataView(output.buffer).setBigUint64(0, value)
-  return output
-}
-
-function concat(parts: readonly Uint8Array[]): Uint8Array {
-  const output = new Uint8Array(parts.reduce((sum, part) => sum + part.byteLength, 0))
-  let offset = 0
-  for (const part of parts) {
-    output.set(part, offset)
-    offset += part.byteLength
-  }
-  return output
 }
