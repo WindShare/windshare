@@ -20,6 +20,15 @@ type WatcherConfig struct {
 	Now      func() time.Time
 }
 
+// pollFlight tracks one in-flight OS sample shared across concurrent waiters.
+// The flight owner writes snapshot and err before closing done, establishing
+// a happens-before edge for waiters without holding w.mu on read.
+type pollFlight struct {
+	done     chan struct{}
+	snapshot Snapshot
+	err      error
+}
+
 // Watcher owns one host-wide polling cadence and fans out immutable generation
 // transitions to all subscribers. Polling runs only while at least one
 // subscriber is active; Snapshot and Poll reuse recent observations so
@@ -27,7 +36,7 @@ type WatcherConfig struct {
 // snapshots and persistent background sampling failures.
 type Watcher struct {
 	mu          sync.Mutex
-	polling     chan struct{}
+	polling     *pollFlight
 	monitor     *Monitor
 	interval    time.Duration
 	now         func() time.Time
@@ -76,8 +85,9 @@ func (w *Watcher) Snapshot(ctx context.Context) (Snapshot, error) {
 
 // Poll satisfies pull-based consumers without triggering redundant OS queries
 // while the cached snapshot is fresh. Concurrent cache misses wait on either
-// the in-flight sample or their own context cancellation, then recheck
-// cancellation and snapshot freshness once the shared sample settles.
+// the in-flight sample or their own context cancellation; non-cancellation
+// sampling errors are shared with that round's waiters, while caller
+// cancellation stays isolated and successes recheck snapshot freshness.
 func (w *Watcher) Poll(ctx context.Context, now time.Time) (Snapshot, bool, error) {
 	for {
 		if err := ctx.Err(); err != nil {
@@ -91,30 +101,36 @@ func (w *Watcher) Poll(ctx context.Context, now time.Time) (Snapshot, bool, erro
 		if wait := w.polling; wait != nil {
 			w.mu.Unlock()
 			select {
-			case <-wait:
+			case <-wait.done:
+				if err := ctx.Err(); err != nil {
+					return w.Current(), false, err
+				}
+				if wait.err != nil {
+					return wait.snapshot, false, wait.err
+				}
 				continue
 			case <-ctx.Done():
 				return w.Current(), false, ctx.Err()
 			}
 		}
-		done := make(chan struct{})
-		w.polling = done
+		flight := &pollFlight{done: make(chan struct{})}
+		w.polling = flight
 		w.mu.Unlock()
 
-		defer w.releasePoll(done)
-		return w.executePoll(ctx, now)
+		defer w.releasePoll(flight)
+		return w.executePoll(ctx, now, flight)
 	}
 }
 
 // Step forces one poll against the underlying monitor and broadcasts any true
 // generation transition (after the initial baseline) to active subscribers.
 func (w *Watcher) Step(ctx context.Context) (Snapshot, bool, error) {
-	done, err := w.claimPoll(ctx)
+	flight, err := w.claimPoll(ctx)
 	if err != nil {
 		return w.Current(), false, err
 	}
-	defer w.releasePoll(done)
-	return w.executePoll(ctx, w.now())
+	defer w.releasePoll(flight)
+	return w.executePoll(ctx, w.now(), flight)
 }
 
 // Subscribe registers for true network generation changes (never the initial
@@ -237,7 +253,7 @@ func withinWindow(now, since time.Time, window time.Duration) bool {
 	return elapsed >= 0 && elapsed < window
 }
 
-func (w *Watcher) claimPoll(ctx context.Context) (chan struct{}, error) {
+func (w *Watcher) claimPoll(ctx context.Context) (*pollFlight, error) {
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -246,38 +262,41 @@ func (w *Watcher) claimPoll(ctx context.Context) (chan struct{}, error) {
 		if wait := w.polling; wait != nil {
 			w.mu.Unlock()
 			select {
-			case <-wait:
+			case <-wait.done:
 				continue
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			}
 		}
-		done := make(chan struct{})
-		w.polling = done
+		flight := &pollFlight{done: make(chan struct{})}
+		w.polling = flight
 		w.mu.Unlock()
-		return done, nil
+		return flight, nil
 	}
 }
 
-func (w *Watcher) releasePoll(done chan struct{}) {
+func (w *Watcher) releasePoll(flight *pollFlight) {
 	w.mu.Lock()
 	w.polling = nil
-	close(done)
+	close(flight.done)
 	w.mu.Unlock()
 }
 
 // executePoll runs one OS sample while the caller owns the active polling slot
 // and does not hold w.mu.
-func (w *Watcher) executePoll(ctx context.Context, now time.Time) (Snapshot, bool, error) {
+func (w *Watcher) executePoll(ctx context.Context, now time.Time, flight *pollFlight) (Snapshot, bool, error) {
 	snapshot, changed, err := w.monitor.Poll(ctx, now)
 	if err != nil {
 		w.mu.Lock()
 		current := w.current
-		// Caller or loop-shutdown cancellation must not poison shared health.
+		// Caller or loop-shutdown cancellation must not poison shared health or
+		// fail concurrent healthy waiters riding the same in-flight sample.
 		if ctx.Err() == nil {
 			w.attemptedAt = now
 			w.lastErr = err
 			w.failedPolls++
+			flight.snapshot = current
+			flight.err = err
 		}
 		w.mu.Unlock()
 		return current, false, err
@@ -310,9 +329,9 @@ func (w *Watcher) run(ctx context.Context, prev <-chan struct{}, done chan struc
 	defer func() {
 		// Wait for any in-flight poll before clearing the resume gap so a
 		// concurrent sample cannot repopulate lastPoll after the loop goes idle.
-		pollDone, _ := w.claimPoll(context.Background())
+		flight, _ := w.claimPoll(context.Background())
 		w.monitor.ResetPollGap()
-		w.releasePoll(pollDone)
+		w.releasePoll(flight)
 	}()
 
 	if initialPoll || prev != nil {
@@ -346,18 +365,21 @@ func (w *Watcher) initialPoll(ctx context.Context) {
 		if wait := w.polling; wait != nil {
 			w.mu.Unlock()
 			select {
-			case <-wait:
+			case <-wait.done:
+				if wait.err != nil {
+					return
+				}
 				continue
 			case <-ctx.Done():
 				return
 			}
 		}
-		done := make(chan struct{})
-		w.polling = done
+		flight := &pollFlight{done: make(chan struct{})}
+		w.polling = flight
 		w.mu.Unlock()
 
-		defer w.releasePoll(done)
-		_, _, _ = w.executePoll(ctx, w.now())
+		defer w.releasePoll(flight)
+		_, _, _ = w.executePoll(ctx, w.now(), flight)
 		return
 	}
 }

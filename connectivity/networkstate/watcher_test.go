@@ -580,3 +580,220 @@ func TestWatcherStepCancelsWhileInFlightPollBlocks(t *testing.T) {
 		t.Fatalf("leader err = %v", err)
 	}
 }
+
+type waitingContext struct {
+	context.Context
+	once    sync.Once
+	waiting chan struct{}
+}
+
+func newWaitingContext(parent context.Context) *waitingContext {
+	return &waitingContext{Context: parent, waiting: make(chan struct{})}
+}
+
+func (c *waitingContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.waiting) })
+	return c.Context.Done()
+}
+
+func TestWatcherPollSharesNonCancellationErrorsAcrossFlightWaiters(t *testing.T) {
+	t.Run("cold_start_shared_error_isolates_cancellation_and_retries_sequentially", func(t *testing.T) {
+		now := time.Unix(9000, 0)
+		sampleErr := errors.New("adapter query unavailable")
+		block := make(chan struct{})
+		source := &countingSource{entered: make(chan struct{}, 2), block: block, err: sampleErr}
+		source.setIP("10.0.0.2")
+		watcher := NewWatcher(WatcherConfig{
+			Source:   source,
+			Debounce: time.Nanosecond,
+			Interval: time.Hour,
+			Now:      func() time.Time { return now },
+		})
+		defer watcher.Close()
+
+		leaderDone := make(chan error, 1)
+		go func() {
+			snap, changed, err := watcher.Poll(context.Background(), now)
+			if changed || snap.GenerationID() != 0 {
+				t.Errorf("leader Poll = (%d, %t, %v), want zero snapshot", snap.GenerationID(), changed, err)
+			}
+			leaderDone <- err
+		}()
+		<-source.entered
+
+		const healthyWaiters = 4
+		waiterErrs := make([]chan error, healthyWaiters)
+		waiterReady := make([]*waitingContext, healthyWaiters)
+		for i := range healthyWaiters {
+			waiterErrs[i] = make(chan error, 1)
+			waiterReady[i] = newWaitingContext(context.Background())
+			go func(idx int) {
+				snap, changed, err := watcher.Poll(waiterReady[idx], now)
+				if changed || snap.GenerationID() != 0 {
+					t.Errorf("waiter %d Poll = (%d, %t, %v), want zero snapshot", idx, snap.GenerationID(), changed, err)
+				}
+				waiterErrs[idx] <- err
+			}(i)
+		}
+
+		cancelParent, cancelWaiter := context.WithCancel(context.Background())
+		defer cancelWaiter()
+		canceledCtx := newWaitingContext(cancelParent)
+		canceledDone := make(chan error, 1)
+		go func() {
+			_, _, err := watcher.Poll(canceledCtx, now)
+			canceledDone <- err
+		}()
+
+		for _, wctx := range waiterReady {
+			<-wctx.waiting
+		}
+		<-canceledCtx.waiting
+
+		cancelWaiter()
+		select {
+		case err := <-canceledDone:
+			if !errors.Is(err, context.Canceled) {
+				close(block)
+				<-leaderDone
+				t.Fatalf("canceled waiter err = %v, want Canceled", err)
+			}
+		case <-time.After(time.Second):
+			close(block)
+			<-leaderDone
+			t.Fatal("canceled waiter did not exit promptly")
+		}
+
+		source.setBlock(nil)
+		close(block)
+
+		if err := <-leaderDone; !errors.Is(err, sampleErr) {
+			t.Fatalf("leader err = %v, want %v", err, sampleErr)
+		}
+		for i, ch := range waiterErrs {
+			if err := <-ch; !errors.Is(err, sampleErr) {
+				t.Fatalf("waiter %d err = %v, want %v", i, err, sampleErr)
+			}
+		}
+		if calls := source.calls.Load(); calls != 1 {
+			t.Fatalf("cold-start concurrent failure calls = %d, want 1", calls)
+		}
+
+		// Cold-start failure must not negative-cache subsequent sequential callers.
+		source.setErr(nil)
+		snap, _, err := watcher.Poll(context.Background(), now)
+		if err != nil || snap.GenerationID() != 1 {
+			t.Fatalf("sequential recovery Poll = (%d, %v), want gen 1", snap.GenerationID(), err)
+		}
+		if calls := source.calls.Load(); calls != 2 {
+			t.Fatalf("post-recovery calls = %d, want 2", calls)
+		}
+	})
+
+	t.Run("idle_stale_shared_error_preserves_last_snapshot", func(t *testing.T) {
+		now := time.Unix(10000, 0)
+		source := &countingSource{}
+		source.setIP("10.0.0.2")
+		watcher := NewWatcher(WatcherConfig{
+			Source:   source,
+			Debounce: time.Nanosecond,
+			Interval: time.Second,
+			Now:      func() time.Time { return now },
+		})
+		defer watcher.Close()
+
+		if snap, _, err := watcher.Poll(context.Background(), now); err != nil || snap.GenerationID() != 1 {
+			t.Fatalf("baseline Poll = (%d, %v)", snap.GenerationID(), err)
+		}
+
+		sampleErr := errors.New("route table unavailable")
+		block := make(chan struct{})
+		source.entered = make(chan struct{}, 2)
+		source.setBlock(block)
+		source.setErr(sampleErr)
+
+		stale := now.Add(2 * time.Second)
+		leaderDone := make(chan error, 1)
+		go func() {
+			snap, changed, err := watcher.Poll(context.Background(), stale)
+			if changed || snap.GenerationID() != 1 {
+				t.Errorf("leader stale Poll = (%d, %t, %v), want gen 1", snap.GenerationID(), changed, err)
+			}
+			leaderDone <- err
+		}()
+		<-source.entered
+
+		const waiters = 3
+		waiterErrs := make([]chan error, waiters)
+		waiterCtxs := make([]*waitingContext, waiters)
+		for i := range waiters {
+			waiterErrs[i] = make(chan error, 1)
+			waiterCtxs[i] = newWaitingContext(context.Background())
+			go func(idx int) {
+				snap, changed, err := watcher.Poll(waiterCtxs[idx], stale)
+				if changed || snap.GenerationID() != 1 {
+					t.Errorf("waiter %d stale Poll = (%d, %t, %v), want gen 1", idx, snap.GenerationID(), changed, err)
+				}
+				waiterErrs[idx] <- err
+			}(i)
+		}
+		for _, wctx := range waiterCtxs {
+			<-wctx.waiting
+		}
+
+		source.setBlock(nil)
+		close(block)
+
+		if err := <-leaderDone; !errors.Is(err, sampleErr) {
+			t.Fatalf("leader err = %v, want %v", err, sampleErr)
+		}
+		for i, ch := range waiterErrs {
+			if err := <-ch; !errors.Is(err, sampleErr) {
+				t.Fatalf("waiter %d err = %v, want %v", i, err, sampleErr)
+			}
+		}
+		if calls := source.calls.Load(); calls != 2 {
+			t.Fatalf("idle stale concurrent failure calls = %d, want 2", calls)
+		}
+	})
+
+	t.Run("cold_start_initial_poll_shares_in_flight_failure", func(t *testing.T) {
+		now := time.Unix(11000, 0)
+		sampleErr := errors.New("adapter query unavailable")
+		block := make(chan struct{})
+		source := &countingSource{entered: make(chan struct{}, 2), block: block, err: sampleErr}
+		watcher := NewWatcher(WatcherConfig{
+			Source:   source,
+			Debounce: time.Nanosecond,
+			Interval: time.Hour,
+			Now:      func() time.Time { return now },
+		})
+		defer watcher.Close()
+
+		leaderDone := make(chan error, 1)
+		go func() {
+			_, _, err := watcher.Poll(context.Background(), now)
+			leaderDone <- err
+		}()
+		<-source.entered
+
+		initCtx := newWaitingContext(context.Background())
+		initDone := make(chan struct{})
+		go func() {
+			watcher.initialPoll(initCtx)
+			close(initDone)
+		}()
+		<-initCtx.waiting
+
+		source.setBlock(nil)
+		close(block)
+
+		if err := <-leaderDone; !errors.Is(err, sampleErr) {
+			t.Fatalf("leader err = %v, want %v", err, sampleErr)
+		}
+		<-initDone
+		if calls := source.calls.Load(); calls != 1 {
+			t.Fatalf("initialPoll after shared cold-start failure calls = %d, want 1", calls)
+		}
+	})
+}
