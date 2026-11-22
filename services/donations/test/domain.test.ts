@@ -7,6 +7,7 @@ import {
   PUBLIC_WALL_LIMIT,
   applyVisibilityCommand,
   clampDonatedAt,
+  decodeAdminCursor,
   defaultDonationConfig,
   type DonationRecord,
   type PublicWallResponse,
@@ -678,7 +679,7 @@ describe('WallStore SQLite persistence, caching, rate limiting, and pagination',
     expect(page1.items).toHaveLength(2)
     expect(page1.nextCursor).not.toBeNull()
 
-    const page2 = store.listAdminDonations(page1.nextCursor, 2)
+    const page2 = store.listAdminDonations(decodeAdminCursor(page1.nextCursor), 2)
     expect(page2.items).toHaveLength(1)
     expect(page2.nextCursor).toBeNull()
 

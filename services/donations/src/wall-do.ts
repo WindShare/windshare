@@ -2,6 +2,7 @@ import { DurableObject } from 'cloudflare:workers'
 import type { DonationWallRpc, DonationsEnv } from './env'
 import type {
   AdminConfigPatch,
+  AdminDonationsCursor,
   AdminDonationsFilter,
   AdminDonationsPage,
   AdminSessionRecord,
@@ -91,7 +92,7 @@ export class DonationWall extends DurableObject<DonationsEnv> implements Donatio
   }
 
   listAdminDonations(
-    afterCursor: string | null,
+    afterCursor: AdminDonationsCursor | null,
     rawLimit: number | null,
     filter?: AdminDonationsFilter,
   ): AdminDonationsPage {

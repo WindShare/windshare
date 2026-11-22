@@ -1,5 +1,6 @@
 import type {
   AdminConfigPatch,
+  AdminDonationsCursor,
   AdminDonationsFilter,
   AdminDonationsPage,
   AdminSessionRecord,
@@ -34,7 +35,7 @@ export interface DonationWallRpc extends Rpc.DurableObjectBranded {
   getAdminConfig(): DonationConfig
   patchAdminConfig(patch: AdminConfigPatch): DonationConfig
   listAdminDonations(
-    afterCursor: string | null,
+    afterCursor: AdminDonationsCursor | null,
     rawLimit: number | null,
     filter?: AdminDonationsFilter,
   ): AdminDonationsPage

@@ -7,8 +7,10 @@ import {
   PUBLIC_WALL_LIMIT,
   applyVisibilityCommand,
   clampDonatedAt,
+  encodeAdminCursor,
   projectPublicWallEntry,
   type AdminConfigPatch,
+  type AdminDonationsCursor,
   type AdminDonationsFilter,
   type AdminDonationsPage,
   type AdminSessionRecord,
@@ -34,7 +36,6 @@ const DEFAULT_ADMIN_PAGE_LIMIT = 50
 const MAX_ADMIN_PAGE_LIMIT = 100
 // Keep parameterized IN-clause chunks well under SQLite's 999 bound parameter ceiling.
 const SQL_IN_BATCH_SIZE = 100
-const CURSOR_PATTERN = /^(\d+):([A-Za-z0-9_-]+)$/
 
 export type RateLimitScope = 'crypto' | 'admin_login'
 
@@ -201,18 +202,6 @@ export function matchesIfNoneMatch(header: string | null, strongEtag: string): b
     }
   }
   return false
-}
-
-export function decodeAdminCursor(
-  raw: string | null,
-): { readonly donatedAt: number; readonly id: string } | null {
-  if (raw === null) return null
-  const match = CURSOR_PATTERN.exec(raw.trim())
-  if (match === null) return null
-  const donatedAt = Number(match[1])
-  const id = match[2] ?? ''
-  if (!Number.isSafeInteger(donatedAt) || id.length === 0) return null
-  return { donatedAt, id }
 }
 
 function normalizeAdminPageLimit(rawLimit?: number | null): number {
@@ -653,13 +642,12 @@ export class WallStore {
   }
 
   listAdminDonations(
-    afterCursor: string | null,
+    afterCursor: AdminDonationsCursor | null,
     rawLimit?: number | null,
     filter?: AdminDonationsFilter,
   ): AdminDonationsPage {
     const limit = normalizeAdminPageLimit(rawLimit)
-    const cursor = decodeAdminCursor(afterCursor)
-    const built = buildAdminDonationsQuery(cursor, limit, filter)
+    const built = buildAdminDonationsQuery(afterCursor, limit, filter)
     const rows = this.sql.exec(built.sql, ...built.bindings)
 
     const all: DonationRecord[] = []
@@ -670,7 +658,7 @@ export class WallStore {
     const items = hasMore ? all.slice(0, limit) : all
     const lastItem = items[items.length - 1]
     const nextCursor = hasMore && lastItem !== undefined
-      ? `${lastItem.donatedAt}:${lastItem.id}`
+      ? encodeAdminCursor({ donatedAt: lastItem.donatedAt, id: lastItem.id })
       : null
 
     return {

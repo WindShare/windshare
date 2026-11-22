@@ -29,7 +29,9 @@ import {
   MAX_CRYPTO_USD_MINOR,
   MAX_HIDE_REASON_CODEPOINTS,
   VISIBILITY_KINDS,
+  decodeAdminCursor,
   type AdminConfigPatch,
+  type AdminDonationsCursor,
   type AdminDonationsFilter,
   type AdminSessionRecord,
   type AdminVisibilityCommand,
@@ -601,6 +603,26 @@ function summarizeStorageError(error: unknown): {
   return { message, retryable, overloaded }
 }
 
+async function handleAdminDonationsList(
+  env: DonationsEnv,
+  searchParams: URLSearchParams,
+): Promise<Response> {
+  const rawAfter = searchParams.get('after')
+  let afterCursor: AdminDonationsCursor | null = null
+  if (rawAfter !== null) {
+    afterCursor = decodeAdminCursor(rawAfter)
+    // Reject malformed cursors explicitly instead of silently restarting from page 1,
+    // which would cause paginating callers to loop or append duplicate records.
+    if (afterCursor === null) {
+      return adminJsonResponse({ error: 'invalid_cursor' }, 400)
+    }
+  }
+  const limit = parseOptionalIntParam(searchParams.get('limit'))
+  const filter = parseAdminDonationsFilter(searchParams)
+  const page = await getDonationWallStub(env).listAdminDonations(afterCursor, limit, filter)
+  return adminJsonResponse(page, 200)
+}
+
 async function dispatchAdminApi(
   request: Request,
   env: DonationsEnv,
@@ -645,11 +667,7 @@ async function dispatchAdminApi(
   }
 
   if (method === 'GET' && pathname === '/v1/admin/donations') {
-    const after = url.searchParams.get('after')
-    const limit = parseOptionalIntParam(url.searchParams.get('limit'))
-    const filter = parseAdminDonationsFilter(url.searchParams)
-    const page = await getDonationWallStub(env).listAdminDonations(after, limit, filter)
-    return adminJsonResponse(page, 200)
+    return handleAdminDonationsList(env, url.searchParams)
   }
 
   const mutationResponse = await handleAuthenticatedAdminMutation(request, env, url, session, deps)

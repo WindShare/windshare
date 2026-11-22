@@ -166,11 +166,32 @@ export interface AdminDonationsFilter {
   readonly query?: string
 }
 
+export interface AdminDonationsCursor {
+  readonly donatedAt: number
+  readonly id: string
+}
+
 export interface AdminDonationsPage {
   readonly items: readonly DonationRecord[]
   readonly nextCursor: string | null
   readonly config: DonationConfig
   readonly counts: AdminVisibilityCounts
+}
+
+const ADMIN_CURSOR_PATTERN = /^(\d+):([A-Za-z0-9_-]+)$/
+
+export function encodeAdminCursor(cursor: AdminDonationsCursor): string {
+  return `${cursor.donatedAt}:${cursor.id}`
+}
+
+export function decodeAdminCursor(raw: string | null): AdminDonationsCursor | null {
+  if (raw === null) return null
+  const match = ADMIN_CURSOR_PATTERN.exec(raw.trim())
+  if (match === null) return null
+  const donatedAt = Number(match[1])
+  const id = match[2] ?? ''
+  if (!Number.isSafeInteger(donatedAt) || id.length === 0) return null
+  return { donatedAt, id }
 }
 
 export function emptyVisibilityCounts(): AdminVisibilityCounts {

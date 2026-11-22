@@ -1,14 +1,10 @@
 import {
   emptyVisibilityCounts,
+  type AdminDonationsCursor,
   type AdminDonationsFilter,
   type AdminVisibilityCounts,
   type VisibilityKind,
 } from './model'
-
-export interface DecodedAdminCursor {
-  readonly donatedAt: number
-  readonly id: string
-}
 
 export interface BuiltSqlQuery {
   readonly sql: string
@@ -23,7 +19,7 @@ function escapeLikePattern(raw: string): string {
 }
 
 export function buildAdminDonationsQuery(
-  cursor: DecodedAdminCursor | null,
+  cursor: AdminDonationsCursor | null,
   limit: number,
   filter?: AdminDonationsFilter,
 ): BuiltSqlQuery {
