@@ -16,6 +16,7 @@ function nowSeconds(): number {
   return Math.floor(Date.now() / 1000)
 }
 
+// Callers receive values already validated by the admin route layer; this only coerces.
 function parseOptionalIntParam(raw: string | null): number | undefined {
   if (raw === null) return undefined
   const parsed = Number(raw)

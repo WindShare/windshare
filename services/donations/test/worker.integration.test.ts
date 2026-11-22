@@ -612,10 +612,12 @@ describe('windshare-donations admin list pagination', () => {
     expect(await fractional.json()).toEqual({ error: 'invalid_limit' })
     expect((await list('?limit=abc')).status).toBe(400)
     expect((await list('?limit=-1')).status).toBe(400)
+    expect((await list('?limit=')).status).toBe(400)
 
     const badCursor = await list('?after=not-a-cursor')
     expect(badCursor.status).toBe(400)
     expect(await badCursor.json()).toEqual({ error: 'invalid_cursor' })
+    expect((await list('?after=')).status).toBe(400)
 
     const ok = await list('?limit=1')
     expect(ok.status).toBe(200)
