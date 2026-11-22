@@ -57,7 +57,7 @@ func TestPrepareSenderWiresSharedCacheAndRevisionIDs(t *testing.T) {
 	if err != nil || secondRevision.IsZero() || secondRevision == firstRevision {
 		t.Fatalf("second revision ID = %x (first=%x), err = %v", secondRevision, firstRevision, err)
 	}
-	if capturedStoreConfig.CacheInvalidator != sender.cache {
+	if capturedStoreConfig.Cache != sender.cache {
 		t.Fatal("revision store and sender services did not share one cache authority")
 	}
 	if capturedStoreConfig.Tracer != tracer {

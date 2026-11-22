@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -308,5 +309,170 @@ func TestTransientReadFailureDoesNotInvalidateActiveRevision(t *testing.T) {
 	}
 	if len(invalidator.revisions) != 0 || stable.closed != 0 {
 		t.Fatal("transient read mutated invalidation or handle authority")
+	}
+}
+
+type panickingRetireCache struct {
+	retired atomic.Int32
+}
+
+func (*panickingRetireCache) InvalidateRevision(catalog.FileID, FileRevision) {}
+func (c *panickingRetireCache) RetireRevision(catalog.FileID, FileRevision) {
+	c.retired.Add(1)
+	panic("cache retire failure")
+}
+
+func TestRevisionStoreRetiresCacheOnReleaseGraceExpiryReclaimAndClose(t *testing.T) {
+	clock := &testClock{now: time.Unix(100, 0)}
+	file, record := fileRecord(t, 1)
+	cache := &recordingInvalidator{}
+	source := &testRevisionSource{files: []*testStableFile{
+		{data: []byte{1}},
+		{data: []byte{2}},
+		{data: []byte{3}},
+	}}
+	store, _, _ := newRevisionStore(t, source, clock, cache, file, record)
+	session := generousSession(t, store, "session")
+
+	// 1. Normal relinquishment retires cache immediately without drift invalidation.
+	first, err := store.OpenRevision(context.Background(), file, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EndLease(first.ID(), LeaseRelinquished); err != nil {
+		t.Fatal(err)
+	}
+	invalidated, retired := cache.snapshot()
+	if len(invalidated) != 0 || len(retired) != 1 || retired[0] != first.Descriptor().FileRevision() {
+		t.Fatalf("relinquish cache events invalidated=%v retired=%v", invalidated, retired)
+	}
+
+	// 2. Detached lease preserves cache across grace, then retires once grace elapses.
+	second, err := store.OpenRevision(context.Background(), file, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EndLease(second.ID(), LeaseDetached); err != nil {
+		t.Fatal(err)
+	}
+	invalidated, retired = cache.snapshot()
+	if len(invalidated) != 0 || len(retired) != 1 {
+		t.Fatalf("detached grace prematurely retired cache: invalidated=%v retired=%v", invalidated, retired)
+	}
+	clock.Advance(RevisionResumeGrace)
+	third, err := store.OpenRevision(context.Background(), file, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidated, retired = cache.snapshot()
+	if len(invalidated) != 0 || len(retired) != 2 || retired[1] != second.Descriptor().FileRevision() {
+		t.Fatalf("grace expiry cache events invalidated=%v retired=%v", invalidated, retired)
+	}
+
+	// 3. Store Close retires remaining active revisions without drift invalidation.
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	invalidated, retired = cache.snapshot()
+	if len(invalidated) != 0 || len(retired) != 3 || retired[2] != third.Descriptor().FileRevision() {
+		t.Fatalf("store close cache events invalidated=%v retired=%v", invalidated, retired)
+	}
+}
+
+func TestRevisionStoreRetiresCacheOnCapacityReclaimAndGuardsCallbackPanic(t *testing.T) {
+	clock := &testClock{now: time.Unix(100, 0)}
+	owner := newCapacityTestOwner(t, revisioncapacity.CapacityLimits{StableHandles: 1, ActiveLeases: 4}, nil)
+	limits := revisioncapacity.CapacityLimits{StableHandles: 1, ActiveLeases: 4}
+	firstID, firstRecord := capacityRecord(t, 61)
+	secondID, secondRecord := capacityRecord(t, 62)
+	panicCache := &panickingRetireCache{}
+	source := &mappedRevisionSource{
+		files: map[catalog.FileID]StableFile{
+			firstID:  &capacityStableFile{data: []byte{1}},
+			secondID: &capacityStableFile{data: []byte{2}},
+		},
+		calls: make(map[catalog.FileID]int),
+	}
+	store, err := NewRevisionStore(RevisionStoreConfig{
+		ShareInstance:       catalogID[catalog.ShareInstance](1),
+		ChunkSize:           catalog.MinChunkSize,
+		Catalog:             testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{firstID.NodeID(): firstRecord, secondID.NodeID(): secondRecord}},
+		Source:              source,
+		Clock:               clock,
+		LeaseIDs:            &sequenceIDs{},
+		Cache:               panicCache,
+		CapacityCoordinator: owner.Coordinator(),
+		CapacityStore:       revisioncapacity.StoreConfig{StoreID: "reclaim-panic-store", ShareID: "reclaim-panic-share", Limits: limits},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
+	session := capacitySession(t, store, "reclaim-panic-session", limits)
+	first, err := store.OpenRevision(context.Background(), firstID, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EndLease(first.ID(), LeaseDetached); err != nil {
+		t.Fatal(err)
+	}
+	if panicCache.retired.Load() != 0 {
+		t.Fatal("detached grace triggered cache retirement")
+	}
+	second, err := store.OpenRevision(context.Background(), secondID, session)
+	if err != nil {
+		t.Fatalf("reclaim with panicking cache observer failed: %v", err)
+	}
+	if panicCache.retired.Load() != 1 {
+		t.Fatalf("reclaim retire calls = %d, want 1", panicCache.retired.Load())
+	}
+	if err := store.EndLease(second.ID(), LeaseRelinquished); err != nil {
+		t.Fatal(err)
+	}
+	if panicCache.retired.Load() != 2 {
+		t.Fatalf("post-relinquish retire calls = %d, want 2", panicCache.retired.Load())
+	}
+}
+
+func TestRevisionStoreRetiresCacheImmediatelyWhileReaderIsInFlight(t *testing.T) {
+	clock := &testClock{now: time.Unix(100, 0)}
+	file, record := fileRecord(t, 1)
+	stable := &capacityStableFile{
+		data: []byte{7}, readStarted: make(chan struct{}), readRelease: make(chan struct{}),
+	}
+	cache := &recordingInvalidator{}
+	store, _, _ := newRevisionStore(t, &queuedStableSource{files: []StableFile{stable}}, clock, cache, file, record)
+	session := generousSession(t, store, "session")
+
+	lease, err := store.OpenRevision(context.Background(), file, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, _ := NewBlockRef(file, lease.Descriptor().FileRevision(), 0, lease.Descriptor().Geometry())
+	readErr := make(chan error, 1)
+	go func() {
+		_, err := store.ReadBlock(context.Background(), lease.ID(), ref)
+		readErr <- err
+	}()
+	<-stable.readStarted
+
+	if err := store.EndLease(lease.ID(), LeaseRelinquished); err != nil {
+		t.Fatal(err)
+	}
+	invalidated, retired := cache.snapshot()
+	if len(invalidated) != 0 || len(retired) != 1 || retired[0] != lease.Descriptor().FileRevision() {
+		t.Fatalf("in-flight relinquish cache events invalidated=%v retired=%v", invalidated, retired)
+	}
+	close(stable.readRelease)
+	if err := <-readErr; err != nil {
+		t.Fatalf("in-flight read after clean relinquish error=%v", err)
+	}
+	invalidated, retired = cache.snapshot()
+	if len(invalidated) != 0 || len(retired) != 1 {
+		t.Fatalf("post-read cache events duplicated retirement: invalidated=%v retired=%v", invalidated, retired)
 	}
 }

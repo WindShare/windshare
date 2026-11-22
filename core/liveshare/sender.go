@@ -385,9 +385,9 @@ func prepareSenderContent(
 	sender.revisionStore, err = dependencies.newRevisionStore(content.RevisionStoreConfig{
 		ShareInstance: authority.shareInstance, ChunkSize: config.ChunkSize, Catalog: sender.catalogStore,
 		Source: sender.source, CapacityCoordinator: config.RevisionCapacity,
-		CapacityStore:    senderRevisionCapacityStoreConfig(authority.shareInstance, config.CapacityTracer),
-		RevisionIDs:      randomRevisionIDs{random: random},
-		CacheInvalidator: sender.cache, Tracer: config.RevisionTracer,
+		CapacityStore: senderRevisionCapacityStoreConfig(authority.shareInstance, config.CapacityTracer),
+		RevisionIDs:   randomRevisionIDs{random: random},
+		Cache:         sender.cache, Tracer: config.RevisionTracer,
 	})
 	if err != nil {
 		return err

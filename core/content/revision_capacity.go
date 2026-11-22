@@ -29,6 +29,7 @@ func (s *RevisionStore) ReclaimIdle(_ context.Context, claim revisioncapacity.Re
 		s.mu.Unlock()
 		return revisioncapacity.ReclaimDeclined(claim)
 	}
+	identity := revision.identity()
 	delete(s.idleRevisions, revision.idleToken)
 	delete(s.revisions, revision.descriptor.FileID())
 	revision.idleToken = ""
@@ -58,6 +59,7 @@ func (s *RevisionStore) ReclaimIdle(_ context.Context, claim revisioncapacity.Re
 	revision.closing = false
 	revision.closed = returned
 	s.mu.Unlock()
+	s.retireRevisionCache(identity)
 	if !returned {
 		return revisioncapacity.ReclaimOwnershipUncertain(claim, closeErr)
 	}

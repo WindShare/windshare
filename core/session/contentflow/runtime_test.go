@@ -172,7 +172,7 @@ func newRuntimeFixture(t *testing.T, blocks int) runtimeFixture {
 			StoreID: "contentflow-runtime-store", ShareID: "contentflow-runtime-share",
 			Limits: revisioncapacity.DefaultShareLimits(),
 		},
-		Clock: clock, LeaseIDs: &runtimeIDs{}, CacheInvalidator: cache,
+		Clock: clock, LeaseIDs: &runtimeIDs{}, Cache: cache,
 	})
 	if err != nil {
 		_ = capacityOwner.Close()

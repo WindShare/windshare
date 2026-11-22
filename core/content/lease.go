@@ -202,6 +202,7 @@ const (
 	revisionTransitionNone revisionTransitionKind = iota
 	revisionTransitionPublishIdle
 	revisionTransitionClose
+	revisionTransitionRetireCache
 )
 
 type revisionTransition struct {
@@ -210,6 +211,7 @@ type revisionTransition struct {
 	token     revisioncapacity.CandidateToken
 	candidate revisioncapacity.IdleCandidate
 	cleanup   revisionCleanup
+	retire    revisionIdentity
 }
 
 func (s *RevisionStore) retireRevisionIfIdleLocked(revision *revisionState, now time.Time) (revisionTransition, bool) {
@@ -242,19 +244,22 @@ func (s *RevisionStore) retireRevisionIfIdleLocked(revision *revisionState, now 
 			},
 		}, false
 	}
+	identity := revision.identity()
 	if s.revisions[revision.descriptor.FileID()] == revision {
 		delete(s.revisions, revision.descriptor.FileID())
 	}
 	revision.lifecycleGeneration++
 	revision.lifecycle = revisionLifecycleReleased
 	revision.closePending = true
-	transition := revisionTransition{kind: revisionTransitionClose, revision: revision, token: revision.idleToken}
+	transition := revisionTransition{kind: revisionTransitionClose, revision: revision, token: revision.idleToken, retire: identity}
 	if transition.token != "" {
 		delete(s.idleRevisions, transition.token)
 	}
 	revision.idleToken = ""
 	if revision.readers != 0 {
-		return revisionTransition{}, true
+		// Handle close waits for active readers in finishRead, but the revision
+		// is permanently retired now so cached entries and in-flight caching stop immediately.
+		return revisionTransition{kind: revisionTransitionRetireCache, retire: identity}, true
 	}
 	if transition.token == "" && revision.source != nil && !revision.closing && !revision.closed {
 		revision.closing = true
@@ -306,7 +311,11 @@ func (s *RevisionStore) runRevisionTransition(transition revisionTransition) err
 			transition.cleanup = revisionCleanup{store: s, revision: transition.revision, idleToken: transition.token}
 		}
 		err := transition.cleanup.run()
+		s.retireRevisionCache(transition.retire)
 		return err
+	case revisionTransitionRetireCache:
+		s.retireRevisionCache(transition.retire)
+		return nil
 	default:
 		return errors.New("revision transition kind is invalid")
 	}

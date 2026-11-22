@@ -7,14 +7,25 @@ import (
 )
 
 func (s *RevisionStore) invalidateRevisionCache(identity revisionIdentity) {
-	if s.invalidator == nil {
+	if s.cache == nil {
 		return
 	}
 	// RevisionStore remains the authorization boundary even if an optional
 	// cache observer fails; a callback panic must not strand open waiters or
 	// prevent shutdown from joining the worker that proved the mismatch.
 	defer func() { _ = recover() }()
-	s.invalidator.InvalidateRevision(identity.file, identity.revision)
+	s.cache.InvalidateRevision(identity.file, identity.revision)
+}
+
+func (s *RevisionStore) retireRevisionCache(identity revisionIdentity) {
+	if s.cache == nil || identity.file.IsZero() || identity.revision.IsZero() {
+		return
+	}
+	// RevisionStore remains the lifecycle and capacity authority even if an
+	// optional cache observer panics; a callback panic must not corrupt handle
+	// retirement, reclaim settlement, or store shutdown.
+	defer func() { _ = recover() }()
+	s.cache.RetireRevision(identity.file, identity.revision)
 }
 
 // invalidateIdentityLocked discovers and revokes every in-memory incarnation

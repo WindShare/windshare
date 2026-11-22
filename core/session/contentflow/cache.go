@@ -65,13 +65,14 @@ type cacheEntry struct {
 }
 
 type cacheCall struct {
-	ctx       context.Context
-	cancel    context.CancelFunc
-	done      chan struct{}
-	waiters   int
-	completed bool
-	block     cachedBlock
-	err       error
+	ctx         context.Context
+	cancel      context.CancelFunc
+	done        chan struct{}
+	waiters     int
+	completed   bool
+	uncacheable bool
+	block       cachedBlock
+	err         error
 }
 
 type SharedBlockCache struct {
@@ -79,14 +80,16 @@ type SharedBlockCache struct {
 	maxBytes    uint64
 	reservation cacheReservation
 
-	mu       sync.Mutex
-	loads    sync.WaitGroup
-	closed   bool
-	used     uint64
-	entries  map[BlockCacheKey]*list.Element
-	lru      *list.List
-	inflight map[BlockCacheKey]*cacheCall
-	watches  map[revisionCacheIdentity]map[*revisionWatch]struct{}
+	mu            sync.Mutex
+	loads         sync.WaitGroup
+	closed        bool
+	used          uint64
+	entries       map[BlockCacheKey]*list.Element
+	entriesByRev  map[revisionCacheIdentity]map[*list.Element]struct{}
+	lru           *list.List
+	inflight      map[BlockCacheKey]*cacheCall
+	inflightByRev map[revisionCacheIdentity]map[BlockCacheKey]*cacheCall
+	watches       map[revisionCacheIdentity]map[*revisionWatch]struct{}
 }
 
 func NewSharedBlockCache(share catalog.ShareInstance, maxBytes uint64, process *ProcessCacheBudget) (*SharedBlockCache, error) {
@@ -98,8 +101,12 @@ func NewSharedBlockCache(share catalog.ShareInstance, maxBytes uint64, process *
 	}
 	return &SharedBlockCache{
 		share: share, maxBytes: maxBytes, reservation: cacheReservation{budget: process},
-		entries: make(map[BlockCacheKey]*list.Element), lru: list.New(), inflight: make(map[BlockCacheKey]*cacheCall),
-		watches: make(map[revisionCacheIdentity]map[*revisionWatch]struct{}),
+		entries:       make(map[BlockCacheKey]*list.Element),
+		entriesByRev:  make(map[revisionCacheIdentity]map[*list.Element]struct{}),
+		lru:           list.New(),
+		inflight:      make(map[BlockCacheKey]*cacheCall),
+		inflightByRev: make(map[revisionCacheIdentity]map[BlockCacheKey]*cacheCall),
+		watches:       make(map[revisionCacheIdentity]map[*revisionWatch]struct{}),
 	}, nil
 }
 
@@ -133,7 +140,7 @@ func (c *SharedBlockCache) get(ctx context.Context, key BlockCacheKey, load func
 	if call == nil {
 		callContext, cancel := context.WithCancel(context.WithoutCancel(ctx))
 		call = &cacheCall{ctx: callContext, cancel: cancel, done: make(chan struct{}), waiters: 1}
-		c.inflight[key] = call
+		c.addInflightLocked(key, call)
 		// Registration shares the closed-state lock so Close can never begin
 		// waiting while a newly admitted load is still able to increment the group.
 		c.loads.Add(1)
@@ -188,7 +195,7 @@ func (c *SharedBlockCache) await(ctx context.Context, key BlockCacheKey, call *c
 		if c.inflight[key] == call && !call.completed {
 			call.waiters--
 			if call.waiters == 0 {
-				delete(c.inflight, key)
+				c.removeInflightLocked(key)
 				c.completeTerminatedCallLocked(call, ctx.Err())
 			}
 		}
@@ -217,17 +224,39 @@ func (c *SharedBlockCache) runLoad(key BlockCacheKey, call *cacheCall, load func
 	call.completed = true
 	active := c.inflight[key] == call
 	if active {
-		delete(c.inflight, key)
+		c.removeInflightLocked(key)
 	}
-	// Invalidation removes the call before cancelling it. A loader that ignores
-	// cancellation must not repopulate the cache with the invalidated revision.
-	if err == nil && active && call.waiters > 0 && !c.closed {
+	// Invalidation removes the call before cancelling it; clean retirement marks
+	// it uncacheable. Neither path may repopulate the cache with a dead revision.
+	if err == nil && active && !call.uncacheable && call.waiters > 0 && !c.closed {
 		c.storeLocked(key, block)
 	}
 	call.block, call.err = block, err
 	close(call.done)
 	call.cancel()
 	c.mu.Unlock()
+}
+
+func (c *SharedBlockCache) addInflightLocked(key BlockCacheKey, call *cacheCall) {
+	c.inflight[key] = call
+	identity := revisionCacheIdentity{file: key.FileID, revision: key.FileRevision}
+	calls := c.inflightByRev[identity]
+	if calls == nil {
+		calls = make(map[BlockCacheKey]*cacheCall)
+		c.inflightByRev[identity] = calls
+	}
+	calls[key] = call
+}
+
+func (c *SharedBlockCache) removeInflightLocked(key BlockCacheKey) {
+	delete(c.inflight, key)
+	identity := revisionCacheIdentity{file: key.FileID, revision: key.FileRevision}
+	if calls := c.inflightByRev[identity]; calls != nil {
+		delete(calls, key)
+		if len(calls) == 0 {
+			delete(c.inflightByRev, identity)
+		}
+	}
 }
 
 func (c *SharedBlockCache) completeTerminatedCallLocked(call *cacheCall, err error) {
@@ -256,6 +285,13 @@ func (c *SharedBlockCache) storeLocked(key BlockCacheKey, block cachedBlock) {
 	entry := &cacheEntry{key: key, block: block, bytes: bytes}
 	element := c.lru.PushFront(entry)
 	c.entries[key] = element
+	identity := revisionCacheIdentity{file: key.FileID, revision: key.FileRevision}
+	entries := c.entriesByRev[identity]
+	if entries == nil {
+		entries = make(map[*list.Element]struct{})
+		c.entriesByRev[identity] = entries
+	}
+	entries[element] = struct{}{}
 	c.used += bytes
 }
 
@@ -271,9 +307,35 @@ func (c *SharedBlockCache) evictOldestLocked() bool {
 func (c *SharedBlockCache) removeEntryLocked(element *list.Element) {
 	entry := element.Value.(*cacheEntry)
 	delete(c.entries, entry.key)
+	identity := revisionCacheIdentity{file: entry.key.FileID, revision: entry.key.FileRevision}
+	if entries := c.entriesByRev[identity]; entries != nil {
+		delete(entries, element)
+		if len(entries) == 0 {
+			delete(c.entriesByRev, identity)
+		}
+	}
 	c.lru.Remove(element)
 	c.used -= entry.bytes
 	c.reservation.shrink(entry.bytes)
+}
+
+func (c *SharedBlockCache) evictRevisionEntriesLocked(identity revisionCacheIdentity) {
+	for element := range c.entriesByRev[identity] {
+		c.removeEntryLocked(element)
+	}
+}
+
+// RetireRevision reclaims cached entries for a cleanly retired open-handle
+// revision and prevents its remaining in-flight loads from caching, without
+// aborting active sends as source drift.
+func (c *SharedBlockCache) RetireRevision(file catalog.FileID, revision content.FileRevision) {
+	identity := revisionCacheIdentity{file: file, revision: revision}
+	c.mu.Lock()
+	c.evictRevisionEntriesLocked(identity)
+	for _, call := range c.inflightByRev[identity] {
+		call.uncacheable = true
+	}
+	c.mu.Unlock()
 }
 
 // InvalidateRevision evicts cached entries, aborts in-flight loads, and cancels
@@ -282,16 +344,10 @@ func (c *SharedBlockCache) removeEntryLocked(element *list.Element) {
 func (c *SharedBlockCache) InvalidateRevision(file catalog.FileID, revision content.FileRevision) {
 	identity := revisionCacheIdentity{file: file, revision: revision}
 	c.mu.Lock()
-	for key, element := range c.entries {
-		if key.FileID == file && key.FileRevision == revision {
-			c.removeEntryLocked(element)
-		}
-	}
-	for key, call := range c.inflight {
-		if key.FileID == file && key.FileRevision == revision {
-			delete(c.inflight, key)
-			c.completeTerminatedCallLocked(call, content.ErrRevisionDrift)
-		}
+	c.evictRevisionEntriesLocked(identity)
+	for key, call := range c.inflightByRev[identity] {
+		c.removeInflightLocked(key)
+		c.completeTerminatedCallLocked(call, content.ErrRevisionDrift)
 	}
 	watches := make([]*revisionWatch, 0, len(c.watches[identity]))
 	for watch := range c.watches[identity] {
@@ -318,7 +374,7 @@ func (c *SharedBlockCache) Stop() {
 	if !c.closed {
 		c.closed = true
 		for key, call := range c.inflight {
-			delete(c.inflight, key)
+			c.removeInflightLocked(key)
 			c.completeTerminatedCallLocked(call, ErrServiceClosed)
 		}
 		for c.evictOldestLocked() {

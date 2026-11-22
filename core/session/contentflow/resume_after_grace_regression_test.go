@@ -157,9 +157,9 @@ func TestResumeWithinGraceReusesResidentCacheAndReopenMatchesMetadata(t *testing
 			StoreID: "resume-after-grace-store", ShareID: "resume-after-grace-share",
 			Limits: revisioncapacity.DefaultShareLimits(),
 		},
-		Clock:            clock,
-		LeaseIDs:         &runtimeIDs{},
-		CacheInvalidator: cache,
+		Clock:    clock,
+		LeaseIDs: &runtimeIDs{},
+		Cache:    cache,
 	})
 	if err != nil {
 		_ = capacityOwner.Close()
@@ -299,13 +299,16 @@ func TestResumeWithinGraceReusesResidentCacheAndReopenMatchesMetadata(t *testing
 
 	// Releasing graceLease leaves the earlier detached session's recovery grace
 	// intact until RevisionResumeGrace elapses; once expired, reopening retires
-	// the old handle and assigns a fresh FileRevision whose SourceMetadata still
-	// authorizes reuse.
+	// the old handle (and reclaims its cached blocks) and assigns a fresh
+	// FileRevision whose SourceMetadata still authorizes reuse.
 	if err := secondService.Release(graceLease.ID()); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.ValidateLease(graceLease.ID(), graceLease.Descriptor()); !errors.Is(err, content.ErrLeaseExpired) {
 		t.Fatalf("relinquished lease validation error=%v", err)
+	}
+	if cache.UsedBytes() != cachedBytes || processCache.Used() != cachedBytes {
+		t.Fatalf("grace-period cache was prematurely evicted: cache=%d process=%d want=%d", cache.UsedBytes(), processCache.Used(), cachedBytes)
 	}
 	requireResumeCapacityUsage(t, secondSessionCapacity.Snapshot(), revisioncapacity.CapacityUsage{})
 	clock.Advance(content.RevisionResumeGrace)
@@ -313,6 +316,9 @@ func TestResumeWithinGraceReusesResidentCacheAndReopenMatchesMetadata(t *testing
 	reopened, err := secondService.Open(context.Background(), resumeRequest)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if cache.UsedBytes() != 0 || processCache.Used() != 0 {
+		t.Fatalf("expired grace revision retained cached blocks after reopen: cache=%d process=%d", cache.UsedBytes(), processCache.Used())
 	}
 	reopenedItems := reopened.Items()
 	if len(reopenedItems) != 1 || reopenedItems[0].Failure != nil {
@@ -351,15 +357,199 @@ func TestResumeWithinGraceReusesResidentCacheAndReopenMatchesMetadata(t *testing
 	if _, _, reads := source.snapshot(); !slices.Equal(reads, []uint64{0, uint64(chunkSize)}) {
 		t.Errorf("checkpoint resume re-requested verified progress; source reads=%v", reads)
 	}
+	if cache.UsedBytes() == 0 || processCache.Used() == 0 {
+		t.Fatalf("reopened continuation did not populate cache: cache=%d process=%d", cache.UsedBytes(), processCache.Used())
+	}
 	if err := secondService.Release(reopenedLease.ID()); err != nil {
 		t.Fatal(err)
 	}
 	if opens, closes, reads := source.snapshot(); opens != 2 || closes != 2 || !slices.Equal(reads, []uint64{0, uint64(chunkSize)}) {
 		t.Fatalf("post-relinquishment source lifecycle opens=%d closes=%d reads=%v", opens, closes, reads)
 	}
+	if cache.UsedBytes() != 0 || processCache.Used() != 0 {
+		t.Fatalf("cleanly retired revision retained cache budget: cache=%d process=%d", cache.UsedBytes(), processCache.Used())
+	}
 	requireResumeCapacityUsage(t, store.CapacitySnapshot().Process(), revisioncapacity.CapacityUsage{})
 	requireResumeCapacityUsage(t, store.CapacitySnapshot().Share(), revisioncapacity.CapacityUsage{})
 	requireResumeCapacityUsage(t, secondSessionCapacity.Snapshot(), revisioncapacity.CapacityUsage{})
+}
+
+func TestCrossShareReclaimFreesRetiredCacheForPeerShareBudget(t *testing.T) {
+	chunkSize := uint32(catalog.MinChunkSize)
+	data := make([]byte, chunkSize)
+	for index := range data {
+		data[index] = byte(index)
+	}
+	modified, err := catalog.NewModifiedTime(2_000, 0, catalog.TimePrecisionSeconds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	makeRecord := func(file catalog.FileID, parent catalog.DirectoryID, name string) catalog.NodeRecord {
+		locator, locErr := catalog.NewSourceReference([]byte("object:" + name))
+		if locErr != nil {
+			t.Fatal(locErr)
+		}
+		identity, idErr := catalog.NewSourceIdentity([]byte("src:" + name))
+		if idErr != nil {
+			t.Fatal(idErr)
+		}
+		candidate, candErr := catalog.NewVersionCandidate([]byte("ver:" + name))
+		if candErr != nil {
+			t.Fatal(candErr)
+		}
+		record, recErr := catalog.NewFileNodeRecord(file, parent, name, locator, identity, candidate, uint64(chunkSize), modified)
+		if recErr != nil {
+			t.Fatal(recErr)
+		}
+		return record
+	}
+
+	capacityOwner, err := revisioncapacity.NewProcessOwner(revisioncapacity.ProcessConfig{
+		Limits:     revisioncapacity.CapacityLimits{StableHandles: 1, ActiveLeases: 4},
+		RetryAfter: revisioncapacity.DefaultCapacityRetryAfter,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Budget accommodates one encoded block (~1 KiB + CBOR envelope) but not two,
+	// proving cross-share reclaim frees both the physical handle and cache budget.
+	processCache, err := NewProcessCacheBudget(uint64(chunkSize) + 256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := &runtimeClock{now: time.Unix(20_000, 0)}
+
+	shareA := flowID[catalog.ShareInstance](211)
+	fileA := flowID[catalog.FileID](212)
+	recordA := makeRecord(fileA, flowID[catalog.DirectoryID](213), "a.bin")
+	cacheA, err := NewSharedBlockCache(shareA, uint64(chunkSize)*4, processCache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	storeA, err := content.NewRevisionStore(content.RevisionStoreConfig{
+		ShareInstance:       shareA,
+		ChunkSize:           chunkSize,
+		Catalog:             runtimeCatalog{records: map[catalog.NodeID]catalog.NodeRecord{fileA.NodeID(): recordA}},
+		Source:              &resumeAfterGraceSource{data: data, modified: modified},
+		CapacityCoordinator: capacityOwner.Coordinator(),
+		CapacityStore: revisioncapacity.StoreConfig{
+			StoreID: "reclaim-cache-store-a", ShareID: "reclaim-cache-share-a",
+			Limits: revisioncapacity.CapacityLimits{StableHandles: 1, ActiveLeases: 4},
+		},
+		Clock:    clock,
+		LeaseIDs: &runtimeIDs{},
+		Cache:    cacheA,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionCapA, err := storeA.RegisterSession(revisioncapacity.SessionConfig{
+		SessionID: "reclaim-cache-session-a", Limits: revisioncapacity.CapacityLimits{StableHandles: 1, ActiveLeases: 4},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	serviceA, err := NewSenderService(SenderServiceConfig{
+		Store: storeA, SessionCapacity: sessionCapA, Encoder: records.Encoder{}, Cache: cacheA,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	shareB := flowID[catalog.ShareInstance](221)
+	fileB := flowID[catalog.FileID](222)
+	recordB := makeRecord(fileB, flowID[catalog.DirectoryID](223), "b.bin")
+	cacheB, err := NewSharedBlockCache(shareB, uint64(chunkSize)*4, processCache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	storeB, err := content.NewRevisionStore(content.RevisionStoreConfig{
+		ShareInstance:       shareB,
+		ChunkSize:           chunkSize,
+		Catalog:             runtimeCatalog{records: map[catalog.NodeID]catalog.NodeRecord{fileB.NodeID(): recordB}},
+		Source:              &resumeAfterGraceSource{data: data, modified: modified},
+		CapacityCoordinator: capacityOwner.Coordinator(),
+		CapacityStore: revisioncapacity.StoreConfig{
+			StoreID: "reclaim-cache-store-b", ShareID: "reclaim-cache-share-b",
+			Limits: revisioncapacity.CapacityLimits{StableHandles: 1, ActiveLeases: 4},
+		},
+		Clock:    clock,
+		LeaseIDs: &runtimeIDs{},
+		Cache:    cacheB,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionCapB, err := storeB.RegisterSession(revisioncapacity.SessionConfig{
+		SessionID: "reclaim-cache-session-b", Limits: revisioncapacity.CapacityLimits{StableHandles: 1, ActiveLeases: 4},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	serviceB, err := NewSenderService(SenderServiceConfig{
+		Store: storeB, SessionCapacity: sessionCapB, Encoder: records.Encoder{}, Cache: cacheB,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = serviceB.Close()
+		_ = serviceA.Close()
+		cacheB.Close()
+		cacheA.Close()
+		_ = storeB.Close()
+		_ = storeA.Close()
+		_ = capacityOwner.Close()
+	})
+
+	openedA, err := serviceA.Open(context.Background(), mustOpenRequest(t, fileA))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reqA, err := NewBlockRequest(openedA.Items()[0].Lease.ID(), []uint64{0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := serviceA.ServeBlocks(context.Background(), flowID[protocolsession.OperationID](230), reqA, func(context.Context, protocolsession.Message) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	bytesA := cacheA.UsedBytes()
+	if bytesA == 0 || processCache.Used() != bytesA {
+		t.Fatalf("share A cache=%d process=%d", bytesA, processCache.Used())
+	}
+
+	// Closing serviceA detaches its lease into grace; cache remains warm until reclaimed.
+	if err := serviceA.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if cacheA.UsedBytes() != bytesA || processCache.Used() != bytesA {
+		t.Fatalf("detached grace evicted share A cache: cache=%d process=%d", cacheA.UsedBytes(), processCache.Used())
+	}
+
+	// Opening on shareB reclaims shareA's idle handle and must retire shareA's cache.
+	openedB, err := serviceB.Open(context.Background(), mustOpenRequest(t, fileB))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cacheA.UsedBytes() != 0 || processCache.Used() != 0 {
+		t.Fatalf("reclaimed share A retained cache budget: cacheA=%d process=%d", cacheA.UsedBytes(), processCache.Used())
+	}
+	reqB, err := NewBlockRequest(openedB.Items()[0].Lease.ID(), []uint64{0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := serviceB.ServeBlocks(context.Background(), flowID[protocolsession.OperationID](231), reqB, func(context.Context, protocolsession.Message) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if cacheB.UsedBytes() == 0 || processCache.Used() != cacheB.UsedBytes() {
+		t.Fatalf("share B could not use reclaimed process budget: cacheB=%d process=%d", cacheB.UsedBytes(), processCache.Used())
+	}
+	if err := serviceB.Release(openedB.Items()[0].Lease.ID()); err != nil {
+		t.Fatal(err)
+	}
+	if cacheB.UsedBytes() != 0 || processCache.Used() != 0 {
+		t.Fatalf("share B release retained cache budget: cacheB=%d process=%d", cacheB.UsedBytes(), processCache.Used())
+	}
 }
 
 func requireResumeCapacityUsage(t *testing.T, snapshot revisioncapacity.ScopeSnapshot, expected revisioncapacity.CapacityUsage) {

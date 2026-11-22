@@ -108,8 +108,13 @@ type CatalogNodeSource interface {
 	Node(context.Context, catalog.NodeID) (catalog.NodeRecord, bool, error)
 }
 
-type CacheInvalidator interface {
+// RevisionCache observes terminal revision lifecycle transitions that affect
+// cached block payloads. InvalidateRevision revokes a drifted revision and its
+// in-flight consumers; RetireRevision reclaims entries for a cleanly retired
+// handle without treating active sends as source drift.
+type RevisionCache interface {
 	InvalidateRevision(catalog.FileID, FileRevision)
+	RetireRevision(catalog.FileID, FileRevision)
 }
 
 type Clock interface {

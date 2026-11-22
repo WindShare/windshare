@@ -22,7 +22,7 @@ type RevisionStoreConfig struct {
 	Clock               Clock
 	RevisionIDs         RevisionIDGenerator
 	LeaseIDs            LeaseIDGenerator
-	CacheInvalidator    CacheInvalidator
+	Cache               RevisionCache
 	Tracer              RevisionTracer
 }
 
@@ -38,7 +38,7 @@ type RevisionStore struct {
 	clock            Clock
 	revisionIDs      RevisionIDGenerator
 	leaseIDs         LeaseIDGenerator
-	invalidator      CacheInvalidator
+	cache            RevisionCache
 	tracer           RevisionTracer
 
 	mu                    sync.Mutex
@@ -206,7 +206,7 @@ func NewRevisionStore(config RevisionStoreConfig) (*RevisionStore, error) {
 		shareInstance: config.ShareInstance, chunkSize: config.ChunkSize,
 		catalog: config.Catalog, source: config.Source,
 		clock: config.Clock, revisionIDs: config.RevisionIDs, leaseIDs: config.LeaseIDs,
-		invalidator: config.CacheInvalidator, tracer: config.Tracer,
+		cache: config.Cache, tracer: config.Tracer,
 		capacityContext: capacityContext, capacityCancel: capacityCancel,
 		capacitySessions: make(map[*revisioncapacity.SessionRegistration]struct{}),
 		revisions:        make(map[catalog.FileID]*revisionState), readingRevisions: make(map[*revisionState]struct{}),
@@ -296,8 +296,12 @@ func (s *RevisionStore) closeLocal() error {
 		attempts = append(attempts, attempt)
 	}
 	idleTokens := make([]revisioncapacity.CandidateToken, 0, len(s.revisions))
+	retiredIdentities := make([]revisionIdentity, 0, len(s.revisions))
 	chargeReleases := make([]capacityChargeRelease, 0)
 	for _, revision := range s.revisions {
+		if revision.lifecycle == revisionLifecycleActive {
+			retiredIdentities = append(retiredIdentities, revision.identity())
+		}
 		revision.lifecycleGeneration++
 		if revision.idleToken != "" {
 			idleTokens = append(idleTokens, revision.idleToken)
@@ -319,6 +323,9 @@ func (s *RevisionStore) closeLocal() error {
 	}
 	s.leases = make(map[LeaseID]*leaseState)
 	s.mu.Unlock()
+	for _, identity := range retiredIdentities {
+		s.retireRevisionCache(identity)
+	}
 	for _, token := range idleTokens {
 		s.capacity.WithdrawIdle(token)
 	}

@@ -125,12 +125,25 @@ func (g *sequenceIDs) NewLeaseID() (LeaseID, error) {
 type recordingInvalidator struct {
 	mu        sync.Mutex
 	revisions []FileRevision
+	retired   []FileRevision
 }
 
 func (i *recordingInvalidator) InvalidateRevision(_ catalog.FileID, revision FileRevision) {
 	i.mu.Lock()
 	i.revisions = append(i.revisions, revision)
 	i.mu.Unlock()
+}
+
+func (i *recordingInvalidator) RetireRevision(_ catalog.FileID, revision FileRevision) {
+	i.mu.Lock()
+	i.retired = append(i.retired, revision)
+	i.mu.Unlock()
+}
+
+func (i *recordingInvalidator) snapshot() (invalidated, retired []FileRevision) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return append([]FileRevision(nil), i.revisions...), append([]FileRevision(nil), i.retired...)
 }
 
 func generousQuota(t *testing.T, name string) *QuotaAccount {
@@ -215,7 +228,7 @@ func fileRecord(t *testing.T, size uint64) (catalog.FileID, catalog.NodeRecord) 
 	return file, record
 }
 
-func newRevisionStore(t *testing.T, source RevisionSource, clock Clock, invalidator CacheInvalidator, file catalog.FileID, record catalog.NodeRecord) (*RevisionStore, *capacityTestAccount, *capacityTestAccount) {
+func newRevisionStore(t *testing.T, source RevisionSource, clock Clock, cache RevisionCache, file catalog.FileID, record catalog.NodeRecord) (*RevisionStore, *capacityTestAccount, *capacityTestAccount) {
 	t.Helper()
 	owner, err := revisioncapacity.NewProcessOwner(revisioncapacity.ProcessConfig{
 		Limits:     revisioncapacity.CapacityLimits{StableHandles: 100, ActiveLeases: 100},
@@ -233,7 +246,7 @@ func newRevisionStore(t *testing.T, source RevisionSource, clock Clock, invalida
 			StoreID: "test-store", ShareID: "test-share",
 			Limits: revisioncapacity.CapacityLimits{StableHandles: 100, ActiveLeases: 100},
 		},
-		LeaseIDs: &sequenceIDs{}, CacheInvalidator: invalidator,
+		LeaseIDs: &sequenceIDs{}, Cache: cache,
 	})
 	if err != nil {
 		t.Fatal(err)
