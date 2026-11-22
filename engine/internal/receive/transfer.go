@@ -130,17 +130,38 @@ func (recovery *getReceiverRecovery) replace(ctx context.Context) (*getReceiverS
 }
 
 func (recovery *getReceiverRecovery) open(ctx context.Context, connect func(context.Context, relayset.ReceiverConfig) (*relayset.Receiver, error)) (*getReceiverSession, error) {
-	set, err := connect(ctx, recovery.config)
-	if err != nil {
+	if ctx == nil {
+		return nil, errors.New("receiver recovery requires caller lifetime")
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	runtime, connection, err := set.WaitReady(ctx)
+	// Give each established generation its own relay lifetime detached from the
+	// task or continuation context so shutdown closes peers before retiring the
+	// relay lane they use for clean CANCEL signaling.
+	sessionCtx, cancelSession := context.WithCancel(context.WithoutCancel(ctx))
+	stopWatch := context.AfterFunc(ctx, cancelSession)
+	set, err := connect(sessionCtx, recovery.config)
 	if err != nil {
-		set.Close()
+		stopWatch()
+		cancelSession()
+		if errors.Is(err, context.Canceled) && ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, err
+	}
+	runtime, connection, err := set.WaitReady(sessionCtx)
+	stopWatch()
+	if err != nil || ctx.Err() != nil {
+		set.Close()
+		cancelSession()
+		if err != nil && (!errors.Is(err, context.Canceled) || ctx.Err() == nil) {
+			return nil, err
+		}
+		return nil, ctx.Err()
 	}
 	recovery.observation.registerLaneSet(runtime.LaneSet())
-	return &getReceiverSession{relays: set, connection: connection, runtime: runtime, recovery: recovery}, nil
+	return &getReceiverSession{relays: set, connection: connection, runtime: runtime, recovery: recovery, cancel: cancelSession}, nil
 }
 
 type getReceiverSession struct {
@@ -149,11 +170,15 @@ type getReceiverSession struct {
 	connection relayset.ReceiverConnection
 	prepared   *liveshare.PreparedReceiver
 	runtime    *receiversession.Runtime
+	cancel     context.CancelFunc
 }
 
 func (session *getReceiverSession) Close() {
 	if session == nil {
 		return
+	}
+	if session.cancel != nil {
+		session.cancel()
 	}
 	if session.relays != nil {
 		session.relays.Close()
@@ -284,7 +309,7 @@ func (a *runner) prepareGetConnectivity(ctx context.Context, request preparedReq
 			return nil, stepNetworkFailure
 		}
 		observation.fail(stepInvalidRequest, err)
-		execution.CloseWithReason(ReceiverLocalStopCaller)
+		execution.CloseWithReason(ReceiverLocalStopOutputAdmission)
 		return nil, stepInvalidRequest
 	}
 	return execution, stepReady

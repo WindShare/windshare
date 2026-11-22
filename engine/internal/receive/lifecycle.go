@@ -30,14 +30,14 @@ type receiveOperation struct {
 	execution *getTransferExecution
 }
 
-func (g *receiveOperation) close() error {
+func (g *receiveOperation) close(stopReason ReceiverLocalStopReason) error {
 	if g.continuation != nil {
 		g.continuation.Close()
 	}
 	g.mu.Lock()
 	session, execution := g.session, g.execution
 	g.mu.Unlock()
-	execution.Close()
+	execution.CloseWithReason(stopReason)
 	session.Close()
 	cleanupErr := g.observation.cleanupFailure()
 	if session != nil && session.runtime != nil {
@@ -74,6 +74,13 @@ func (g *receiveOperation) replace(ctx context.Context, _ *receiversession.Runti
 		next.Close()
 		failure := g.observation.failureSnapshot()
 		return nil, errors.Join(errors.New("replacement content admission failed"), failure.Cause)
+	}
+	if ctx.Err() != nil {
+		// Retire the new peer while its replacement relay lane is still open,
+		// before receivercontinuation discards next.runtime on cancellation.
+		nextExecution.CloseWithReason(ReceiverLocalStopCaller)
+		next.Close()
+		return nil, ctx.Err()
 	}
 	g.mu.Lock()
 	g.session, g.execution = next, nextExecution

@@ -357,6 +357,7 @@ const (
 
 type activeReceiverPeer struct {
 	attempt   receiverPeerAttempt
+	cancel    context.CancelFunc
 	done      <-chan struct{}
 	localStop *receiverLocalStop
 	once      sync.Once
@@ -381,6 +382,9 @@ func (peer *activeReceiverPeer) CloseWithReason(reason ReceiverLocalStopReason) 
 	}
 	peer.once.Do(func() {
 		peer.localStop.record(reason)
+		if peer.cancel != nil {
+			peer.cancel()
+		}
 		_ = peer.attempt.Close()
 		<-peer.done
 	})
@@ -405,8 +409,17 @@ func (a *runner) startReceiverPeer(
 		notifyReceiverPeer(observe, receiverPeerFailed)
 		return nil
 	}
-	attempt, err := starter.Start(ctx, runtime)
+	// Isolate the peer session from task cancel causes (such as task.ErrCancelled)
+	// and continuation shutdown so localStop is always recorded before teardown
+	// and v2peer observes only a plain context.Canceled local stop.
+	base := ctx
+	if base == nil {
+		base = context.Background()
+	}
+	peerCtx, cancelPeer := context.WithCancel(context.WithoutCancel(base))
+	attempt, err := starter.Start(peerCtx, runtime)
 	if err != nil || attempt == nil {
+		cancelPeer()
 		observation.warningCode(receiverPeerSetupFailureCode(receiverPeerSetupStart))
 		notifyReceiverPeer(observe, receiverPeerFailed)
 		return nil
@@ -418,7 +431,7 @@ func (a *runner) startReceiverPeer(
 			attempt, runtime, runtime.ProtocolSessionID(), observation, observe,
 		)
 	}()
-	return &activeReceiverPeer{attempt: attempt, done: done, localStop: localStop}
+	return &activeReceiverPeer{attempt: attempt, cancel: cancelPeer, done: done, localStop: localStop}
 }
 
 func receiverPeerSetupFailureCode(phase receiverPeerSetupPhase) FailureCode {

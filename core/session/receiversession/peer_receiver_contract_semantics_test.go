@@ -8,6 +8,7 @@ import (
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"testing"
+	"testing/synctest"
 )
 
 func TestReceiverPeerOpenNormalizesNilContextAndRequiresContinuationContract(t *testing.T) {
@@ -229,4 +230,35 @@ func TestReceiverPeerTerminalPublicationContainsControlAndCleanupRaces(t *testin
 	}) {
 		t.Fatal("unsafe provenance validated as operation-only")
 	}
+}
+
+func TestReceiverPeerOpenPreAdmissionCancellationSurfacesContextError(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		runtime, _ := newUnstartedRuntimeWithContinuations(
+			t,
+			protocolsession.RoleReceiver,
+			protocolsession.OperationLimits{},
+			nil,
+			continuationReplayClassifier{},
+		)
+		// Deliberately do not start the lane writer so Begin waits before admission.
+		rpc := newTestRequests(
+			runtime,
+			bytes.NewReader(bytes.Repeat([]byte{0xc9}, protocolsession.IdentityBytes)),
+		)
+		t.Cleanup(rpc.Close)
+		receiver := &Runtime{core: runtime, lifecycle: runtime, rpc: rpc}
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() {
+			_, err := receiver.OpenPeerOperation(ctx, []byte{0xf6})
+			done <- err
+		}()
+		synctest.Wait()
+		cancel()
+		err := <-done
+		if err != context.Canceled {
+			t.Fatalf("pre-admission cancel error = %#v (%v), want exact context.Canceled", err, err)
+		}
+	})
 }

@@ -78,6 +78,34 @@ func TestAttemptClosureRetiresAdmissionThatWonCancellationRace(t *testing.T) {
 	}
 }
 
+func TestCloseAttemptClosesSignalingBeforeDetachingAdmittedLane(t *testing.T) {
+	lanes, err := transferlanes.New(transferlanes.Config{ProtocolSessionID: protocolsession.ProtocolSessionID{3}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lanes.Close()
+	identity := session.LaneIdentity{ID: 2, Epoch: 1}
+	if err := lanes.Add(transferlanes.Identity(identity), transferlanes.RouteDirect,
+		recoveryBlockSource(func(context.Context, transferlanes.Demand) (records.BlockRecord, error) {
+			return records.BlockRecord{}, nil
+		})); err != nil {
+		t.Fatal(err)
+	}
+	path := &Path{config: PathConfig{Content: recoveryLaneOwner{lanes}}}
+	attempt := &recoveringAttempt{fakeAttempt: newAttempt(), identity: identity}
+	lanesDuringClose := -1
+	attempt.onClose = func() {
+		lanesDuringClose = lanes.Len()
+	}
+	path.closeAttempt(attempt)
+	if lanesDuringClose != 1 {
+		t.Fatalf("admitted lane count during attempt.Close = %d, want 1", lanesDuringClose)
+	}
+	if lanes.Len() != 0 {
+		t.Fatalf("admitted lane count after closeAttempt = %d, want 0", lanes.Len())
+	}
+}
+
 func TestExhaustedContentRecoversWithoutThroughputGrowth(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		sessionID := protocolsession.ProtocolSessionID{1}

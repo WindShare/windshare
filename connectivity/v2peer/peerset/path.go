@@ -394,14 +394,11 @@ func (p *Path) closeAttempt(attempt Attempt) {
 	if attempt == nil {
 		return
 	}
-	initial, admitted := attempt.Lane()
-	if admitted && p.config.Content != nil {
-		p.config.Content.DetachLane(initial)
-	}
+	// Close signaling before detaching the admitted data lane so a local stop
+	// on a direct-only session can still admit CANCEL while its lane is live.
+	// Close also joins attachment, catching a lane admitted during shutdown.
 	_ = attempt.Close()
-	// Close joins attachment as well as negotiation. Admission can win the
-	// cancellation race after the first snapshot, transferring a final lane.
-	if final, attached := attempt.Lane(); attached && (!admitted || final != initial) && p.config.Content != nil {
-		p.config.Content.DetachLane(final)
+	if lane, attached := attempt.Lane(); attached && p.config.Content != nil {
+		p.config.Content.DetachLane(lane)
 	}
 }

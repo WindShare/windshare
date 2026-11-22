@@ -92,7 +92,7 @@ func runAttempt(ctx context.Context, input preparedRequest, deps Dependencies, r
 // Teardown participates in settlement, so recovery advice must include its
 // outcome rather than being decided while an attempt still owns resources.
 func (active *receiveOperation) settleAttempt(ctx context.Context, settlement *SettlementInput, step stepOutcome, startedAt time.Time) task.Completion[Result] {
-	cleanupErr := active.close()
+	cleanupErr := active.close(earlyExitStopReason(ctx.Err(), step))
 	elapsed := max(active.runner.clock.Now().Sub(startedAt), 0)
 	connectivity := active.metrics.Snapshot(true)
 	var peerStop, relayStop error
@@ -171,6 +171,16 @@ func receiverTerminationErrors(runtime *receiversession.Runtime, connection rela
 		connectionErr = connection.Err()
 	}
 	return
+}
+func earlyExitStopReason(contextErr error, step stepOutcome) ReceiverLocalStopReason {
+	switch {
+	case contextErr != nil:
+		return ReceiverLocalStopCaller
+	case step == stepNetworkFailure:
+		return ReceiverLocalStopRuntimeSessionFailure
+	default:
+		return ReceiverLocalStopOutputAdmission
+	}
 }
 func getSettlementStopReason(contextErr, admissionErr, runtimeErr, connectionErr error) ReceiverLocalStopReason {
 	switch {
