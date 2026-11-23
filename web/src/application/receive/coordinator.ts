@@ -7,10 +7,9 @@ import {
   type OutputSessionHandle,
   type StartBackendTaskInput,
 } from '../../output/backends/contract'
-import { openNewFSASession, startFSADirectoryPicker } from '../../output/backends/fsa'
-import { browserOPFSEnvironment, openNewOPFSSession, type OPFSEnvironment } from '../../output/backends/opfs'
-import { openPortableSession } from '../../output/backends/portable'
-import { diagnosticBackendName, type OutputTraceSource } from '../../output/diagnostics'
+import { startFSADirectoryPicker } from '../../output/backends/fsa'
+import type { OPFSEnvironment } from '../../output/backends/opfs'
+import type { OutputTraceSource } from '../../output/diagnostics'
 import { RECEIVE_DATABASE_NAME, ReceiveStore } from '../../output/store/database'
 import type { FrozenSelectionPolicy } from '../../catalog/selection'
 import type { TransferJob } from '../../transfer/job'
@@ -53,18 +52,22 @@ import {
   type RetainedTaskSnapshot,
 } from './contracts'
 import { executeRetainedTaskAction, loadRetainedTasks } from './retained'
+import { openNewOutputSession } from './session-opener'
+import { BeforeUnloadGuard, type BeforeUnloadEventTarget } from './unload-guard'
 
 const PROGRESS_THROTTLE_MS = 100
 
+export type ReceiveWindowPort = BrowserOutputWindow & Partial<BeforeUnloadEventTarget>
+
 export interface ReceiveRuntimePorts {
-  readonly windowPort?: BrowserOutputWindow
+  readonly windowPort?: ReceiveWindowPort
   readonly databaseName?: string
   readonly opfsEnv?: OPFSEnvironment
   readonly outputTrace?: OutputTraceSource
 }
 
 export interface ReceiveCoordinatorOptions extends ReceiveRuntimePorts {
-  readonly windowPort: BrowserOutputWindow
+  readonly windowPort: ReceiveWindowPort
   readonly currentJoinedShare: () => JoinedBrowserShare | undefined
   readonly onActionError?: (error: unknown) => void
 }
@@ -76,6 +79,7 @@ export interface ReceiveCoordinatorOptions extends ReceiveRuntimePorts {
  */
 export class ReceiveCoordinator {
   readonly #options: ReceiveCoordinatorOptions
+  readonly #unloadGuard: BeforeUnloadGuard
   readonly #listeners = new Set<() => void>()
   readonly #lifetimeAbort = new AbortController()
   #storePromise: Promise<ReceiveStore> | undefined
@@ -110,6 +114,7 @@ export class ReceiveCoordinator {
 
   constructor(options: ReceiveCoordinatorOptions) {
     this.#options = options
+    this.#unloadGuard = new BeforeUnloadGuard(options.windowPort)
     this.#snapshot = this.#buildSnapshot()
   }
 
@@ -373,6 +378,7 @@ export class ReceiveCoordinator {
     if (this.#disposed) return
     this.#disposed = true
     this.#lifetimeAbort.abort()
+    this.#unloadGuard.dispose()
     this.#offerAbort?.abort()
     this.#activeJob?.stop()
     if (this.#progressTimer !== undefined) {
@@ -448,7 +454,16 @@ export class ReceiveCoordinator {
 
     let session: OutputSessionHandle | undefined
     try {
-      session = await this.#openNewSession(choice.backend, taskInput, parentHandle)
+      session = await openNewOutputSession({
+        backend: choice.backend,
+        task: taskInput,
+        parentHandle,
+        windowPort: this.#options.windowPort,
+        ...(this.#options.opfsEnv === undefined ? {} : { opfsEnv: this.#options.opfsEnv }),
+        ...(this.#options.outputTrace === undefined ? {} : { outputTrace: this.#options.outputTrace }),
+        openStoreOptional: () => this.#openStoreOptional(),
+        requireStore: () => this.#requireStore(),
+      })
     } catch (error) {
       this.#activation = null
       this.#publish()
@@ -466,50 +481,6 @@ export class ReceiveCoordinator {
       display ?? null,
       initial,
     )
-  }
-
-  async #openNewSession(
-    backend: SaveBackendKind,
-    task: StartBackendTaskInput,
-    parentHandle: FileSystemDirectoryHandle | undefined,
-  ): Promise<OutputSessionHandle> {
-    const diagnostics = this.#options.outputTrace === undefined
-      ? undefined
-      : Object.freeze({ backend: diagnosticBackendName(backend), trace: this.#options.outputTrace })
-    const locks = this.#options.windowPort.navigator?.locks
-
-    if (backend === 'portable') {
-      const store = await this.#openStoreOptional()
-      return openPortableSession({
-        task,
-        windowPort: this.#options.windowPort,
-        ...(store === undefined ? {} : { store }),
-        ...(diagnostics === undefined ? {} : { diagnostics }),
-      })
-    }
-
-    const store = await this.#requireStore()
-    if (backend === 'fsa') {
-      if (parentHandle === undefined) {
-        throw new DOMException('No folder was selected', 'AbortError')
-      }
-      return openNewFSASession({
-        task,
-        parentHandle,
-        store,
-        ...(locks === undefined ? {} : { locks }),
-        ...(diagnostics === undefined ? {} : { diagnostics }),
-      })
-    }
-
-    const opfsEnv = this.#options.opfsEnv ?? browserOPFSEnvironment(this.#options.windowPort.navigator?.storage, locks)
-    return openNewOPFSSession({
-      task,
-      store,
-      env: opfsEnv,
-      windowPort: this.#options.windowPort,
-      ...(diagnostics === undefined ? {} : { diagnostics }),
-    })
   }
 
   async #runSession(
@@ -543,9 +514,10 @@ export class ReceiveCoordinator {
       onProgress: progress => this.#observeProgress(progress),
     })
     this.#activeJob = job
-    this.#publish()
 
     try {
+      this.#unloadGuard.setArmed(true)
+      this.#publish()
       const result = await job.run()
       this.#flushProgressNow()
       if (result.status === 'completed' && this.#lifecycle?.kind === 'downloading') {
@@ -572,6 +544,7 @@ export class ReceiveCoordinator {
     } finally {
       this.#activeJob = null
       this.#activeSession = null
+      this.#unloadGuard.setArmed(false)
       await session.close().catch(() => undefined)
       try { connectivity.close() } catch { /* Best-effort connectivity release. */ }
       this.#publish()
