@@ -80,8 +80,9 @@ func TestWakeHonorsServerDeadlineAcrossRecoveryOwners(t *testing.T) {
 
 type parkedPermit struct{}
 
-func (parkedPermit) Admit() bool { return false }
-func (parkedPermit) Release()    {}
+func (parkedPermit) Admit() bool    { return false }
+func (parkedPermit) Release()       {}
+func (parkedPermit) ReleaseFailed() {}
 
 type slowRetirement struct{ senderRelayTestEndpoint }
 

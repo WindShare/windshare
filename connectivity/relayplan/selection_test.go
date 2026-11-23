@@ -306,8 +306,25 @@ func TestBackupPrioritizesHealthThenActiveThenZone(t *testing.T) {
 	if BackupIndex(primary, options, Policy{}) != 1 {
 		t.Fatal("healthy active should precede a zone-diverse canary")
 	}
-	options[1].history = recentlyFailed
+	options[1] = options[1].WithRegistrationFailure()
+	if options[1].HistoryState() != "failed" {
+		t.Fatalf("failed history = %q", options[1].HistoryState())
+	}
 	if BackupIndex(primary, options, Policy{}) != 0 {
 		t.Fatal("healthy canary should precede a recently failed active")
+	}
+	options[1] = options[1].WithoutRegistrationFailure()
+	if _, observed := options[1].ObservedHandshake(); observed || options[1].HistoryState() != "unmeasured" {
+		t.Fatalf("cleared failure invented duration: %+v", options[1])
+	}
+	if BackupIndex(primary, options, Policy{}) != 1 {
+		t.Fatal("recovered active should regain priority over canary")
+	}
+	admitted := Candidate{history: recentlyAdmitted, ObservedDuration: 125 * time.Millisecond}
+	if d, ok := admitted.WithoutRegistrationFailure().ObservedHandshake(); !ok || d != 125*time.Millisecond {
+		t.Fatalf("clearing non-failed candidate lost measured duration: %v, %t", d, ok)
+	}
+	if _, ok := admitted.WithRegistrationFailure().ObservedHandshake(); ok {
+		t.Fatal("failed candidate retained measured duration")
 	}
 }

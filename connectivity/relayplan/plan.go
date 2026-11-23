@@ -56,6 +56,24 @@ func (c Candidate) HistoryState() string {
 	}
 }
 
+// WithRegistrationFailure marks a candidate copy as failed so live backup
+// arbitration within the same share applies the same ranking rule as Build.
+func (c Candidate) WithRegistrationFailure() Candidate {
+	c.history = recentlyFailed
+	c.ObservedDuration = 0
+	return c
+}
+
+// WithoutRegistrationFailure clears a failed state once a candidate completes
+// a registration handshake, without inventing a measured duration sample.
+func (c Candidate) WithoutRegistrationFailure() Candidate {
+	if c.history == recentlyFailed {
+		c.history = unmeasured
+		c.ObservedDuration = 0
+	}
+	return c
+}
+
 type registrationHistory int8
 
 const (
