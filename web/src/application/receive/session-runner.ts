@@ -3,13 +3,13 @@ import type { ReceiveOperationDisplay } from '../../output/model'
 import type { OutputSessionHandle } from '../../output/backends/contract'
 import { emitOutputTrace, type OutputTraceSource } from '../../output/diagnostics'
 import type { ReceiveTaskRecord } from '../../output/store/types'
-import type { TransferJob, TransferJobResult } from '../../transfer/job'
+import type { TransferJobResult } from '../../transfer/job'
 import type { TransferProgress } from '../../transfer/progress'
-import { transitionReceiveState, type ReceiveLifecycleState } from '../../transfer/state'
+import type { ReceiveLifecycleState } from '../../transfer/state'
 import type { JoinedBrowserShare } from '../browser-share/gateway'
 import { DisconnectCheckpointGuard } from './disconnect-checkpoint-guard'
+import type { ExecutionState, WorkspaceTask } from './execution-state'
 import { closeOutputSession } from './session-opener'
-import type { ReceiveTaskState } from './task-state'
 import { BeforeUnloadGuard, type BeforeUnloadEventTarget } from './unload-guard'
 import { ScreenWakeLockGuard, type ScreenWakeLockWindowTarget } from './wake-lock-guard'
 
@@ -21,6 +21,7 @@ export interface SessionRunCallbacks {
 }
 
 export interface SessionRunInput {
+  readonly transferToken: symbol
   readonly joined: JoinedBrowserShare
   readonly session: OutputSessionHandle
   readonly selection: FrozenSelectionPolicy
@@ -32,19 +33,20 @@ export interface SessionRunInput {
   readonly callbacks?: SessionRunCallbacks
 }
 
-interface ActiveReceiveSession {
-  readonly taskId: string
-  job?: TransferJob
+interface PendingFailure {
+  readonly error: unknown
+  readonly preActivation: boolean
 }
 
 /**
  * Owns the active `TransferJob` lifecycle, browser leave/wake-lock/disconnect guards,
- * throttled progress publication, and settlement.
+ * throttled progress publication, and settlement under `ExecutionState` ownership.
  */
 export class ReceiveSessionRunner {
   readonly #unloadGuard: BeforeUnloadGuard
   readonly #wakeLockGuard: ScreenWakeLockGuard
-  readonly #task: ReceiveTaskState
+  readonly #execution: ExecutionState
+  readonly #workspace: WorkspaceTask
   readonly #outputTrace: OutputTraceSource | undefined
   readonly #isDisposed: () => boolean
   readonly #publish: () => void
@@ -52,13 +54,13 @@ export class ReceiveSessionRunner {
   readonly #onSessionFinished: () => void
   readonly #reportError: (error: unknown) => void
   readonly #dispatchAsyncError: (error: unknown, custom?: (error: unknown) => void) => void
-  #session: ActiveReceiveSession | null = null
   #disconnectGuard: DisconnectCheckpointGuard | undefined
   #progressTimer: ReturnType<typeof setTimeout> | undefined
 
   constructor(options: Readonly<{
     windowPort: Partial<BeforeUnloadEventTarget> & ScreenWakeLockWindowTarget
-    task: ReceiveTaskState
+    execution: ExecutionState
+    workspace: WorkspaceTask
     outputTrace?: OutputTraceSource
     isDisposed: () => boolean
     publish: () => void
@@ -69,7 +71,8 @@ export class ReceiveSessionRunner {
   }>) {
     this.#unloadGuard = new BeforeUnloadGuard(options.windowPort)
     this.#wakeLockGuard = new ScreenWakeLockGuard(options.windowPort)
-    this.#task = options.task
+    this.#execution = options.execution
+    this.#workspace = options.workspace
     this.#outputTrace = options.outputTrace
     this.#isDisposed = options.isDisposed
     this.#publish = options.publish
@@ -79,16 +82,9 @@ export class ReceiveSessionRunner {
     this.#dispatchAsyncError = options.dispatchAsyncError
   }
 
-  get active(): boolean {
-    return this.#session !== null
-  }
-
-  get activeTaskId(): string | null {
-    return this.#session?.taskId ?? null
-  }
-
   get waitingForLiveJob(): boolean {
-    return this.#session !== null && (this.#session.job === undefined || this.#task.lifecycle?.kind !== 'downloading')
+    return this.#execution.isRunning &&
+      (this.#execution.runningJob === undefined || this.#workspace.lifecycle?.kind !== 'downloading')
   }
 
   get outageCheckpointed(): boolean {
@@ -96,9 +92,9 @@ export class ReceiveSessionRunner {
   }
 
   interrupt(action: 'pause' | 'stop'): boolean {
-    const job = this.#session?.job
+    const job = this.#execution.runningJob
     if (job === undefined) return false
-    this.#task.interruption = action
+    this.#workspace.markInterruption(action)
     if (action === 'pause') job.pause('user')
     else job.stop()
     this.#closeDisconnectGuard()
@@ -114,28 +110,20 @@ export class ReceiveSessionRunner {
   dispose(): void {
     this.#unloadGuard.dispose()
     this.#wakeLockGuard.dispose()
-    this.#session?.job?.detach()
+    this.#execution.runningJob?.detach()
     this.#closeDisconnectGuard()
     this.#flushProgressNow()
   }
 
   async run(input: SessionRunInput): Promise<void> {
-    const { joined, session, selection, activeSelectionKey, rootPath, singleFileId, display, initialLifecycle, callbacks } = input
-    if (this.#isDisposed()) return this.closeDetached(session)
-    let connectivity: ReturnType<JoinedBrowserShare['beginDownloadConnectivity']> | undefined
-    const owner: ActiveReceiveSession = { taskId: session.taskId }
-    this.#session = owner
-    this.#task.beginSession({
-      taskId: session.taskId,
-      shareInstance: joined.descriptor.shareInstanceId,
-      selectionKey: activeSelectionKey,
-      singleFileId,
-      backend: session.backend,
-      display,
-      initialLifecycle,
-    })
+    const { transferToken, joined, session, selection, activeSelectionKey, rootPath, singleFileId, display, initialLifecycle, callbacks } = input
+    if (this.#isDisposed() || !this.#execution.transitionToRunning(transferToken, session.taskId, singleFileId)) {
+      return this.closeDetached(session)
+    }
 
+    let connectivity: ReturnType<JoinedBrowserShare['beginDownloadConnectivity']> | undefined
     let activated = false
+    let failure: PendingFailure | undefined
     try {
       connectivity = joined.beginDownloadConnectivity()
       const job = joined.createTransferJob(session.transferOutput, connectivity, {
@@ -144,7 +132,9 @@ export class ReceiveSessionRunner {
         onProgress: progress => this.#observeProgress(progress),
         onUncheckpointedWrite: () => this.#disconnectGuard?.invalidate(),
       })
-      owner.job = job
+      if (!this.#execution.attachRunningJob(transferToken, job)) {
+        return
+      }
       if (session.transferOutput.capabilities.resumable) {
         this.#disconnectGuard = new DisconnectCheckpointGuard(joined, {
           job,
@@ -153,6 +143,16 @@ export class ReceiveSessionRunner {
           ...(this.#outputTrace === undefined ? {} : { trace: this.#outputTrace }),
         })
       }
+      // Defer mutating workspace state until connectivity, job, and guards succeed
+      // so pre-activation failures leave any prior settled/paused TaskCard intact.
+      this.#workspace.beginActive({
+        taskId: session.taskId,
+        shareInstance: joined.descriptor.shareInstanceId,
+        selectionKey: activeSelectionKey,
+        backend: session.backend,
+        display,
+        initialLifecycle,
+      })
       this.#unloadGuard.setArmed(true)
       this.#wakeLockGuard.setArmed(true)
       this.#publish()
@@ -162,24 +162,27 @@ export class ReceiveSessionRunner {
       this.#closeDisconnectGuard()
       await this.#settle(session, result)
     } catch (error) {
-      if (!activated && callbacks?.onAsyncError !== undefined) {
-        this.#task.clear()
-        this.#dispatchAsyncError(error, callbacks.onAsyncError)
-      } else {
-        this.#task.markFailed(error)
-        this.#reportError(error)
-      }
+      failure = { error, preActivation: !activated }
+      if (activated) this.#workspace.markFailed(error)
     } finally {
       this.#closeDisconnectGuard()
       this.#unloadGuard.setArmed(false)
       this.#wakeLockGuard.setArmed(false)
       await closeOutputSession(session, this.#outputTrace)
       try { connectivity?.close() } catch { /* Best-effort connectivity release. */ }
-      this.#session = null
-      this.#task.singleFileId = null
+      this.#execution.releaseTransferIfOwned(transferToken)
       this.#publish()
-      if (!this.#isDisposed()) this.#onSessionFinished()
+      this.#finishRun(failure, callbacks)
     }
+  }
+
+  #finishRun(failure: PendingFailure | undefined, callbacks: SessionRunCallbacks | undefined): void {
+    if (this.#isDisposed()) return
+    if (failure !== undefined) {
+      if (failure.preActivation) this.#dispatchAsyncError(failure.error, callbacks?.onAsyncError)
+      else this.#reportError(failure.error)
+    }
+    this.#onSessionFinished()
   }
 
   async #settle(session: OutputSessionHandle, result: TransferJobResult): Promise<void> {
@@ -188,17 +191,17 @@ export class ReceiveSessionRunner {
       this.#traceDetached(session)
       return
     }
-    if (this.#task.lifecycle?.kind === 'downloading') {
-      this.#task.lifecycle = transitionReceiveState(this.#task.lifecycle, { kind: 'downloading', phase: 'finalizing' })
+    if (this.#workspace.lifecycle?.kind === 'downloading') {
+      this.#workspace.markFinalizing()
       this.#publish()
     }
     const settled = await session.settle(result)
     this.#onSettledRecord(settled)
-    this.#task.applySettled(settled)
+    this.#workspace.applySettled(settled)
   }
 
   #observeProgress(progress: TransferProgress): void {
-    this.#task.progress = progress
+    this.#workspace.observeProgress(progress)
     if (this.#progressTimer !== undefined) return
     this.#progressTimer = setTimeout(() => {
       this.#progressTimer = undefined

@@ -1,7 +1,7 @@
 import type { CatalogEntry } from '../../catalog/records'
 import { snapshotCatalogPath } from '../../catalog/path-policy'
 import { SelectionPolicy, type FrozenSelectionPolicy } from '../../catalog/selection'
-import type { ArtifactOffers } from '../../output/model'
+import type { ArtifactOffers, SaveBackendKind } from '../../output/model'
 import {
   planArtifactOffers,
   PORTABLE_MAX_BYTES,
@@ -14,6 +14,7 @@ import {
   selectionSpecFromPolicy,
   type SelectionSpec,
 } from '../../transfer/selection'
+import type { ReceiveLifecycleState } from '../../transfer/state'
 import type { BrowseDirectory, JoinedBrowserShare } from '../browser-share/gateway'
 import type {
   ReceiveAction,
@@ -115,12 +116,15 @@ export function singleFileNeedsPicker(
   return pickerFloorBytes !== null && expectedSize !== undefined && expectedSize >= pickerFloorBytes
 }
 
-export function isSingleFileReuseCandidateRecord(record: ReceiveTaskRecord): boolean {
-  switch (record.lifecycle.kind) {
+export function isSingleFileReuseCandidate(
+  backend: SaveBackendKind,
+  lifecycle: ReceiveLifecycleState,
+): boolean {
+  switch (lifecycle.kind) {
     case 'ready-to-save':
-      return record.backend === 'opfs'
+      return backend === 'opfs'
     case 'download-started':
-      return record.backend === 'opfs' && record.lifecycle.retained
+      return backend === 'opfs' && lifecycle.retained
     case 'paused':
     case 'downloading':
     case 'preparing':
@@ -128,6 +132,10 @@ export function isSingleFileReuseCandidateRecord(record: ReceiveTaskRecord): boo
     default:
       return false
   }
+}
+
+export function isSingleFileReuseCandidateRecord(record: ReceiveTaskRecord): boolean {
+  return isSingleFileReuseCandidate(record.backend, record.lifecycle)
 }
 
 function isExportableOpfsTask(task: RetainedTaskSnapshot): boolean {
@@ -189,19 +197,4 @@ export function decideSingleFileReuse(
   }
 
   return Object.freeze({ kind: 'none' })
-}
-
-export function mergeRetainedCandidates(
-  groups: readonly (readonly RetainedTaskSnapshot[])[],
-): readonly RetainedTaskSnapshot[] {
-  const byId = new Map<string, RetainedTaskSnapshot>()
-  for (const group of groups) {
-    for (const task of group) {
-      const existing = byId.get(task.taskId)
-      if (existing === undefined || task.lifecycle.generation >= existing.lifecycle.generation) {
-        byId.set(task.taskId, task)
-      }
-    }
-  }
-  return Object.freeze([...byId.values()])
 }

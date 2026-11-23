@@ -1,26 +1,26 @@
 import type { CatalogEntry } from '../../catalog/records'
-import type { ArtifactChoice, ReceiveOperationDisplay } from '../../output/model'
-import type { BrowserOutputCapabilities } from '../../output/backends/contract'
-import type { ReceiveTaskRecord } from '../../output/store/types'
 import type { FrozenSelectionPolicy } from '../../catalog/selection'
+import type { BrowserOutputCapabilities } from '../../output/backends/contract'
+import { emitOutputTrace, type OutputTraceSource } from '../../output/diagnostics'
+import type { ArtifactChoice, ReceiveOperationDisplay } from '../../output/model'
+import { isAbortError } from '../../transfer/fault'
 import type { SelectionSpec } from '../../transfer/selection'
 import type { BrowseDirectory, JoinedBrowserShare } from '../browser-share/gateway'
+import type { BrowserCapabilityCache } from './capability-cache'
 import type {
-  ActiveActivationSnapshot,
-  BrowserCapabilitiesState,
   ReceiveAction,
   ReceiveAdmission,
   ReceiveBlockReason,
   RetainedTaskSnapshot,
   SingleFileDownloadOutcome,
 } from './contracts'
-import { retainedSnapshot } from './retained'
+import type { ExecutionState } from './execution-state'
+import type { RetainedTaskActions } from './retained-actions'
+import type { RetainedTaskInventory } from './retained-inventory'
 import {
   ReceiveBlockedError,
   SaveUnavailableError,
   decideSingleFileReuse,
-  isSingleFileReuseCandidateRecord,
-  mergeRetainedCandidates,
   planSingleFileDownload,
   type SingleFileDownloadPlan,
   type SingleFileReuseDecision,
@@ -42,48 +42,38 @@ export interface SingleFileLaunchRequest {
   readonly display: ReceiveOperationDisplay | undefined
 }
 
-export interface SingleFileLaunchHost {
-  readonly isDisposed: () => boolean
-  readonly startBlockedReason: () => ReceiveBlockReason | null
-  readonly currentJoinedShare: () => JoinedBrowserShare | undefined
-  readonly capabilitiesState: () => BrowserCapabilitiesState
-  readonly capabilitiesValue: () => BrowserOutputCapabilities | undefined
-  readonly retryCapabilities: () => void
-  readonly ensureCapabilities: () => void
-  readonly preloadShareTasks: (shareInstance: string) => void
-  readonly pendingShareIndex: (shareInstance: string) => Promise<readonly ReceiveTaskRecord[]> | undefined
-  readonly shareIndexRecords: (shareInstance: string, key: string) => readonly ReceiveTaskRecord[]
-  readonly retainedTasks: () => readonly RetainedTaskSnapshot[]
-  readonly hasPendingRetained: () => boolean
-  readonly currentSettledCandidate: (shareInstance: string, key: string) => RetainedTaskSnapshot | undefined
-  readonly admitCandidate: (task: RetainedTaskSnapshot, action: ReceiveAction, ignoreActivation: boolean) => ReceiveAdmission
-  readonly claimActivation: (snapshot: ActiveActivationSnapshot) => Readonly<{ token: symbol; activation: ActiveActivationSnapshot }>
-  readonly ownsActivation: (token: symbol) => boolean
-  readonly clearActivationAndPublish: () => void
-  readonly clearActivationOnly: () => void
-  readonly normalizeRecords: (token: symbol, records: readonly ReceiveTaskRecord[]) => Promise<readonly RetainedTaskSnapshot[]>
-  readonly runRetainedSave: (taskId: string, options: SingleFileDownloadOptions | undefined) => void
-  readonly runRetainedContinue: (taskId: string, options: SingleFileDownloadOptions | undefined) => void
-  readonly launchChoice: (
+/** Narrow internal collaboration surface owned by `ReceiveCoordinator`. */
+export interface SingleFileLaunchContext {
+  readonly execution: ExecutionState
+  readonly inventory: RetainedTaskInventory
+  readonly capabilities: BrowserCapabilityCache
+  readonly retainedActions: RetainedTaskActions
+  readonly outputTrace?: OutputTraceSource
+  isDisposed(): boolean
+  currentJoinedShare(): JoinedBrowserShare | undefined
+  startBlockedReason(): ReceiveBlockReason | null
+  preloadShareTasks(shareInstance: string): void
+  admitCandidate(task: RetainedTaskSnapshot, action: ReceiveAction, ignoreTransferSlot: boolean): ReceiveAdmission
+  publish(): void
+  launchChoice(
     request: SingleFileLaunchRequest,
     options: SingleFileDownloadOptions | undefined,
-  ) => Extract<SingleFileDownloadOutcome, { kind: 'started' | 'waiting-picker' | 'failed' }>
-  readonly openWithActivation: (
+  ): Extract<SingleFileDownloadOutcome, { kind: 'started' | 'waiting-picker' | 'failed' }>
+  openWithTransferToken(
     token: symbol,
-    activation: ActiveActivationSnapshot,
     request: SingleFileLaunchRequest,
     options: SingleFileDownloadOptions | undefined,
-  ) => Promise<void>
-  readonly dispatchAsyncError: (error: unknown, custom?: (error: unknown) => void) => void
+  ): Promise<void>
+  dispatchAsyncError(error: unknown, custom?: (error: unknown) => void): void
 }
 
 export function startSingleFileDownloadFlow(
-  host: SingleFileLaunchHost,
+  ctx: SingleFileLaunchContext,
   entry: Extract<CatalogEntry, { kind: 'file' }>,
   directory: BrowseDirectory,
   options?: SingleFileDownloadOptions,
 ): SingleFileDownloadOutcome {
-  const ready = checkSingleFileReady(host)
+  const ready = checkSingleFileReady(ctx, options)
   if (ready.kind !== 'ready') return ready.outcome
 
   let planned: SingleFileDownloadPlan
@@ -94,128 +84,107 @@ export function startSingleFileDownloadFlow(
   }
 
   const shareInstance = ready.joined.descriptor.shareInstanceId
-  host.preloadShareTasks(shareInstance)
-  const pendingIndex = host.pendingShareIndex(shareInstance)
+  ctx.preloadShareTasks(shareInstance)
+  const pendingIndex = ctx.inventory.pendingSharePromise(shareInstance)
   if (pendingIndex !== undefined) {
-    return startWhileShareIndexLoading(host, ready.joined, entry, planned, pendingIndex, options)
+    return startWhileShareIndexLoading(ctx, ready.joined, entry, planned, pendingIndex, options)
   }
 
-  const collected = collectKnownCandidates(host, shareInstance, planned.selectionKey)
-  if (collected.rawNeedingNormalization.length > 0) {
-    const claimed = claimSingleFileLookup(host, entry, planned)
-    void resolveSingleFileAsync(host, claimed.token, claimed.activation, ready.joined, planned, undefined, collected.rawNeedingNormalization, options)
-    return Object.freeze({ kind: 'started' })
+  const inspected = ctx.inventory.inspectKeyCandidates(shareInstance, planned.selectionKey)
+  if (inspected.kind === 'none') {
+    return launchFreshSingleFile(ctx, ready.joined, planned, options)
+  }
+  if (inspected.kind === 'needs-resolution') {
+    return startAsyncCandidateResolution(ctx, ready.joined, entry, planned, undefined, inspected.taskIds, options)
   }
 
   const decision = decideSingleFileReuse(
-    collected.resolved,
+    inspected.candidates,
     shareInstance,
     planned.selectionKey,
-    (task, action) => host.admitCandidate(task, action, false),
+    (task, action) => ctx.admitCandidate(task, action, false),
   )
-  const reused = applySyncReuseDecision(host, decision, options)
+  const reused = applySyncReuseDecision(ctx, entry.idText, decision, options)
   if (reused !== undefined) return reused
 
-  return launchFreshSingleFile(host, ready.joined, planned, options)
+  return launchFreshSingleFile(ctx, ready.joined, planned, options)
 }
 
 function checkSingleFileReady(
-  host: SingleFileLaunchHost,
+  ctx: SingleFileLaunchContext,
+  options: SingleFileDownloadOptions | undefined,
 ):
   | Readonly<{ kind: 'ready'; joined: JoinedBrowserShare; capabilities: BrowserOutputCapabilities }>
   | Readonly<{ kind: 'stop'; outcome: SingleFileDownloadOutcome }> {
-  if (host.isDisposed()) return { kind: 'stop', outcome: Object.freeze({ kind: 'blocked', reason: 'actionUnavailable' }) }
-  const blocked = host.startBlockedReason()
+  if (ctx.isDisposed()) return { kind: 'stop', outcome: Object.freeze({ kind: 'blocked', reason: 'actionUnavailable' }) }
+  const blocked = ctx.startBlockedReason()
   if (blocked !== null) return { kind: 'stop', outcome: Object.freeze({ kind: 'blocked', reason: blocked }) }
-  const joined = host.currentJoinedShare()
+  const joined = ctx.currentJoinedShare()
   if (joined === undefined) return { kind: 'stop', outcome: Object.freeze({ kind: 'blocked', reason: 'connectFirst' }) }
-  if (host.capabilitiesState() === 'failed') {
-    host.retryCapabilities()
+  if (ctx.capabilities.state === 'failed') {
+    ctx.capabilities.retry(error => ctx.dispatchAsyncError(error, options?.onAsyncError))
     return { kind: 'stop', outcome: Object.freeze({ kind: 'probing' }) }
   }
-  const capabilities = host.capabilitiesValue()
-  if (host.capabilitiesState() === 'probing' || capabilities === undefined) {
-    host.ensureCapabilities()
+  const capabilities = ctx.capabilities.value
+  if (ctx.capabilities.state === 'probing' || capabilities === undefined) {
+    void ctx.capabilities.ensure().catch(() => undefined)
     return { kind: 'stop', outcome: Object.freeze({ kind: 'probing' }) }
   }
   return { kind: 'ready', joined, capabilities }
 }
 
-function claimSingleFileLookup(
-  host: SingleFileLaunchHost,
-  entry: Extract<CatalogEntry, { kind: 'file' }>,
-  planned: SingleFileDownloadPlan,
-) {
-  return host.claimActivation({
-    kind: 'committing',
-    choiceId: planned.offers.kind === 'ready' ? planned.offers.primary.choiceId : 'single-file:lookup',
-    suggestedName: entry.name,
-    singleFileId: entry.idText,
-  })
-}
-
 function startWhileShareIndexLoading(
-  host: SingleFileLaunchHost,
+  ctx: SingleFileLaunchContext,
   joined: JoinedBrowserShare,
   entry: Extract<CatalogEntry, { kind: 'file' }>,
   planned: SingleFileDownloadPlan,
-  pendingIndex: Promise<readonly ReceiveTaskRecord[]>,
+  pendingIndex: Promise<void>,
   options: SingleFileDownloadOptions | undefined,
 ): SingleFileDownloadOutcome {
   if (planned.offers.kind === 'ready' && planned.offers.primary.backend === 'fsa') {
     return Object.freeze({ kind: 'probing' })
   }
-  const claimed = claimSingleFileLookup(host, entry, planned)
-  void resolveSingleFileAsync(host, claimed.token, claimed.activation, joined, planned, pendingIndex, undefined, options)
+  return startAsyncCandidateResolution(ctx, joined, entry, planned, pendingIndex, undefined, options)
+}
+
+function startAsyncCandidateResolution(
+  ctx: SingleFileLaunchContext,
+  joined: JoinedBrowserShare,
+  entry: Extract<CatalogEntry, { kind: 'file' }>,
+  planned: SingleFileDownloadPlan,
+  pendingIndex: Promise<void> | undefined,
+  preMatchedTaskIds: readonly string[] | undefined,
+  options: SingleFileDownloadOptions | undefined,
+): SingleFileDownloadOutcome {
+  const choiceId = planned.offers.kind === 'ready' ? planned.offers.primary.choiceId : 'single-file:lookup'
+  const token = ctx.execution.claimResolvingReuse(choiceId, entry.name, entry.idText)
+  if (token === null) return Object.freeze({ kind: 'blocked', reason: 'busy' })
+  ctx.publish()
+  void resolveSingleFileAsync(ctx, token, joined, entry.idText, planned, pendingIndex, preMatchedTaskIds, options)
   return Object.freeze({ kind: 'started' })
 }
 
-function collectKnownCandidates(
-  host: SingleFileLaunchHost,
-  shareInstance: string,
-  key: string,
-): Readonly<{ resolved: readonly RetainedTaskSnapshot[]; rawNeedingNormalization: readonly ReceiveTaskRecord[] }> {
-  const retainedMatches = host.retainedTasks().filter(
-    task => task.shareInstance === shareInstance && task.selectionKey === key,
-  )
-  const settled = host.currentSettledCandidate(shareInstance, key)
-  const known = mergeRetainedCandidates([retainedMatches, settled === undefined ? [] : [settled]])
-  const knownById = new Map(known.map(task => [task.taskId, task]))
-  const rawNeedingNormalization: ReceiveTaskRecord[] = []
-  const rawSettled: RetainedTaskSnapshot[] = []
-  for (const record of host.shareIndexRecords(shareInstance, key).filter(isSingleFileReuseCandidateRecord)) {
-    const existing = knownById.get(record.taskId)
-    if (existing !== undefined && existing.lifecycle.generation >= record.lifecycle.generation) continue
-    if (record.lifecycle.kind === 'downloading' || record.lifecycle.kind === 'preparing') {
-      rawNeedingNormalization.push(record)
-    } else {
-      rawSettled.push(retainedSnapshot(record, false))
-    }
-  }
-  return { resolved: mergeRetainedCandidates([known, rawSettled]), rawNeedingNormalization }
-}
-
 function applySyncReuseDecision(
-  host: SingleFileLaunchHost,
+  ctx: SingleFileLaunchContext,
+  singleFileId: string,
   decision: SingleFileReuseDecision,
   options: SingleFileDownloadOptions | undefined,
 ): SingleFileDownloadOutcome | undefined {
+  if (decision.kind === 'none') return undefined
+  traceReuseDecision(ctx.outputTrace, decision)
   if (decision.kind === 'export') {
-    host.runRetainedSave(decision.task.taskId, options)
+    void ctx.retainedActions.runLocalAction(decision.task.taskId, 'save', singleFileId, exportCallbacks(options))
     return Object.freeze({ kind: 'exported' })
   }
   if (decision.kind === 'resume') {
-    host.runRetainedContinue(decision.task.taskId, options)
+    void ctx.retainedActions.runContinue(decision.task.taskId, singleFileId, resumeCallbacks(options))
     return Object.freeze({ kind: 'resumed' })
   }
-  if (decision.kind === 'blocked') {
-    return Object.freeze({ kind: 'blocked', reason: decision.reason })
-  }
-  return undefined
+  return Object.freeze({ kind: 'blocked', reason: decision.reason })
 }
 
 function launchFreshSingleFile(
-  host: SingleFileLaunchHost,
+  ctx: SingleFileLaunchContext,
   joined: JoinedBrowserShare,
   planned: SingleFileDownloadPlan,
   options: SingleFileDownloadOptions | undefined,
@@ -226,7 +195,7 @@ function launchFreshSingleFile(
   if (planned.offers.kind !== 'ready') {
     return Object.freeze({ kind: 'failed', error: new Error('Single-file download options are unavailable') })
   }
-  return host.launchChoice({
+  return ctx.launchChoice({
     joined,
     choice: planned.offers.primary,
     spec: planned.spec,
@@ -237,86 +206,150 @@ function launchFreshSingleFile(
 }
 
 async function resolveSingleFileAsync(
-  host: SingleFileLaunchHost,
+  ctx: SingleFileLaunchContext,
   token: symbol,
-  activation: ActiveActivationSnapshot,
   joined: JoinedBrowserShare,
+  singleFileId: string,
   planned: SingleFileDownloadPlan,
-  pendingIndex: Promise<readonly ReceiveTaskRecord[]> | undefined,
-  preMatchedRaw: readonly ReceiveTaskRecord[] | undefined,
+  pendingIndex: Promise<void> | undefined,
+  preMatchedTaskIds: readonly string[] | undefined,
   options: SingleFileDownloadOptions | undefined,
 ): Promise<void> {
-  const shareInstance = joined.descriptor.shareInstanceId
-  const rawRecords = pendingIndex !== undefined
-    ? (await pendingIndex).filter(record => record.selectionKey === planned.selectionKey && isSingleFileReuseCandidateRecord(record))
-    : (preMatchedRaw ?? [])
-  if (!host.ownsActivation(token) || host.currentJoinedShare() !== joined) return
+  try {
+    const shareInstance = joined.descriptor.shareInstanceId
+    if (pendingIndex !== undefined) {
+      await pendingIndex
+      if (!ensureActiveForJoined(ctx, token, joined)) return
+    }
 
-  const normalized = rawRecords.length > 0 ? await host.normalizeRecords(token, rawRecords) : Object.freeze([])
-  if (!host.ownsActivation(token) || host.currentJoinedShare() !== joined) return
+    const candidates = await resolveCandidatesForAsyncLookup(ctx, shareInstance, planned.selectionKey, preMatchedTaskIds)
+    if (!ensureActiveForJoined(ctx, token, joined)) return
 
-  const retainedMatches = host.retainedTasks().filter(
-    task => task.shareInstance === shareInstance && task.selectionKey === planned.selectionKey,
-  )
-  const settled = host.currentSettledCandidate(shareInstance, planned.selectionKey)
-  const candidates = mergeRetainedCandidates([retainedMatches, normalized, settled === undefined ? [] : [settled]])
-  const decision = decideSingleFileReuse(
-    candidates,
-    shareInstance,
-    planned.selectionKey,
-    (task, action) => host.admitCandidate(task, action, true),
-  )
+    const decision = decideSingleFileReuse(
+      candidates,
+      shareInstance,
+      planned.selectionKey,
+      (task, action) => ctx.admitCandidate(task, action, true),
+    )
+    if (dispatchAsyncReuseDecision(ctx, token, singleFileId, decision, options)) return
 
-  if (dispatchAsyncReuseDecision(host, decision, options)) return
-  const asyncError = asyncFreshStartError(host, planned)
-  if (asyncError !== undefined) {
-    host.clearActivationAndPublish()
-    host.dispatchAsyncError(asyncError, options?.onAsyncError)
-    return
+    const asyncError = asyncFreshStartError(ctx, planned)
+    if (asyncError !== undefined) {
+      releaseAndReportError(ctx, token, asyncError, options)
+      return
+    }
+    if (planned.offers.kind !== 'ready' || !ctx.execution.transitionToOpening(token)) return
+    await ctx.openWithTransferToken(token, {
+      joined,
+      choice: planned.offers.primary,
+      spec: planned.spec,
+      selection: planned.selection,
+      key: planned.selectionKey,
+      display: options?.display,
+    }, options)
+  } catch (error) {
+    if (!ctx.execution.ownsTransfer(token)) return
+    ctx.execution.releaseTransferIfOwned(token)
+    ctx.publish()
+    if (!ctx.isDisposed() && !isAbortError(error)) {
+      ctx.dispatchAsyncError(error, options?.onAsyncError)
+    }
   }
-  if (planned.offers.kind !== 'ready') return
-  await host.openWithActivation(token, activation, {
-    joined,
-    choice: planned.offers.primary,
-    spec: planned.spec,
-    selection: planned.selection,
-    key: planned.selectionKey,
-    display: options?.display,
-  }, options)
+}
+
+function ensureActiveForJoined(
+  ctx: SingleFileLaunchContext,
+  token: symbol,
+  joined: JoinedBrowserShare,
+): boolean {
+  if (!ctx.execution.ownsTransfer(token)) return false
+  if (ctx.currentJoinedShare() !== joined) {
+    ctx.execution.releaseTransferIfOwned(token)
+    ctx.publish()
+    return false
+  }
+  return true
+}
+
+async function resolveCandidatesForAsyncLookup(
+  ctx: SingleFileLaunchContext,
+  shareInstance: string,
+  key: string,
+  preMatchedTaskIds: readonly string[] | undefined,
+): Promise<readonly RetainedTaskSnapshot[]> {
+  if (preMatchedTaskIds !== undefined) {
+    return ctx.inventory.resolveKeyCandidates(shareInstance, key, preMatchedTaskIds)
+  }
+  const inspected = ctx.inventory.inspectKeyCandidates(shareInstance, key)
+  if (inspected.kind === 'none') return Object.freeze([])
+  if (inspected.kind === 'ready') return inspected.candidates
+  return ctx.inventory.resolveKeyCandidates(shareInstance, key, inspected.taskIds)
 }
 
 function dispatchAsyncReuseDecision(
-  host: SingleFileLaunchHost,
+  ctx: SingleFileLaunchContext,
+  token: symbol,
+  singleFileId: string,
   decision: SingleFileReuseDecision,
   options: SingleFileDownloadOptions | undefined,
 ): boolean {
+  if (decision.kind === 'none') return false
+  traceReuseDecision(ctx.outputTrace, decision)
   if (decision.kind === 'export') {
-    host.clearActivationOnly()
-    host.runRetainedSave(decision.task.taskId, options)
+    void ctx.retainedActions.runLocalAction(decision.task.taskId, 'save', singleFileId, exportCallbacks(options), token)
     return true
   }
   if (decision.kind === 'resume') {
-    host.clearActivationOnly()
-    host.runRetainedContinue(decision.task.taskId, options)
+    void ctx.retainedActions.runContinue(decision.task.taskId, singleFileId, resumeCallbacks(options), token)
     return true
   }
-  if (decision.kind === 'blocked') {
-    host.clearActivationAndPublish()
-    host.dispatchAsyncError(new ReceiveBlockedError(decision.reason), options?.onAsyncError)
-    return true
-  }
-  return false
+  releaseAndReportError(ctx, token, new ReceiveBlockedError(decision.reason), options)
+  return true
 }
 
 function asyncFreshStartError(
-  host: SingleFileLaunchHost,
+  ctx: SingleFileLaunchContext,
   planned: SingleFileDownloadPlan,
 ): Error | undefined {
-  if (host.hasPendingRetained()) return new ReceiveBlockedError('busy')
+  if (ctx.execution.hasLocalAction) return new ReceiveBlockedError('busy')
   if (planned.offers.kind === 'unavailable') return new SaveUnavailableError(planned.offers.reason)
   if (planned.offers.kind !== 'ready' || planned.offers.primary.backend === 'fsa') {
-    // FSA requires synchronous user activation; if an abandoned record vanished mid-lookup, let the user click once more.
+    // FSA requires synchronous user activation; once the vanished record is pruned, the next click opens the picker.
     return new ReceiveBlockedError('actionUnavailable')
   }
   return undefined
+}
+
+function releaseAndReportError(
+  ctx: SingleFileLaunchContext,
+  token: symbol,
+  error: unknown,
+  options: SingleFileDownloadOptions | undefined,
+): void {
+  ctx.execution.releaseTransferIfOwned(token)
+  ctx.publish()
+  ctx.dispatchAsyncError(error, options?.onAsyncError)
+}
+
+function exportCallbacks(options: SingleFileDownloadOptions | undefined) {
+  return {
+    ...(options?.onExported === undefined ? {} : { onCompleted: options.onExported }),
+    ...(options?.onAsyncError === undefined ? {} : { onError: options.onAsyncError }),
+  }
+}
+
+function resumeCallbacks(options: SingleFileDownloadOptions | undefined) {
+  return {
+    ...(options?.onActivated === undefined ? {} : { onActivated: options.onActivated }),
+    ...(options?.onAsyncError === undefined ? {} : { onError: options.onAsyncError }),
+  }
+}
+
+function traceReuseDecision(trace: OutputTraceSource | undefined, decision: Exclude<SingleFileReuseDecision, { kind: 'none' }>): void {
+  emitOutputTrace(trace, 'continuation', {
+    task_id: decision.task.taskId,
+    transition: 'single_file_reuse',
+    decision: decision.kind,
+    ...(decision.kind === 'blocked' ? { reason: decision.reason } : {}),
+  })
 }
