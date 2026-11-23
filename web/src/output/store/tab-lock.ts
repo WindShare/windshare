@@ -1,4 +1,7 @@
 const TASK_LOCK_PREFIX = 'windshare-receive:'
+const FSA_RESERVATION_LOCK = 'windshare-receive-fsa-reserve'
+
+let localReservationTail: Promise<void> = Promise.resolve()
 
 export interface TaskLock {
   readonly name: string
@@ -75,4 +78,30 @@ export async function isTaskLockedElsewhere(
     busy = lock === null
   })
   return busy
+}
+
+/**
+ * Serializes top-level FSA target allocation across tabs (or in-process when Web Locks
+ * are unavailable) because File System Access lacks atomic exclusive creation (`O_EXCL`).
+ */
+export async function withFSAReservationLock<T>(
+  work: () => Promise<T>,
+  locks: LockManager | undefined = globalThis.navigator?.locks,
+): Promise<T> {
+  if (locks !== undefined) {
+    let result!: T
+    await locks.request(FSA_RESERVATION_LOCK, { mode: 'exclusive' }, async () => {
+      result = await work()
+    })
+    return result
+  }
+  const previous = localReservationTail
+  let release!: () => void
+  localReservationTail = new Promise<void>(resolve => { release = resolve })
+  await previous
+  try {
+    return await work()
+  } finally {
+    release()
+  }
 }

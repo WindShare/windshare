@@ -475,6 +475,84 @@ export async function verifyFSADiscardSafetyOverNativeHandles(databaseName: stri
   }
 }
 
+export async function verifyFSAConcurrentSingleFileAllocationOverNativeHandles(databaseName: string) {
+  const store = await ReceiveStore.open(databaseName)
+  const root = await navigator.storage.getDirectory()
+  const sandboxName = `fsa-concurrent-${crypto.randomUUID()}`
+  const parent = await root.getDirectoryHandle(sandboxName, { create: true })
+  const taskA = `fsa-a-${crypto.randomUUID()}`
+  const taskB = `fsa-b-${crypto.randomUUID()}`
+  const payloadA = new TextEncoder().encode('report-from-task-a')
+  const payloadB = new TextEncoder().encode('report-from-task-b-longer')
+
+  try {
+    const [sessionA, sessionB] = await Promise.all([
+      openNewFSASession({
+        task: {
+          taskId: taskA,
+          selection: { shareInstance: 'share-a', syntheticRoot: 'root', defaultSelected: true, rules: [] },
+          selectionKey: 'sel-a',
+          artifact: { kind: 'directory-tree', name: 'report.bin', singleFileId: 'f-a' },
+          lifecycle: initialReceiveState(taskA),
+        },
+        parentHandle: parent,
+        store,
+      }),
+      openNewFSASession({
+        task: {
+          taskId: taskB,
+          selection: { shareInstance: 'share-b', syntheticRoot: 'root', defaultSelected: true, rules: [] },
+          selectionKey: 'sel-b',
+          artifact: { kind: 'directory-tree', name: 'report.bin', singleFileId: 'f-b' },
+          lifecycle: initialReceiveState(taskB),
+        },
+        parentHandle: parent,
+        store,
+      }),
+    ])
+
+    const [writerA, writerB] = await Promise.all([
+      sessionA.transferOutput.openFile({
+        fileId: 'f-a', path: ['report.bin'], sourcePath: ['report.bin'], revision: 'r-a', exactSize: BigInt(payloadA.byteLength),
+      }, new AbortController().signal),
+      sessionB.transferOutput.openFile({
+        fileId: 'f-b', path: ['report.bin'], sourcePath: ['report.bin'], revision: 'r-b', exactSize: BigInt(payloadB.byteLength),
+      }, new AbortController().signal),
+    ])
+
+    await Promise.all([
+      writerA.writeAt(0n, payloadA).then(() => writerA.commit([byteRange(0n, BigInt(payloadA.byteLength))])),
+      writerB.writeAt(0n, payloadB).then(() => writerB.commit([byteRange(0n, BigInt(payloadB.byteLength))])),
+    ])
+
+    const [settledA, settledB] = await Promise.all([
+      sessionA.settle({
+        status: 'completed', completedFiles: 1n, completedBytes: BigInt(payloadA.byteLength),
+        discoveredFiles: 1n, discoveredBytes: BigInt(payloadA.byteLength), discoveryComplete: true, failedFiles: 0n, failedDirectories: 0n,
+      }),
+      sessionB.settle({
+        status: 'completed', completedFiles: 1n, completedBytes: BigInt(payloadB.byteLength),
+        discoveredFiles: 1n, discoveredBytes: BigInt(payloadB.byteLength), discoveryComplete: true, failedFiles: 0n, failedDirectories: 0n,
+      }),
+    ])
+    await Promise.all([sessionA.close(), sessionB.close()])
+
+    const names = await listDirectoryKeys(parent)
+    const contents = await Promise.all(names.map(async name =>
+      await (await (await parent.getFileHandle(name)).getFile()).text()))
+
+    return {
+      lifecycleKinds: [settledA.lifecycle.kind, settledB.lifecycle.kind],
+      names,
+      contents: contents.sort(),
+    }
+  } finally {
+    store.close()
+    await root.removeEntry(sandboxName, { recursive: true }).catch(() => undefined)
+    await deleteDatabase(databaseName)
+  }
+}
+
 async function listDirectoryKeys(dir: FileSystemDirectoryHandle): Promise<string[]> {
   const names: string[] = []
   for await (const name of (dir as FileSystemDirectoryHandle & { keys(): AsyncIterableIterator<string> }).keys()) {

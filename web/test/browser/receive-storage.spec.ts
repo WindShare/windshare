@@ -181,6 +181,25 @@ test('FSA discard preserves foreign and replaced files and removes the result di
   })
 })
 
+test('concurrent FSA single-file downloads to the same directory allocate distinct files without overwriting', async ({
+  page,
+  browserName,
+}) => {
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
+  await requireOriginPrivateStorage(page, browserName)
+
+  const result = await page.evaluate(async ({ path, db }) => {
+    const harness = await import(path) as typeof import('./receive-storage-harness')
+    return harness.verifyFSAConcurrentSingleFileAllocationOverNativeHandles(db)
+  }, { path: HARNESS_PATH, db: `windshare-fsa-concurrent-${crypto.randomUUID()}` })
+
+  expect(result).toEqual({
+    lifecycleKinds: ['saved', 'saved'],
+    names: ['report (1).bin', 'report.bin'],
+    contents: ['report-from-task-a', 'report-from-task-b-longer'],
+  })
+})
+
 test('portable backend streams valid Store-mode ZIP archives to browser download', async ({ page }) => {
   await page.goto(BROWSER_CONTRACT_HOST_PATH)
   const result = await page.evaluate(async path => {
