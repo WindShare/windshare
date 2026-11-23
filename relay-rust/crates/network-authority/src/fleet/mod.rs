@@ -85,10 +85,15 @@ impl<R: Store, E: Environment> Authority<R, E> {
             policy.version.checked_add(1).ok_or(Fault::Invalid)
         })?;
         let node = Node::new(spec, NodeState::Canary, version)?;
-        let operation = B64.encode(self.environment.random::<16>()?);
+        let operation_id = B64.encode(self.environment.random::<16>()?);
         save(&mut self.store, &record, &node)?;
-        directory.project(&mut self.store, signer, self.environment.now(), &operation)?;
-        tracing::info!(event="node_enrolled", %operation, node_id=%node.spec.node_key, alias=%node.spec.alias, version);
+        directory.project(
+            &mut self.store,
+            signer,
+            self.environment.now(),
+            &operation_id,
+        )?;
+        tracing::info!(event="node_enrolled", %operation_id, node_id=%node.spec.node_key, alias=%node.spec.alias, version);
         Ok(node)
     }
 }

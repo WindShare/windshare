@@ -45,7 +45,7 @@ impl Publication {
         store: &mut impl Store,
         signer: &Publisher,
         now: u64,
-        operation: &str,
+        operation_id: &str,
     ) -> Result<()> {
         let mut nodes = Vec::new();
         for (_, raw) in store.scan("node/", None)? {
@@ -68,17 +68,17 @@ impl Publication {
             let next: BTreeMap<_, _> = nodes.iter().map(|n| (&n.spec.node_key, n)).collect();
             for (id, entry) in &previous {
                 if !next.contains_key(id) {
-                    tracing::info!(event="directory_entry_removed", operation_id=%operation, node_id=%id, alias=%entry.spec.alias);
+                    tracing::info!(event="directory_entry_removed", %operation_id, node_id=%id, alias=%entry.spec.alias);
                 }
             }
             for (id, entry) in next {
                 if previous.get(id).copied() != Some(entry) {
-                    tracing::info!(event="directory_entry_changed", operation_id=%operation, node_id=%id,
+                    tracing::info!(event="directory_entry_changed", %operation_id, node_id=%id,
                         alias=%entry.spec.alias, status=?entry.status, roles=?entry.spec.roles);
                 }
             }
             payload.nodes = nodes;
-            self.publish(payload, signer, now, operation)?;
+            self.publish(payload, signer, now, operation_id)?;
             self.save(store)?;
         }
         Ok(())
@@ -99,7 +99,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
             node.state() == cmd.expected_state && node.version == cmd.expected_policy_version,
             stale()
         );
-        let operation = super::B64.encode(self.environment.random::<16>()?);
+        let operation_id = super::B64.encode(self.environment.random::<16>()?);
         let next = match cmd.action {
             Action::Activate => NodeState::Active,
             Action::Drain => {
@@ -131,7 +131,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
                     self.store.delete(&record)?;
                     self.store.delete(&key("node-load", &node.key))?;
                     self.live_loads.remove(&node.key);
-                    tracing::info!(event="node_removed", %operation, node_id=%cmd.node_key, early_cutoff);
+                    tracing::info!(event="node_removed", %operation_id, node_id=%cmd.node_key, early_cutoff);
                     return Ok(());
                 }
                 NodeState::Disabled
@@ -144,9 +144,9 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 &mut self.store,
                 signer,
                 self.environment.now(),
-                &operation,
+                &operation_id,
             )?;
-            tracing::info!(event="node_intent_changed", %operation, node_id=%cmd.node_key, action=?cmd.action, admission=?node.admission(), version=node.version);
+            tracing::info!(event="node_intent_changed", %operation_id, node_id=%cmd.node_key, action=?cmd.action, admission=?node.admission(), version=node.version);
         }
         Ok(())
     }

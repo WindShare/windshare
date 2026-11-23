@@ -174,3 +174,102 @@ fn legacy_nodes_migrate_once_without_resigning_or_reusing_a_draft_version() {
     crate::fleet::migration::migrate(&mut store).unwrap();
     assert_eq!(store.put_count, writes);
 }
+
+fn assert_correlated_operation_id(
+    events: &[(tracing::Level, Value)],
+    expected_events: &[&str],
+) -> String {
+    use super::super::observability::events_named;
+
+    let mut shared: Option<&str> = None;
+    for name in expected_events {
+        let matched = events_named(events, name);
+        assert_eq!(matched.len(), 1, "expected one {name} event");
+        let fields = &matched[0]["fields"];
+        assert!(
+            fields.get("operation").is_none(),
+            "{name} should not emit legacy operation field"
+        );
+        let operation_id = fields["operation_id"]
+            .as_str()
+            .expect("operation_id string");
+        assert_ne!(operation_id, "");
+        match shared {
+            Some(previous) => assert_eq!(operation_id, previous),
+            None => shared = Some(operation_id),
+        }
+    }
+    shared.expect("at least one event").to_owned()
+}
+
+#[test]
+fn fleet_mutation_traces_correlate_with_operation_id() {
+    use super::super::observability::capture_events;
+
+    let mut auth = fixture();
+    let admin = auth
+        .initialize("init", "init", "operator", "reasonable password")
+        .unwrap();
+    let (release, signer, history) = directory();
+    Publication::bootstrap(&mut auth.store, &release, &[&history]).unwrap();
+    let spec: Spec = serde_json::from_value(spec("traced", 17)).unwrap();
+
+    let mut enrolled = None;
+    let enroll_events = capture_events(|| {
+        enrolled = Some(auth.enroll(&admin, spec, &signer).unwrap());
+    });
+    let node = enrolled.unwrap();
+    let enroll_op = assert_correlated_operation_id(
+        &enroll_events,
+        &[
+            "node_enrolled",
+            "directory_entry_changed",
+            "directory_signed",
+        ],
+    );
+
+    let activate_events = capture_events(|| {
+        auth.manage(&admin, &command(&node, Action::Activate), &signer)
+            .unwrap();
+    });
+    let activate_op = assert_correlated_operation_id(
+        &activate_events,
+        &[
+            "node_intent_changed",
+            "directory_entry_changed",
+            "directory_signed",
+        ],
+    );
+    assert_ne!(activate_op, enroll_op);
+
+    let active = auth.node_by_key(&admin, &node.key).unwrap().node;
+    let disable_events = capture_events(|| {
+        auth.manage(
+            &admin,
+            &command(&active, Action::Disable { early_cutoff: true }),
+            &signer,
+        )
+        .unwrap();
+    });
+    let disable_op = assert_correlated_operation_id(
+        &disable_events,
+        &[
+            "node_intent_changed",
+            "directory_entry_removed",
+            "directory_signed",
+        ],
+    );
+    assert_ne!(disable_op, activate_op);
+
+    let disabled = auth.node_by_key(&admin, &node.key).unwrap().node;
+    let remove_events = capture_events(|| {
+        auth.manage(
+            &admin,
+            &command(&disabled, Action::Remove { early_cutoff: true }),
+            &signer,
+        )
+        .unwrap();
+    });
+    let remove_op = assert_correlated_operation_id(&remove_events, &["node_removed"]);
+    assert_ne!(remove_op, disable_op);
+}
