@@ -11,6 +11,7 @@ import { EMPTY_PREVIEW, type ReceiverFailure } from '../../src/ui/model'
 import type { BrowseDirectory, BrowserReceiverGateway, JoinedBrowserShare } from '../../src/application/browser-share/gateway'
 import { createMemoryOPFSEnv, createMockDownloadWindow, MemoryReceiveStore } from '../output/opfs-fixture'
 import {
+  deferred,
   entry,
   FakeJoined,
   identity,
@@ -18,6 +19,7 @@ import {
   rootDirectory,
   turn,
   waitFor,
+  waitForController,
   directPreviewSnapshot,
   DiagnosticPreviewJoined,
 } from './v2-preview-fixture'
@@ -332,6 +334,7 @@ describe('preview target download, single-photo blob reuse, and workspace task d
 
     let releaseJob!: () => void
     const jobRunning = new Promise<void>(resolve => { releaseJob = resolve })
+    const job3Gate = deferred<void>()
     let jobCalls = 0
     const selection = new SelectionPolicy(true)
     const joined = {
@@ -360,11 +363,14 @@ describe('preview target download, single-photo blob reuse, and workspace task d
       beginDownloadConnectivity: () => ({ routes: [], close: vi.fn() }),
       createTransferJob: () => {
         jobCalls += 1
+        const callIndex = jobCalls
         return {
           pause: vi.fn(),
           stop: vi.fn(),
+          detach: vi.fn(),
           run: async () => {
-            if (jobCalls === 1) await jobRunning
+            if (callIndex === 1) await jobRunning
+            if (callIndex === 3) await job3Gate.promise
             return {
               status: 'completed' as const,
               completedFiles: 1n, completedBytes: 100n,
@@ -423,19 +429,38 @@ describe('preview target download, single-photo blob reuse, and workspace task d
 
     // Error preview closes once transfer activates on the same file.
     controller.previewFile(brokenEntry.idText)
-    await waitFor(() => controller.getSnapshot().preview.state === 'error')
+    await waitForController(controller, s => s.preview.state === 'error')
     expect(controller.downloadPreviewedFile()).toEqual({ kind: 'started' })
-    await waitFor(() => controller.getSnapshot().preview.state === 'idle')
-    await waitFor(() => controller.getSnapshot().output.activeTaskId === null)
+    await waitForController(controller, s => s.preview.state === 'idle' && s.output.activeTaskId === null && jobCalls === 2)
+    expect(jobCalls).toBe(2)
 
-    // Switching away before error preview's transfer activates keeps the newly opened preview alive.
+    // Switching away before error preview's transfer activates keeps the newly opened preview alive
+    // even after onActivated actually executes for job #3.
     controller.previewFile(brokenEntry.idText)
-    await waitFor(() => controller.getSnapshot().preview.state === 'error')
+    await waitForController(controller, s => s.preview.state === 'error')
     expect(controller.downloadPreviewedFile()).toEqual({ kind: 'started' })
+    expect(jobCalls).toBe(2)
     controller.previewFile(photoEntry.idText)
-    await waitFor(() => controller.getSnapshot().preview.state === 'image')
-    await waitFor(() => controller.getSnapshot().output.activeTaskId === null)
+    await waitForController(controller, s =>
+      s.preview.state === 'image' &&
+      s.output.activeTaskId !== null &&
+      s.output.lifecycle?.kind === 'downloading',
+    )
+    expect(jobCalls).toBe(3)
     expect(controller.getSnapshot().preview).toMatchObject({ state: 'image', fileId: photoEntry.idText })
+    job3Gate.resolve()
+    await waitForController(controller, s => s.output.activeTaskId === null)
+    expect(controller.getSnapshot().preview).toMatchObject({ state: 'image', fileId: photoEntry.idText })
+
+    // saveLocalBlob failure stays local to preview result without polluting global snapshot.error.
+    vi.spyOn(windowPort.URL!, 'createObjectURL').mockImplementationOnce(() => {
+      throw new Error('blob url failed')
+    })
+    expect(controller.downloadPreviewedFile()).toEqual({
+      kind: 'failed',
+      failure: { kind: 'save-unavailable', reason: 'no-safe-destination' },
+    })
+    expect(controller.getSnapshot().error).toBeNull()
 
     // Preview startup failure stays local to preview result without polluting global snapshot.error.
     const bigPreviewFail = vi.spyOn(joined, 'preview').mockRejectedValueOnce(new Error('not previewable'))
@@ -504,15 +529,27 @@ describe('single-photo blob reuse, preview picker isolation, and workspace task 
         transferStarts += 1
         return { routes: [], close: vi.fn() }
       },
-      createTransferJob: () => ({
+      createTransferJob: (output: Parameters<JoinedBrowserShare['createTransferJob']>[0]) => ({
         pause: vi.fn(),
         stop: vi.fn(),
-        run: async () => ({
-          status: 'completed' as const,
-          completedFiles: 1n, completedBytes: entry.expectedSize,
-          discoveredFiles: 1n, discoveredBytes: entry.expectedSize, discoveryComplete: true,
-          failedFiles: 0n, failedDirectories: 0n,
-        }),
+        detach: vi.fn(),
+        run: async () => {
+          const writer = await output.openFile({
+            fileId: entry.idText,
+            path: [entry.name],
+            sourcePath: [entry.name],
+            revision: 'rev-1',
+            exactSize: entry.expectedSize,
+          }, new AbortController().signal)
+          await writer.writeAt(0n, new Uint8Array(Number(entry.expectedSize)))
+          await writer.commit([{ start: 0n, end: entry.expectedSize }])
+          return {
+            status: 'completed' as const,
+            completedFiles: 1n, completedBytes: entry.expectedSize,
+            discoveredFiles: 1n, discoveredBytes: entry.expectedSize, discoveryComplete: true,
+            failedFiles: 0n, failedDirectories: 0n,
+          }
+        },
       }),
       close: async () => undefined,
     } as unknown as JoinedBrowserShare
@@ -556,16 +593,46 @@ describe('single-photo blob reuse, preview picker isolation, and workspace task 
     controller.cancelPreparing()
     await waitFor(() => controller.getSnapshot().output.offers?.kind === 'ready')
 
-    // Explicit OPFS also initiates a real transfer instead of reusing in-memory portable blob.
+    // Explicit OPFS initiates a real transfer, writes/commits bytes, and settles as retained download-started.
     controller.chooseArtifact('opfs:file', 'default')
-    await waitFor(() => transferStarts === 2)
-    expect(controller.getSnapshot().output.backend).toBe('opfs')
-    await waitFor(() => controller.getSnapshot().output.activeTaskId === null)
+    await waitForController(controller, s =>
+      s.output.backend === 'opfs' &&
+      s.output.activeTaskId === null &&
+      s.output.lifecycle?.kind === 'download-started',
+    )
+    expect(transferStarts).toBe(2)
+    expect(controller.getSnapshot().output.lifecycle).toMatchObject({
+      kind: 'download-started',
+      retained: true,
+      fileName: entry.name,
+    })
+    expect(downloads).toHaveLength(3)
+
+    // Active workspace lifecycle action failure routes locally when handled and falls back globally on unmount.
+    const lifecycleFailures: ReceiverFailure[] = []
+    vi.spyOn(baseWin.URL!, 'createObjectURL').mockImplementationOnce(() => {
+      throw new Error('local handoff blocked')
+    })
+    controller.performLifecycleAction('save', {
+      onAsyncFailure: failure => { lifecycleFailures.push(failure); return true },
+    })
+    await waitFor(() => lifecycleFailures.length === 1)
+    expect(controller.getSnapshot().error).toBeNull()
+
+    vi.spyOn(baseWin.URL!, 'createObjectURL').mockImplementationOnce(() => {
+      throw new Error('unmounted handoff blocked')
+    })
+    controller.performLifecycleAction('save', { onAsyncFailure: () => false })
+    await waitForController(controller, s => s.error !== null)
 
     await controller.dispose()
   })
 
   it('keeps preview open on cancelled picker or item switch, isolates async startup failures, and skips dismissed OPFS cards while keeping ready-to-save', async () => {
+    const store = new MemoryReceiveStore()
+    const openSpy = vi.spyOn(ReceiveStore, 'open').mockResolvedValue(
+      Object.assign(store, { close: vi.fn() }) as unknown as ReceiveStore,
+    )
     const mib = 1024n * 1024n
     const fsaEntry = { ...entry, id: identity(6), idText: identityText(6), name: 'big-clip.mp4', expectedSize: 80n * mib }
     const otherEntry = { ...entry, id: identity(8), idText: identityText(8), name: 'other.png', expectedSize: 100n }
@@ -622,7 +689,12 @@ describe('single-photo blob reuse, preview picker isolation, and workspace task 
       { windowPort: windowPort as unknown as ReceiveWindowPort },
     )
     controller.initialize({ capabilityInput: 'key', pageUrl: 'https://receiver.invalid/s/share' })
-    await waitFor(() => controller.getSnapshot().output.capabilitiesState === 'ready' && controller.getSnapshot().rows.length === 2)
+    await waitForController(controller, s =>
+      s.output.capabilitiesState === 'ready' &&
+      s.rows.length === 2 &&
+      s.output.singleFilePickerPendingFromBytes === null,
+    )
+    expect(openSpy).toHaveBeenCalled()
 
     // Cancelling the FSA picker keeps the error preview open with zero errors.
     controller.previewFile(fsaEntry.idText)
@@ -872,6 +944,136 @@ describe('preview export guards, modal task failure routing, and shareScope visi
     const scopeA2 = controller.presentation.shareScope.getSnapshot()
     expect(scopeA2.visitId).toBeGreaterThan(scopeB.visitId)
     unsubScope()
+
+    await controller.dispose()
+  })
+
+  it('closes loading preview on transfer activation and keeps modal open when loading resolves to image before onActivated', async () => {
+    const store = new MemoryReceiveStore()
+    vi.spyOn(ReceiveStore, 'open').mockResolvedValue(Object.assign(store, { close: vi.fn() }) as unknown as ReceiveStore)
+    const { env } = createMemoryOPFSEnv()
+    let openDirGate: ReturnType<typeof deferred<void>> | null = null
+    const gatedEnv = {
+      ...env,
+      getRootDirectory: async () => {
+        if (openDirGate !== null) await openDirGate.promise
+        return env.getRootDirectory()
+      },
+    }
+    vi.spyOn(outputContract, 'probeBrowserOutputCapabilities').mockResolvedValue(Object.freeze({
+      indexedDb: true, fsa: false, opfs: true, portable: false, availableStorageBytes: 64n * 1024n * 1024n,
+    }))
+    const { windowPort: baseWin, downloads } = createMockDownloadWindow()
+    const windowPort = { ...baseWin, indexedDB: { open: vi.fn() } as unknown as IDBFactory }
+    const fileCloseOnLoad = { ...entry, id: identity(2), idText: identityText(2), name: 'slow-a.png', expectedSize: 8n }
+    const fileResolveToImage = { ...entry, id: identity(3), idText: identityText(3), name: 'slow-b.png', expectedSize: 8n }
+
+    const previewSignals: AbortSignal[] = []
+    const previewGate2 = deferred<Awaited<ReturnType<JoinedBrowserShare['preview']>>>()
+    const job2Gate = deferred<void>()
+    let jobCalls = 0
+    const joined = {
+      descriptor: {
+        shareInstance: identity(7), shareInstanceId: identityText(7),
+        syntheticRoot: identity(1), syntheticRootId: identityText(1),
+      },
+      recoveryIdentity: 'share.recovery',
+      protocolSessionId: identityText(8),
+      protocolSessionIdentity: identityText(8),
+      selection: new SelectionPolicy(true),
+      replaceSelection(this: { selection: SelectionPolicy }, next: SelectionPolicy) { this.selection = next },
+      rootDirectory: () => rootDirectory,
+      page: async (directory: BrowseDirectory) => ({
+        directory, pageIndex: 0, pageCount: 1, entryCount: 2, omittedCount: 0n,
+        entries: [fileCloseOnLoad, fileResolveToImage],
+      }),
+      inspectSelection: async () => ({
+        kind: 'tree' as const, suggestedName: 'Album', rootPath: [], knownFileCount: 2, knownBytes: 16n, complete: true,
+      }),
+      subscribeCatalogScanProgress: () => () => undefined,
+      subscribePathActivity: () => () => undefined,
+      subscribeConnection: (listener: (value: { kind: 'connected' }) => void) => { listener({ kind: 'connected' }); return () => undefined },
+      subscribeProtocolGeneration: () => () => undefined,
+      beginPreviewConnectivity: () => ({ routes: [], close: vi.fn() }),
+      beginDownloadConnectivity: () => ({ routes: [], close: vi.fn() }),
+      createTransferJob: (output: Parameters<JoinedBrowserShare['createTransferJob']>[0]) => {
+        jobCalls += 1
+        const callIndex = jobCalls
+        const file = callIndex === 1 ? fileCloseOnLoad : fileResolveToImage
+        return {
+          pause: vi.fn(),
+          stop: vi.fn(),
+          detach: vi.fn(),
+          run: async () => {
+            if (callIndex === 2) await job2Gate.promise
+            const writer = await output.openFile({
+              fileId: file.idText,
+              path: [file.name],
+              sourcePath: [file.name],
+              revision: 'rev-1',
+              exactSize: file.expectedSize,
+            }, new AbortController().signal)
+            await writer.writeAt(0n, new Uint8Array(Number(file.expectedSize)))
+            await writer.commit([{ start: 0n, end: file.expectedSize }])
+            return {
+              status: 'completed' as const,
+              completedFiles: 1n, completedBytes: file.expectedSize,
+              discoveredFiles: 1n, discoveredBytes: file.expectedSize, discoveryComplete: true,
+              failedFiles: 0n, failedDirectories: 0n,
+            }
+          },
+        }
+      },
+      preview: (target: typeof fileCloseOnLoad, _conn: unknown, signal: AbortSignal) => {
+        previewSignals.push(signal)
+        if (target.idText === fileCloseOnLoad.idText) {
+          return new Promise<never>(() => undefined)
+        }
+        return previewGate2.promise
+      },
+      close: async () => undefined,
+    } as unknown as JoinedBrowserShare
+
+    const controller = new ReceiverController(
+      { join: async () => joined } as unknown as BrowserReceiverGateway,
+      { windowPort: windowPort as unknown as ReceiveWindowPort, opfsEnv: gatedEnv },
+    )
+    controller.initialize({ capabilityInput: 'key', pageUrl: 'https://receiver.invalid/s/share' })
+    await waitForController(controller, s => s.output.capabilitiesState === 'ready' && s.rows.length === 2)
+
+    // Still loading when onActivated fires: modal closes and pending preview aborts.
+    controller.previewFile(fileCloseOnLoad.idText)
+    expect(controller.getSnapshot().preview).toMatchObject({ state: 'loading', fileId: fileCloseOnLoad.idText })
+    expect(controller.downloadPreviewedFile()).toEqual({ kind: 'started' })
+    await waitForController(controller, s =>
+      s.preview.state === 'idle' && s.output.activeTaskId === null && s.output.lifecycle?.kind === 'download-started',
+    )
+    expect(previewSignals[0]?.aborted).toBe(true)
+    expect(jobCalls).toBe(1)
+
+    // Starts in loading, resolves to image before session opens/activates: onActivated keeps the image modal open.
+    openDirGate = deferred<void>()
+    controller.previewFile(fileResolveToImage.idText)
+    expect(controller.getSnapshot().preview).toMatchObject({ state: 'loading', fileId: fileResolveToImage.idText })
+    expect(controller.downloadPreviewedFile()).toEqual({ kind: 'started' })
+    previewGate2.resolve({
+      current: { kind: 'image', name: fileResolveToImage.name, url: 'blob:slow-b', mimeType: 'image/png', width: 20, height: 10 },
+      imageBlob: new Blob([Uint8Array.of(1)], { type: 'image/png' }),
+      seek: async () => { throw new Error('unused') },
+      close: async () => undefined,
+    } as unknown as Awaited<ReturnType<JoinedBrowserShare['preview']>>)
+    await waitForController(controller, s => s.preview.state === 'image' && s.preview.fileId === fileResolveToImage.idText)
+    expect(jobCalls).toBe(1)
+
+    openDirGate.resolve()
+    await waitForController(controller, s => s.output.activeTaskId !== null && s.output.lifecycle?.kind === 'downloading')
+    expect(jobCalls).toBe(2)
+    expect(controller.getSnapshot().preview).toMatchObject({ state: 'image', fileId: fileResolveToImage.idText })
+
+    job2Gate.resolve()
+    await waitForController(controller, s => s.output.activeTaskId === null && s.output.lifecycle?.kind === 'download-started')
+    expect(controller.getSnapshot().preview).toMatchObject({ state: 'image', fileId: fileResolveToImage.idText })
+    expect(downloads).toHaveLength(2)
 
     await controller.dispose()
   })
