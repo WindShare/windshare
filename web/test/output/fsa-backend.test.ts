@@ -267,14 +267,15 @@ describe('FSA backend safety boundaries', () => {
     })
     await session.close()
 
-    // Reopen: physical file for f1 is intact (alreadyCompleted), f3 rejects stale IDB ranges if truncated.
+    // Fresh FSA sessions have no prior history and omit pre-open completion lookup.
+    expect(session.transferOutput.checkCompleted).toBeUndefined()
+
+    // Reopen: physical file for f1 is intact (checkCompleted hit), f2 is incomplete, f3 rejects stale IDB ranges if truncated.
     const reopened = await reopenFSASession({
       task: pausedTask, store: store as unknown as ReceiveStore, allowPermissionPrompt: true,
     })
-    const resumedA = await reopened.transferOutput.openFile({
-      fileId: 'f1', path: ['CON.txt'], sourcePath: ['Photos', 'CON.txt'], revision: 'rev1', exactSize: 4n,
-    }, new AbortController().signal)
-    expect(resumedA.alreadyCompleted).toBe(true)
+    expect(await reopened.transferOutput.checkCompleted?.('f1', new AbortController().signal)).toEqual({ size: 4n })
+    expect(await reopened.transferOutput.checkCompleted?.('f2', new AbortController().signal)).toBeUndefined()
 
     const physicalC = reserved.children.get('truncated.bin') as FakeFileHandle
     physicalC.overwriteExternally(new Uint8Array(2))
@@ -902,5 +903,131 @@ describe('FSA result-root layout integration', () => {
       'windshare-download/Photos/',
       'windshare-download/Photos/a.jpg',
     ])
+  })
+})
+
+describe('FSA resume completion skip', () => {
+  it('skips remote revision opens for intact completed files on FSA resume and redownloads truncated ones', async () => {
+    const store = new MemoryReceiveStore()
+    const parent = new FakeDirectoryHandle('Downloads', store.events)
+    const shareInstance = new Uint8Array(16).fill(3)
+    const rootId = new Uint8Array(16).fill(4)
+    const idA = new Uint8Array(16).fill(11)
+    const idB = new Uint8Array(16).fill(12)
+    const idC = new Uint8Array(16).fill(13)
+    const idAText = encodeBase64Url(idA)
+    const idBText = encodeBase64Url(idB)
+    const idCText = encodeBase64Url(idC)
+    const payloadA = new Uint8Array([1, 2, 3, 4])
+    const payloadB = new Uint8Array([5, 6, 7, 8, 9])
+    const payloadC = new Uint8Array([10, 11, 12, 13, 14, 15])
+
+    const initial = await openNewFSASession({
+      task: {
+        taskId: 'fsa-resume-skip',
+        selection: { shareInstance: encodeBase64Url(shareInstance), syntheticRoot: encodeBase64Url(rootId), defaultSelected: true, rules: [] },
+        selectionKey: 'sel-resume-skip',
+        artifact: { kind: 'directory-tree', name: 'Docs' },
+        lifecycle: initialReceiveState('fsa-resume-skip'),
+      },
+      parentHandle: parent as unknown as FileSystemDirectoryHandle,
+      store: store as unknown as ReceiveStore,
+    })
+    for (const [fileId, name, data] of [[idAText, 'a.bin', payloadA], [idBText, 'b.bin', payloadB]] as const) {
+      const writer = await initial.transferOutput.openFile({
+        fileId, path: [name], sourcePath: ['Docs', name], revision: `rev-${name}`, exactSize: BigInt(data.byteLength),
+      }, new AbortController().signal)
+      await writer.writeAt(0n, data)
+      await writer.commit([byteRange(0n, BigInt(data.byteLength))])
+    }
+    const pausedTask = await initial.settle({
+      status: 'paused', pauseReason: 'user',
+      completedFiles: 2n, completedBytes: 9n, discoveredFiles: 3n, discoveredBytes: 15n,
+      discoveryComplete: true, failedFiles: 0n, failedDirectories: 0n,
+    })
+    await initial.close()
+
+    const entries: CatalogEntry[] = [
+      Object.freeze({ kind: 'file', id: idA, idText: idAText, name: 'a.bin', expectedSize: BigInt(payloadA.byteLength) }),
+      Object.freeze({ kind: 'file', id: idB, idText: idBText, name: 'b.bin', expectedSize: BigInt(payloadB.byteLength) }),
+      Object.freeze({ kind: 'file', id: idC, idText: idCText, name: 'c.bin', expectedSize: BigInt(payloadC.byteLength) }),
+    ]
+    const committed: CommittedDirectory = Object.freeze({
+      directoryId: rootId, directoryIdText: encodeBase64Url(rootId),
+      generation: new Uint8Array(16).fill(5), generationText: encodeBase64Url(new Uint8Array(16).fill(5)),
+      pageCount: 1, entryCount: 3, omittedCount: 0n, terminalCommitment: new Uint8Array(32),
+    })
+    const page: CatalogPage = Object.freeze({
+      shareInstance, directoryId: rootId, directoryIdText: committed.directoryIdText,
+      generation: committed.generation, generationText: committed.generationText,
+      pageIndex: 0, terminal: true, previousCommitment: new Uint8Array(32),
+      entries: Object.freeze(entries), omittedCount: 0n, objectCommitment: new Uint8Array(32), encodedBytes: 64,
+    })
+    const descriptor = Object.freeze({
+      shareInstance, shareInstanceId: encodeBase64Url(shareInstance),
+      syntheticRoot: rootId, syntheticRootId: committed.directoryIdText,
+    }) as unknown as ShareDescriptor
+    const catalog = Object.freeze({ loadDirectory: async () => committed, page: async () => page }) as unknown as CatalogClient
+
+    const payloads = new Map<string, Uint8Array<ArrayBuffer>>([
+      [idBText, payloadB],
+      [idCText, payloadC],
+    ])
+    const openedRevisions: string[] = []
+    const revisions: RevisionReader = {
+      open: async fileId => {
+        const key = encodeBase64Url(fileId)
+        openedRevisions.push(key)
+        const data = payloads.get(key)
+        if (data === undefined) throw new Error('source file deleted on sender')
+        const rev = new Uint8Array(16).fill(77)
+        const desc: FileRevisionDescriptor = Object.freeze({
+          shareInstance, shareInstanceId: descriptor.shareInstanceId,
+          fileId: new Uint8Array(fileId), fileIdText: key,
+          fileRevision: rev, fileRevisionText: encodeBase64Url(rev),
+          exactSize: BigInt(data.byteLength), geometry: new FileGeometry(BigInt(data.byteLength), 16n),
+        })
+        return Object.freeze({ descriptor: desc, leaseId: new Uint8Array(16).fill(9), release: async () => undefined })
+      },
+    }
+    const broker: BlockRangeReader = {
+      readRange: async function* (desc, _leaseId, span) {
+        const data = payloads.get(desc.fileIdText)!
+        yield Object.freeze({ offset: span.start, data: data.subarray(Number(span.start), Number(span.end)) })
+      },
+    }
+
+    // Resume 1: a.bin is missing on sender, b.bin is intact locally, only c.bin needs remote open.
+    const reopened = await reopenFSASession({
+      task: pausedTask, store: store as unknown as ReceiveStore, allowPermissionPrompt: true,
+    })
+    const resumedResult = await new TransferJob({
+      descriptor, catalog, selection: new SelectionPolicy(true).snapshot(),
+      revisions, broker, output: reopened.transferOutput,
+    }).run()
+    await reopened.close()
+
+    expect(resumedResult.status).toBe('completed')
+    expect(resumedResult.completedFiles).toBe(3n)
+    expect(openedRevisions).toEqual([idCText])
+
+    // Resume 2: externally truncating completed b.bin forces checkCompleted to miss and redownload b.bin.
+    const docsDir = parent.children.get('Docs') as FakeDirectoryHandle
+    const physicalB = docsDir.children.get('b.bin') as FakeFileHandle
+    physicalB.overwriteExternally(new Uint8Array(2))
+    openedRevisions.length = 0
+
+    const reopenedAfterEdit = await reopenFSASession({
+      task: pausedTask, store: store as unknown as ReceiveStore, allowPermissionPrompt: true,
+    })
+    const repairedResult = await new TransferJob({
+      descriptor, catalog, selection: new SelectionPolicy(true).snapshot(),
+      revisions, broker, output: reopenedAfterEdit.transferOutput,
+    }).run()
+    await reopenedAfterEdit.close()
+
+    expect(repairedResult.status).toBe('completed')
+    expect(openedRevisions).toEqual([idBText])
+    expect([...physicalB.bytes]).toEqual([...payloadB])
   })
 })

@@ -1,4 +1,5 @@
 import { bigintToSafeNumber, type ByteRange } from '../../content/geometry'
+import type { CompletedOutputFile } from '../../transfer/output-port'
 import type { ObjectCheckpointCoordinator } from '../native-object/coordinator'
 import type { ReceiveStore } from '../store/database'
 import {
@@ -39,7 +40,6 @@ export interface OpenedProgressiveZipFile {
   readonly record: ReceiveFileRecord
   readonly plan: ZipEntryPlanV1
   readonly completedRanges: readonly ByteRange[]
-  readonly alreadyCompleted: boolean
   crcRanges: readonly ZipCrcRange[]
 }
 
@@ -121,6 +121,14 @@ export class ProgressiveZipWriter {
 
   get allocatedLength(): bigint {
     return this.#allocatedLength
+  }
+
+  completedFile(fileId: string): CompletedOutputFile | undefined {
+    const existing = this.#entries.get(fileId)
+    if (existing?.zipEntry === undefined || existing.zipEntry.kind !== 'file' || existing.status !== 'completed') {
+      return undefined
+    }
+    return Object.freeze({ size: existing.size })
   }
 
   async ensureDirectory(directoryId: string, path: readonly string[], modifiedTimeMilliseconds?: bigint): Promise<void> {
@@ -231,7 +239,6 @@ export class ProgressiveZipWriter {
       record: existing,
       plan,
       completedRanges: fromRangeTuples(existing.completedRanges),
-      alreadyCompleted: existing.status === 'completed',
       crcRanges: zip.crcRanges,
     }
   }
@@ -278,7 +285,6 @@ export class ProgressiveZipWriter {
       record: row,
       plan,
       completedRanges: Object.freeze([]),
-      alreadyCompleted: false,
       crcRanges: Object.freeze([]),
     }
   }

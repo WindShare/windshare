@@ -23,7 +23,7 @@ import {
   isQuotaExceededError,
   sourceFault,
 } from './fault'
-import type { TransferOutputFile, TransferOutputSession } from './output-port'
+import type { CompletedOutputFile, TransferOutputFile, TransferOutputSession } from './output-port'
 
 const MAX_CAPACITY_WAIT_MS = 60_000
 const MAX_LEASE_RETRIES = 3
@@ -88,15 +88,17 @@ async function attemptSingleFileTransfer(
   let writer: TransferOutputFile | undefined
   const rangeState: { current: ByteRangeSet | undefined } = { current: undefined }
   try {
+    const completed = await checkAlreadyCompleted(ctx, file, leaseAttempt)
+    if (completed !== undefined) {
+      ctx.onInitialCoverage?.(completed.size)
+      return { kind: 'completed', size: completed.size }
+    }
+
     opened = await openRevisionWithBackoff(ctx, file.entry.id)
     const desc = opened.descriptor
     const revisionText = encodeBase64Url(desc.fileRevision)
     writer = await openOutputFile(ctx, file, opened, revisionText)
 
-    if (writer.alreadyCompleted) {
-      ctx.onInitialCoverage?.(desc.exactSize)
-      return { kind: 'completed', size: desc.exactSize }
-    }
     if (hasObservedRevisionChange(writer, opened, revisionText)) {
       await abortChangedWriter(writer)
       return { kind: 'source-changed' }
@@ -114,6 +116,18 @@ async function attemptSingleFileTransfer(
   } finally {
     await opened?.release().catch(() => undefined)
   }
+}
+
+function checkAlreadyCompleted(
+  ctx: FileTransferContext,
+  file: DiscoveredFile,
+  leaseAttempt: number,
+): Promise<CompletedOutputFile | undefined> {
+  // Only check prior completion on the initial attempt; lease-replacement retries are already streaming.
+  if (leaseAttempt > 0 || ctx.output.checkCompleted === undefined) {
+    return Promise.resolve(undefined)
+  }
+  return ctx.output.checkCompleted(file.entry.idText, ctx.signal)
 }
 
 function openOutputFile(

@@ -1,6 +1,7 @@
 import type { ByteRange } from '../../content/geometry'
 import type { TransferJobResult, TransferJobStatus } from '../../transfer/job'
 import type {
+  CompletedOutputFile,
   TransferDirectoryRequest,
   TransferFileRequest,
   TransferOutputFile,
@@ -122,6 +123,7 @@ export async function openNewOPFSSession(input: Readonly<{
       fileHandle,
       io,
       ...(zip === undefined ? {} : { zip }),
+      reopened: false,
       store: input.store,
       lock,
       windowPort: input.windowPort,
@@ -183,6 +185,7 @@ export async function reopenOPFSSession(input: Readonly<{
       fileHandle,
       io,
       ...(zip === undefined ? {} : { zip }),
+      reopened: true,
       store: input.store,
       lock,
       windowPort: input.windowPort,
@@ -296,6 +299,7 @@ class OPFSSessionHandle implements OutputSessionHandle {
     fileHandle: FileSystemFileHandle
     io: ObjectCheckpointCoordinator
     zip?: ProgressiveZipWriter
+    reopened: boolean
     store: ReceiveStore
     lock: TaskLock
     windowPort: BrowserDownloadWindow
@@ -326,6 +330,9 @@ class OPFSSessionHandle implements OutputSessionHandle {
           await input.zip!.ensureDirectory(request.directoryId, zipPath, request.modifiedTimeMilliseconds)
         },
       }),
+      ...(input.reopened ? {
+        checkCompleted: (fileId: string, signal: AbortSignal) => this.#checkCompleted(fileId, signal),
+      } : {}),
       openFile: (request: TransferFileRequest, signal: AbortSignal) => this.#openFile(request, signal),
       markDiscoveryComplete: async () => {
         this.#record = Object.freeze({ ...this.#record, discoveryComplete: true, updatedAt: Date.now() })
@@ -452,6 +459,17 @@ class OPFSSessionHandle implements OutputSessionHandle {
     return updated
   }
 
+  async #checkCompleted(fileId: string, signal: AbortSignal): Promise<CompletedOutputFile | undefined> {
+    signal.throwIfAborted()
+    if (this.#zip !== undefined) {
+      return this.#zip.completedFile(fileId)
+    }
+    const existing = await this.#store.getFile(this.taskId, fileId)
+    if (existing === undefined || existing.status !== 'completed') return undefined
+    const physicalSize = await this.#io.size()
+    return physicalSize >= existing.size ? Object.freeze({ size: existing.size }) : undefined
+  }
+
   async #openFile(request: TransferFileRequest, signal: AbortSignal): Promise<TransferOutputFile> {
     signal.throwIfAborted()
     if (this.#zip !== undefined) {
@@ -478,7 +496,6 @@ class OPFSSessionHandle implements OutputSessionHandle {
     })
     return Object.freeze({
       completedRanges: opened.completedRanges,
-      alreadyCompleted: opened.alreadyCompleted,
       savedRevision: opened.record.revision,
       ...(opened.record.sourceMetadata === undefined
         ? {}
@@ -521,7 +538,6 @@ class OPFSSessionHandle implements OutputSessionHandle {
 
     return Object.freeze({
       completedRanges: validExisting === undefined ? Object.freeze([]) : fromRangeTuples(validExisting.completedRanges),
-      alreadyCompleted: validExisting?.status === 'completed',
       ...(validExisting === undefined ? {} : {
         savedRevision: validExisting.revision,
         ...(validExisting.sourceMetadata === undefined ? {} : { savedSourceMetadata: validExisting.sourceMetadata }),

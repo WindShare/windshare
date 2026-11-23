@@ -151,9 +151,7 @@ export async function verifyOPFSProgressiveZipLifecycle(databaseName: string) {
       env,
       windowPort: captureWindow,
     })
-    const f1Again = await reopened.transferOutput.openFile({
-      fileId: 'f1', path: ['folder', 'a.txt'], sourcePath: ['folder', 'a.txt'], revision: 'r1', exactSize: BigInt(payloadA.byteLength),
-    }, new AbortController().signal)
+    const f1Completed = await reopened.transferOutput.checkCompleted?.('f1', new AbortController().signal)
     const f2Again = await reopened.transferOutput.openFile({
       fileId: 'f2', path: ['folder', 'b.txt'], sourcePath: ['folder', 'b.txt'], revision: 'r2', exactSize: BigInt(payloadB.byteLength),
     }, new AbortController().signal)
@@ -182,7 +180,7 @@ export async function verifyOPFSProgressiveZipLifecycle(databaseName: string) {
     const remaining = await store.getTask(taskId)
 
     return {
-      reopenedF1AlreadyCompleted: f1Again.alreadyCompleted,
+      reopenedF1AlreadyCompleted: f1Completed?.size === BigInt(payloadA.byteLength),
       reopenedF2StartEnd: f2Again.completedRanges.map(r => `${r.start}:${r.end}`),
       finishedKind: finished.lifecycle.kind,
       savedAgainKind: savedAgain.lifecycle.kind,
@@ -245,9 +243,7 @@ export async function verifyFSABackendOverNativeHandles(databaseName: string) {
     await session.close()
 
     const reopened = await reopenFSASession({ task: paused, store, allowPermissionPrompt: false })
-    const resumedF1 = await reopened.transferOutput.openFile({
-      fileId: 'f1', path: ['pic.bin'], sourcePath: ['Album', 'pic.bin'], revision: 'r1', exactSize: 4n,
-    }, new AbortController().signal)
+    const resumedF1 = await reopened.transferOutput.checkCompleted?.('f1', new AbortController().signal)
     const resumedF2 = await reopened.transferOutput.openFile({
       fileId: 'f2', path: ['clip.bin'], sourcePath: ['Album', 'clip.bin'], revision: 'r2', exactSize: 8n,
     }, new AbortController().signal)
@@ -261,7 +257,7 @@ export async function verifyFSABackendOverNativeHandles(databaseName: string) {
     }
 
     return {
-      resumedF1AlreadyCompleted: resumedF1.alreadyCompleted,
+      resumedF1AlreadyCompleted: resumedF1?.size === 4n,
       resumedF2Ranges: resumedF2.completedRanges.map(r => `${r.start}:${r.end}`),
       survivingNames,
       taskDeleted: (await store.getTask(taskId)) === undefined,

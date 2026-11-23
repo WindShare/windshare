@@ -9,6 +9,7 @@ import {
 } from '../../transfer/fault'
 import type { TransferJobResult } from '../../transfer/job'
 import type {
+  CompletedOutputFile,
   TransferDirectoryRequest,
   TransferFileRequest,
   TransferOutputFile,
@@ -168,11 +169,20 @@ export async function reopenFSASession(input: Readonly<{
       updatedAt: Date.now(),
     })
     await input.store.putTask(updated)
+    const priorCompleted = await loadCompletedFSARecords(input.store, updated.taskId)
     emitOutputTrace(input.diagnostics?.trace, 'reopen', {
       backend: 'file_system_access',
       transition: 'authorized',
     })
-    return new FSASessionHandle(updated, rootHandle, input.store, lock, new SafeNameRegistry(), input.diagnostics)
+    return new FSASessionHandle(
+      updated,
+      rootHandle,
+      input.store,
+      lock,
+      new SafeNameRegistry(),
+      input.diagnostics,
+      priorCompleted,
+    )
   } catch (error) {
     emitOutputTrace(input.diagnostics?.trace, 'reopen', {
       backend: 'file_system_access',
@@ -216,6 +226,7 @@ class FSASessionHandle implements OutputSessionHandle {
   readonly #lock: TaskLock
   readonly #safeNames: SafeNameRegistry
   readonly #diagnostics: OutputDiagnosticsPorts | undefined
+  readonly #priorCompleted: ReadonlyMap<string, ReceiveFileRecord>
   readonly #dirCache = new Map<string, FileSystemDirectoryHandle>()
 
   constructor(
@@ -225,6 +236,7 @@ class FSASessionHandle implements OutputSessionHandle {
     lock: TaskLock,
     safeNames: SafeNameRegistry,
     diagnostics?: OutputDiagnosticsPorts,
+    priorCompleted: ReadonlyMap<string, ReceiveFileRecord> = new Map(),
   ) {
     this.taskId = record.taskId
     this.#record = record
@@ -233,6 +245,7 @@ class FSASessionHandle implements OutputSessionHandle {
     this.#lock = lock
     this.#safeNames = safeNames
     this.#diagnostics = diagnostics
+    this.#priorCompleted = priorCompleted
     this.transferOutput = Object.freeze({
       sessionId: record.taskId,
       capabilities: Object.freeze({
@@ -242,6 +255,9 @@ class FSASessionHandle implements OutputSessionHandle {
         maxConcurrentFiles: FSA_MAX_CONCURRENT_FILES,
       }),
       ensureDirectory: (request: TransferDirectoryRequest, signal: AbortSignal) => this.#ensureDirectory(request, signal),
+      ...(priorCompleted.size > 0
+        ? { checkCompleted: (fileId: string, signal: AbortSignal) => this.#checkCompleted(fileId, signal) }
+        : {}),
       openFile: (request: TransferFileRequest, signal: AbortSignal) => this.#openFile(request, signal),
       markDiscoveryComplete: async () => {
         this.#record = Object.freeze({ ...this.#record, discoveryComplete: true, updatedAt: Date.now() })
@@ -285,13 +301,19 @@ class FSASessionHandle implements OutputSessionHandle {
     await this.#resolveDirectory(request.path, signal)
   }
 
+  async #checkCompleted(fileId: string, signal: AbortSignal): Promise<CompletedOutputFile | undefined> {
+    signal.throwIfAborted()
+    const existing = this.#priorCompleted.get(fileId)
+    if (existing === undefined) return undefined
+    const verified = await verifyExistingFSAFile(existing)
+    if (verified === undefined || verified.status !== 'completed') return undefined
+    return Object.freeze({ size: verified.size })
+  }
+
   async #openFile(request: TransferFileRequest, signal: AbortSignal): Promise<TransferOutputFile> {
     signal.throwIfAborted()
     const existing = await this.#store.getFile(this.taskId, request.fileId)
     const verified = existing === undefined ? undefined : await verifyExistingFSAFile(existing)
-    if (verified !== undefined && verified.status === 'completed') {
-      return completedFSAFile(verified)
-    }
 
     const parentPath = request.path.slice(0, -1)
     const leafName = this.#record.target.kind === 'fsa' && this.#record.target.singleFile
@@ -355,7 +377,6 @@ class FSASessionHandle implements OutputSessionHandle {
 
 class FSAOutputFile implements TransferOutputFile {
   readonly completedRanges: readonly ByteRange[]
-  readonly alreadyCompleted = false
   readonly savedRevision?: string
   readonly savedSourceMetadata?: string
   readonly savedSize?: bigint
@@ -493,19 +514,16 @@ class FSAOutputFile implements TransferOutputFile {
   }
 }
 
-function completedFSAFile(record: ReceiveFileRecord): TransferOutputFile {
-  return Object.freeze({
-    completedRanges: fromRangeTuples(record.completedRanges),
-    alreadyCompleted: true,
-    savedRevision: record.revision,
-    ...(record.sourceMetadata === undefined ? {} : { savedSourceMetadata: record.sourceMetadata }),
-    savedSize: record.size,
-    writeAt: () => Promise.resolve(),
-    checkpoint: () => Promise.resolve(),
-    commit: () => Promise.resolve(),
-    pause: () => Promise.resolve(),
-    abort: () => Promise.resolve(),
-  })
+async function loadCompletedFSARecords(
+  store: ReceiveStore,
+  taskId: string,
+): Promise<ReadonlyMap<string, ReceiveFileRecord>> {
+  const files = await store.listTaskFiles(taskId)
+  const completed = new Map<string, ReceiveFileRecord>()
+  for (const file of files) {
+    if (file.status === 'completed') completed.set(file.fileId, file)
+  }
+  return completed
 }
 
 /**
@@ -523,7 +541,8 @@ async function verifyExistingFSAFile(record: ReceiveFileRecord): Promise<Receive
     const needed = maxRangeEnd(record.completedRanges)
     if (physicalSize < needed) return undefined
     return record
-  } catch {
+  } catch (error) {
+    if (isPermissionDeniedError(error)) throw error
     return undefined
   }
 }

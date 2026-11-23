@@ -259,9 +259,11 @@ function makeShareFixture(files: readonly {
   }) as unknown as CatalogClient
 
   const byId = new Map(files.map(file => [encodeBase64Url(fixedId(file.seed)), file]))
+  const openedFileIds: string[] = []
   const revisions: RevisionReader = {
     open: async (fileId: Uint8Array) => {
       const key = encodeBase64Url(fileId)
+      openedFileIds.push(key)
       const file = byId.get(key)
       if (file === undefined || file.missing) {
         throw new TransferFaultError(
@@ -296,7 +298,7 @@ function makeShareFixture(files: readonly {
       })
     },
   }
-  return { descriptor, catalog, revisions, broker }
+  return { descriptor, catalog, revisions, broker, openedFileIds }
 }
 
 describe('OPFS partial settlement and export', () => {
@@ -577,5 +579,144 @@ describe('OPFS partial settlement and export', () => {
     await singleSession.close()
     expect(settledSingle.lifecycle.kind).toBe('download-started')
     expect(downloads.at(-1)?.fileName).toBe('video.bin')
+  })
+})
+
+describe('OPFS resume completion skip', () => {
+  it('skips remote revision opens for completed OPFS ZIP members on resume and finalizes even if a completed source vanished', async () => {
+    const store = new MemoryReceiveStore()
+    const { env } = createMemoryOPFSEnv()
+    const { windowPort, downloads } = createMockDownloadWindow()
+    const payloadA = new TextEncoder().encode('alpha-done')
+    const payloadB = new TextEncoder().encode('beta-done-too')
+    const payloadC = new TextEncoder().encode('gamma-pending')
+    const idA = encodeBase64Url(fixedId(21))
+    const idB = encodeBase64Url(fixedId(22))
+    const idC = encodeBase64Url(fixedId(23))
+    const fixture = makeShareFixture([
+      { seed: 21, name: 'a.txt', bytes: payloadA, missing: true },
+      { seed: 22, name: 'b.txt', bytes: payloadB },
+      { seed: 23, name: 'c.txt', bytes: payloadC },
+    ])
+    const selection = new SelectionPolicy(true).snapshot()
+    const spec = selectionSpecFromPolicy(fixture.descriptor.shareInstanceId, fixture.descriptor.syntheticRootId, selection)
+
+    const initial = await openNewOPFSSession({
+      task: {
+        taskId: 'opfs-zip-resume-skip',
+        selection: spec,
+        selectionKey: selectionKey(spec),
+        artifact: Object.freeze({ kind: 'zip-archive', name: 'Bundle.zip' }),
+        lifecycle: initialReceiveState('opfs-zip-resume-skip'),
+      },
+      store: store as unknown as ReceiveStore,
+      env,
+      windowPort,
+    })
+    expect(initial.transferOutput.checkCompleted).toBeUndefined()
+
+    for (const [fileId, name, data] of [[idA, 'a.txt', payloadA], [idB, 'b.txt', payloadB]] as const) {
+      const writer = await initial.transferOutput.openFile({
+        fileId, path: [name], sourcePath: [name], revision: `r-${name}`, exactSize: BigInt(data.byteLength),
+      }, new AbortController().signal)
+      await writer.writeAt(0n, data)
+      await writer.commit([byteRange(0n, BigInt(data.byteLength))])
+    }
+    const paused = await initial.settle({
+      status: 'paused',
+      pauseReason: 'user',
+      completedFiles: 2n,
+      completedBytes: BigInt(payloadA.byteLength + payloadB.byteLength),
+      discoveredFiles: 3n,
+      discoveredBytes: BigInt(payloadA.byteLength + payloadB.byteLength + payloadC.byteLength),
+      discoveryComplete: true,
+      failedFiles: 0n,
+      failedDirectories: 0n,
+    })
+    await initial.close()
+
+    const reopened = await reopenOPFSSession({
+      task: paused,
+      store: store as unknown as ReceiveStore,
+      env,
+      windowPort,
+    })
+    const result = await new TransferJob({
+      descriptor: fixture.descriptor,
+      catalog: fixture.catalog,
+      selection,
+      revisions: fixture.revisions,
+      broker: fixture.broker,
+      output: reopened.transferOutput,
+    }).run()
+    const settled = await reopened.settle(result)
+    await reopened.close()
+
+    expect(result.status).toBe('completed')
+    expect(result.completedFiles).toBe(3n)
+    expect(fixture.openedFileIds).toEqual([idC])
+    expect(settled.lifecycle.kind).toBe('download-started')
+    expect(downloads).toHaveLength(1)
+    const entries = await readZipFiles(downloads[0]!.blob)
+    expect(entries.get('a.txt')).toEqual(payloadA)
+    expect(entries.get('b.txt')).toEqual(payloadB)
+    expect(entries.get('c.txt')).toEqual(payloadC)
+
+    // Single-file OPFS also verifies physical size before skipping remote open on resume.
+    const singleFileId = encodeBase64Url(fixedId(24))
+    const singleBytes = new TextEncoder().encode('single-done-bytes')
+    const singleFixture = makeShareFixture([{ seed: 24, name: 'clip.bin', bytes: singleBytes, missing: true }])
+    const singleSpec = selectionSpecFromPolicy(
+      singleFixture.descriptor.shareInstanceId,
+      singleFixture.descriptor.syntheticRootId,
+      selection,
+    )
+    const singleNew = await openNewOPFSSession({
+      task: {
+        taskId: 'opfs-single-resume-skip',
+        selection: singleSpec,
+        selectionKey: selectionKey(singleSpec),
+        artifact: Object.freeze({
+          kind: 'original-file',
+          name: 'clip.bin',
+          singleFileId,
+          singleFilePath: ['clip.bin'],
+          singleFileSize: BigInt(singleBytes.byteLength),
+        }),
+        lifecycle: initialReceiveState('opfs-single-resume-skip'),
+      },
+      store: store as unknown as ReceiveStore,
+      env,
+      windowPort,
+    })
+    const singleWriter = await singleNew.transferOutput.openFile({
+      fileId: singleFileId, path: ['clip.bin'], sourcePath: ['clip.bin'],
+      revision: 'r-clip', exactSize: BigInt(singleBytes.byteLength),
+    }, new AbortController().signal)
+    await singleWriter.writeAt(0n, singleBytes)
+    await singleWriter.commit([byteRange(0n, BigInt(singleBytes.byteLength))])
+    const singlePaused = await singleNew.settle({
+      status: 'paused', pauseReason: 'user',
+      completedFiles: 1n, completedBytes: BigInt(singleBytes.byteLength),
+      discoveredFiles: 1n, discoveredBytes: BigInt(singleBytes.byteLength),
+      discoveryComplete: true, failedFiles: 0n, failedDirectories: 0n,
+    })
+    await singleNew.close()
+
+    const singleReopened = await reopenOPFSSession({
+      task: singlePaused, store: store as unknown as ReceiveStore, env, windowPort,
+    })
+    const singleResult = await new TransferJob({
+      descriptor: singleFixture.descriptor,
+      catalog: singleFixture.catalog,
+      selection,
+      revisions: singleFixture.revisions,
+      broker: singleFixture.broker,
+      output: singleReopened.transferOutput,
+    }).run()
+    await singleReopened.close()
+
+    expect(singleResult.status).toBe('completed')
+    expect(singleFixture.openedFileIds).toEqual([])
   })
 })

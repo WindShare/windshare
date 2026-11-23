@@ -16,7 +16,13 @@ function id(seed: number): Uint8Array<ArrayBuffer> {
   return new Uint8Array(16).fill(seed)
 }
 
-function makeShareFixture(files: readonly { readonly seed: number; readonly name: string; readonly bytes: Uint8Array<ArrayBuffer>; readonly revSeed?: number }[]) {
+function makeShareFixture(files: readonly {
+  readonly seed: number
+  readonly name: string
+  readonly bytes: Uint8Array<ArrayBuffer>
+  readonly revSeed?: number
+  readonly missing?: boolean
+}[]) {
   const shareInstance = id(1)
   const rootId = id(2)
   const entries: CatalogEntry[] = files.map(file => Object.freeze({
@@ -62,11 +68,13 @@ function makeShareFixture(files: readonly { readonly seed: number; readonly name
   }) as unknown as CatalogClient
 
   const byId = new Map(files.map(file => [encodeBase64Url(id(file.seed)), file]))
+  const openedFileIds: string[] = []
   const revisions: RevisionReader = {
     open: async (fileId: Uint8Array) => {
       const key = encodeBase64Url(fileId)
+      openedFileIds.push(key)
       const file = byId.get(key)
-      if (file === undefined) throw new Error('missing file')
+      if (file === undefined || file.missing) throw new Error('missing file')
       const rev = id(file.revSeed ?? (file.seed + 50))
       const revDesc: FileRevisionDescriptor = Object.freeze({
         shareInstance,
@@ -99,7 +107,7 @@ function makeShareFixture(files: readonly { readonly seed: number; readonly name
       }
     },
   }
-  return { descriptor, catalog, revisions, broker, readRanges }
+  return { descriptor, catalog, revisions, broker, readRanges, openedFileIds }
 }
 
 describe('transfer discovery and job execution', () => {
@@ -127,7 +135,6 @@ describe('transfer discovery and job execution', () => {
       },
       openFile: async (req: TransferFileRequest): Promise<TransferOutputFile> => ({
         completedRanges: [byteRange(0n, 4n)],
-        alreadyCompleted: false,
         savedRevision: req.revision,
         savedSize: req.exactSize,
         writeAt: async (offset, data) => { target.set(data, Number(offset)) },
@@ -158,7 +165,6 @@ describe('transfer discovery and job execution', () => {
       ...output,
       openFile: async (): Promise<TransferOutputFile> => ({
         completedRanges: [byteRange(0n, 4n)],
-        alreadyCompleted: false,
         savedRevision: encodeBase64Url(id(77)),
         savedSize: 8n,
         writeAt: async () => { throw new Error('must not write to changed revision') },
@@ -192,7 +198,6 @@ describe('transfer discovery and job execution', () => {
       capabilities: { maxConcurrentFiles: 1 },
       openFile: async (): Promise<TransferOutputFile> => ({
         completedRanges: [],
-        alreadyCompleted: false,
         writeAt: async () => { jobRef.current?.pause('user') },
         checkpoint: async () => { checkpointCalls += 1 },
         commit: async () => undefined,
@@ -236,7 +241,6 @@ describe('transfer discovery and job execution', () => {
       capabilities: { maxConcurrentFiles: 1 },
       openFile: async (): Promise<TransferOutputFile> => ({
         completedRanges: [],
-        alreadyCompleted: false,
         writeAt: async (offset, data) => { target.set(data, Number(offset)) },
         checkpoint: async () => { checkpointCalls += 1 },
         commit: async () => { commitCalls += 1 },
@@ -276,7 +280,6 @@ describe('transfer discovery and job execution', () => {
         },
         openFile: async (): Promise<TransferOutputFile> => ({
           completedRanges: [],
-          alreadyCompleted: false,
           writeAt: async offset => {
             // Slice 1 arrives after the 10 s threshold; subsequent slices arrive 1 s apart.
             nowMs += offset === 0n ? 11_000 : 1_000
@@ -482,5 +485,64 @@ describe('transfer discovery and job execution', () => {
       new AbortController().signal,
     )
     expect(onlyPhotosShape).toMatchObject({ kind: 'tree', suggestedName: 'Photos', rootPath: ['Photos'] })
+  })
+})
+
+describe('transfer job resume completion skip', () => {
+  it('skips remote revision opens for locally completed files on resume even if a completed source vanished', async () => {
+    const payloadA = new Uint8Array([1, 2, 3, 4])
+    const payloadB = new Uint8Array([5, 6, 7, 8, 9, 10])
+    const payloadC = new Uint8Array([11, 12, 13, 14, 15, 16, 17, 18])
+    const fixture = makeShareFixture([
+      { seed: 41, name: 'done-a.bin', bytes: payloadA, missing: true },
+      { seed: 42, name: 'done-b.bin', bytes: payloadB },
+      { seed: 43, name: 'pending-c.bin', bytes: payloadC },
+    ])
+    const completed = new Map<string, bigint>([
+      [encodeBase64Url(id(41)), BigInt(payloadA.byteLength)],
+      [encodeBase64Url(id(42)), BigInt(payloadB.byteLength)],
+    ])
+    const writtenC = new Uint8Array(payloadC.byteLength)
+    const openedOutputs: string[] = []
+    let lastProgressBytes = 0n
+
+    const output: TransferOutputSession = {
+      sessionId: 'sess-skip-completed',
+      capabilities: { maxConcurrentFiles: 2 },
+      checkCompleted: async fileId => {
+        const size = completed.get(fileId)
+        return size === undefined ? undefined : { size }
+      },
+      openFile: async (req: TransferFileRequest): Promise<TransferOutputFile> => {
+        openedOutputs.push(req.fileId)
+        return {
+          completedRanges: [],
+          writeAt: async (offset, data) => { writtenC.set(data, Number(offset)) },
+          checkpoint: async () => undefined,
+          commit: async () => undefined,
+          pause: async () => undefined,
+          abort: async () => undefined,
+        }
+      },
+    }
+
+    const result = await new TransferJob({
+      descriptor: fixture.descriptor,
+      catalog: fixture.catalog,
+      selection: new SelectionPolicy(true).snapshot(),
+      revisions: fixture.revisions,
+      broker: fixture.broker,
+      output,
+      onProgress: progress => { lastProgressBytes = progress.materializedBytes },
+    }).run()
+
+    const pendingId = encodeBase64Url(id(43))
+    expect(result.status).toBe('completed')
+    expect(result.completedFiles).toBe(3n)
+    expect(result.completedBytes).toBe(BigInt(payloadA.byteLength + payloadB.byteLength + payloadC.byteLength))
+    expect(lastProgressBytes).toBe(result.completedBytes)
+    expect(fixture.openedFileIds).toEqual([pendingId])
+    expect(openedOutputs).toEqual([pendingId])
+    expect([...writtenC]).toEqual([...payloadC])
   })
 })

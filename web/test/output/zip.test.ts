@@ -231,10 +231,8 @@ describe('ZIP writers (portable streaming & OPFS progressive)', () => {
 
     // Reopen fresh writer over same OPFS bytes + store and complete file B.
     const writer2 = await ProgressiveZipWriter.open('pzip-1', store as unknown as ReceiveStore, coord)
-    const reopenedA = await writer2.openFile({
-      fileId: 'fa', path: ['docs', 'a.txt'], revision: 'r1', exactSize: BigInt(payloadA.byteLength),
-    })
-    expect(reopenedA.alreadyCompleted).toBe(true)
+    expect(writer2.completedFile('fa')).toEqual({ size: BigInt(payloadA.byteLength) })
+    expect(writer2.completedFile('fb')).toBeUndefined()
 
     const reopenedB = await writer2.openFile({
       fileId: 'fb', path: ['docs', 'b.txt'], revision: 'r2', exactSize: BigInt(payloadB.byteLength),

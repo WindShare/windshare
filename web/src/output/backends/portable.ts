@@ -199,7 +199,6 @@ class PortableSessionHandle implements OutputSessionHandle {
       }
       return Object.freeze({
         completedRanges: Object.freeze([]),
-        alreadyCompleted: false,
         writeAt: async (offset: bigint, data: Uint8Array) => {
           if (offset === expectedOffset) {
             zipFile.write(data)
@@ -229,7 +228,6 @@ class PortableSessionHandle implements OutputSessionHandle {
     this.#singleFileSize = request.exactSize
     return Object.freeze({
       completedRanges: Object.freeze([]),
-      alreadyCompleted: false,
       writeAt: async (offset: bigint, data: Uint8Array) => {
         const start = bigintToSafeNumber(offset, 'portable write offset')
         if (offset + BigInt(data.byteLength) > this.#singleFileSize) {

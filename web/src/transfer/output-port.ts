@@ -17,6 +17,10 @@ export interface TransferDirectoryRequest {
   readonly modifiedTimeMilliseconds?: bigint
 }
 
+export interface CompletedOutputFile {
+  readonly size: bigint
+}
+
 /**
  * Storage-neutral file writer consumed by `transfer/file-transfer.ts`.
  * Backends guarantee physical bytes are flushed before `checkpoint()` persists
@@ -25,8 +29,6 @@ export interface TransferDirectoryRequest {
 export interface TransferOutputFile {
   /** Durable ranges already verified on disk from a prior run. */
   readonly completedRanges: readonly ByteRange[]
-  /** True when the file was already completed and committed in an earlier run. */
-  readonly alreadyCompleted: boolean
   /** Saved revision from a prior run, if any, used to detect source file changes. */
   readonly savedRevision?: string
   readonly savedSourceMetadata?: string
@@ -61,6 +63,12 @@ export interface TransferOutputSession {
   readonly sessionId: string
   readonly capabilities: TransferOutputCapabilities
   ensureDirectory?(request: TransferDirectoryRequest, signal: AbortSignal): Promise<void>
+  /**
+   * Verifies whether `fileId` was already completed and committed locally in a prior run.
+   * Checked before acquiring a remote revision lease so resumed transfers skip completed
+   * files without remote round-trips or failing if the source file was later removed.
+   */
+  checkCompleted?(fileId: string, signal: AbortSignal): Promise<CompletedOutputFile | undefined>
   openFile(request: TransferFileRequest, signal: AbortSignal): Promise<TransferOutputFile>
   markDiscoveryComplete?(): Promise<void>
   safeRenamedSummary?(): SafeRenamedSummary | undefined

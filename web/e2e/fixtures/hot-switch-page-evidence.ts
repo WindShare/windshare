@@ -111,7 +111,6 @@ export class DeliveryBuffer {
         this.#writtenBytes = 0
         return Object.freeze({
           completedRanges: Object.freeze([]),
-          alreadyCompleted: false,
           writeAt: async (offset: bigint, data: Uint8Array) => {
             await outputFence.waitForWrite()
             const start = bigintToSafeNumber(offset, 'hot-switch write offset')
