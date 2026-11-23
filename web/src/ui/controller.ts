@@ -608,10 +608,11 @@ export class ReceiverController {
   ): boolean {
     const share = this.#snapshot.share
     if (share?.kind !== 'photo') return false
-    if (findReadyOfferChoice(this.#snapshot.output.offers, choiceId)?.backend !== 'portable') return false
+    const choice = findReadyOfferChoice(this.#snapshot.output.offers, choiceId)
+    if (choice?.backend !== 'portable' || choice.artifactKind !== 'original-file') return false
     const target = this.#previews.activeTarget()
     if (target?.imageBlob === undefined || target.entry.idText !== share.file.id) return false
-    this.#receive.completeLocalBlobDownload(target.imageBlob, target.entry.name, display)
+    this.#receive.completeLocalBlobDownload(choiceId, target.imageBlob, display)
     return true
   }
 

@@ -11,6 +11,7 @@ import {
 } from '../../output/backends/contract'
 import { startFSADirectoryPicker } from '../../output/backends/fsa'
 import type { OPFSEnvironment } from '../../output/backends/opfs'
+import { handoffLocalPortableBlob, persistPortableHistory } from '../../output/backends/portable'
 import { emitOutputTrace, type OutputTraceSource } from '../../output/diagnostics'
 import type { SelectionShape } from '../../transfer/discovery'
 import { classifyNativeError, isAbortError } from '../../transfer/fault'
@@ -289,47 +290,74 @@ export class ReceiveCoordinator {
   }
 
   completeLocalBlobDownload(
+    choiceId: string,
     blob: Blob,
-    suggestedName: string,
     display?: ReceiveOperationDisplay,
   ): boolean {
-    if (this.#disposed || this.startBlockedReason() !== null) return false
+    const resolved = this.#resolveReadyChoice(choiceId)
+    if (
+      resolved === undefined ||
+      resolved.choice.backend !== 'portable' ||
+      resolved.choice.artifact.kind !== 'original-file'
+    ) {
+      return false
+    }
+    const now = Date.now()
+    const taskId = createTaskId()
+    let record: ReturnType<typeof handoffLocalPortableBlob>
     try {
-      triggerBrowserDownload(this.#options.windowPort, blob, suggestedName, ORIGINAL_FILE_MEDIA_TYPE)
+      record = handoffLocalPortableBlob({
+        task: Object.freeze({
+          taskId,
+          selection: resolved.spec,
+          selectionKey: resolved.key,
+          artifact: resolved.choice.artifact,
+          lifecycle: initialReceiveState(taskId, now),
+          ...(display === undefined ? {} : { display }),
+        }),
+        blob,
+        windowPort: this.#options.windowPort,
+        ...(this.#options.outputTrace === undefined ? {} : { trace: this.#options.outputTrace }),
+        now,
+      })
     } catch (error) {
       this.#traceLocalBlobFailure(error)
       this.#reportError(error)
       return false
     }
     this.#dismissedShareInstance = null
-    this.#workspace.completeLocalBlob({
-      taskId: createTaskId(),
-      shareInstance: this.#options.currentJoinedShare()?.descriptor.shareInstanceId ?? null,
-      selectionKey: this.#offers?.selectionKey ?? null,
-      suggestedName,
-      display,
-      now: Date.now(),
-    })
+    this.#workspace.completeSettled(record)
+    this.#inventory.upsertRecord(record)
     this.#publish()
+    void this.#storage.runTaskWrite(record.taskId, async access => {
+      const store = await access.openStoreOptional()
+      await persistPortableHistory(store, record, this.#options.outputTrace)
+    }).catch(() => undefined)
     return true
   }
 
   startDownload(choiceId: string, display?: ReceiveOperationDisplay): boolean {
-    if (this.#disposed || this.startBlockedReason() !== null) return false
-    const joined = this.#options.currentJoinedShare()
-    const offers = this.#offers
-    const spec = this.#selectionSpec
-    if (joined === undefined || offers === null || offers.kind !== 'ready' || spec === null) return false
-    const selection = this.#selectionPolicy ?? policyFromSelectionSpec(spec)
-    const allChoices = [offers.primary, ...offers.alternatives, ...(offers.zip === null ? [] : [offers.zip])]
-    const choice = allChoices.find(candidate => candidate.choiceId === choiceId)
-    if (choice === undefined) return false
+    const resolved = this.#resolveReadyChoice(choiceId)
+    if (resolved === undefined) return false
+    const selection = this.#selectionPolicy ?? policyFromSelectionSpec(resolved.spec)
     const launched = this.#launchChoice(
-      { joined, choice, spec, selection, key: offers.selectionKey, display },
+      { ...resolved, selection, display },
       undefined,
       true,
     )
     return launched.kind === 'started' || launched.kind === 'waiting-picker'
+  }
+
+  #resolveReadyChoice(choiceId: string) {
+    if (this.#disposed || this.startBlockedReason() !== null) return undefined
+    const joined = this.#options.currentJoinedShare()
+    const offers = this.#offers
+    const spec = this.#selectionSpec
+    if (joined === undefined || offers === null || offers.kind !== 'ready' || spec === null) return undefined
+    const allChoices = [offers.primary, ...offers.alternatives, ...(offers.zip === null ? [] : [offers.zip])]
+    const choice = allChoices.find(candidate => candidate.choiceId === choiceId)
+    if (choice === undefined) return undefined
+    return { joined, choice, spec, key: offers.selectionKey }
   }
 
   startSingleFileDownload(

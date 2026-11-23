@@ -564,11 +564,14 @@ describe('single-photo blob reuse, preview picker isolation, and workspace task 
       controller.getSnapshot().output.offers?.kind === 'ready',
     )
 
-    // Default portable save uses in-memory imageBlob with 0 transfer!
+    // Default portable save uses in-memory imageBlob with 0 transfer and persists terminal history!
     controller.chooseArtifact('portable:file', 'default')
     expect(transferStarts).toBe(0)
     expect(downloads).toHaveLength(1)
     expect(controller.getSnapshot().output.lifecycle).toMatchObject({ kind: 'download-started', retained: false })
+    const localBlobTaskId = controller.getSnapshot().output.lifecycle!.taskId
+    await waitFor(() => store.tasks.has(localBlobTaskId))
+    expect(controller.presentation.downloads.getSnapshot().history.some(task => task.operationId === localBlobTaskId)).toBe(true)
 
     // Dismissing a handed-to-browser card hides it in workspace while retaining history.
     const taskSnap = controller.presentation.task.getSnapshot()
@@ -581,10 +584,22 @@ describe('single-photo blob reuse, preview picker isolation, and workspace task 
     expect(dismissedLayout.primaryTask).toBeNull()
     expect(dismissedLayout.collapseRemoteSaving).toBe(false)
 
-    // Explicit redownload starts a real transfer even for portable.
+    // Explicit redownload starts a real transfer even for portable and persists an equivalent history shape.
     controller.chooseArtifact('portable:file', 'redownload')
     await waitFor(() => transferStarts === 1)
     await waitFor(() => controller.getSnapshot().output.activeTaskId === null)
+    const redownloadTaskId = controller.getSnapshot().output.lifecycle!.taskId
+    expect(store.tasks.get(localBlobTaskId)).toMatchObject({
+      shareInstance: store.tasks.get(redownloadTaskId)?.shareInstance,
+      selectionKey: store.tasks.get(redownloadTaskId)?.selectionKey,
+      selection: store.tasks.get(redownloadTaskId)?.selection,
+      artifact: store.tasks.get(redownloadTaskId)?.artifact,
+      backend: 'portable',
+      target: store.tasks.get(redownloadTaskId)?.target,
+      discoveryComplete: true,
+      display: { destinationLabel: { kind: 'browser-downloads' } },
+      lifecycle: { kind: 'download-started', retained: false, fileName: entry.name },
+    })
 
     // Explicit FSA opens the directory picker instead of reusing imageBlob.
     controller.chooseArtifact('fsa:file', 'default')

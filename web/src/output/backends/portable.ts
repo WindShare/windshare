@@ -1,4 +1,5 @@
 import { bigintToSafeNumber } from '../../content/geometry'
+import { classifyNativeError } from '../../transfer/fault'
 import type { SettledTransferJobResult } from '../../transfer/job'
 import type {
   TransferDirectoryRequest,
@@ -7,7 +8,8 @@ import type {
   TransferOutputSession,
 } from '../../transfer/output-port'
 import { transitionReceiveState } from '../../transfer/state'
-import { emitOutputTrace, type OutputDiagnosticsPorts } from '../diagnostics'
+import { emitOutputTrace, type OutputDiagnosticsPorts, type OutputTraceSource } from '../diagnostics'
+import type { ReceiveOperationDisplay } from '../model/operation-display'
 import type { ReceiveStore } from '../store/database'
 import type { ReceiveTaskRecord } from '../store/types'
 import { StreamingZipWriter } from '../zip/streaming-zip'
@@ -23,12 +25,80 @@ import {
   type StartBackendTaskInput,
 } from './contract'
 
+const BROWSER_DOWNLOADS_DESTINATION = Object.freeze({ kind: 'browser-downloads' as const })
+
 export interface OpenPortableSessionInput {
   readonly task: StartBackendTaskInput
   readonly windowPort: BrowserDownloadWindow
   readonly store?: ReceiveStore
   readonly maxBytes?: bigint
   readonly diagnostics?: OutputDiagnosticsPorts
+}
+
+/**
+ * Builds the terminal portable handoff record shared by completed transfers and
+ * preview-blob fast-path saves so browser history behaves identically regardless of timing.
+ */
+export function createCompletedPortableRecord(input: Readonly<{
+  task: StartBackendTaskInput
+  now?: number
+}>): ReceiveTaskRecord {
+  const now = input.now ?? Date.now()
+  const started = transitionReceiveState(input.task.lifecycle, {
+    kind: 'download-started',
+    retained: false,
+    fileName: input.task.artifact.name,
+  }, now)
+  const display = portableDisplay(input.task.display, input.task.artifact.name, now)
+  return Object.freeze({
+    taskId: input.task.taskId,
+    shareInstance: input.task.selection.shareInstance,
+    selectionKey: input.task.selectionKey,
+    selection: input.task.selection,
+    artifact: input.task.artifact,
+    backend: 'portable',
+    lifecycle: started,
+    target: Object.freeze({ kind: 'portable', fileName: input.task.artifact.name }),
+    ...(display === undefined ? {} : { display }),
+    discoveryComplete: true,
+    updatedAt: now,
+  })
+}
+
+export function handoffLocalPortableBlob(input: Readonly<{
+  task: StartBackendTaskInput
+  blob: Blob
+  windowPort: BrowserDownloadWindow
+  trace?: OutputTraceSource
+  now?: number
+}>): ReceiveTaskRecord {
+  const mediaType = artifactDownloadMediaType(input.task.artifact.kind)
+  triggerBrowserDownload(input.windowPort, input.blob, input.task.artifact.name, mediaType)
+  emitOutputTrace(input.trace, 'publication', {
+    backend: 'portable',
+    task_id: input.task.taskId,
+    transition: 'committed',
+  })
+  return createCompletedPortableRecord({
+    task: input.task,
+    ...(input.now === undefined ? {} : { now: input.now }),
+  })
+}
+
+export async function persistPortableHistory(
+  store: ReceiveStore | undefined,
+  record: ReceiveTaskRecord,
+  trace?: OutputTraceSource,
+): Promise<void> {
+  if (store === undefined) return
+  await store.putTask(record).catch((error: unknown) => {
+    emitOutputTrace(trace, 'publication', {
+      backend: 'portable',
+      task_id: record.taskId,
+      transition: 'history_persist_failed',
+      error_class: classifyNativeError(error),
+    })
+  })
 }
 
 /**
@@ -42,9 +112,7 @@ export function openPortableSession(input: OpenPortableSessionInput): OutputSess
     kind: 'downloading',
     phase: 'receiving',
   })
-  const display = input.task.display === undefined
-    ? undefined
-    : Object.freeze({ ...input.task.display, destinationLabel: Object.freeze({ kind: 'browser-downloads' as const }) })
+  const display = portableDisplay(input.task.display)
 
   const baseRecord: ReceiveTaskRecord = Object.freeze({
     taskId: input.task.taskId,
@@ -244,9 +312,24 @@ class PortableSessionHandle implements OutputSessionHandle {
   }
 
   async #persistHistory(record: ReceiveTaskRecord): Promise<void> {
-    if (this.#store === undefined) return
-    await this.#store.putTask(record).catch(() => undefined)
+    await persistPortableHistory(this.#store, record, this.#diagnostics?.trace)
   }
+}
+
+function portableDisplay(
+  display: ReceiveOperationDisplay | undefined,
+  fallbackLabel?: string,
+  now = Date.now(),
+): ReceiveOperationDisplay | undefined {
+  if (display !== undefined) {
+    return Object.freeze({ ...display, destinationLabel: BROWSER_DOWNLOADS_DESTINATION })
+  }
+  if (fallbackLabel === undefined) return undefined
+  return Object.freeze({
+    objectLabel: fallbackLabel,
+    destinationLabel: BROWSER_DOWNLOADS_DESTINATION,
+    createdAtMilliseconds: now,
+  })
 }
 
 function failedReasonFor(status: SettledTransferJobResult['status']): 'source-changed' | 'cancelled' | 'error' {
