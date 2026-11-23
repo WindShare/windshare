@@ -85,6 +85,7 @@ export class ReceiveCoordinator {
   #offerAbort: AbortController | undefined
   #offers: ArtifactOffers | null = null
   #selectionSpec: SelectionSpec | null = null
+  #selectionPolicy: FrozenSelectionPolicy | null = null
   #activation: ActiveActivationSnapshot | null = null
   #activeJob: TransferJob | null = null
   #activeSession: OutputSessionHandle | null = null
@@ -194,6 +195,7 @@ export class ReceiveCoordinator {
     )
     const key = selectionKey(spec)
     this.#selectionSpec = spec
+    this.#selectionPolicy = frozen
     this.#offers = Object.freeze({ kind: 'confirming', epoch, selectionKey: key })
     this.#adoptMatchingRetained()
     this.#publish()
@@ -256,6 +258,9 @@ export class ReceiveCoordinator {
     const offers = this.#offers
     const spec = this.#selectionSpec
     if (joined === undefined || offers === null || offers.kind !== 'ready' || spec === null) return false
+    // Preserve draft ancestry hints from the live snapshot so discovery verifies the
+    // selected path first instead of scanning unrelated sibling directories.
+    const selection = this.#selectionPolicy ?? policyFromSelectionSpec(spec)
 
     const allChoices = [offers.primary, ...offers.alternatives, ...(offers.zip === null ? [] : [offers.zip])]
     const choice = allChoices.find(candidate => candidate.choiceId === choiceId)
@@ -286,7 +291,7 @@ export class ReceiveCoordinator {
       })
     }
     this.#publish()
-    void this.#executeNewDownload(joined, choice, spec, offers.selectionKey, display, pickedFolder)
+    void this.#executeNewDownload(joined, choice, spec, selection, offers.selectionKey, display, pickedFolder)
     return true
   }
 
@@ -346,6 +351,7 @@ export class ReceiveCoordinator {
     this.#offerAbort?.abort()
     this.#offers = null
     this.#selectionSpec = null
+    this.#selectionPolicy = null
     this.#activation = null
     this.#dismissedShareInstance = null
     if (this.#activeJob === null) {
@@ -403,6 +409,7 @@ export class ReceiveCoordinator {
     joined: JoinedBrowserShare,
     choice: ArtifactChoice,
     spec: SelectionSpec,
+    selection: FrozenSelectionPolicy,
     key: string,
     display: ReceiveOperationDisplay | undefined,
     pickedFolder: Promise<FileSystemDirectoryHandle> | undefined,
@@ -451,7 +458,7 @@ export class ReceiveCoordinator {
     await this.#runSession(
       joined,
       session,
-      policyFromSelectionSpec(spec),
+      selection,
       key,
       choice.artifact.singleFileId !== undefined,
       display ?? null,

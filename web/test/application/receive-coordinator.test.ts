@@ -9,7 +9,8 @@ import { presentTask, retainedTaskFacts } from '../../src/ui/tasks'
 import type { RetainedTaskSnapshot } from '../../src/application/receive/contracts'
 import { ReceiveCoordinator } from '../../src/application/receive/coordinator'
 import type { JoinedBrowserShare } from '../../src/application/browser-share/gateway'
-import { SelectionPolicy } from '../../src/catalog/selection'
+import { SelectionPolicy, type FrozenSelectionPolicy } from '../../src/catalog/selection'
+import { encodeBase64Url } from '../../src/crypto/bytes'
 import type { BrowserOutputWindow } from '../../src/output/backends/contract'
 import { initialReceiveState, transitionReceiveState } from '../../src/transfer/state'
 
@@ -168,6 +169,69 @@ describe('receive admission and coordinator', () => {
 
     coordinator.cancelActivation()
     resolvePicker({} as FileSystemDirectoryHandle)
+    await coordinator.dispose()
+  })
+
+  it('preserves draft ancestry hints on the selection policy passed into a live transfer job', async () => {
+    const fileId = new Uint8Array(16).fill(7)
+    const fileIdText = encodeBase64Url(fileId)
+    const selection = new SelectionPolicy(false)
+    selection.set(
+      { kind: 'file', id: fileId, idText: fileIdText, name: 'invoice.pdf', expectedSize: 16n },
+      ['root-1', 'sub-1'],
+      true,
+    )
+
+    let jobSelection: FrozenSelectionPolicy | undefined
+    const windowPort: BrowserOutputWindow = {
+      URL: { createObjectURL: vi.fn(() => 'blob:test'), revokeObjectURL: vi.fn() },
+      document: {
+        createElement: vi.fn(() => ({ click: vi.fn(), remove: vi.fn(), style: {} })),
+        body: { appendChild: vi.fn() },
+      } as unknown as Document,
+    }
+    const joined = {
+      descriptor: { shareInstanceId: 'share-1', syntheticRootId: 'root-1' },
+      selection,
+      inspectSelection: async () => ({
+        kind: 'single-file' as const,
+        file: { kind: 'file' as const, id: fileId, idText: fileIdText, name: 'invoice.pdf', expectedSize: 16n },
+        sourcePath: ['sub-1', 'invoice.pdf'],
+        exactBytes: 16n,
+      }),
+      beginDownloadConnectivity: () => ({ routes: [], close: vi.fn() }),
+      createTransferJob: (_output: unknown, _connectivity: unknown, options?: { readonly selection?: FrozenSelectionPolicy }) => {
+        jobSelection = options?.selection
+        return {
+          pause: vi.fn(),
+          stop: vi.fn(),
+          run: async () => ({
+            status: 'completed' as const,
+            completedFiles: 1n,
+            completedBytes: 16n,
+            discoveredFiles: 1n,
+            discoveredBytes: 16n,
+            discoveryComplete: true,
+            failedFiles: 0n,
+            failedDirectories: 0n,
+          }),
+        }
+      },
+    } as unknown as JoinedBrowserShare
+
+    const coordinator = new ReceiveCoordinator({
+      windowPort,
+      currentJoinedShare: () => joined,
+    })
+    coordinator.refreshOffers(joined)
+    await vi.waitFor(() => expect(coordinator.getSnapshot().offers?.kind).toBe('ready'))
+
+    const offers = coordinator.getSnapshot().offers
+    if (offers?.kind !== 'ready') throw new Error('expected ready offers')
+    expect(coordinator.startDownload(offers.primary.choiceId)).toBe(true)
+    await vi.waitFor(() => expect(jobSelection).toBeDefined())
+    expect(jobSelection?.draftRules?.[0]?.ancestry).toEqual(['root-1', 'sub-1'])
+
     await coordinator.dispose()
   })
 })
