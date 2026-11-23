@@ -97,9 +97,9 @@ func TestManagedDiscoveryFailureAndRevocation(t *testing.T) {
 	if issue(p.TURNParallel).Status != p.TURNRetryLater {
 		t.Fatal("unknown capability is retryable")
 	}
-	<-r.Discover(t.Context())
+	<-r.Discover(t.Context(), turnsession.Trace{})
 	state.Store(1)
-	<-r.Discover(t.Context())
+	<-r.Discover(t.Context(), turnsession.Trace{})
 	if g := issue(p.TURNParallel); g.Status != p.TURNOK || !g.HasFallback || len(g.Credentials) != 0 || issued.Load() != 0 {
 		t.Fatal("fallback charged during parallel demand")
 	}
@@ -115,5 +115,35 @@ func TestManagedDiscoveryFailureAndRevocation(t *testing.T) {
 	count := issued.Load()
 	if issue(p.TURNAll).Status != p.TURNUnconfigured || issued.Load() != count {
 		t.Fatal("disabled issuer contacted again")
+	}
+}
+
+func TestUnknownCapabilityDoesNotDelayKnownIssuer(t *testing.T) {
+	started := make(chan struct{})
+	client := &http.Client{Transport: transportFunc(func(req *http.Request) (*http.Response, error) {
+		reply := httptest.NewRecorder()
+		if req.URL.Host == "rtc.live.cloudflare.com" {
+			close(started)
+			_, _ = reply.WriteString(`{"iceServers":{"urls":["turn:example.org"],"username":"u","credential":"p"}}`)
+		} else {
+			select {
+			case <-started:
+			case <-req.Context().Done():
+				return nil, req.Context().Err()
+			}
+			_, _ = reply.WriteString(`{"managed_turn":false}`)
+		}
+		return reply.Result(), nil
+	})}
+	source := relayprofile.Candidate{PublicURL: "https://private.example", AccessKey: "enrolled"}
+	r, err := New([]relayconfig.TURNService{{ID: "known", Kind: relayconfig.TURNCloudflare, KeyID: "key", APIToken: "api"}}, []relayprofile.Registration{source.Registration()}, []relayprofile.Candidate{source}, Options{HTTP: client})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	result := r.Issue(ctx, turnsession.IssueRequest{Mode: p.TURNAll})
+	if ctx.Err() != nil || len(result.Credentials) != 1 || result.Credentials[0].ServiceID != "known" {
+		t.Fatal("independent issuer blocked by discovery")
 	}
 }

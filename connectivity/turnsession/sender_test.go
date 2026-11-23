@@ -27,7 +27,7 @@ func TestSessionCoalescesDemandAndRenewsOneGrantAtATime(t *testing.T) {
 		}
 		return IssueResult{Status: p.TURNOK, Credentials: []Credential{{ServiceID: "a", URLs: []string{"turn:one"}, Username: "u", Password: "p", ValidFor: time.Minute}}}
 	})
-	s := NewSender(p.ProtocolSessionID{1}, provider, func() time.Time { return clock })
+	s := NewSender(Trace{Session: p.ProtocolSessionID{1}}, provider, func() time.Time { return clock })
 	defer s.Close()
 	responses := make(chan p.TURNGrants, 2)
 	send := func(_ context.Context, b []byte) error { g, err := p.DecodeTURNGrants(b); responses <- g; return err }

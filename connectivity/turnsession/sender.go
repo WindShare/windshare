@@ -4,11 +4,10 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
-	"fmt"
-	"log/slog"
 	"sync"
 	"time"
 
+	diag "github.com/windshare/windshare/core/diagnostics"
 	p "github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -23,7 +22,7 @@ type Sender struct {
 	mu       sync.Mutex
 	provider Provider
 	now      func() time.Time
-	session  p.ProtocolSessionID
+	trace    Trace
 	issued   map[p.TURNGrantID]entry
 	latest   map[string]p.TURNGrantID
 	previous map[string]p.TURNGrantID
@@ -34,8 +33,8 @@ type Sender struct {
 	work     sync.WaitGroup
 }
 
-func NewSender(id p.ProtocolSessionID, provider Provider, now func() time.Time) *Sender {
-	return &Sender{session: id, provider: provider, now: now, issued: make(map[p.TURNGrantID]entry), latest: make(map[string]p.TURNGrantID), previous: make(map[string]p.TURNGrantID), refresh: make(map[string]time.Time), full: make(map[p.TURNMode][]uint64)}
+func NewSender(trace Trace, provider Provider, now func() time.Time) *Sender {
+	return &Sender{trace: trace, provider: provider, now: now, issued: make(map[p.TURNGrantID]entry), latest: make(map[string]p.TURNGrantID), previous: make(map[string]p.TURNGrantID), refresh: make(map[string]time.Time), full: make(map[p.TURNMode][]uint64)}
 }
 func (s *Sender) Close() { s.mu.Lock(); s.closed = true; s.mu.Unlock(); s.work.Wait() }
 
@@ -67,7 +66,7 @@ func (s *Sender) Handle(ctx context.Context, body []byte, send Send) error {
 	if err != nil {
 		return err
 	}
-	slog.Debug("turn_demand_received", "session_id", fmt.Sprintf("%x", s.session), "mode", d.Mode, "request_id", d.RequestID)
+	s.trace.Event("turn_demand_received", "", diag.Fields{"mode": diag.Uint(uint64(d.Mode)), "request_id": diag.Uint(d.RequestID)})
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -121,7 +120,7 @@ func (s *Sender) resolve(ctx context.Context, d p.TURNDemand) p.TURNGrants {
 	if s.provider == nil {
 		return reply
 	}
-	request := IssueRequest{Mode: d.Mode, ServiceIDs: d.ServiceIDs}
+	request := IssueRequest{Trace: s.trace, Mode: d.Mode, ServiceIDs: d.ServiceIDs}
 	s.mu.Lock()
 	if len(d.ServiceIDs) == 0 {
 		request.Reusable = make(map[string]bool, len(s.latest))
@@ -170,7 +169,7 @@ func (s *Sender) resolve(ctx context.Context, d p.TURNDemand) p.TURNGrants {
 		s.issued[grant.GrantID] = entry{grant, expiry}
 		s.refresh[c.ServiceID] = s.now().Add(refreshInterval)
 		reply.Grants = append(reply.Grants, grant)
-		slog.Debug("turn_grant_issued", "session_id", fmt.Sprintf("%x", s.session), "service_id", c.ServiceID, "grant_id", fmt.Sprintf("%x", grant.GrantID), "ttl_ms", grant.ValidForMS, "url_count", len(grant.URLs))
+		s.trace.Event("turn_grant_issued", c.ServiceID, diag.Fields{"grant_id": diag.Identity(grant.GrantID[:]), "ttl_ms": diag.Uint(grant.ValidForMS), "url_count": diag.Uint(uint64(len(grant.URLs)))})
 	}
 	if len(reply.Grants) == 0 && len(result.Retained)+len(result.Credentials) > 0 {
 		reply.Status = p.TURNRetryLater

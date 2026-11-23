@@ -5,10 +5,12 @@ import (
 
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/connectivity/v2signal"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
 type ReceiverConfig struct {
+	Trace         diagnostics.Sink
 	Purpose       v2signal.ConnectionPurpose
 	Factory       *v2peer.ReceiverFactory
 	Signaling     v2peer.ReceiverSignaling

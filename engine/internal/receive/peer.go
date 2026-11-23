@@ -12,6 +12,7 @@ import (
 	"github.com/windshare/windshare/connectivity/v2peer/peerset"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/session"
 	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	"github.com/windshare/windshare/core/transfer"
@@ -276,6 +277,7 @@ type receiverPeerOptions struct {
 }
 
 type receiverPeerFactoryAdapter struct {
+	trace         diagnostics.Sink
 	options       receiverPeerOptions
 	factory       *v2peer.ReceiverFactory
 	stopAfterWave bool
@@ -502,7 +504,7 @@ func (adapter receiverPeerFactoryAdapter) startPeerSet(ctx context.Context, sign
 	if demand == peerset.NoDemand {
 		demand = peerset.ContentDemand
 	}
-	path, err := peerset.OpenReceiverSession(ctx, peerset.Config{Budget: adapter.options.budget}, peerset.ReceiverConfig{Factory: adapter.factory, Signaling: signaling, Lanes: lanes, Demand: demand, StopAfterWave: adapter.stopAfterWave})
+	path, err := peerset.OpenReceiverSession(ctx, peerset.Config{Budget: adapter.options.budget}, peerset.ReceiverConfig{Trace: adapter.trace, Factory: adapter.factory, Signaling: signaling, Lanes: lanes, Demand: demand, StopAfterWave: adapter.stopAfterWave})
 	if err != nil {
 		return nil, err
 	}

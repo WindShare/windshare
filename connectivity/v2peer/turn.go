@@ -21,6 +21,11 @@ func openTURNPeer(request nativepeer.AttemptRequest, g p.TURNGrant) (*pionpeer.C
 	})
 }
 func (a *peerAttempt) openTURN(ctx context.Context, request nativepeer.AttemptRequest) (PeerConnection, error) {
+	// Unknown grants cannot queue ahead of an authorized negotiation. A live
+	// grant may still expire while waiting, so check it again after admission.
+	if _, ok := a.config.turn.Lookup(a.config.offer.TURNGrantID); !ok {
+		return nil, turnsession.ErrUnknownGrant
+	}
 	release, err := a.config.factory.turnCapacity.Acquire(ctx)
 	if err != nil {
 		return nil, err

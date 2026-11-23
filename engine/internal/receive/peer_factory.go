@@ -23,7 +23,7 @@ func (a *runner) newReceiverPeerStarter(observation getObservation, localStop *r
 	if err != nil {
 		return nil, err
 	}
-	adapter := receiverPeerFactoryAdapter{factory: factory, stopAfterWave: stopAfterWave}
+	adapter := receiverPeerFactoryAdapter{trace: a.control.Diagnostics, factory: factory, stopAfterWave: stopAfterWave}
 	observation.registerReceiverFactory(adapter, localStop)
 	return adapter, nil
 }

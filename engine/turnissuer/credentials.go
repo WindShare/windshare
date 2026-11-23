@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -91,7 +90,7 @@ func (r *Resolver) request(ctx context.Context, method, address, token string, b
 	return nil
 }
 
-func (r *Resolver) issue(ctx context.Context, s source) (turnsession.Credential, error) {
+func (r *Resolver) issue(ctx context.Context, s source, trace turnsession.Trace) (turnsession.Credential, error) {
 	c := turnsession.Credential{ServiceID: s.ID, URLs: slices.Clone(s.URLs), ValidFor: time.Duration(s.TTL()) * time.Second}
 	switch s.Kind {
 	case relayconfig.TURNStatic:
@@ -131,7 +130,7 @@ func (r *Resolver) issue(ctx context.Context, s source) (turnsession.Credential,
 			r.mu.Lock()
 			r.known[s.ID] = false
 			r.mu.Unlock()
-			slog.Debug("turn_managed_disabled", "service_id", s.ID)
+			trace.Event("turn_managed_disabled", s.ID, nil)
 		}
 		if err != nil || response.TTL <= 0 || response.TTL > relayconfig.MaximumTURNTTL {
 			return c, errUnavailable
@@ -173,6 +172,9 @@ func selectCloudflareServers(c *turnsession.Credential, response json.RawMessage
 			if p.ValidTURNURL(u) && (len(filters) == 0 || slices.ContainsFunc(filters, func(filter string) bool { return u == filter || strings.HasPrefix(u, filter+"?") })) && !slices.Contains(c.URLs, u) {
 				c.Username, c.Password = entry.Username, entry.Credential
 				c.URLs = append(c.URLs, u)
+				if len(c.URLs) == p.MaxURLsPerGrant {
+					return nil
+				}
 			}
 		}
 	}
