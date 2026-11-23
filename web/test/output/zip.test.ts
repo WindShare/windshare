@@ -13,6 +13,7 @@ import type { BrowserDownloadWindow } from '../../src/output/backends/browser-ha
 import { planArtifactOffers } from '../../src/output/backends/contract'
 import { openNewOPFSSession, reopenOPFSSession } from '../../src/output/backends/opfs'
 import { openPortableSession } from '../../src/output/backends/portable'
+import { NATIVE_WRITE_CHUNK_BYTES } from '../../src/output/native-object/client'
 import type { NativeObjectIO } from '../../src/output/native-object/contracts'
 import { ObjectCheckpointCoordinator } from '../../src/output/native-object/coordinator'
 import type { ReceiveStore } from '../../src/output/store/database'
@@ -548,6 +549,85 @@ describe('ZIP writers (portable streaming & OPFS progressive)', () => {
       expect(files.get('d/sub/b.txt')).toEqual(payloadB)
     } finally {
       await reader.close()
+    }
+  })
+})
+
+describe('ProgressiveZipWriter finalization batching', () => {
+  it('coalesces a small archive central directory and EOCD into one worker write', async () => {
+    const io = new MemoryNativeObjectIO()
+    const store = new MemoryFileStore(io.events)
+    const coord = new ObjectCheckpointCoordinator({
+      io, operationId: 'pzip-batch-small', objectId: 'small.part',
+    })
+    const writer = await ProgressiveZipWriter.open('pzip-batch-small', store as unknown as ReceiveStore, coord)
+    await writer.ensureDirectory('d1', ['docs'])
+    await writer.ensureDirectory('d2', ['docs', 'sub'])
+    for (let index = 0; index < 6; index += 1) {
+      const payload = new TextEncoder().encode(`small-file-${index}`)
+      const opened = await writer.openFile({
+        fileId: `sf-${index}`, path: ['docs', 'sub', `file-${index}.txt`], revision: `r-${index}`,
+        exactSize: BigInt(payload.byteLength),
+      })
+      await writer.writeFileSlice(opened, 0n, payload)
+      await writer.commitFile(opened, [byteRange(0n, BigInt(payload.byteLength))])
+    }
+
+    const tailStart = writer.allocatedLength
+    const writeSpy = vi.spyOn(io, 'writeAt')
+    const finalSize = await writer.finalize()
+    expect(writeSpy).toHaveBeenCalledTimes(1)
+    const [offset, bytes] = writeSpy.mock.calls[0]!
+    expect(offset).toBe(tailStart)
+    expect(bytes.byteLength).toBeLessThanOrEqual(NATIVE_WRITE_CHUNK_BYTES)
+    expect(tailStart + BigInt(bytes.byteLength)).toBe(finalSize)
+
+    const archive = await readZipArchive(new Blob([io.bytes.subarray(0, Number(finalSize))]))
+    expect(archive.directories).toEqual(new Set(['docs/', 'docs/sub/']))
+    expect(archive.files.size).toBe(6)
+    expect(new TextDecoder().decode(archive.files.get('docs/sub/file-5.txt'))).toBe('small-file-5')
+  })
+
+  it('splits a central directory exceeding one worker chunk into contiguous bounded batches', async () => {
+    const io = new MemoryNativeObjectIO()
+    const store = new MemoryFileStore(io.events)
+    const coord = new ObjectCheckpointCoordinator({
+      io, operationId: 'pzip-batch-large', objectId: 'large.part',
+    })
+    const writer = await ProgressiveZipWriter.open('pzip-batch-large', store as unknown as ReceiveStore, coord)
+    const entryCount = 300
+    const namePrefix = 'n'.repeat(980)
+    const expectedPayloads = new Map<string, Uint8Array>()
+    for (let index = 0; index < entryCount; index += 1) {
+      const name = `${namePrefix}-${String(index).padStart(4, '0')}.bin`
+      const payload = index === 0 || index === 150 || index === entryCount - 1
+        ? new TextEncoder().encode(`payload-${index}`)
+        : new Uint8Array(0)
+      const opened = await writer.openFile({
+        fileId: `lf-${index}`, path: ['bulk', name], revision: `r-${index}`, exactSize: BigInt(payload.byteLength),
+      })
+      if (payload.byteLength > 0) await writer.writeFileSlice(opened, 0n, payload)
+      await writer.commitFile(opened, payload.byteLength > 0 ? [byteRange(0n, BigInt(payload.byteLength))] : [])
+      expectedPayloads.set(`bulk/${name}`, payload)
+    }
+
+    const tailStart = writer.allocatedLength
+    const writeSpy = vi.spyOn(io, 'writeAt')
+    const finalSize = await writer.finalize()
+    expect(writeSpy).toHaveBeenCalledTimes(2)
+    let cursor = tailStart
+    for (const [offset, bytes] of writeSpy.mock.calls) {
+      expect(offset).toBe(cursor)
+      expect(bytes.byteLength).toBeGreaterThan(0)
+      expect(bytes.byteLength).toBeLessThanOrEqual(NATIVE_WRITE_CHUNK_BYTES)
+      cursor += BigInt(bytes.byteLength)
+    }
+    expect(cursor).toBe(finalSize)
+
+    const archive = await readZipArchive(new Blob([io.bytes.subarray(0, Number(finalSize))]))
+    expect(archive.files.size).toBe(entryCount)
+    for (const [entryName, expected] of expectedPayloads) {
+      expect(archive.files.get(entryName)).toEqual(expected)
     }
   })
 })
