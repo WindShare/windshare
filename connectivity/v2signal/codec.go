@@ -9,13 +9,14 @@ import (
 	"unicode/utf8"
 
 	"github.com/fxamacker/cbor/v2"
-	"github.com/windshare/windshare/core/session/peerslot"
 	"golang.org/x/text/unicode/norm"
+
+	"github.com/windshare/windshare/core/session/peerslot"
 )
 
 const (
 	IdentityBytes          = 16
-	SignalingSchemaVersion = 4
+	SignalingSchemaVersion = 5
 	MaximumSDPBytes        = 60 << 10
 	MaximumCandidateBytes  = 4 << 10
 	MaximumSDPMidBytes     = 256
@@ -51,6 +52,7 @@ const (
 	InitialConnectivity ConnectionPurpose = iota
 	Recovery
 	ThroughputExploration
+	TURNRelay
 )
 
 func (purpose ConnectionPurpose) String() string {
@@ -61,6 +63,8 @@ func (purpose ConnectionPurpose) String() string {
 		return "recovery"
 	case ThroughputExploration:
 		return "throughput"
+	case TURNRelay:
+		return "turn-relay"
 	default:
 		return "invalid"
 	}
@@ -75,7 +79,7 @@ type Binding struct {
 }
 
 func (binding Binding) Validate() error {
-	if binding.Purpose > ThroughputExploration || binding.PeerSlot >= peerslot.Count || binding.AttemptSequence == 0 || zero(binding.PeerPathID[:]) || zero(binding.AttemptID[:]) {
+	if binding.Purpose > TURNRelay || binding.PeerSlot >= peerslot.Count || binding.AttemptSequence == 0 || zero(binding.PeerPathID[:]) || zero(binding.AttemptID[:]) {
 		return ErrInvalidSignal
 	}
 	return nil
@@ -91,8 +95,9 @@ func (binding Binding) RequireSame(candidate Binding) error {
 }
 
 type Offer struct {
-	Binding Binding
-	SDP     string
+	TURNGrantID [IdentityBytes]byte
+	Binding     Binding
+	SDP         string
 }
 
 func (Offer) Kind() MessageKind { return MessagePeerOffer }
@@ -137,15 +142,31 @@ func EncodeOffer(offer Offer) ([]byte, error) {
 	if err := validateDescription(offer.Binding, offer.SDP); err != nil {
 		return nil, err
 	}
-	return encodeDescription(offer.Binding, offer.SDP)
+	var id []byte
+	if offer.TURNGrantID != ([IdentityBytes]byte{}) {
+		id = offer.TURNGrantID[:]
+	}
+	if (offer.Binding.Purpose == TURNRelay) != (id != nil) {
+		return nil, ErrInvalidSignal
+	}
+	return signalEncMode.Marshal(append(descriptionFields(offer.Binding, offer.SDP), id))
 }
 
 func DecodeOffer(encoded []byte) (Offer, error) {
-	binding, sdp, err := decodeDescription(encoded)
+	binding, sdp, tail, err := decodeDescription(encoded, 8)
 	if err != nil {
 		return Offer{}, err
 	}
 	offer := Offer{Binding: binding, SDP: sdp}
+	if binding.Purpose == TURNRelay {
+		id, err := decodeIdentity[[IdentityBytes]byte](tail)
+		if err != nil {
+			return Offer{}, err
+		}
+		offer.TURNGrantID = id
+	} else if !bytes.Equal(tail, []byte{0xf6}) {
+		return Offer{}, ErrInvalidSignal
+	}
 	canonical, _ := EncodeOffer(offer)
 	if !bytes.Equal(canonical, encoded) {
 		return Offer{}, ErrNonCanonicalSignal
@@ -157,11 +178,11 @@ func EncodeAnswer(answer Answer) ([]byte, error) {
 	if err := validateDescription(answer.Binding, answer.SDP); err != nil {
 		return nil, err
 	}
-	return encodeDescription(answer.Binding, answer.SDP)
+	return signalEncMode.Marshal(descriptionFields(answer.Binding, answer.SDP))
 }
 
 func DecodeAnswer(encoded []byte) (Answer, error) {
-	binding, sdp, err := decodeDescription(encoded)
+	binding, sdp, _, err := decodeDescription(encoded, 7)
 	if err != nil {
 		return Answer{}, err
 	}
@@ -216,26 +237,26 @@ func DecodeCandidate(encoded []byte) (Candidate, error) {
 	return candidate, nil
 }
 
-func encodeDescription(binding Binding, sdp string) ([]byte, error) {
-	return signalEncMode.Marshal([]any{
+func descriptionFields(binding Binding, sdp string) []any {
+	return []any{
 		uint64(SignalingSchemaVersion), binding.PeerPathID[:], binding.AttemptID[:], binding.AttemptSequence, uint64(binding.PeerSlot), uint64(binding.Purpose), sdp,
-	})
+	}
 }
 
-func decodeDescription(encoded []byte) (Binding, string, error) {
+func decodeDescription(encoded []byte, count int) (Binding, string, []byte, error) {
 	var fields []cbor.RawMessage
-	if err := signalDecMode.Unmarshal(encoded, &fields); err != nil || len(fields) != 7 {
-		return Binding{}, "", ErrInvalidSignal
+	if err := signalDecMode.Unmarshal(encoded, &fields); err != nil || len(fields) != count {
+		return Binding{}, "", nil, ErrInvalidSignal
 	}
 	binding, err := decodePrefix(fields[:6])
 	if err != nil {
-		return Binding{}, "", err
+		return Binding{}, "", nil, err
 	}
 	var sdp string
 	if err := signalDecMode.Unmarshal(fields[6], &sdp); err != nil || validateDescription(binding, sdp) != nil {
-		return Binding{}, "", ErrInvalidSignal
+		return Binding{}, "", nil, ErrInvalidSignal
 	}
-	return binding, sdp, nil
+	return binding, sdp, fields[count-1], nil
 }
 
 func decodePrefix(fields []cbor.RawMessage) (Binding, error) {

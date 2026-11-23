@@ -11,6 +11,7 @@ import (
 	"github.com/pion/ice/v4"
 	"github.com/pion/stun/v4"
 	pion "github.com/pion/webrtc/v4"
+
 	"github.com/windshare/windshare/connectivity/iceconfig"
 	"github.com/windshare/windshare/connectivity/socketauthority"
 )
@@ -31,7 +32,7 @@ func testSessionLease(t *testing.T, authority *socketauthority.Authority, sessio
 }
 func testConnection(t *testing.T, lease *socketauthority.Lease, urls []string, mapped []MappedEndpoint) *Connection {
 	t.Helper()
-	configuration, err := iceconfig.New(urls)
+	configuration, err := iceconfig.NewDirect(urls)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,7 +337,7 @@ func TestProviderRejectsMismatchedAndConcurrentResources(t *testing.T) {
 	if err = connection.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = iceconfig.New([]string{"invalid:url"}); err == nil {
+	if _, err = iceconfig.NewDirect([]string{"invalid:url"}); err == nil {
 		t.Fatal("invalid URL accepted")
 	}
 }

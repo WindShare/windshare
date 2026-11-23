@@ -97,7 +97,9 @@ type PeerSession interface {
 
 	// Passing nil removes the path-control callback for the handler's Run lifetime.
 	SetPeerPathControlHandler(func(context.Context, []byte) error)
+	SetTURNControlHandler(func(context.Context, []byte) error)
 	SendPeerPathControl(context.Context, []byte) error
+	SendTURNControl(context.Context, []byte) error
 }
 
 // PeerHandler owns provider policy, SDP/ICE interpretation, and physical

@@ -46,7 +46,7 @@ func SenderMessageValidator(semantic SenderControlSemanticValidator) InboundMess
 
 func ValidateReceiverMessage(message Message) (InboundValidationResult, error) {
 	if message.kind.IsSessionControl() {
-		return InboundValidationResult{}, ValidateSessionControlBody(message.kind, message.body)
+		return InboundValidationResult{}, ValidateSessionControlBody(RoleReceiver, message.kind, message.body)
 	}
 	return InboundValidationResult{}, nil
 }
@@ -55,7 +55,7 @@ func isSenderControl(kind MessageKind) bool {
 	switch kind {
 	case MessageCatalogResult, MessageOpenResults, MessageOperationError, MessageSessionTerminal,
 		MessageLaneAttach, MessageScanProgress, MessageOperationComplete, MessageLeaseResult,
-		MessagePeerAnswer, MessagePeerCandidate, MessagePeerPathControl:
+		MessagePeerAnswer, MessagePeerCandidate, MessagePeerPathControl, MessageTURNControl:
 		return true
 	default:
 		return false

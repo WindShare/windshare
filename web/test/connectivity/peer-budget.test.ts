@@ -21,7 +21,7 @@ describe('shared peer admission budget', () => {
 })
 
 describe('selected pair classification', () => {
-  it('classifies direct pairs, ignores relay candidates, and reports pair RTT without leaking credentials', () => {
+  it('classifies direct and TURN pairs, and reports pair RTT without leaking credentials', () => {
     const stats = new Map([
       ['transport', { id: 'transport', type: 'transport', selectedCandidatePairId: 'pair' }],
       ['pair', { id: 'pair', type: 'candidate-pair', localCandidateId: 'local', remoteCandidateId: 'remote', currentRoundTripTime: 0.025 }],
@@ -38,7 +38,7 @@ describe('selected pair classification', () => {
       ['local', { id: 'local', candidateType: 'relay', protocol: 'udp', address: '2001:db8::1' }],
       ['remote', { id: 'remote', candidateType: 'srflx' }],
     ]) as unknown as RTCStatsReport
-    expect(selectedPairFact(relayed, undefined, 0, 100)).toBeUndefined()
+    expect(selectedPairFact(relayed, undefined, 0, 100)?.fact.route).toBe('turn')
     expect(selectedPairFact(new Map() as unknown as RTCStatsReport, undefined, 0, 0)).toBeUndefined()
   })
 })

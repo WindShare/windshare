@@ -240,7 +240,7 @@ describe('v2 authenticated session signaling', () => {
       sdp: 'v=0\r\na=setup:actpass\r\n',
     })
 
-    const answerBody = [4, binding.peerPathId, binding.attemptId, binding.attemptSequence, binding.peerSlot, 0, 'v=0\r\na=setup:active\r\n']
+    const answerBody = [5, binding.peerPathId, binding.attemptId, binding.attemptSequence, binding.peerSlot, 0, 'v=0\r\na=setup:active\r\n']
     const answer = senderOperationControl({
       kind: MESSAGE_KIND.peerAnswer,
       operationId: requireValue(session.operation).id,
@@ -263,7 +263,7 @@ describe('v2 authenticated session signaling', () => {
     channel.receive(await senderSealer.seal(replayedAnswer.message.plaintext))
 
     const candidateBody = [
-      4,
+      5,
       binding.peerPathId,
       binding.attemptId,
       binding.attemptSequence,
@@ -299,7 +299,7 @@ describe('v2 authenticated session signaling', () => {
       semanticBody: encodeCanonicalCbor(candidateBody),
     })
     const distinctCandidateBody = [
-      4,
+      5,
       binding.peerPathId,
       binding.attemptId,
       binding.attemptSequence,
@@ -397,7 +397,7 @@ describe('v2 authenticated session signaling', () => {
     await router.route(encodeMessage(
       MESSAGE_KIND.peerAnswer,
       requireValue(session.operation).id,
-      encodeBody([4, binding.peerPathId, binding.attemptId, binding.attemptSequence, binding.peerSlot, 0, 'v=0\r\ns=answer\r\n']),
+      encodeBody([5, binding.peerPathId, binding.attemptId, binding.attemptSequence, binding.peerSlot, 0, 'v=0\r\ns=answer\r\n']),
     ))
     await router.route(encodeMessage(
       MESSAGE_KIND.peerCandidate,
@@ -580,7 +580,7 @@ function requireValue<T>(value: T | undefined): T {
 
 function encodedCandidateBody(binding: PeerBinding, seed: number): Uint8Array<ArrayBuffer> {
   return encodeBody([
-    4,
+    5,
     binding.peerPathId,
     binding.attemptId,
     binding.attemptSequence,

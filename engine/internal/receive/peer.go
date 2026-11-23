@@ -173,7 +173,7 @@ func (paths *receiverContentPaths) observeContent(activity []transferlanes.Conte
 		switch entry.Route {
 		case transferlanes.RouteDirect:
 			paths.direct = true
-		case transferlanes.RouteRelay:
+		case transferlanes.RouteRelay, transferlanes.RouteTURN:
 			paths.relay = true
 		}
 	}

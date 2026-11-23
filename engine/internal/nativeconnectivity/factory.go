@@ -7,7 +7,10 @@ import (
 	"io"
 	"time"
 
+	"github.com/windshare/windshare/connectivity/turnsession"
+
 	pion "github.com/pion/webrtc/v4"
+
 	"github.com/windshare/windshare/connectivity/icepolicy"
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/v2peer"
@@ -15,6 +18,7 @@ import (
 )
 
 type SenderConfig struct {
+	TURNProvider   turnsession.Provider
 	Capacity       *Capacity
 	Now            func() time.Time
 	Diagnostics    bool
@@ -40,6 +44,7 @@ func senderConfig(config SenderConfig) (v2peer.Config, error) {
 		return v2peer.Config{}, err
 	}
 	result := v2peer.Config{
+		TURNCapacity: config.Capacity.TURN(), TURNProvider: config.TURNProvider,
 		Configuration: v2peer.DefaultConfiguration(),
 		Native:        native,
 		Now:           config.Now,
@@ -55,6 +60,7 @@ func senderConfig(config SenderConfig) (v2peer.Config, error) {
 }
 
 type ReceiverConfig struct {
+	TURNCapacity   *turnsession.Capacity
 	SendCapacity   *wsrtc.SendCapacity
 	Random         io.Reader
 	Native         *nativepeer.NativePeerConnectivity
@@ -68,6 +74,7 @@ func NewReceiver(config ReceiverConfig) (*v2peer.ReceiverFactory, error) {
 
 func receiverConfig(config ReceiverConfig) v2peer.ReceiverFactoryConfig {
 	result := v2peer.ReceiverFactoryConfig{
+		TURNCapacity:  config.TURNCapacity,
 		Random:        config.Random,
 		Native:        config.Native,
 		Configuration: v2peer.DefaultConfiguration(),

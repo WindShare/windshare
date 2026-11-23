@@ -70,9 +70,24 @@ wind get <link> [-o <directory>] [--only <path>]... [--redownload] [--key <key>]
 
 | `--connectivity` | Behavior |
 |---|---|
-| `auto` | Schedules content across available relay and direct WebRTC lanes. |
+| `auto` | Schedules content across application relays, direct WebRTC, and on-demand TURN lanes. |
 | `relay-only` | Transfers content only through application relays; creates no ICE connections. |
 | `p2p-only` | Uses relays for signaling and transfers content only over direct WebRTC paths. |
+
+### TURN services
+
+CLI and desktop senders use the same `config.json`. Configure up to eight services. Each receiver can use up to four alongside its direct and application-relay lanes.
+
+```json
+{
+  "turn_services": [
+    {"id": "office", "kind": "coturn", "role": "parallel", "urls": ["turn:office.example:3478"], "shared_secret": "<secret>"},
+    {"id": "backup", "kind": "cloudflare", "role": "fallback", "key_id": "<key-id>", "api_token": "<turn-key-token>"}
+  ]
+}
+```
+
+`coturn` and `shared_static` default to `parallel` for sustained network demand. Manual Cloudflare keys and enrolled managed relays default to `fallback` for stalled or slow delivery. A `shared_static` service takes `urls`, `username`, and `password`. Use a dedicated account. Receivers can reuse it after a share ends until the provider rotates or revokes its password.
 
 ## Resume
 

@@ -1,3 +1,4 @@
+import { Transform } from 'node:stream'
 import { once } from 'node:events'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { connect, createServer, type Server, type Socket } from 'node:net'
@@ -28,6 +29,7 @@ interface DirectRelayProfile {
 export interface DirectShareOptions {
   readonly blockSizeBytes?: number
   readonly relayProfile?: DirectRelayProfile
+  readonly turnServices?: readonly object[]
   readonly senderTrace?: boolean
 }
 
@@ -139,7 +141,7 @@ export class DirectProductStack {
     // Keep test relay authority independent of the developer's saved profiles.
     const configPath = join(this.#requireRoot(), `${operationId}-config.json`)
     const profiles = relayProfile === undefined ? [] : [relayProfile]
-    const configuration = { profiles, active_relays: profiles.map(({ url }) => url) }
+    const configuration = { profiles, turn_services: options.turnServices, active_relays: profiles.map(({ url }) => url) }
     await writeFile(configPath, JSON.stringify(configuration), { mode: 0o600 })
     const sender = this.#track(new DirectProcess(binaries.wind, commandArguments, {
       cwd: REPOSITORY_ROOT,
@@ -204,8 +206,8 @@ export class DirectProductStack {
     return completeBoundary < 0 ? '' : encoded.slice(0, completeBoundary + 1)
   }
 
-  async createRelayCutProxy(relayUrl = this.#requireRelayUrl()): Promise<RelayCutProxy> {
-    const proxy = await RelayCutProxy.start(relayUrl)
+  async createRelayCutProxy(relayUrl = this.#requireRelayUrl(), bytesPerSecond?: number): Promise<RelayCutProxy> {
+    const proxy = await RelayCutProxy.start(relayUrl, bytesPerSecond)
     this.#proxies.push(proxy)
     return proxy
   }
@@ -347,13 +349,14 @@ export class RelayCutProxy {
   readonly #server: Server
   readonly #connections = new Set<readonly [Socket, Socket]>()
   #closed = false
+  #paused = false
 
   private constructor(server: Server, url: string) {
     this.#server = server
     this.url = url
   }
 
-  static async start(upstreamUrl: string): Promise<RelayCutProxy> {
+  static async start(upstreamUrl: string, bytesPerSecond?: number): Promise<RelayCutProxy> {
     const upstream = new URL(upstreamUrl)
     const port = Number(upstream.port)
     if (upstream.protocol !== 'ws:' || upstream.hostname === '' || !Number.isInteger(port)) {
@@ -363,7 +366,7 @@ export class RelayCutProxy {
     const server = createServer((client) => {
       const proxy = holder.value
       if (proxy === undefined) client.destroy()
-      else proxy.#forward(client, upstream.hostname, port)
+      else proxy.#forward(client, upstream.hostname, port, bytesPerSecond)
     })
     await new Promise<void>((resolveListen, rejectListen) => {
       server.once('error', rejectListen)
@@ -385,21 +388,27 @@ export class RelayCutProxy {
   async cut(): Promise<void> {
     if (this.#closed) return
     this.#closed = true
+    this.setAvailable(false)
+    await new Promise<void>((resolveClose, rejectClose) => {
+      this.#server.close((error) => error === undefined ? resolveClose() : rejectClose(error))
+    })
+  }
+
+  setAvailable(available: boolean): void {
+    this.#paused = !available
+    if (available) return
     for (const [client, upstream] of this.#connections) {
       client.destroy()
       upstream.destroy()
     }
-    await new Promise<void>((resolveClose, rejectClose) => {
-      this.#server.close((error) => error === undefined ? resolveClose() : rejectClose(error))
-    })
   }
 
   async close(): Promise<void> {
     await this.cut()
   }
 
-  #forward(client: Socket, host: string, port: number): void {
-    if (this.#closed) {
+  #forward(client: Socket, host: string, port: number, bytesPerSecond?: number): void {
+    if (this.#closed || this.#paused) {
       client.destroy()
       return
     }
@@ -419,7 +428,10 @@ export class RelayCutProxy {
     const request = new RelayRequestProxy(host, port)
     request.on('error', settle)
     client.pipe(request).pipe(upstream)
-    upstream.pipe(client)
+    if (bytesPerSecond === undefined) upstream.pipe(client)
+    else upstream.pipe(new Transform({ transform(chunk: Buffer, _encoding, callback) {
+      setTimeout(callback, Math.ceil(chunk.length * 1000 / bytesPerSecond), null, chunk)
+    } })).pipe(client)
   }
 }
 

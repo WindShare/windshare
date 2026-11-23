@@ -21,8 +21,18 @@ func (session *testPeerSession) SetPeerPathControlHandler(handler func(context.C
 	session.pathControlHandler = handler
 }
 
+func (session *testPeerSession) SetTURNControlHandler(handler func(context.Context, []byte) error) {
+	session.sessionControlMu.Lock()
+	defer session.sessionControlMu.Unlock()
+	session.turnHandler = handler
+}
+
 func (session *testPeerSession) SendPeerPathControl(ctx context.Context, body []byte) error {
 	return session.sendSessionControl(ctx, protocolsession.MessagePeerPathControl, body)
+}
+
+func (session *testPeerSession) SendTURNControl(ctx context.Context, body []byte) error {
+	return session.sendSessionControl(ctx, protocolsession.MessageTURNControl, body)
 }
 
 func (session *testPeerSession) sendSessionControl(ctx context.Context, kind protocolsession.MessageKind, body []byte) error {

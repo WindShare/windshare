@@ -14,6 +14,21 @@ pub const TERMINATION_RETRY_MS: u64 = 5_000;
 
 pub struct Database(SqlStorage);
 impl Database {
+    pub fn read_only(state: &State) -> Self {
+        Self(state.storage().sql())
+    }
+    pub fn initialized(&self) -> Result<bool> {
+        Ok(self
+            .0
+            .exec(
+                "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='access_entries'",
+                None,
+            )?
+            .raw()
+            .next()
+            .transpose()?
+            .is_some())
+    }
     pub fn open(state: &State) -> Result<Self> {
         let db = Self(state.storage().sql());
         db.0.exec("CREATE TABLE IF NOT EXISTS access_entries (key TEXT PRIMARY KEY, value TEXT NOT NULL, expires INTEGER) STRICT", None)?;

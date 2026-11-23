@@ -179,8 +179,8 @@ func validateSenderControlSemantic(
 		_, err = DecodeOperationFailure(semantic)
 	case MessageScanProgress:
 		_, err = DecodeScanProgress(semantic)
-	case MessagePeerPathControl:
-		err = ValidateSessionControlBody(kind, semantic)
+	case MessagePeerPathControl, MessageTURNControl:
+		err = ValidateSessionControlBody(RoleSender, kind, semantic)
 	case MessageSessionTerminal:
 		_, err = DecodeSessionTerminal(semantic)
 	default:
@@ -197,8 +197,15 @@ func validateSenderControlSemantic(
 
 // The authenticated outer kind selects the schema. Body versions remain local
 // to each protocol, so a schema revision cannot redirect another control family.
-func ValidateSessionControlBody(kind MessageKind, body []byte) error {
+func ValidateSessionControlBody(origin Role, kind MessageKind, body []byte) error {
 	switch kind {
+	case MessageTURNControl:
+		if origin == RoleReceiver {
+			_, err := DecodeTURNDemand(body)
+			return err
+		}
+		_, err := DecodeTURNGrants(body)
+		return err
 	case MessagePeerPathControl:
 		_, err := DecodePeerPathControl(body)
 		return err

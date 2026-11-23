@@ -168,10 +168,12 @@ function createGateway(
       route: Parameters<typeof realOffers.offer>[0],
       signal: AbortSignal,
       observer?: Parameters<typeof realOffers.offer>[2],
+      profile?: Parameters<typeof realOffers.offer>[3],
+      turnServer?: Parameters<typeof realOffers.offer>[4],
     ) => {
       if (peerHarness === undefined) {
         const [peer] = await Promise.all([
-          realOffers.offer(route, signal, observer),
+          realOffers.offer(route, signal, observer, profile, turnServer),
           peerRelease.waitUntilReleased(signal),
         ])
         return peer
@@ -179,7 +181,7 @@ function createGateway(
       if (!(route instanceof SessionSignalingRoute)) {
         throw new TypeError('Recovery fixture requires authenticated session signaling')
       }
-      const peer = await realOffers.offer(route, signal, observer)
+      const peer = await realOffers.offer(route, signal, observer, profile, turnServer)
       return peerHarness.wrap(peer, [...route.binding.attemptId])
     },
   }

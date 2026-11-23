@@ -66,6 +66,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
+      CLOUDFLARE_TURN_ENABLED: ${{ vars.CLOUDFLARE_TURN_ENABLED }}
       CLOUDFLARE_DEPLOYMENT_MODE: ${{ vars.CLOUDFLARE_DEPLOYMENT_MODE || 'full' }}
     steps:
       - uses: actions/checkout@v7

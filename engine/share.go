@@ -4,6 +4,9 @@ import (
 	"context"
 	"slices"
 
+	"github.com/windshare/windshare/engine/relayconfig"
+	"github.com/windshare/windshare/engine/turnissuer"
+
 	"github.com/windshare/windshare/connectivity/networkstate"
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/diagnostics"
@@ -20,11 +23,12 @@ import (
 var ErrInvalidShareChunkSize = share.ErrInvalidChunkSize
 
 type ShareRequest struct {
-	Source      liveshare.FileSourceFactory
-	RelayIntent relayprofile.Intent
-	Frontend    string
-	ChunkSize   uint32
-	Diagnostics diagnostics.Sink
+	TURNServices []relayconfig.TURNService
+	Source       liveshare.FileSourceFactory
+	RelayIntent  relayprofile.Intent
+	Frontend     string
+	ChunkSize    uint32
+	Diagnostics  diagnostics.Sink
 }
 type ShareRelayCandidate = relayprofile.Registration
 type ShareResult = share.Result
@@ -60,6 +64,11 @@ func (engine *Engine) StartShare(ctx context.Context, request ShareRequest) (*Sh
 	if err != nil {
 		return nil, err
 	}
+	issuer, err := turnissuer.New(request.TURNServices, selection.Relays, request.RelayIntent.Candidates(), turnissuer.Options{})
+	if err != nil {
+		selection.ReleaseAuthorization()
+		return nil, err
+	}
 	controller := share.NewController()
 	execution := share.Request{Source: request.Source, Relays: selection.Relays, ChunkSize: request.ChunkSize, Diagnostics: request.Diagnostics}
 	admissions := relayset.NewNetworkAdmissions(selection.Plan, engine.config.Clock, engine.network.ServerRetryAt)
@@ -71,7 +80,8 @@ func (engine *Engine) StartShare(ctx context.Context, request ShareRequest) (*Sh
 		}
 	}
 	dependencies := share.Dependencies{
-		Controller: controller, RevisionCapacity: engine.revisions,
+		TURNProvider: issuer,
+		Controller:   controller, RevisionCapacity: engine.revisions,
 		CatalogBudget: engine.catalog, CacheBudget: engine.cache, Connectivity: engine.connectivity,
 		Prepare: injected.Prepare, PollNetwork: pollNetwork,
 		Attempts: admissions.Control, Clock: engine.config.Clock,
@@ -87,6 +97,9 @@ func (engine *Engine) StartShare(ctx context.Context, request ShareRequest) (*Sh
 	}
 	current, err := startWorkflow(engine, ctx, "share", request.Diagnostics, func(ctx context.Context, control task.Control) task.Completion[share.Result] {
 		defer selection.ReleaseAuthorization()
+		probe, cancel := context.WithCancel(ctx)
+		discovered := issuer.Discover(probe)
+		defer func() { cancel(); <-discovered }()
 		control.Diagnostics.Record(selection)
 		dependencies.ObserveAttempt = engine.network.Observer(selection, control.Diagnostics)
 		if control.Diagnostics.Enabled() {

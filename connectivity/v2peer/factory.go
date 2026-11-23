@@ -8,7 +8,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/windshare/windshare/connectivity/turnsession"
+
 	pion "github.com/pion/webrtc/v4"
+
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -100,6 +103,8 @@ func (function DataChannelAdapterFunc) WrapDataChannel(
 }
 
 type Config struct {
+	TURNCapacity       *turnsession.Capacity
+	TURNProvider       turnsession.Provider
 	Native             *nativepeer.NativePeerConnectivity
 	Configuration      pion.Configuration
 	PeerConnections    PeerConnectionFactory
@@ -118,6 +123,8 @@ type Config struct {
 }
 
 type Factory struct {
+	turnCapacity          *turnsession.Capacity
+	turnProvider          turnsession.Provider
 	native                *nativepeer.NativePeerConnectivity
 	configuration         pion.Configuration
 	peerConnections       PeerConnectionFactory
@@ -202,7 +209,11 @@ func NewFactory(config Config) (*Factory, error) {
 	if err != nil {
 		return nil, errors.Join(ErrConfig, err)
 	}
+	if config.TURNCapacity == nil {
+		config.TURNCapacity = turnsession.NewCapacity()
+	}
 	factory := &Factory{
+		turnCapacity: config.TURNCapacity, turnProvider: config.TURNProvider,
 		native:        config.Native,
 		configuration: config.Configuration, peerConnections: config.PeerConnections,
 		dataChannels:      config.DataChannels,
@@ -239,6 +250,7 @@ func (factory *Factory) NewSenderPeerHandler(
 	}
 	capacity := SenderMaxActivePeerAttemptsPerSession*(factory.maxCandidates+3) + handlerEventReserve
 	return &senderHandler{
+		turn:    turnsession.NewSender(session.ProtocolSessionID(), factory.turnProvider, factory.now),
 		factory: factory, session: session, events: make(chan handlerEvent, capacity),
 		attempts:          make(map[protocolsession.OperationID]*peerAttempt),
 		bindings:          make(map[v2signal.Binding]protocolsession.OperationID),
@@ -296,10 +308,14 @@ func (factory *Factory) BeginOperationContinuation(
 	// publish its rejection. Rebuilding only the continuation contract from a
 	// canonical placeholder preserves v2signal's single binding/scope owner while
 	// leaving the malformed original body for the handler to reject and observe.
-	placeholder, encodeErr := v2signal.EncodeOffer(v2signal.Offer{
+	offer := v2signal.Offer{
 		Binding: binding,
 		SDP:     rejectedOfferAuthoritySDP,
-	})
+	}
+	if binding.Purpose == v2signal.TURNRelay {
+		offer.TURNGrantID[0] = 1
+	}
+	placeholder, encodeErr := v2signal.EncodeOffer(offer)
 	if encodeErr != nil {
 		return nil, true, errors.Join(err, encodeErr)
 	}
@@ -338,6 +354,7 @@ type handlerEvent struct {
 }
 
 type senderHandler struct {
+	turn    *turnsession.Sender
 	factory *Factory
 	session sendersession.PeerSession
 	events  chan handlerEvent

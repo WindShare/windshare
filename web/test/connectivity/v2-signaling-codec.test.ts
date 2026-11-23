@@ -29,6 +29,7 @@ interface SignalingVector {
   readonly controlBinding: {
     readonly operationId: string
   }
+  readonly turnOffer: { readonly sdp: string; readonly bodyB64: string }
   readonly offer: { readonly sdp: string; readonly bodyB64: string }
   readonly answer: { readonly sdp: string; readonly bodyB64: string }
   readonly candidate: {
@@ -70,7 +71,11 @@ describe('v2 E2E peer signaling codec', () => {
       attemptSequence: BigInt(vector.attemptSequence),
       peerSlot: vector.peerSlot,
     }
-    expect(vector.schemaVersion).toBe(4)
+    expect(vector.schemaVersion).toBe(5)
+    const turn = decodePeerOffer(bytes(vector.turnOffer.bodyB64))
+    expect(turn.purpose).toBe('turn-relay')
+    expect(turn.turnGrantId?.[0]).toBe(1)
+    expect(encodePeerOffer(turn)).toEqual(bytes(vector.turnOffer.bodyB64))
     expect(MESSAGE_KIND.peerOffer).toBe(vector.messageKinds.offer)
     expect(MESSAGE_KIND.peerAnswer).toBe(vector.messageKinds.answer)
     expect(MESSAGE_KIND.peerCandidate).toBe(vector.messageKinds.candidate)

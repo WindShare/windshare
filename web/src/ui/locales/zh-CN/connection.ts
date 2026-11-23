@@ -45,6 +45,7 @@ export const connection: typeof English = {
   emptyChannels: '可用于下载或预览的通道将显示在这里。',
   connectedChannels: '已连接的下载通道',
   direct: '点对点直连',
+  turnRelay: 'TURN 中转',
   applicationRelay: '应用中转',
   connected: '已连接',
   receivedRecently: '最近收到数据',

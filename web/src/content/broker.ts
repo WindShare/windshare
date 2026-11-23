@@ -16,6 +16,7 @@ export interface DownloadConnectivitySnapshot {
   readonly first_direct_elapsed_ms: number | null
   readonly direct_bytes: string
   readonly application_relay_bytes: string
+  readonly turn_bytes: string
   readonly unknown_bytes: string
   readonly direct_fraction: number | null
   readonly fallback_stall_ms: number

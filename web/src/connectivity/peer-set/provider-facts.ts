@@ -1,8 +1,10 @@
+import { classifyPair } from '../peer-route/route'
+
 export type PeerProviderFact =
   | { readonly kind: 'receive-buffer'; readonly strategy: 'data-only' | 'chromium-video'; readonly stage: 'selected' | 'applied' | 'negotiated' | 'disabled'; readonly reason: string; readonly errorName: string }
   | { readonly kind: 'state'; readonly phase: 'signaling' | 'ice-check' | 'dtls-datachannel'; readonly state: string; readonly elapsedMs: number }
   | { readonly kind: 'candidate'; readonly candidateType: string; readonly protocol: string; readonly family: string; readonly interfaceClass: 'unknown'; readonly endpoint: 'unknown'; readonly disposition: string }
-  | { readonly kind: 'selected-pair'; readonly route: 'direct'; readonly localType: string; readonly remoteType: string; readonly protocol: string; readonly family: string; readonly rttMs: number | null; readonly ageMs: number; readonly switchReason: 'initial' | 'pair-changed' | 'sample' }
+  | { readonly kind: 'selected-pair'; readonly route: 'direct' | 'turn'; readonly localType: string; readonly remoteType: string; readonly protocol: string; readonly family: string; readonly rttMs: number | null; readonly ageMs: number; readonly switchReason: 'initial' | 'pair-changed' | 'sample' }
   | { readonly kind: 'ice-error'; readonly code: number; readonly endpoint: string }
   | { readonly kind: 'profile'; readonly networkGenerationID: string; readonly profileID: string; readonly side: 'receiver'; readonly endpointIDs: string }
   | { readonly kind: 'observer-loss'; readonly count: number }
@@ -32,21 +34,19 @@ export function selectedPairFact(stats: RTCStatsReport, previousID: string | und
   const local = stats.get(String(pair.localCandidateId)) as Record<string, unknown> | undefined
   const remote = stats.get(String(pair.remoteCandidateId)) as Record<string, unknown> | undefined
   if (local === undefined || remote === undefined) return undefined
-  const localType = knownCandidateType(local.candidateType)
-  const remoteType = knownCandidateType(remote.candidateType)
-  if (localType === 'unknown' || remoteType === 'unknown') return undefined
+  const localType = local.candidateType
+  const remoteType = remote.candidateType
+  const route = classifyPair(localType, remoteType)
+  if (route === undefined || typeof localType !== 'string' || typeof remoteType !== 'string') return undefined
   const address = typeof local.address === 'string' ? local.address : ''
   const id = pair.id
   return { id, fact: Object.freeze({ kind: 'selected-pair',
-    route: 'direct',
+    route,
     localType, remoteType, protocol: local.protocol === 'udp' || local.protocol === 'tcp' ? local.protocol : 'unknown',
     family: addressFamily(address),
     rttMs: pairRTT(pair.currentRoundTripTime),
     ageMs: id === previousID ? Math.max(0, now - selectedAt) : 0,
     switchReason: switchReason(previousID, id) }) }
-}
-function knownCandidateType(value: unknown): string {
-  return typeof value === 'string' && ['host', 'srflx', 'prflx'].includes(value) ? value : 'unknown'
 }
 
 function addressFamily(address: string): string {

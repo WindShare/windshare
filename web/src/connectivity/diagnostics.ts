@@ -28,7 +28,11 @@ export const BROWSER_CONNECTIVITY_ATTEMPT_STAGES = Object.freeze([
   'failed',
 ] as const)
 
+export const TURN_TRACE_STAGES = ['turn_demand_sent', 'turn_grants_received', 'turn_refresh_requested', 'turn_path_admitted', 'turn_path_closed'] as const
+export type TURNTraceStage = typeof TURN_TRACE_STAGES[number]
+
 export const BROWSER_CONNECTIVITY_RECOVERY_STAGES = Object.freeze([
+  ...TURN_TRACE_STAGES,
   'parallelism',
   'wave-started',
   'retry-decided',
@@ -189,6 +193,7 @@ type PeerRecoveryBase = Readonly<{
 }>
 
 export type PeerRecoveryTraceEvent = PeerRecoveryBase & (
+  | Readonly<{ stage: TURNTraceStage; serviceId?: string; grantId?: string; status?: string; mode?: string }>
   | Readonly<{ stage: 'parallelism'; action: string; reason: string;
       networkWaitingBytes: number; inFlightBytes: number; remainingBytes: number; remainingKnown: boolean;
       paths: number; queuedBytes: number; unfinishedBytes: number; capacityWaitingBytes: number;

@@ -93,8 +93,9 @@ impl AccessObject {
     ) -> Result<Response> {
         let mut store = CloudflareAccessStore::new(db, String::new());
         match (req.method(), req.path().as_str()) {
-            (Method::Get, "/api/session") => {
-                reply(&json!({"authenticated": true, "capabilities": {}}), 200)
+            (Method::Get, "/api/session") => reply(&json!({"authenticated": true}), 200),
+            (Method::Get, "/api/turn/status") | (Method::Post, "/api/turn/toggle") => {
+                Self::turn_setting(db, &req.method(), body)
             }
             (Method::Post, "/api/logout") => Self::logout(db, req),
             (Method::Get, "/api/credentials") => {

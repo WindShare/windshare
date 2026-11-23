@@ -146,12 +146,7 @@ func (s *PeerSet) Open(ctx context.Context, config PathConfig) (*Path, error) {
 	if config.Demand == BrowseDemand && s.prewarmed[config.SessionID] {
 		return nil, ErrPathTerminal
 	}
-	pool := s.slots[config.SessionID]
-	if pool == nil {
-		pool = &peerslot.Pool{}
-		s.slots[config.SessionID] = pool
-	}
-	slot, err := pool.Acquire()
+	slot, err := s.slotPoolLocked(config.SessionID).Acquire()
 	if err != nil {
 		return nil, err
 	}
@@ -266,4 +261,13 @@ func (p *Path) wait(delay time.Duration) bool {
 			return true
 		}
 	}
+}
+
+func (s *PeerSet) slotPoolLocked(id protocolsession.ProtocolSessionID) *peerslot.Pool {
+	pool := s.slots[id]
+	if pool == nil {
+		pool = &peerslot.Pool{}
+		s.slots[id] = pool
+	}
+	return pool
 }

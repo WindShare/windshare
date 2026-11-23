@@ -38,6 +38,8 @@ func (s *Set) attestBlock(state *laneState, record records.BlockRecord) Block {
 			route = downloadmetrics.Direct
 		case RouteRelay:
 			route = downloadmetrics.ApplicationRelay
+		case RouteTURN:
+			route = downloadmetrics.TURN
 		}
 	}
 	return Block{BlockRecord: record, route: route}
@@ -66,7 +68,7 @@ func (s *Set) ContentActivity() []ContentActivity {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	result := make([]ContentActivity, 0, int(RouteDirect))
+	result := make([]ContentActivity, 0, int(RouteTURN))
 	activityByRoute := s.contentActivity
 	for _, lane := range s.lanes {
 		if !lane.retired {

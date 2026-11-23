@@ -7,7 +7,8 @@ import { PeerRecoverySupervisor, type PeerRecoverySupervisorOptions } from './pa
 export class PeerSet {
   readonly #paths = new Map<string, PeerRecoverySupervisor>()
   readonly #retiring = new Set<Promise<void>>()
-  readonly #slots = new Map<string, PeerSlotPool>()
+  readonly #slots: PeerSlotPool
+  constructor(slots = new PeerSlotPool()) { this.#slots = slots }
 
   get size(): number { return this.#paths.size + this.#retiring.size }
 
@@ -29,13 +30,7 @@ export class PeerSet {
     const key = encodeBase64Url(options.peerPathId.copyBytes())
     const existing = this.#paths.get(key)
     if (existing !== undefined) return existing
-    const session = encodeBase64Url(options.protocolSessionId.copyBytes())
-    let pool = this.#slots.get(session)
-    if (pool === undefined) {
-      pool = new PeerSlotPool()
-      this.#slots.set(session, pool)
-    }
-    const slot = pool.acquire()
+    const slot = this.#slots.acquire()
     let path: PeerRecoverySupervisor
     try {
       path = new PeerRecoverySupervisor({ ...options, slot })

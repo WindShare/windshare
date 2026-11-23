@@ -1,3 +1,4 @@
+import { decodeTURNDemand } from '../protocol/turn-control'
 import { observeProtocolFailure } from './failure-diagnostics'
 import { cancellationTraceReason } from './operation-diagnostics'
 import { cancellationFromSignal } from './operations/cancellation'
@@ -206,6 +207,17 @@ export class ReceiverSessionRuntime {
     options.signal?.throwIfAborted()
     decodePeerPathControl(body)
     await this.#selectLane(options.laneId).writer.send(encodeMessage(MESSAGE_KIND.peerPathControl, undefined, body), options)
+  }
+
+  subscribeTURNControls(listener: (body: Uint8Array<ArrayBuffer>) => void): () => void {
+    return this.#router.subscribeTURNControls(listener)
+  }
+
+  async sendTURNControl(body: Uint8Array, options: { readonly laneId?: number; readonly signal?: AbortSignal } = {}): Promise<void> {
+    this.#requireOpen()
+    options.signal?.throwIfAborted()
+    decodeTURNDemand(body)
+    await this.#selectLane(options.laneId).writer.send(encodeMessage(MESSAGE_KIND.turnControl, undefined, body), options)
   }
 
   async requestLaneGrant(

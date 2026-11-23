@@ -6,6 +6,7 @@ import { connectedChannelCount } from './path-presentation'
 const ROUTE_LABEL = {
   direct: 'direct',
   'application-relay': 'applicationRelay',
+  turn: 'turnRelay',
 } as const
 
 export function DownloadChannels({ path }: { readonly path: ReceiverPathActivitySnapshot }) {

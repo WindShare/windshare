@@ -7,15 +7,20 @@ import (
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/throughput"
 	"github.com/windshare/windshare/connectivity/v2signal"
-	"github.com/windshare/windshare/core/session/peerslot"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
+
+const MaxDirectPaths = 3
 
 // The controller borrows scheduling observations; it never creates private
 // work queues or retries an optional path with the essential recovery budget.
 func (s *ReceiverSession) runContentControl(lanes *transferlanes.Set) {
 	var controller throughput.Controller
+	turn := s.turn
+	if turn != nil {
+		defer turn.close()
+	}
 	for {
 		timer := s.owner.config.Clock.NewTimer(throughput.SampleInterval)
 		select {
@@ -26,6 +31,7 @@ func (s *ReceiverSession) runContentControl(lanes *transferlanes.Set) {
 		}
 		s.recoverContentDemand(lanes)
 		demand := lanes.SchedulingDemand()
+		s.observeTURNDemand(demand)
 		s.mu.Lock()
 		if s.closed || s.ctx.Err() != nil {
 			s.mu.Unlock()
@@ -41,15 +47,15 @@ func (s *ReceiverSession) runContentControl(lanes *transferlanes.Set) {
 			UnfinishedBytes: demand.UnfinishedBytes, CapacityWaitingBytes: demand.CapacityWaitingBytes,
 			NetworkWaitingBytes: demand.NetworkWaitingBytes, UsefulBytes: demand.UsefulBytes,
 			OutputBytes: demand.OutputBytes, RemainingBytes: demand.RemainingBytes, RemainingKnown: demand.RemainingKnown,
-			Paths: paths, Pending: pending,
+			Paths: paths, Pending: pending || turn.settlingAt(s.owner.config.Clock.Now()),
 		}
-		decision := controller.Step(s.owner.config.Clock.Now(), observation, peerslot.Count-1)
+		decision := controller.Step(s.owner.config.Clock.Now(), observation, MaxDirectPaths)
 		var retire *Path
 		target := targets[decision.Path]
 		identity := transferlanes.Identity{ID: decision.Path.LaneID, Epoch: decision.Path.LaneEpoch}
 		switch decision.Action {
 		case throughput.Explore:
-			if total < peerslot.Count-1 {
+			if total < MaxDirectPaths {
 				config := s.config
 				config.Purpose, config.Demand = v2signal.ThroughputExploration, ContentDemand
 				if path, err := s.owner.openDirect(s.ctx, config); err == nil {
@@ -73,6 +79,15 @@ func (s *ReceiverSession) runContentControl(lanes *transferlanes.Set) {
 		if retire != nil {
 			retireThroughputGeneration(retire, identity)
 		}
+	}
+}
+
+func (s *ReceiverSession) observeTURNDemand(demand transferlanes.SchedulingDemand) {
+	if s.turn != nil {
+		s.mu.Lock()
+		active := s.config.Demand == ContentDemand
+		s.mu.Unlock()
+		s.turn.step(s.owner.config.Clock.Now(), active, demand)
 	}
 }
 
@@ -148,6 +163,9 @@ func (s *ReceiverSession) pathFinished(result Result) {
 		return
 	}
 	if result.Scope != protocolsession.PeerFailureSessionTerminal {
+		if s.allowTURN {
+			return
+		}
 		s.owner.mu.Lock()
 		recoverable := len(s.owner.paths) > 0
 		s.owner.mu.Unlock()

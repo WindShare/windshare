@@ -20,10 +20,14 @@ type PeerRouteObserver interface {
 	SelectedPeerRoute() (transferlanes.Route, bool)
 }
 
-func selectedPeerRoute(peer ReceiverPeerConnection) (transferlanes.Route, error) {
+func selectedPeerRoute(peer ReceiverPeerConnection, purpose v2signal.ConnectionPurpose) (transferlanes.Route, error) {
+	expected := transferlanes.RouteDirect
+	if purpose == v2signal.TURNRelay {
+		expected = transferlanes.RouteTURN
+	}
 	if observer, ok := peer.(PeerRouteObserver); ok {
 		route, valid := observer.SelectedPeerRoute()
-		if valid && route == transferlanes.RouteDirect {
+		if valid && route == expected {
 			return route, nil
 		}
 		return 0, ErrNegotiation
@@ -40,10 +44,20 @@ func selectedPeerRoute(peer ReceiverPeerConnection) (transferlanes.Route, error)
 	if err != nil || pair == nil || pair.Local == nil || pair.Remote == nil {
 		return 0, errors.Join(ErrNegotiation, err)
 	}
-	if pair.Local.Typ == pion.ICECandidateTypeRelay || pair.Remote.Typ == pion.ICECandidateTypeRelay {
+	route := transferlanes.RouteDirect
+	for _, t := range []pion.ICECandidateType{pair.Local.Typ, pair.Remote.Typ} {
+		switch t {
+		case pion.ICECandidateTypeHost, pion.ICECandidateTypeSrflx, pion.ICECandidateTypePrflx:
+		case pion.ICECandidateTypeRelay:
+			route = transferlanes.RouteTURN
+		default:
+			return 0, ErrNegotiation
+		}
+	}
+	if route != expected {
 		return 0, ErrNegotiation
 	}
-	return transferlanes.RouteDirect, nil
+	return route, nil
 }
 
 type receiverAdmissionSettlement uint8

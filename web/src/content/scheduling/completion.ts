@@ -51,7 +51,7 @@ function boundedEstimate(milliseconds: number, minimum: number): number {
   return Math.min(MAXIMUM_ESTIMATE_MILLISECONDS, Math.max(minimum, milliseconds))
 }
 
-export function completionCost(milliseconds: number, route: 'direct' | 'application-relay'): number {
+export function completionCost(milliseconds: number, route: 'direct' | 'application-relay' | 'turn'): number {
   return route === 'direct' ? milliseconds : milliseconds * RELAY_COST_FACTOR
 }
 

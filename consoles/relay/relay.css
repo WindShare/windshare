@@ -51,3 +51,8 @@
   .inventory > .section-title { align-items: center; }
   .pairing-intro { gap: .8rem; }
 }
+
+.managed-turn { padding: 1rem clamp(1.1rem, 2.5vw, 1.75rem); }
+.managed-turn label { display: flex; align-items: center; gap: .65rem; font-weight: 610; }
+.managed-turn input { width: 1.1rem; height: 1.1rem; accent-color: var(--accent); }
+.managed-turn p { max-width: 68ch; margin-top: .6rem; color: var(--muted); font-size: .87rem; }

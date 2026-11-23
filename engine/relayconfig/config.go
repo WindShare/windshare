@@ -31,6 +31,7 @@ var (
 )
 
 type Config struct {
+	TURNServices   []TURNService
 	FrontURL       string
 	Profiles       []relayprofile.Candidate
 	ActiveRelays   []string
@@ -42,12 +43,14 @@ type Config struct {
 func emptyConfig() Config { return Config{Profiles: []relayprofile.Candidate{}} }
 
 type document struct {
-	FrontURL       string       `json:"front_url,omitempty"`
-	Profiles       []savedRelay `json:"profiles"`
-	ActiveRelays   []string     `json:"active_relays,omitempty"`
-	ConfiguredOnly bool         `json:"configured_relays_only,omitempty"`
+	TURNServices   []TURNService `json:"turn_services,omitempty"`
+	FrontURL       string        `json:"front_url,omitempty"`
+	Profiles       []savedRelay  `json:"profiles"`
+	ActiveRelays   []string      `json:"active_relays,omitempty"`
+	ConfiguredOnly bool          `json:"configured_relays_only,omitempty"`
 }
 type savedRelay struct {
+	ManagedTurn     bool   `json:"managed_turn,omitempty"`
 	URL             string `json:"url"`
 	ConsoleURL      string `json:"console_url,omitempty"`
 	OfferedFrontend string `json:"offered_frontend,omitempty"`
@@ -110,12 +113,12 @@ func Decode(reader io.Reader) (Config, error) {
 		}
 		return Config{}, ErrConfig
 	}
-	result := Config{FrontURL: disk.FrontURL, ActiveRelays: disk.ActiveRelays, ConfiguredOnly: disk.ConfiguredOnly}
+	result := Config{TURNServices: disk.TURNServices, FrontURL: disk.FrontURL, ActiveRelays: disk.ActiveRelays, ConfiguredOnly: disk.ConfiguredOnly}
 	if disk.Profiles != nil {
 		result.Profiles = make([]relayprofile.Candidate, 0, len(disk.Profiles))
 	}
 	for _, profile := range disk.Profiles {
-		result.Profiles = append(result.Profiles, relayprofile.Candidate{PublicURL: profile.URL, AccessKey: profile.AccessKey, ConsoleURL: profile.ConsoleURL, OfferedFrontend: profile.OfferedFrontend})
+		result.Profiles = append(result.Profiles, relayprofile.Candidate{ManagedTurn: profile.ManagedTurn, PublicURL: profile.URL, AccessKey: profile.AccessKey, ConsoleURL: profile.ConsoleURL, OfferedFrontend: profile.OfferedFrontend})
 	}
 	if err := result.Validate(); err != nil {
 		return Config{}, err
@@ -129,6 +132,9 @@ func (config Config) Validate() error {
 }
 
 func (config Config) validateFields() error {
+	if err := ValidateTURNServices(config.TURNServices); err != nil {
+		return err
+	}
 	if config.FrontURL != "" {
 		if err := ValidateFrontURL(config.FrontURL); err != nil {
 			return fmt.Errorf("%w: %w", ErrConfig, err)

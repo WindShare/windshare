@@ -24,6 +24,7 @@ const (
 )
 
 type setupIntent struct {
+	ManagedTurn      bool      `json:"managed_turn,omitempty"`
 	SettingsRevision string    `json:"settings_revision"`
 	OperationID      string    `json:"operation_id"`
 	RelayURL         string    `json:"relay_url"`

@@ -6,6 +6,7 @@ import (
 
 	"github.com/fxamacker/cbor/v2"
 	pion "github.com/pion/webrtc/v4"
+
 	"github.com/windshare/windshare/connectivity/pionpeer"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -145,7 +146,7 @@ var rejectedOfferIdentityDecoding = func() cbor.DecMode {
 // one terminal stream even though the offer itself must remain unusable.
 func recoverOfferBinding(encoded []byte) (v2signal.Binding, bool) {
 	var fields []cbor.RawMessage
-	if err := rejectedOfferIdentityDecoding.Unmarshal(encoded, &fields); err != nil || len(fields) < 5 {
+	if err := rejectedOfferIdentityDecoding.Unmarshal(encoded, &fields); err != nil || len(fields) < 6 {
 		return v2signal.Binding{}, false
 	}
 	var version uint64
@@ -162,7 +163,8 @@ func recoverOfferBinding(encoded []byte) (v2signal.Binding, bool) {
 	copy(binding.PeerPathID[:], pathBytes)
 	copy(binding.AttemptID[:], attemptBytes)
 	if rejectedOfferIdentityDecoding.Unmarshal(fields[3], &binding.AttemptSequence) != nil ||
-		rejectedOfferIdentityDecoding.Unmarshal(fields[4], &binding.PeerSlot) != nil {
+		rejectedOfferIdentityDecoding.Unmarshal(fields[4], &binding.PeerSlot) != nil ||
+		rejectedOfferIdentityDecoding.Unmarshal(fields[5], &binding.Purpose) != nil {
 		return v2signal.Binding{}, false
 	}
 	if binding.Validate() != nil {
@@ -311,13 +313,19 @@ func (execution *attemptExecution) acceptAdmission(
 			direct = pair.LocalType != "relay" && pair.RemoteType != "relay"
 		}
 	}
-	execution.attempt.config.factory.native.SetAdmitted([16]byte(execution.attempt.config.session.ProtocolSessionID()), execution.attempt.binding().PeerPathID, direct)
+	route := transferlanes.RouteDirect
+	if execution.attempt.binding().Purpose == v2signal.TURNRelay {
+		route = transferlanes.RouteTURN
+		execution.attempt.releaseTURN()
+	} else {
+		execution.attempt.config.factory.native.SetAdmitted([16]byte(execution.attempt.config.session.ProtocolSessionID()), execution.attempt.binding().PeerPathID, direct)
+	}
 	execution.attempt.recorder.complete(
 		SenderAttemptAdmitted, execution.candidateCounts(), SenderAttemptObservation{
 			Phase:                SenderAttemptPhaseAdmission,
 			GrantOperationID:     result.GrantOperationID,
 			Lane:                 &result.Lane,
-			Route:                transferlanes.RouteDirect,
+			Route:                route,
 			AdmissionDisposition: SenderAdmissionAccepted,
 			ResponseDelivery:     SenderResponseDelivered,
 		},

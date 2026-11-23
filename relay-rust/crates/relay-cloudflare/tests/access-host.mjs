@@ -7,6 +7,9 @@ export class AccessObject extends DurableObject {
   constructor(ctx, env) { super(ctx, env); this.rust = new RustAccess(ctx, env); this.fetches = 0; }
   async fetch(request) {
     const path = new URL(request.url).pathname;
+    if (path === '/__test/changes') {
+      return Response.json({ ...this.ctx.storage.sql.exec('SELECT total_changes() AS changes').one(), alarm:await this.ctx.storage.getAlarm() });
+    }
     if (path === '/__test/fetches') {
       return Response.json({ fetches: this.fetches });
     }

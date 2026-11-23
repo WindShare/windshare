@@ -53,3 +53,20 @@ func TestPathUnavailableIsAggregatedBeforeEndingSession(t *testing.T) {
 		t.Fatal("authentication failure lost session meaning")
 	}
 }
+
+func TestAutoRetainsSessionAfterLastDirectPathTerminates(t *testing.T) {
+	for _, result := range []Result{{Cause: ErrWaveExhausted}, {Scope: protocolsession.PeerFailurePathTerminal, Cause: ErrPathTerminal}} {
+		owner, _ := newTestPeerSet(t, Config{})
+		ctx, cancel := context.WithCancel(t.Context())
+		s := &ReceiverSession{owner: owner, ctx: ctx, cancel: cancel, allowTURN: true}
+		s.pathFinished(result)
+		if ctx.Err() != nil {
+			t.Fatal("direct failure canceled TURN and application lanes", result)
+		}
+		s.pathFinished(Result{Scope: protocolsession.PeerFailureSessionTerminal, Cause: errors.New("authentication")})
+		if ctx.Err() == nil {
+			t.Fatal("session authentication failure left the receiver active")
+		}
+		cancel()
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/fxamacker/cbor/v2"
+
 	"github.com/windshare/windshare/core/session/peerslot"
 )
 
@@ -153,7 +154,7 @@ func TestPeerSignalingRejectsHostileBodiesAndBindingSubstitution(t *testing.T) {
 	}
 
 	valid, _ := EncodeOffer(Offer{Binding: binding, SDP: "v=0"})
-	nonCanonical := append([]byte{0x98, 0x07}, valid[1:]...)
+	nonCanonical := append([]byte{0x98, 0x08}, valid[1:]...)
 	if _, err := DecodeOffer(nonCanonical); !errors.Is(err, ErrNonCanonicalSignal) {
 		t.Fatalf("noncanonical array error = %v", err)
 	}

@@ -25,13 +25,13 @@ function identity(first: number): Uint8Array<ArrayBuffer> {
 describe('v2 session wire registry', () => {
   it.each(Object.entries(MESSAGE_KIND).filter(([, kind]) => kind !== MESSAGE_KIND.blockFragment))(
     'decodes the registered %s control message', (_name, kind) => {
-      const sessionControl = kind === MESSAGE_KIND.sessionTerminal || kind === MESSAGE_KIND.peerPathControl
+      const sessionControl = kind === MESSAGE_KIND.sessionTerminal || kind === MESSAGE_KIND.peerPathControl || kind === MESSAGE_KIND.turnControl
       const encoded = encodeMessage(kind, sessionControl ? undefined : 1n, encodeBody(null))
       expect(decodeMessage(encoded.plaintext)).toEqual(encoded)
     },
   )
 
-  it.each([0n, 20n, 21n, 255n, 0xffffffffffffffffn, BigInt(MESSAGE_KIND.blockFragment)])(
+  it.each([0n, 21n, 255n, 0xffffffffffffffffn, BigInt(MESSAGE_KIND.blockFragment)])(
     'rejects unknown kinds and the data codec on the control path: %s', kind => {
       const plaintext = encodeCanonicalCbor(new Map<number, unknown>([[0, kind], [1, null], [2, null]]))
       expect(() => decodeMessage(plaintext)).toThrow('unknown or uses the wrong codec')
@@ -158,19 +158,19 @@ describe('v2 authenticated sender control schemas', () => {
   it('validates authenticated peer answer and candidate bounds', () => {
     expect(() => validateSenderControlBody(
       MESSAGE_KIND.peerAnswer,
-      encodeBody([4, identity(8), identity(9), 1n, 0, 0, 'answer-sdp']),
+      encodeBody([5, identity(8), identity(9), 1n, 0, 0, 'answer-sdp']),
     )).not.toThrow()
     expect(() => validateSenderControlBody(
       MESSAGE_KIND.peerCandidate,
-      encodeBody([4, identity(8), identity(9), 1n, 0, 0, 'candidate', null, 0, null]),
+      encodeBody([5, identity(8), identity(9), 1n, 0, 0, 'candidate', null, 0, null]),
     )).not.toThrow()
     expect(() => validateSenderControlBody(
       MESSAGE_KIND.peerAnswer,
-      encodeBody([4, identity(8), identity(9), 1n, 0, 0, '']),
+      encodeBody([5, identity(8), identity(9), 1n, 0, 0, '']),
     )).toThrow(/empty/i)
     expect(() => validateSenderControlBody(
       MESSAGE_KIND.peerCandidate,
-      encodeBody([4, identity(8), identity(9), 1n, 0, 0, 'candidate', null, 65_536, null]),
+      encodeBody([5, identity(8), identity(9), 1n, 0, 0, 'candidate', null, 65_536, null]),
     )).toThrow(/unsigned 16-bit/i)
   })
 
@@ -178,9 +178,9 @@ describe('v2 authenticated sender control schemas', () => {
 
     const operationId = 10n
 
-    const answerBody = encodeBody([4, identity(8), identity(9), 1n, 0, 0, 'answer-sdp'])
+    const answerBody = encodeBody([5, identity(8), identity(9), 1n, 0, 0, 'answer-sdp'])
     const candidateBody = encodeBody([
-      4, identity(8), identity(9), 1n, 0, 0, 'candidate', 'data', 0, 'windshare',
+      5, identity(8), identity(9), 1n, 0, 0, 'candidate', 'data', 0, 'windshare',
     ])
     const catalogBody = encodeBody(new Map<number, unknown>([[0, 1], [1, identity(11)]]))
     const answer = senderOperationControl({

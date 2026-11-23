@@ -15,6 +15,9 @@ import (
 func (handler *senderHandler) runSessionControls(ctx context.Context) func() {
 	child, cancel := context.WithCancel(ctx)
 	var work sync.WaitGroup
+	handler.session.SetTURNControlHandler(func(_ context.Context, body []byte) error {
+		return handler.turn.Handle(child, body, handler.session.SendTURNControl)
+	})
 	handler.session.SetPeerPathControlHandler(func(_ context.Context, body []byte) error {
 		handler.factory.native.ApplyControl([16]byte(handler.session.ProtocolSessionID()), body)
 		return nil
@@ -24,6 +27,8 @@ func (handler *senderHandler) runSessionControls(ctx context.Context) func() {
 	})
 	return func() {
 		cancel()
+		handler.session.SetTURNControlHandler(nil)
+		handler.turn.Close()
 		work.Wait()
 		handler.session.SetPeerPathControlHandler(nil)
 	}
@@ -96,7 +101,7 @@ func (handler *senderHandler) startAttempt(
 	if handler.stopping {
 		return context.Canceled
 	}
-	if handler.factory.native.Retired([16]byte(handler.session.ProtocolSessionID()), offer.Binding.PeerPathID) {
+	if offer.Binding.Purpose != v2signal.TURNRelay && handler.factory.native.Retired([16]byte(handler.session.ProtocolSessionID()), offer.Binding.PeerPathID) {
 		return ErrPeerPathRetired
 	}
 	handler.expireRetiredLocked(handler.factory.now())
@@ -142,7 +147,7 @@ func (handler *senderHandler) startAttempt(
 	attempt := newPeerAttempt(peerAttemptConfig{
 		factory: handler.factory, session: handler.session,
 		operation: op, offer: offer,
-		onDone: handler.attemptDone,
+		onDone: handler.attemptDone, turn: handler.turn,
 	})
 	claim := handler.claimEvidenceLocked(operation, offer.Binding)
 	if claim.capacity {
@@ -340,7 +345,7 @@ func (attempt *peerAttempt) run(ctx context.Context) error {
 	attempt.recorder.negotiationDeadlineArmed()
 	request := nativepeer.AttemptRequest{Configuration: attempt.config.factory.configuration, ProtocolSessionID: [16]byte(attempt.config.session.ProtocolSessionID()), Binding: attempt.binding()}
 	var prepared *nativepeer.PreparedAttempt
-	if attempt.config.factory.peerConnections == nil {
+	if attempt.binding().Purpose != v2signal.TURNRelay && attempt.config.factory.peerConnections == nil {
 		prepared, err = attempt.prepareNativeAttempt(negotiationContext, request)
 		if err != nil {
 			return attempt.finish(ctx, errors.Join(ErrNegotiation, err), nil, false)
@@ -348,9 +353,15 @@ func (attempt *peerAttempt) run(ctx context.Context) error {
 		defer prepared.Close()
 	}
 	var peer PeerConnection
-	if attempt.config.factory.peerConnections != nil {
+	switch {
+	case attempt.binding().Purpose == v2signal.TURNRelay:
+		peer, err = attempt.openTURN(negotiationContext, request)
+		if attempt.releaseTURN != nil {
+			defer attempt.releaseTURN()
+		}
+	case attempt.config.factory.peerConnections != nil:
 		peer, err = attempt.config.factory.peerConnections.NewPeerConnection(negotiationContext, request)
-	} else {
+	default:
 		connection, startErr := prepared.Start(negotiationContext)
 		err = startErr
 		if connection != nil {

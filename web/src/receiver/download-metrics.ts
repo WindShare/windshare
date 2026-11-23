@@ -33,7 +33,7 @@ export class DownloadMetrics {
   readonly #id: string
   readonly #started: number
   readonly #ranges = new Map<string, Interval[]>()
-  readonly #bytes = { direct: 0n, 'application-relay': 0n, unknown: 0n }
+  readonly #bytes = { direct: 0n, turn: 0n, 'application-relay': 0n, unknown: 0n }
   #last: number
   #first: number | null
   #direct: boolean
@@ -94,7 +94,7 @@ export class DownloadMetrics {
     const total = Object.values(this.#bytes).reduce((sum, value) => sum + value, 0n)
     return Object.freeze({
       download_id: this.#id, first_direct_elapsed_ms: this.#first,
-      direct_bytes: this.#bytes.direct.toString(),
+      direct_bytes: this.#bytes.direct.toString(), turn_bytes: this.#bytes.turn.toString(),
       application_relay_bytes: this.#bytes['application-relay'].toString(), unknown_bytes: this.#bytes.unknown.toString(),
       direct_fraction: total === 0n || this.#incomplete ? null : Number(this.#bytes.direct) / Number(total),
       fallback_stall_ms: this.#stall, incomplete: this.#incomplete, final: this.#final,

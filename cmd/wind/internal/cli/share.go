@@ -127,7 +127,7 @@ func awaitShareStartup(current *engine.ShareTask) (engine.ShareReady, error, boo
 func (a *App) engineShareRequest(request shareRequest, runtime *commandRuntime) engine.ShareRequest {
 	return engine.ShareRequest{
 		Source:      filesystem.ShareSource(request.paths),
-		RelayIntent: request.relayIntent,
+		RelayIntent: request.relayIntent, TURNServices: request.turnServices,
 		Frontend:    request.link.frontURL,
 		ChunkSize:   request.chunkSize,
 		Diagnostics: runtime.diagnosticSink(),

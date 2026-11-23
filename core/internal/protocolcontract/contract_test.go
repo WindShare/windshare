@@ -263,6 +263,7 @@ func buildVectorFiles(t *testing.T) []vectorFile {
 	descriptor := buildDescriptorObject(t, f)
 	block := canonicalBlockRecord(t, f)
 	return []vectorFile{
+		{Version: 1, Kind: "turn-control", Description: "Direction-bound TURN demand and grant bodies.", Cases: turnControlCases(t)},
 		{Version: 1, Kind: "v2-identity", Description: "Suite 0x02 link identity and domain-separated HKDF contract.", Cases: []any{identityCase(t, f)}},
 		{Version: 1, Kind: "v2-descriptor-object", Description: "Version-3 bootstrap descriptor with canonical CBOR, AES-GCM and a sender signature.", Cases: []any{descriptor.vector()}},
 		{Version: 1, Kind: "v2-content-payloads", Description: "Canonical CBOR payloads carried by authenticated online sessions.", Cases: contentPayloadCases(t, f, block)},

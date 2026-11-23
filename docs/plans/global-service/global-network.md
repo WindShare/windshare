@@ -51,8 +51,8 @@ Deployment templates and procedures live in
 | `wsrelay` | One actor per share. Every registration gets `Attribution::Anonymous` (`relay-rust/crates/relay-native/src/actor/ingress.rs`). STUN over UDP, a browser Origin allowlist (`--origins`), and per-source limits. |
 | Cloudflare deployment | A relay with restricted admission, owner console, device enrollment (`relay-access`), and managed TURN, plus the frontend as Worker static assets on a custom domain (`scripts/deploy/cloudflare`). Sized for personal use. |
 | STUN | Only `stun:stun.l.google.com:19302` ships (`connectivity/icepolicy/defaults.go`); mainland reach needs measurement. An attempt uses at most two STUN endpoints. |
-| TURN | Managed Cloudflare TURN through an enrolled Cloudflare relay, or manual `static`, `coturn`, and `cloudflare` issuers; delegated to receivers on demand over `TURN_CONTROL`. |
-| Discovery | `/.well-known/windshare` v1: `access`, `relay_url`, optional `console_url` and `frontend_url`. |
+| TURN | Managed Cloudflare TURN through an enrolled Cloudflare relay, or manual `shared_static`, `coturn`, and `cloudflare` services. Receivers request parallel or fallback credentials using `TURN_CONTROL` Demand and Grants. Managed issuance uses short-lived credentials and read-only device authorization. |
+| Discovery | `/.well-known/windshare` v1: `access`, `relay_url`, optional `console_url`, `frontend_url`, and `managed_turn`. |
 
 ## 2. Decisions
 
@@ -439,7 +439,7 @@ comparison measurements; relay usage is not a P2P failure rate.
 | Cross-border quality in planning | Vantage-point data shows cross-border quality differs widely between nodes | The planner weighs measured cross-border quality, not only RTT from the sender |
 | Cold-start exit hint | More than four `>=50 Mbps` relay nodes and measured slow cross-region first connects | Non-blocking edge hint in planned desktop mode; normalize `region` values (`zone=cn, region=as` in mainland) |
 | Delayed built-in relay registration | Measured link latency, first-join rate, registration count, and public-relay bytes (including receiver-only private-relay failures) justify deferring automatic network backfill | Keep configured relays immediate and defer built-in network backfill; keep existing candidate and recovery scheduling |
-| Official TURN | Measured transfers where WebRTC over TURN would beat the application relays | coturn on purchased nodes; the authority issues short-lived credentials to ticket holders, delegated through the existing `TURN_CONTROL` `Grant` |
+| Official TURN | Measured transfers where WebRTC over TURN would beat the application relays | coturn on purchased nodes; the authority issues short-lived credentials to ticket holders, delegated through the existing `TURN_CONTROL` Grants |
 | Relay-to-relay forwarding | P2P fails and no relay is reachable by both sides | Directed forwarding for that case only |
 
 ## 7. Risks and open inputs

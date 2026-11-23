@@ -24,10 +24,11 @@ type Route uint8
 const (
 	RouteRelay Route = iota + 1
 	RouteDirect
+	RouteTURN
 )
 
 func (route Route) valid() bool {
-	return route == RouteRelay || route == RouteDirect
+	return route == RouteRelay || route == RouteDirect || route == RouteTURN
 }
 
 // ContentRoutePolicy is fixed before a session admits content. Keeping it on
@@ -126,7 +127,12 @@ func (value Route) DiagnosticName() string {
 		return "relay"
 	case RouteDirect:
 		return "direct"
+	case RouteTURN:
+		return "turn"
 	default:
 		return "unknown_" + strconv.FormatUint(uint64(value), 10)
 	}
 }
+
+// AllowsRoute exposes the session's immutable content policy to connectivity.
+func (s *Set) AllowsRoute(route Route) bool { return s.contentRoutePolicy.Allows(route) }

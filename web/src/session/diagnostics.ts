@@ -39,7 +39,7 @@ export const PROTOCOL_MESSAGE_KINDS = Object.freeze([
   'lease_result',
   'peer_answer',
   'peer_candidate',
-  'peer_path_control',
+  'peer_path_control', 'turn_control',
 ] as const)
 
 export type ProtocolMessageKind = (typeof PROTOCOL_MESSAGE_KINDS)[number]
@@ -274,7 +274,7 @@ export type ContentSchedulingTraceEvent = Readonly<{
   dispatchSequence: number
   fileId: string
   localBlockIndex: bigint
-  route: 'application-relay' | 'direct'
+  route: 'application-relay' | 'direct' | 'turn'
   purpose: import('../content/scheduling/exploration').DispatchPurpose
   deliveryEvidence?: 'unknown' | 'recent' | 'stale'
   rescueReason?: import('../content/scheduling/exploration').RescueReason
@@ -353,6 +353,7 @@ export function protocolMessageKindV1(kind: MessageKind): ProtocolMessageKind {
     case MESSAGE_KIND.peerOffer: return 'peer_offer'
     case MESSAGE_KIND.peerAnswer: return 'peer_answer'
     case MESSAGE_KIND.peerCandidate: return 'peer_candidate'
+    case MESSAGE_KIND.turnControl: return 'turn_control'
     case MESSAGE_KIND.peerPathControl: return 'peer_path_control'
   }
 }

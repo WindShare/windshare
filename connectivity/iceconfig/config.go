@@ -20,7 +20,7 @@ type Connection struct {
 	discovery []string
 }
 
-func New(discovery []string) (Connection, error) {
+func NewDirect(discovery []string) (Connection, error) {
 	if len(discovery) > MaximumURLs {
 		return Connection{}, ErrConfiguration
 	}

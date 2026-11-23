@@ -1,3 +1,4 @@
+import { decodeTURNGrants } from '../protocol/turn-control'
 import { decodePeerPathControl } from '../protocol/peer-path-control'
 import { requirePeerSlot } from './peer-slots/slots'
 import { isWellFormedUnicode } from '../protocol/text'
@@ -33,6 +34,7 @@ export const MESSAGE_KIND = Object.freeze({
   peerAnswer: 17,
   peerCandidate: 18,
   peerPathControl: 19,
+  turnControl: 20,
 } as const)
 
 export const PEER_OPERATION_CODE = Object.freeze({
@@ -297,6 +299,9 @@ export function validateSenderControlBody(kind: MessageKind, body: Uint8Array): 
     case MESSAGE_KIND.operationError:
       decodeOperationErrorControl(body)
       return
+    case MESSAGE_KIND.turnControl:
+      decodeTURNGrants(body)
+      return
     case MESSAGE_KIND.peerPathControl:
       decodePeerPathControl(body)
       return
@@ -447,7 +452,7 @@ function requireExactArray(body: Uint8Array, length: number, label: string): rea
 }
 
 function validatePeerBinding(fields: readonly unknown[], label: string): void {
-  if (requireUnsigned(fields[0], label) !== 4n) {
+  if (requireUnsigned(fields[0], label) !== 5n) {
     throw new MessageError('invalid peer schema')
   }
   const sequence = requireUnsigned(fields[3], 'attempt sequence')
@@ -457,7 +462,7 @@ function validatePeerBinding(fields: readonly unknown[], label: string): void {
   requireBytes(fields[1], 16, `${label} peer path ID`, true)
   requireBytes(fields[2], 16, `${label} attempt ID`, true)
   requirePeerSlot(requireUnsigned(fields[4], 'peer slot'))
-  if (requireUnsigned(fields[5], 'connection purpose') > 2n) throw new MessageError('invalid connection purpose')
+  if (requireUnsigned(fields[5], 'connection purpose') > 3n) throw new MessageError('invalid connection purpose')
 }
 
 function requireOptionalNormalizedText(value: unknown, maximumBytes: number, label: string): void {
@@ -539,7 +544,7 @@ function decodeOperationId(value: unknown): bigint {
 
 function requireMessageIdentity(kind: MessageKind, operationId: bigint | undefined): void {
   if (!MESSAGE_KINDS.has(kind)) throw new MessageError('Message kind is outside the wire registry')
-  if (kind === MESSAGE_KIND.sessionTerminal || kind === MESSAGE_KIND.peerPathControl) {
+  if (kind === MESSAGE_KIND.sessionTerminal || kind === MESSAGE_KIND.peerPathControl || kind === MESSAGE_KIND.turnControl) {
     if (operationId !== undefined) throw new MessageError('Session control has an operation ID')
     return
   }

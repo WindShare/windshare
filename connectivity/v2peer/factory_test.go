@@ -11,6 +11,7 @@ import (
 	"time"
 
 	pion "github.com/pion/webrtc/v4"
+
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/catalog"
 	framechannel "github.com/windshare/windshare/core/framechannel"
@@ -46,6 +47,7 @@ type testPeerSession struct {
 
 	sessionControlMu   sync.Mutex
 	pathControlHandler func(context.Context, []byte) error
+	turnHandler        func(context.Context, []byte) error
 	sessionControls    chan capturedControl
 }
 

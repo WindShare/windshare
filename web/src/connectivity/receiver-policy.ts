@@ -1,3 +1,6 @@
+import { TURNPaths } from './turn-paths'
+import { PeerTabAdmission } from './peer-set/tab-admission'
+import { DEFAULT_PEER_NEGOTIATION_BUDGET_MILLISECONDS, DEFAULT_PEER_ADMISSION_BUDGET_MILLISECONDS } from './peer-set/contract'
 import {
   LaneSet,
   type BlockLane,
@@ -42,11 +45,12 @@ import { encodeBase64Url } from '../crypto/bytes'
 import { PeerPathControl } from './peer-set/path-control'
 import { PeerNetworkGeneration } from './peer-set/network-generation'
 import type { ConnectionPurpose } from './signaling-codec'
-import { PEER_CONTINUATION_SLOTS } from '../session/peer-slots/slots'
+import { PeerSlotPool } from '../session/peer-slots/slots'
 import { PeerRecoveryTrace } from './peer-set/trace'
 import { ThroughputController, THROUGHPUT_SAMPLE_MS, type ThroughputDecision, type ThroughputPath } from './peer-set/throughput'
 
-const MAXIMUM_THROUGHPUT_PATHS = PEER_CONTINUATION_SLOTS - 1
+const MAXIMUM_THROUGHPUT_PATHS = 3
+const turnAdmission = new PeerTabAdmission()
 
 export type ConnectivityPolicy = 'auto' | 'relay-only' | 'p2p-only'
 
@@ -171,7 +175,10 @@ export class ReceiverConnectivity {
   readonly #activations = new Map<number, ActiveConnectivity>()
   readonly #peerCleanupTasks = new Map<InstalledPeer, Promise<void>>()
   readonly #unsubscribeLaneChanges: () => void
-  readonly #peers = new PeerSet()
+  readonly #slots = new PeerSlotPool()
+  readonly #peers = new PeerSet(this.#slots)
+  readonly #turn: TURNPaths
+  #turnCleanup: Promise<void> | undefined
   readonly #pathControls = new Map<string, PeerPathControl>()
   #peerPathId: PeerPathIdentity | undefined
   readonly #installedPeers = new Map<string, InstalledPeer>()
@@ -196,6 +203,28 @@ export class ReceiverConnectivity {
     this.#peerRecoveryOptions = { ...options.peerRecovery,
       network: options.peerRecovery?.network ?? new PeerNetworkGeneration() }
     this.#protocolSessionId = options.session.protocolSessionIdentity
+    const clock = this.#peerRecoveryOptions.clock ?? browserPeerRecoveryClock
+    this.#turn = new TURNPaths({
+      session: this.#session, slots: this.#slots, now: () => clock.now(),
+      identity: () => createPeerPathIdentity(this.#randomBytes),
+      start: (grant, identity, ordinal) => new BrowserPeerAttemptExecutor({
+        session: this.#session, offers: this.#offers, peerPathIdentity: identity.copyBytes(), clock,
+        tabAdmission: turnAdmission, admissionReceiver: this, turnGrant: grant,
+        publish: candidate => this.#publishPeer(candidate, 'turn'),
+        ...(this.#randomBytes === undefined ? {} : { randomBytes: this.#randomBytes }),
+        ...(this.#connectivityTrace === undefined ? {} : { trace: this.#connectivityTrace }),
+      }).createAttempt({ ...ordinal, protocolSessionId: this.#protocolSessionId, peerPathId: identity, purpose: 'turn-relay',
+        waveOrdinal: 1, waveAttemptOrdinal: 1, sessionAttemptOrdinal: Number(ordinal.attemptSequence),
+        admissionWaitBudgetMilliseconds: DEFAULT_PEER_NEGOTIATION_BUDGET_MILLISECONDS,
+        negotiationBudgetMilliseconds: DEFAULT_PEER_NEGOTIATION_BUDGET_MILLISECONDS,
+        admissionBudgetMilliseconds: DEFAULT_PEER_ADMISSION_BUDGET_MILLISECONDS, phaseChanged: () => undefined }),
+      trace: (stage, detail, path, lane) => {
+        const identity = path ?? this.#peerPathId
+        if (identity) new PeerRecoveryTrace(this.#protocolSessionId, identity, this.#connectivityTrace)
+          .emit(() => ({ stage, ...detail }), undefined, lane)
+      },
+      release: async lane => { this.#releasePeer(lane.laneId, lane.laneEpoch); await this.#joinPeerCleanup() },
+    })
     this.#laneEpochs.set(options.session.initialLaneId, options.session.keys.initialLaneEpoch)
     this.#unsubscribeLaneChanges = this.#session.subscribeLaneChanges((change) => {
       if (change.type === 'attached') {
@@ -295,7 +324,7 @@ export class ReceiverConnectivity {
       ...controlsClose,
       ...(recoveryClose === undefined ? [] : [recoveryClose]),
       this.#joinPeerCleanup(),
-      this.#throughputTask,
+      this.#throughputTask, this.#turnCleanup, this.#turn.reset(),
     ])
   }
 
@@ -392,7 +421,8 @@ export class ReceiverConnectivity {
         if (this.#lifetime.signal.aborted) break
         const demand = this.#lanes.schedulingDemand()
         const paths = this.#throughputPaths()
-        const pending = this.#peers.hasPendingPath
+        if (this.#policy === 'auto' && this.#activations.size > 0) this.#turn.step(demand)
+        const pending = this.#peers.hasPendingPath || clock.now() < this.#turn.settlingUntil
         const decision = controller.step(clock.now(), { ...demand, paths, pending,
           unfinishedBytes: this.#activations.size === 0 ? 0 : demand.unfinishedBytes,
           networkWaitingBytes: this.#activations.size === 0 ? 0 : demand.networkWaitingBytes }, MAXIMUM_THROUGHPUT_PATHS)
@@ -476,16 +506,16 @@ export class ReceiverConnectivity {
     await Promise.allSettled([this.#peers.remove(identity), control?.close()])
   }
 
-  #publishPeer(candidate: PeerCandidatePublication): boolean {
+  #publishPeer(candidate: PeerCandidatePublication, expected: 'direct' | 'turn' = 'direct'): boolean {
     if (
       this.#lifetime.signal.aborted || this.#installedPeers.has(encodeBase64Url(candidate.peerPathId.copyBytes())) ||
       !equalDiagnosticIdentities(candidate.protocolSessionId, this.#protocolSessionId) ||
-      this.#peers.path(candidate.peerPathId) === undefined ||
+      (expected === 'turn' ? !this.#turn.owns(candidate.peerPathId) : this.#peers.path(candidate.peerPathId) === undefined) ||
       this.#laneEpochs.get(candidate.laneId) !== candidate.laneEpoch ||
       !this.#session.availableLaneIds().includes(candidate.laneId)
     ) return false
     const pathRoute = candidate.peer.pathRoute
-    if (pathRoute !== 'direct' || !this.#admit(candidate.laneId, candidate.laneEpoch, pathRoute)) return false
+    if (pathRoute !== expected || !this.#admit(candidate.laneId, candidate.laneEpoch, pathRoute)) return false
     const installed: InstalledPeer = { ...candidate }
     this.#installedPeers.set(encodeBase64Url(candidate.peerPathId.copyBytes()), installed)
     const unsubscribe = candidate.peer.subscribePathRoute?.((nextRoute) => {
@@ -506,6 +536,7 @@ export class ReceiverConnectivity {
     const active = this.#activations.get(id)
     if (active === undefined) return
     this.#activations.delete(id)
+    if (this.#activations.size === 0) this.#turnCleanup = this.#turn.reset()
     if (this.#activations.size === 0) for (const control of this.#pathControls.values()) control.deactivate()
     active.peerRecovery?.close()
     if (active.ownsRoutes) active.routes.close(reason)
@@ -517,11 +548,11 @@ export class ReceiverConnectivity {
     if (
       installed === undefined ||
       !equalDiagnosticIdentities(installed.protocolSessionId, this.#protocolSessionId) ||
-      this.#peers.path(installed.peerPathId) === undefined ||
       installed.laneId !== laneId ||
       installed.laneEpoch !== laneEpoch
     ) return
     this.#installedPeers.delete(encodeBase64Url(installed.peerPathId.copyBytes()))
+    this.#turn.detached(laneId, laneEpoch)
     this.#peers.path(installed.peerPathId)?.peerDetached({
       attemptId: installed.attemptId,
       protocolSessionId: installed.protocolSessionId,

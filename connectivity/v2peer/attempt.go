@@ -8,7 +8,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/windshare/windshare/connectivity/turnsession"
+
 	pion "github.com/pion/webrtc/v4"
+
 	"github.com/windshare/windshare/connectivity/v2peer/internal/candidatewriter"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -49,6 +52,7 @@ func (rejection *peerOperationRejection) Error() string { return rejection.messa
 func (rejection *peerOperationRejection) Unwrap() error { return rejection.cause }
 
 type peerAttemptConfig struct {
+	turn      *turnsession.Sender
 	factory   *Factory
 	session   sendersession.PeerSession
 	operation protocolsession.Operation
@@ -81,11 +85,12 @@ type attemptEvent struct {
 }
 
 type peerAttempt struct {
-	config   peerAttemptConfig
-	recorder *senderAttemptRecorder
-	events   chan attemptEvent
-	inboxMu  sync.Mutex
-	closed   bool
+	releaseTURN func()
+	config      peerAttemptConfig
+	recorder    *senderAttemptRecorder
+	events      chan attemptEvent
+	inboxMu     sync.Mutex
+	closed      bool
 
 	cancelMu                 sync.Mutex
 	cancel                   context.CancelCauseFunc

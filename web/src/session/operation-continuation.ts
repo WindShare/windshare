@@ -20,7 +20,7 @@ export const MAXIMUM_PEER_CANDIDATES = 64
 
 type ContinuationState = 'active' | 'closed' | 'local-cancel' | 'remote-final'
 
-const CONTINUATION_SCHEMA_VERSION = 4n
+const CONTINUATION_SCHEMA_VERSION = 5n
 const OPERATION_ID_BYTES = 8
 const PEER_IDENTITY_BYTES = 16
 const MAXIMUM_OPERATION_BODY_BYTES = 65_536 - 44
@@ -116,7 +116,7 @@ export class OperationContinuationAuthority {
     this.requestKind = requestKind
     if (requestKind === MESSAGE_KIND.peerOffer) {
       try {
-        this.#peerBinding = decodePeerBinding(canonicalRequestBody, 7, 'peer offer')
+        this.#peerBinding = decodePeerBinding(canonicalRequestBody, 8, 'peer offer')
       } catch (cause) {
         throw new SessionRuntimeError(
           'operation',
@@ -349,7 +349,11 @@ function decodePeerBinding(body: Uint8Array, length: number, label: string): Pee
     throw new Error(`${label} has a non-canonical continuation prefix`)
   }
   const purpose = requireUnsigned(fields[5], 'connection purpose')
-  if (purpose > 2n) throw new Error('invalid connection purpose')
+  if (purpose > 3n) throw new Error('invalid connection purpose')
+  if (length === 8) {
+    if (purpose === 3n) requireBytes(fields[7], PEER_IDENTITY_BYTES, 'TURN grant ID', true)
+    else if (fields[7] !== null) throw new Error('Unexpected TURN grant ID')
+  }
   const sequence = requireUnsigned(fields[3], 'attempt sequence')
   if (sequence === 0n || sequence > 0xffffffffffffffffn) throw new Error('invalid attempt sequence')
   return Object.freeze({

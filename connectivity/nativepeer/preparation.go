@@ -201,7 +201,7 @@ func (p *PreparedAttempt) connect(ctx context.Context) (*pionpeer.Connection, er
 	// UPnP/PCP/NAT-PMP can map TCP alongside UDP; capacity/bind failures leave
 	// the mandatory UDP path intact.
 	_ = path.lease.PrepareTCP()
-	iceConfiguration, err := iceconfig.New(p.profile.URLs())
+	iceConfiguration, err := iceconfig.NewDirect(p.profile.URLs())
 	if err != nil {
 		n.mu.Unlock()
 		return nil, err

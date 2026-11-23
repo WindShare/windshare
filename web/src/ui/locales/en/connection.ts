@@ -43,6 +43,7 @@ export const connection = {
   emptyChannels: 'Channels appear when available for downloads or previews.',
   connectedChannels: 'Connected download channels',
   direct: 'Direct (P2P)',
+  turnRelay: 'TURN relay',
   applicationRelay: 'Application relay',
   connected: 'Connected',
   receivedRecently: 'Received recently',

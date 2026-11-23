@@ -59,10 +59,43 @@ async function createCredential(deployment) {
   assert.equal(login.status, 200);
   const created = await post('credentials', { name: 'Deployment smoke' }, login.headers.get('Set-Cookie').split(';')[0]);
   assert.equal(created.status, 201);
-  return created.json();
+  return { credential: await created.json(), cookie: login.headers.get('Set-Cookie').split(';')[0] };
+}
+
+async function verifyTURN(deployment, credential, cookie, bindingFixture) {
+  const discover = async () => (await (await fetch(deployment.endpoint + '/.well-known/windshare')).json()).managed_turn === true;
+  if (!await discover()) return false;
+  const toggle = enabled => fetch(deployment.consoleUrl + '/api/turn/toggle', { method: 'POST',
+    headers: { Origin: deployment.consoleUrl, Cookie: cookie, 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) });
+  const issue = () => fetch(deployment.endpoint + '/v2/turn/credentials', { method: 'POST', redirect: 'error',
+    headers: { Authorization: 'Bearer ' + credential.configuration.access_key }, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  // The companion's service binding and public receptor can roll out at different times.
+  for (let i=0;i<20;i++) {
+    const status=await fetch(deployment.consoleUrl+'/api/session',{headers:{Cookie:cookie}});
+    if ((await status.json()).capabilities?.managed_turn === true) break;
+    await new Promise(resolve=>setTimeout(resolve,1000));
+  }
+  assert.equal((await toggle(false)).status, 200);
+  assert.equal(await discover(), true);
+  const paused = await issue();
+  assert.equal(paused.status, 403);
+  assert.equal((await paused.json()).error, 'turn_disabled');
+  assert.equal((await toggle(true)).status, 200);
+  const issued = await issue();
+  if (bindingFixture) {
+    // This intentionally unissuable key exercises Wrangler secret preservation
+    // and real console authorization when the account cannot create Calls keys.
+    assert.equal(issued.status, 503);
+    return false;
+  }
+  assert.equal(issued.status, 200);
+  assert.equal(issued.headers.get('cache-control'), 'no-store');
+  assert.equal((await issued.json()).ttl_seconds, 1800);
+  return true;
 }
 
 let attempted = false;
+let ownedKeyName;
 const client = name => cloudflareClient({ accountId: env.CLOUDFLARE_ACCOUNT_ID, workerName: name, apiToken: env.CLOUDFLARE_API_TOKEN });
 try {
   assert.equal(await client(workerName).settings(), null);
@@ -73,11 +106,24 @@ try {
   run();
   const before = JSON.parse(await readFile(join(outputDirectory, 'deployment.json'), 'utf8'));
   await verifyHosting(before);
-  const credential = await createCredential(before);
+  ownedKeyName = 'windshare-' + workerName + '-' + before.deploymentId.slice(0, 8);
+  const { credential, cookie } = await createCredential(before);
+  const discovery = async () => (await (await fetch(before.endpoint + '/.well-known/windshare')).json()).managed_turn === true;
+  const bindingFixture = !await discovery() && process.env.WINDSHARE_SMOKE_TURN_BINDING === 'true';
+  if (bindingFixture) {
+    await client(workerName).putSecret('TURN_KEY', JSON.stringify({key_id:'test/invalid',api_token:randomBytes(24).toString('hex')}));
+    for (let attempt=0; attempt<12 && !await discovery(); attempt++) await new Promise(resolve=>setTimeout(resolve, 1000));
+    assert.equal(await discovery(), true);
+  }
+  const managedTURN = await verifyTURN(before, credential, cookie, bindingFixture);
+  const keys = async () => (await client(workerName).turnKeys()).filter(key => key.name === ownedKeyName).map(key => key.uid);
+  const originalKeys = managedTURN ? await keys() : [];
+  if (managedTURN) assert.equal(originalKeys.length, 1);
   command('go', ['run', './cmd/wind', 'relay', 'add', credential.configuration.url, '--access-key', credential.configuration.access_key]);
   command('go', ['run', './cmd/wind', 'relay', 'frontend', before.frontendUrl]);
   const imported = JSON.parse(await readFile(savedConfig, 'utf8'));
   assert.equal(imported.profiles[0].url, before.endpoint);
+  assert.equal(imported.profiles[0].managed_turn === true, managedTURN || bindingFixture);
   env.WINDSHARE_RELAY_ACCESS_KEY = imported.profiles[0].access_key;
   const probe = phase => command('go', ['run', './relay-rust/tests/_goclient',
     '-endpoint', before.endpoint + '/v2/ws', '-deployment-phase', phase, '-deployment-state', stateFile]);
@@ -89,15 +135,30 @@ try {
     const after = JSON.parse(await readFile(join(outputDirectory, 'deployment.json'), 'utf8'));
     assert.deepEqual(after, { ...before, mode, frontendUrl: mode === FULL_DEPLOYMENT ? before.endpoint : null });
     await verifyHosting(after);
+    if (managedTURN || bindingFixture) {
+      if (managedTURN) assert.deepEqual(await keys(), originalKeys);
+      assert.equal(await discovery(), true);
+      assert((await client(workerName).settings()).bindings.some(b => b.name === 'TURN_KEY' && b.type === 'secret_text'));
+    }
     probe('verify');
   }
-  console.log(JSON.stringify({ event: 'smoke_passed', workerName, ...before }));
+  console.log(JSON.stringify({ event: 'smoke_passed', workerName, managedTURN, bindingFixture, ...before }));
 } finally {
   try {
     if (attempted) {
       const failures = [];
+      if (ownedKeyName) {
+        try {
+          const owned = (await client(workerName).turnKeys()).filter(key => key.name === ownedKeyName);
+          for (const key of owned) await client(workerName).deleteTURNKey(key.uid);
+        } catch (error) {
+          if (!error.message.includes('HTTP 403')) failures.push(error);
+        }
+      }
       for (const name of [workerName + '-console', workerName]) {
-        try { command(process.execPath, [wrangler, 'delete', name, '--config', 'relay-rust/crates/relay-cloudflare/wrangler.toml']); }
+        try {
+          if (await client(name).settings()) command(process.execPath, [wrangler, 'delete', name, '--config', 'relay-rust/crates/relay-cloudflare/wrangler.toml']);
+        }
         catch (error) { failures.push(error); }
       }
       if (failures.length) throw new AggregateError(failures, 'Owned smoke resource cleanup failed');
@@ -105,6 +166,7 @@ try {
   } finally {
     for (const path of paths) await rm(path, { force: true });
     await rmdir(outputDirectory).catch(error => { if (error.code !== 'ENOENT') throw error; });
-    await rmdir(directory);
+    // CLI pairing also creates a lock and a private state directory under this mkdtemp root.
+    await rm(directory, { recursive: true, force: true });
   }
 }

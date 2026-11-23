@@ -625,7 +625,7 @@ function peerAnswer(
   return encodeMessage(
     MESSAGE_KIND.peerAnswer,
     operationId,
-    encodeBody([4, peerPathId, attemptId, sequence, peerSlot, 0, sdp]),
+    encodeBody([5, peerPathId, attemptId, sequence, peerSlot, 0, sdp]),
   )
 }
 
@@ -634,7 +634,7 @@ function peerOfferBody(
   attemptId: Uint8Array<ArrayBuffer>,
   sequence = 1n,
 ): Uint8Array<ArrayBuffer> {
-  return encodeBody([4, peerPathId, attemptId, sequence, 0, 0, 'v=0\r\ns=offer\r\n'])
+  return encodeBody([5, peerPathId, attemptId, sequence, 0, 0, 'v=0\r\ns=offer\r\n', null])
 }
 
 function peerCandidate(
@@ -647,7 +647,7 @@ function peerCandidate(
     MESSAGE_KIND.peerCandidate,
     operationId,
     encodeBody([
-      4,
+      5,
       peerPathId,
       attemptId,
       1n,

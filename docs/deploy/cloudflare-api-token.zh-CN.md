@@ -1,5 +1,9 @@
 # 创建 CLOUDFLARE_API_TOKEN：浏览器操作指南
 
+**完整部署和仅中转部署默认启用托管 TURN。** 账户需开通 Realtime TURN，部署令牌需有 **帐户 / Cloudflare Calls / 编辑** 权限。TURN 与 Realtime SFU 合计每帐户每月有 1,000 GB 免费出站流量，超出部分为 0.05 美元/GB。在管理台暂停后，已有凭据最长 30 分钟到期。设置 `CLOUDFLARE_TURN_ENABLED=false` 并重新部署会移除绑定和该部署的 Key。[Cloudflare 费率](https://developers.cloudflare.com/realtime/sfu/platform/pricing/)
+
+实测仅有 Workers 部署权限的令牌调用 Calls 返回 HTTP 403（10000），中转与前端仍可正常部署。
+
 这个 Token（令牌）是一串授权码，让 GitHub Actions 能把 WindShare 中转部署到你的 Cloudflare 账户。全程只需浏览器，不用安装软件或运行命令。
 
 准备好 Cloudflare 账号，以及你自己的 WindShare GitHub 仓库（通常是 Fork 后的仓库）。使用自定义域名时，该域名需要已接入同一个 Cloudflare 账户，并显示为 **有效（Active）**。
@@ -20,11 +24,12 @@
 | 什么时候需要 | 资源 | 权限 | 权限级别 |
 |---|---|---|---|
 | 所有人都需要 | 帐户（Account） | Workers | 管理员（Admin） |
+| 启用托管 TURN | 帐户（Account） | Cloudflare Calls | 编辑（Edit / Write） |
 | 使用自己的域名时加上 | 区域（Zone） | Workers 路由（Workers Routes） | 编辑（Edit / Write） |
 | 使用自己的域名时加上 | 区域（Zone） | 区域（Zone） | 读取（Read） |
 
-- 使用 Cloudflare 提供的 `xxx.workers.dev` 地址：只填写第一行。
-- 使用自己的地址，例如 `relay.example.com`：点击 **添加更多（Add more）**，补齐后两行，共三行。
+- 使用 Cloudflare 提供的 `xxx.workers.dev` 地址：填写帐户权限。
+- 使用自己的地址，例如 `relay.example.com`：点击 **添加更多（Add more）**，补齐两项区域权限。
 
 首次部署需要创建 Worker，因此第一行选 **Workers → 管理员**；`Workers 脚本（Workers Scripts）→ 编辑` 不等同于这里的创建权限。这个管理员权限覆盖所选账户中的所有 Workers。自定义域名还需要对应区域的路由写入权限，见 [Cloudflare 权限说明](https://developers.cloudflare.com/workers/authorization/workers/)。区域读取权限用于本项目部署前检查域名归属。
 

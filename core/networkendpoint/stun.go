@@ -27,6 +27,24 @@ func NormalizeSTUN(raw string) (string, error) {
 	if err != nil || number == 0 {
 		return "", fmt.Errorf("%w: STUN port", ErrInvalid)
 	}
+	host, err := normalizeICEHost(parsed)
+	if err != nil {
+		return "", err
+	}
+	return "stun:" + host + ":" + strconv.FormatUint(number, 10), nil
+}
+
+// ValidICEHost checks the same IP-literal and DNS spelling on direct and TURN paths.
+func ValidICEHost(host string) bool {
+	u := &url.URL{Host: host}
+	if host == "" || u.Port() != "" || strings.HasPrefix(host, "[") != strings.Contains(host, ":") || strings.HasPrefix(host, "[") != strings.HasSuffix(host, "]") {
+		return false
+	}
+	_, err := normalizeICEHost(u)
+	return err == nil
+}
+
+func normalizeICEHost(parsed *url.URL) (string, error) {
 	if err := urlhost.Normalize(parsed); err != nil {
 		return "", fmt.Errorf("%w: STUN host", ErrInvalid)
 	}
@@ -41,5 +59,5 @@ func NormalizeSTUN(raw string) (string, error) {
 	if strings.ContainsRune(host, ':') {
 		host = "[" + host + "]"
 	}
-	return "stun:" + host + ":" + strconv.FormatUint(number, 10), nil
+	return host, nil
 }

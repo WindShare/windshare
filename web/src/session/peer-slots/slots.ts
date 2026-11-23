@@ -1,4 +1,4 @@
-export const PEER_CONTINUATION_SLOTS = 4
+export const PEER_CONTINUATION_SLOTS = 8
 const MAXIMUM_SEQUENCE = 0xffffffffffffffffn
 
 export interface PeerAttemptOrdinal {

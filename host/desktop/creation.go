@@ -138,7 +138,7 @@ func (a *Application) prepareAdmission(ctx context.Context, op *operation, trace
 		return terminal{}
 	}
 	task, err := a.deps.start(ctx, engine.ShareRequest{
-		Source: filesystem.ShareSource(op.paths), RelayIntent: intent, Frontend: config.FrontURL, Diagnostics: trace,
+		Source: filesystem.ShareSource(op.paths), RelayIntent: intent, TURNServices: config.TURNServices, Frontend: config.FrontURL, Diagnostics: trace,
 	})
 	if task != nil {
 		return running{task: task, frontURL: config.FrontURL, selectedRelays: intent.Mode() != relayprofile.Planned}

@@ -29,6 +29,7 @@ func (reader *LockedReader) Read(destination []byte) (int, error) {
 }
 
 type Runtime struct {
+	turnControls         sessionControlHandler
 	peerPathControls     sessionControlHandler
 	share                catalog.ShareInstance
 	role                 protocolsession.Role
@@ -122,6 +123,10 @@ func New(config Config) (*Runtime, error) {
 	}
 	runtime.inbound = inbound
 	if err := inbound.RegisterHandler(protocolsession.MessagePeerPathControl, &runtime.peerPathControls); err != nil {
+		cancelLifecycle()
+		return nil, err
+	}
+	if err := inbound.RegisterHandler(protocolsession.MessageTURNControl, &runtime.turnControls); err != nil {
 		cancelLifecycle()
 		return nil, err
 	}

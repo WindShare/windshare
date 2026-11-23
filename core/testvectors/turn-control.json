@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "kind": "turn-control",
+  "description": "Direction-bound TURN demand and grant bodies.",
+  "cases": [
+    {
+      "bodyB64": "hQEBAQGA",
+      "name": "demand",
+      "sender": false
+    },
+    {
+      "bodyB64": "hQEBAgKBZGhvbWU=",
+      "name": "demand",
+      "sender": false
+    },
+    {
+      "bodyB64": "hgECAQH1gA==",
+      "name": "grants",
+      "sender": true
+    },
+    {
+      "bodyB64": "hgECAgH0gYZkaG9tZVABAAAAAAAAAAAAAAAAAAAAgnN0dXJuOmxvY2FsaG9zdDozNDc4eCN0dXJuczpleGFtcGxlLm9yZzo0NDM/dHJhbnNwb3J0PXRjcGVndWVzdGdmaXh0dXJlGgAbd0A=",
+      "name": "grants",
+      "sender": true
+    },
+    {
+      "bodyB64": "hgECAwL0gA==",
+      "name": "grants",
+      "sender": true
+    },
+    {
+      "bodyB64": "hgECBAP1gA==",
+      "name": "grants",
+      "sender": true
+    }
+  ]
+}

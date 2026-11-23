@@ -8,7 +8,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/windshare/windshare/connectivity/pionpeer"
+	"github.com/windshare/windshare/connectivity/turnsession"
+
 	pion "github.com/pion/webrtc/v4"
+
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/v2peer/internal/candidatewriter"
 	"github.com/windshare/windshare/connectivity/v2signal"
@@ -65,6 +69,7 @@ const (
 )
 
 type ReceiverFactoryConfig struct {
+	TURNCapacity                           *turnsession.Capacity
 	Native                                 *nativepeer.NativePeerConnectivity
 	Configuration                          pion.Configuration
 	PeerConnections                        ReceiverPeerConnectionFactory
@@ -79,6 +84,7 @@ type ReceiverFactoryConfig struct {
 }
 
 type ReceiverFactory struct {
+	turnCapacity          *turnsession.Capacity
 	native                *nativepeer.NativePeerConnectivity
 	configuration         pion.Configuration
 	peerConnections       ReceiverPeerConnectionFactory
@@ -141,7 +147,11 @@ func NewReceiverFactory(config ReceiverFactoryConfig) (*ReceiverFactory, error) 
 	if err != nil {
 		return nil, errors.Join(ErrConfig, err)
 	}
+	if config.TURNCapacity == nil {
+		config.TURNCapacity = turnsession.NewCapacity()
+	}
 	factory := &ReceiverFactory{
+		turnCapacity:  config.TURNCapacity,
 		native:        config.Native,
 		configuration: config.Configuration, peerConnections: config.PeerConnections,
 		dataChannels:      config.DataChannels,
@@ -194,13 +204,14 @@ func (factory *ReceiverFactory) CompleteObservations() ReceiverObservationComple
 }
 
 type ReceiverAttempt struct {
-	factory   *ReceiverFactory
-	signaling ReceiverSignaling
-	lanes     ReceiverLaneSession
-	peer      ReceiverPeerConnection
-	channel   PeerDataChannel
-	binding   v2signal.Binding
-	events    chan receiverEvent
+	turnGrantID protocolsession.TURNGrantID
+	factory     *ReceiverFactory
+	signaling   ReceiverSignaling
+	lanes       ReceiverLaneSession
+	peer        ReceiverPeerConnection
+	channel     PeerDataChannel
+	binding     v2signal.Binding
+	events      chan receiverEvent
 
 	ctx     context.Context
 	cancel  context.CancelCauseFunc
@@ -243,6 +254,12 @@ func (factory *ReceiverFactory) Start(
 
 // StartPreparedBinding transfers an admitted preparation into one timed attempt.
 func (factory *ReceiverFactory) StartPreparedBinding(parent context.Context, signaling ReceiverSignaling, lanes ReceiverLaneSession, binding v2signal.Binding, prepared *nativepeer.PreparedAttempt) (*ReceiverAttempt, error) {
+	if binding.Purpose == v2signal.TURNRelay {
+		return nil, ErrConfig
+	}
+	return factory.startBinding(parent, signaling, lanes, binding, prepared, nil)
+}
+func (factory *ReceiverFactory) startBinding(parent context.Context, signaling ReceiverSignaling, lanes ReceiverLaneSession, binding v2signal.Binding, prepared *nativepeer.PreparedAttempt, grant *protocolsession.TURNGrant) (*ReceiverAttempt, error) {
 	if factory == nil || signaling == nil || lanes == nil || parent == nil || binding.Validate() != nil {
 		return nil, ErrConfig
 	}
@@ -272,9 +289,24 @@ func (factory *ReceiverFactory) StartPreparedBinding(parent context.Context, sig
 	}
 	request := nativepeer.AttemptRequest{Configuration: factory.configuration, ProtocolSessionID: [16]byte(sessionID), Binding: binding}
 	var peer ReceiverPeerConnection
-	if factory.peerConnections != nil {
+	var grantID protocolsession.TURNGrantID
+	release := func() {}
+	switch {
+	case grant != nil:
+		permit, capacityErr := factory.turnCapacity.Acquire(phaseContext)
+		if capacityErr != nil {
+			return fail(capacityErr, nil, nil)
+		}
+		release = permit
+		var connection *pionpeer.Connection
+		connection, err = openTURNPeer(request, *grant)
+		if connection != nil {
+			peer = connection
+		}
+		grantID = grant.GrantID
+	case factory.peerConnections != nil:
 		peer, err = factory.peerConnections.NewReceiverPeerConnection(phaseContext, request)
-	} else {
+	default:
 		if !prepared.Matches(request.ProtocolSessionID, binding) {
 			return fail(ErrConfig, nil, nil)
 		}
@@ -285,6 +317,7 @@ func (factory *ReceiverFactory) StartPreparedBinding(parent context.Context, sig
 		}
 	}
 	if err != nil || peer == nil {
+		release()
 		return fail(errors.Join(ErrNegotiation, err), peer, nil)
 	}
 	raw, err := peer.CreateDataChannel(
@@ -292,22 +325,24 @@ func (factory *ReceiverFactory) StartPreparedBinding(parent context.Context, sig
 		transportwebrtc.DefaultDataChannelInit(),
 	)
 	if err != nil || raw == nil {
+		release()
 		return fail(errors.Join(ErrNegotiation, err), peer, nil)
 	}
 	channel, err := factory.dataChannels.WrapDataChannel(raw)
 	if err != nil || channel == nil {
+		release()
 		return fail(errors.Join(errChannelAdmission, err), peer, raw)
 	}
 	transport := newOwnedPeerDataChannel(peer, channel)
 	attempt := &ReceiverAttempt{
-		factory: factory, signaling: signaling, lanes: lanes, peer: peer,
+		factory: factory, signaling: signaling, lanes: lanes, peer: peer, turnGrantID: grantID,
 		channel: transport, transport: transport, binding: binding,
 		events: make(chan receiverEvent, factory.maxCandidates*2+attemptEventReserve),
 		ctx:    ctx, cancel: cancel, done: make(chan struct{}), ready: make(chan struct{}),
 		phases: phases, phaseContext: phaseContext,
 	}
 	attempt.registerCallbacks()
-	go attempt.run()
+	go func() { defer release(); attempt.run() }()
 	return attempt, nil
 }
 
