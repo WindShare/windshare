@@ -455,9 +455,11 @@ func readJournalHeader(opDir *Dir) (taskHeader, error) {
 		if len(raw) == 0 && errors.Is(readErr, io.EOF) {
 			return taskHeader{}, fmt.Errorf("%w: missing meta header", errJournalCorrupt)
 		}
-		hasNewline := len(raw) > 0 && raw[len(raw)-1] == '\n'
-		trimmed := bytes.TrimSuffix(raw, []byte("\n"))
-		if len(trimmed) == 0 && hasNewline {
+		if raw[len(raw)-1] != '\n' {
+			return taskHeader{}, fmt.Errorf("%w: incomplete meta header", errJournalCorrupt)
+		}
+		trimmed := raw[:len(raw)-1]
+		if len(trimmed) == 0 {
 			continue
 		}
 		rec, parseErr := parseJournalLine(trimmed)
@@ -468,9 +470,11 @@ func readJournalHeader(opDir *Dir) (taskHeader, error) {
 	}
 }
 
-// readJournalState loads and validates state.log read-only. A torn trailing
-// line without newline (from a mid-write crash) is tolerated; corruption in
-// earlier lines or a missing meta header returns errJournalCorrupt.
+// readJournalState loads and validates state.log read-only. Every committed
+// record is newline-terminated; any trailing bytes without a newline (from a
+// mid-write crash, even if the JSON payload and CRC happen to be intact) are
+// treated as an uncommitted torn tail to be truncated before appending.
+// Corruption in earlier lines or a missing meta header returns errJournalCorrupt.
 func readJournalState(opDir *Dir) (journalState, int64, error) {
 	state := newJournalState()
 	f, err := openChildFile(opDir, journalFileName, os.O_RDONLY, 0)
@@ -486,27 +490,26 @@ func readJournalState(opDir *Dir) (journalState, int64, error) {
 		if len(raw) > journalMaxLineBytes {
 			return state, 0, errJournalCorrupt
 		}
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return state, 0, readErr
+		}
 		if len(raw) == 0 && errors.Is(readErr, io.EOF) {
 			break
 		}
-		hasNewline := len(raw) > 0 && raw[len(raw)-1] == '\n'
-		trimmed := bytes.TrimSuffix(raw, []byte("\n"))
-		if len(trimmed) == 0 && hasNewline {
+		if raw[len(raw)-1] != '\n' {
+			// Newline is the frame terminator: without it the trailing write
+			// never completed, and accepting it would cause the next append to
+			// concatenate onto this line and corrupt state.log.
+			state.tornTail = true
+			break
+		}
+		trimmed := raw[:len(raw)-1]
+		if len(trimmed) == 0 {
 			validBytes += int64(len(raw))
 			continue
 		}
 		rec, parseErr := parseJournalLine(trimmed)
 		if parseErr != nil {
-			// Tolerate only an incomplete final record left by an abrupt crash.
-			if errors.Is(readErr, io.EOF) && !hasNewline {
-				state.tornTail = true
-				break
-			}
-			// Also tolerate a corrupted final line only if at exact EOF with no following lines.
-			if errors.Is(readErr, io.EOF) && state.hasMeta {
-				state.tornTail = true
-				break
-			}
 			return state, 0, parseErr
 		}
 		if err := state.apply(rec); err != nil {
@@ -514,12 +517,6 @@ func readJournalState(opDir *Dir) (journalState, int64, error) {
 		}
 		validBytes += int64(len(raw))
 		state.lineCount++
-		if errors.Is(readErr, io.EOF) {
-			break
-		}
-		if readErr != nil {
-			return state, 0, readErr
-		}
 	}
 	if !state.hasMeta {
 		return state, 0, errJournalCorrupt
