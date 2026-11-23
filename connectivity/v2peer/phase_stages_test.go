@@ -24,7 +24,7 @@ func TestNativeObservedStagesPreserveCheckingWindowAndCancelOriginalIO(t *testin
 	}
 	lifecycle.observeICE(pion.ICEConnectionStateChecking)
 	checking := receiveTest(t, timers.created)
-	if checking.phase != PeerAttemptPhaseChecking || checking.duration != 40*time.Second {
+	if checking.phase != PeerAttemptPhaseChecking || checking.duration != 32*time.Second {
 		t.Fatal(checking)
 	}
 	preparation.timer.Fire()

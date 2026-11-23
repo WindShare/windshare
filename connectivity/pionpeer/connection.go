@@ -3,10 +3,12 @@
 package pionpeer
 
 import (
+	"context"
 	"errors"
 	"net"
 	"net/netip"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -61,12 +63,16 @@ type Event struct {
 
 type Connection struct {
 	*pion.PeerConnection
-	lease     *socketauthority.Lease
-	release   func()
-	request   AttemptConfig
-	mapped    []MappedEndpoint
-	closeOnce sync.Once
-	closeErr  error
+	lease          *socketauthority.Lease
+	release        func()
+	request        AttemptConfig
+	mapped         []MappedEndpoint
+	mux            *socketauthority.Mux
+	candidateMu    sync.Mutex
+	stopCandidates context.CancelFunc
+	closed         bool
+	closeOnce      sync.Once
+	closeErr       error
 }
 
 // NewPeerConnection acquires an exclusive attempt reference. The caller's path
@@ -114,8 +120,10 @@ func NewPeerConnection(configuration pion.Configuration, request AttemptConfig) 
 	settings.SetIPFilter(localEndpointFilter(endpoints))
 	settings.SetICEMulticastDNSMode(ice.MulticastDNSModeQueryOnly)
 	configureNetworkTypes(&settings, lease, tcpEndpoints)
-	configureICE(&configuration, request.ICE)
-	connection := &Connection{lease: lease, release: release, request: request, mapped: mapped}
+	// Pion opens separate ephemeral sockets for discovery URLs. The leased mux owns STUN.
+	configuration.ICEServers = nil
+	configuration.ICETransportPolicy = pion.ICETransportPolicyAll
+	connection := &Connection{lease: lease, release: release, request: request, mapped: mapped, mux: mux}
 	settings.LoggerFactory = providerLoggerFactory{LoggerFactory: logging.NewDefaultLoggerFactory(), observe: connection.observeDiagnostic}
 	pc, err := pion.NewAPI(pion.WithSettingEngine(settings)).NewPeerConnection(configuration)
 	if err != nil {
@@ -181,12 +189,15 @@ func localEndpointFilter(endpoints []netip.AddrPort) func(net.IP) bool {
 	}
 }
 
-func configureICE(configuration *pion.Configuration, connection iceconfig.Connection) {
-	configuration.ICEServers = nil
-	if urls := connection.DiscoveryURLs(); len(urls) > 0 {
-		configuration.ICEServers = []pion.ICEServer{{URLs: urls}}
+// Supplemental mapped candidates travel by trickle, outside Pion's local SDP.
+func (c *Connection) LocalDescription() *pion.SessionDescription {
+	description := c.PeerConnection.LocalDescription()
+	if description == nil || c.mux == nil || (len(c.request.ICE.DiscoveryURLs()) == 0 && len(c.mapped) == 0) {
+		return description
 	}
-	configuration.ICETransportPolicy = pion.ICETransportPolicyAll
+	copy := *description
+	copy.SDP = strings.ReplaceAll(copy.SDP, "a=end-of-candidates\r\n", "")
+	return &copy
 }
 
 func (c *Connection) event(milestone, state string) Event {
@@ -222,6 +233,12 @@ func (c *Connection) OnConnectionStateChange(callback func(pion.PeerConnectionSt
 }
 func (c *Connection) Close() error {
 	c.closeOnce.Do(func() {
+		c.candidateMu.Lock()
+		c.closed = true
+		if c.stopCandidates != nil {
+			c.stopCandidates()
+		}
+		c.candidateMu.Unlock()
 		c.closeErr = c.PeerConnection.Close()
 		c.release()
 		c.closeErr = errors.Join(c.closeErr, c.lease.Close())

@@ -108,6 +108,16 @@ func TestLocalFixedSTUNSocketLifecycleBaseline(t *testing.T) {
 				}
 			}
 		collected:
+			if stable {
+				counts := make(map[netip.AddrPort]int)
+				for _, source := range sources {
+					counts[source]++
+				}
+				left, right := leftLease.Endpoints()[0], rightLease.Endpoints()[0]
+				if len(counts) != 2 || counts[left] < len(pairs) || counts[right] < len(pairs) {
+					t.Fatalf("both attempts must probe from each leased port %v/%v: %v", left, right, counts)
+				}
+			}
 			for _, pair := range pairs {
 				var ports []uint16
 				if pair.RemoteType == "srflx" {

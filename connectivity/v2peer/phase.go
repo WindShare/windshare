@@ -14,7 +14,7 @@ import (
 const (
 	PeerSignalingPreparationBudget     = 10 * time.Second
 	PeerAnswerPreparationReserve       = 2 * time.Second
-	PeerICECheckingBudget              = 40 * time.Second
+	PeerICECheckingBudget              = 32 * time.Second
 	PeerDataChannelEstablishmentBudget = 15 * time.Second
 	// Providers without observable stage boundaries retain the complete checking
 	// opportunity under one explicitly negotiation-owned deadline.
