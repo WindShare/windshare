@@ -59,6 +59,14 @@ func TestArgumentParsingNeverProjectsRejectedSecretValues(t *testing.T) {
 			wantStderr: "account login: option value is invalid\n",
 		},
 		{
+			name: "account revoke invalid credential",
+			args: func(canary string) []string {
+				return []string{"account", "revoke", canary}
+			},
+			wantCode:   ExitUsage,
+			wantStderr: "Account: invalid credential ID\n",
+		},
+		{
 			name: "config invalid boolean",
 			args: func(canary string) []string {
 				return []string{"config", "import", "--verbose=" + canary, "-"}
@@ -221,6 +229,8 @@ func TestAllCommandsHandleHelpAndUsageWithoutStartingEngine(t *testing.T) {
 		{"relay frontend -h", []string{"relay", "frontend", "-h"}, ExitOK},
 		{"relay remove positional --help", []string{"relay", "remove", "https://relay.example", "--help"}, ExitOK},
 		{"account login positional --help", []string{"account", "login", "alice", "--help"}, ExitOK},
+		{"account revoke --help", []string{"account", "revoke", "--help"}, ExitOK},
+		{"account revoke dash positional --help", []string{"account", "revoke", "-AAAAAAAAAAAAAAAAAAAAA", "--help"}, ExitOK},
 		{"account unknown", []string{"account", "unknown"}, ExitUsage},
 		{"resume --help", []string{"resume", "--help"}, ExitOK},
 		{"resume help", []string{"resume", "help"}, ExitOK},

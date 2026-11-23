@@ -96,7 +96,7 @@ func Parse(args []string, output command.LineOutput) (Request, command.ExitCode,
 		}
 		req.value = positionals[0]
 		return req, command.ExitOK, true
-	case "email", "verify", "revoke":
+	case "email", "verify":
 		flags := command.NewFlagSet("account " + action)
 		positionals, outcome := command.ParseInterleaved(flags, rest)
 		if code, ok := projectAccountFlagParse(output, "account "+action, outcome); !ok {
@@ -106,19 +106,43 @@ func Parse(args []string, output command.LineOutput) (Request, command.ExitCode,
 			command.WriteLines(output, Usage)
 			return Request{}, command.ExitUsage, false
 		}
-		if action == "revoke" {
-			raw, err := base64.RawURLEncoding.Strict().DecodeString(positionals[0])
-			if err != nil || len(raw) != 16 {
-				command.WriteLines(output, "Account: invalid credential ID")
-				return Request{}, command.ExitUsage, false
-			}
-			return Request{action: action, credential: [16]byte(raw)}, command.ExitOK, true
-		}
 		return Request{action: action, value: positionals[0]}, command.ExitOK, true
+	case "revoke":
+		positionals, outcome := parseRevokePositionals(rest)
+		if code, ok := projectAccountFlagParse(output, "account revoke", outcome); !ok {
+			return Request{}, code, false
+		}
+		if len(positionals) != 1 || positionals[0] == "" {
+			command.WriteLines(output, Usage)
+			return Request{}, command.ExitUsage, false
+		}
+		raw, err := base64.RawURLEncoding.Strict().DecodeString(positionals[0])
+		if err != nil || len(raw) != 16 {
+			command.WriteLines(output, "Account: invalid credential ID")
+			return Request{}, command.ExitUsage, false
+		}
+		return Request{action: action, credential: [16]byte(raw)}, command.ExitOK, true
 	default:
 		command.WriteLines(output, Usage)
 		return Request{}, command.ExitUsage, false
 	}
+}
+
+// parseRevokePositionals enforces revoke's option-free positional contract:
+// Base64URL credential IDs can legitimately start with "-", so non-help tokens
+// before "--" stay positional instead of failing as unknown options.
+func parseRevokePositionals(args []string) ([]string, command.ParseOutcome) {
+	positionals := make([]string, 0, len(args))
+	for i, arg := range args {
+		if arg == "--" {
+			return append(positionals, args[i+1:]...), command.ParseReady
+		}
+		if command.IsHelpFlag(arg) {
+			return nil, command.ParseHelp
+		}
+		positionals = append(positionals, arg)
+	}
+	return positionals, command.ParseReady
 }
 
 func projectAccountFlagParse(output command.LineOutput, label string, outcome command.ParseOutcome) (command.ExitCode, bool) {

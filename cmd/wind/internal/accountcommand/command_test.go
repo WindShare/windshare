@@ -130,11 +130,73 @@ func TestAccountHelpSucceedsWithoutConfiguredService(t *testing.T) {
 		{"help"}, {"-h"}, {"-help"}, {"--help"},
 		{"status", "--help"}, {"refresh", "-h"}, {"login", "--help"},
 		{"login", "alice", "--help"}, {"password", "alice", "-h"}, {"email", "alice@example.test", "--help"},
+		{"revoke", "-h"}, {"revoke", "-help"}, {"revoke", "--help"},
+		{"revoke", base64.RawURLEncoding.EncodeToString((&[16]byte{0xF8})[:]), "--help"},
+		{"revoke", "--help", base64.RawURLEncoding.EncodeToString((&[16]byte{0xF8})[:])},
 	} {
 		output := &lines{}
 		if code := (Runner{Output: output}).Run(context.Background(), args); code != command.ExitOK || !strings.Contains(output.String(), "wind account status") {
 			t.Fatalf("help %v returned %d output=%q", args, code, output.String())
 		}
+	}
+}
+
+func TestAccountRevokeAcceptsLeadingDashCredentialIDs(t *testing.T) {
+	const activeAccount = "active-account"
+	ids := []struct {
+		name   string
+		id     [16]byte
+		prefix string
+	}{
+		{name: "single dash", id: [16]byte{0xF8}, prefix: "-"},
+		{name: "double dash", id: [16]byte{0xFB, 0xE0}, prefix: "--"},
+		{name: "triple dash", id: [16]byte{0xFB, 0xEF, 0x80}, prefix: "---"},
+	}
+	for _, tc := range ids {
+		encoded := base64.RawURLEncoding.EncodeToString(tc.id[:])
+		if !strings.HasPrefix(encoded, tc.prefix) {
+			t.Fatalf("%s fixture %q does not start with %q", tc.name, encoded, tc.prefix)
+		}
+		for _, args := range [][]string{
+			{"revoke", encoded},
+			{"revoke", "--", encoded},
+			{"revoke", encoded, "--"},
+		} {
+			t.Run(tc.name+"/"+strings.Join(args[1:], "_"), func(t *testing.T) {
+				service := &commandService{value: account.Snapshot{State: account.Ready, Account: activeAccount}}
+				output := &lines{}
+				if code := (Runner{Service: service, Output: output}).Run(context.Background(), args); code != command.ExitOK {
+					t.Fatalf("args=%v returned %d output=%q", args, code, output.String())
+				}
+				if service.action != "revoke" || service.target != activeAccount || service.revoked != tc.id {
+					t.Fatalf("args=%v wrong revoke dispatch: %+v", args, service)
+				}
+			})
+		}
+	}
+
+	singleDash := base64.RawURLEncoding.EncodeToString((&[16]byte{0xF8})[:])
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "truncated dash id", args: []string{"revoke", singleDash[:21]}, want: "Account: invalid credential ID"},
+		{name: "unrecognized dash token", args: []string{"revoke", "--json"}, want: "Account: invalid credential ID"},
+		{name: "literal help after terminator", args: []string{"revoke", "--", "-h"}, want: "Account: invalid credential ID"},
+		{name: "literal long help after terminator", args: []string{"revoke", "--", "--help"}, want: "Account: invalid credential ID"},
+		{name: "missing after terminator", args: []string{"revoke", "--"}, want: "Usage:"},
+		{name: "empty after terminator", args: []string{"revoke", "--", ""}, want: "Usage:"},
+		{name: "extra arg after terminator", args: []string{"revoke", "--", singleDash, "--help"}, want: "Usage:"},
+		{name: "extra flag before id", args: []string{"revoke", "--json", singleDash}, want: "Usage:"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service := &commandService{value: account.Snapshot{State: account.Ready, Account: activeAccount}}
+			output := &lines{}
+			if code := (Runner{Service: service, Output: output}).Run(context.Background(), tc.args); code != command.ExitUsage || service.action != "" || !strings.Contains(output.String(), tc.want) {
+				t.Fatalf("args=%v code=%d action=%q output=%q want=%q", tc.args, code, service.action, output.String(), tc.want)
+			}
+		})
 	}
 }
 
