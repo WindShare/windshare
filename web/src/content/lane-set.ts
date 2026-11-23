@@ -252,6 +252,10 @@ export class LaneSet {
     return Object.freeze([...this.#lanes.keys()])
   }
 
+  laneEpoch(laneId: number): number | undefined {
+    return this.#lanes.get(laneId)?.laneEpoch
+  }
+
   sampleLane(laneId: number, laneEpoch: number): void {
     const state = this.#lanes.get(laneId)
     if (state === undefined || state.laneEpoch !== laneEpoch) return

@@ -2,6 +2,7 @@ import { RelayPolicyDeniedError, RELAY_POLICY_RETRY_MS } from './relay-admission
 import { BandwidthWaitError } from '../contracts/capacity'
 import { RelayEndpointFailure } from './relay-selection/race'
 import { BlockLaneAttemptsError } from '../content/broker'
+import { BlockInactivityTimeoutError } from '../content/scheduling/block-response-wait'
 import { SessionRuntimeError } from '../session/runtime-types'
 import { RelayReceiverError } from '../transport/relay/receiver'
 import { RELAY_ERROR, RelayProtocolError } from '../transport/relay/protocol'
@@ -94,6 +95,32 @@ export function recoveryRetry(error: unknown, now: number, depth = 0): RecoveryR
 export function isLaneRecoveryFailure(error: unknown): boolean {
   return error instanceof BandwidthWaitError || error instanceof BlockLaneAttemptsError ||
     (error instanceof SessionRuntimeError && error.scope === 'lane')
+}
+
+export function hasBlockInactivityTimeout(error: unknown, depth = 0): boolean {
+  if (depth >= 8) return false
+  if (error instanceof BlockInactivityTimeoutError) return true
+  if (error instanceof BlockLaneAttemptsError || error instanceof AggregateError) {
+    return error.errors.some(cause => hasBlockInactivityTimeout(cause, depth + 1))
+  }
+  return false
+}
+
+export function stalledBlockLaneIds(error: unknown): readonly number[] {
+  const ids = new Set<number>()
+  collectStalledLaneIds(error, ids, 0)
+  return Object.freeze([...ids])
+}
+
+function collectStalledLaneIds(error: unknown, ids: Set<number>, depth: number): void {
+  if (depth >= 8) return
+  if (error instanceof BlockInactivityTimeoutError) {
+    if (error.laneId !== undefined) ids.add(error.laneId)
+    return
+  }
+  if (error instanceof BlockLaneAttemptsError || error instanceof AggregateError) {
+    for (const cause of error.errors) collectStalledLaneIds(cause, ids, depth + 1)
+  }
 }
 
 export function isSessionFailure(error: unknown): boolean {

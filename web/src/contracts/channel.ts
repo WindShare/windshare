@@ -6,6 +6,15 @@ export const MAX_FRAME_BYTES = 65_536
 export type Frame = Uint8Array
 export type ChannelState = 'connecting' | 'open' | 'closed'
 
+export interface ChannelLivenessProbeOptions {
+  /**
+   * Optional verification window in milliseconds. Any accepted inbound frame
+   * clears the deadline; silence past it fails the transport path. Omitting it
+   * sends an advisory probe without shortening the normal heartbeat timeout.
+   */
+  readonly deadlineMilliseconds?: number
+}
+
 /**
  * A reliable, ordered, transport-neutral frame channel.
  *
@@ -35,6 +44,12 @@ export interface FrameChannel {
    * receive stream closes; close cannot overtake an accepted terminal.
    */
   sendTerminal(frame: Frame, signal?: AbortSignal): Promise<void>
+
+  /**
+   * Requests an immediate transport liveness probe when the underlying path
+   * supports connection probing (e.g. relay WebSocket after wake/reconnect).
+   */
+  probeLiveness?(options?: ChannelLivenessProbeOptions): void
 
   /**
    * Local and remote closure are idempotent and wake blocked sends. Late traffic

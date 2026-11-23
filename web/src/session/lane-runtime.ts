@@ -1,7 +1,7 @@
 import { observeProtocolFailure } from './failure-diagnostics'
 import type { ShareDescriptor } from '../catalog/records'
 import { capacityWaitFailure } from '../contracts/capacity'
-import type { FrameChannel } from '../contracts/channel'
+import type { ChannelLivenessProbeOptions, FrameChannel } from '../contracts/channel'
 import { CborError } from '../protocol/cbor'
 import { EnvelopeError, EnvelopeOpener, EnvelopeSealer } from './envelope'
 import { protocolMessageKindV1, type ProtocolTraceSource } from './diagnostics'
@@ -101,6 +101,10 @@ export class SessionLane {
 
   get available(): boolean { return this.#available && !this.#channel.unavailable.aborted }
   get done(): Promise<void> { return this.#pumpTask }
+
+  probeLiveness(options?: ChannelLivenessProbeOptions): void {
+    if (!this.#closed) this.#channel.probeLiveness?.(options)
+  }
 
   observeAvailability(): void {
     this.#channel.unavailable.addEventListener('abort', this.#withdraw, { once: true })

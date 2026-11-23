@@ -1,4 +1,4 @@
-import type { ChannelState, Frame, FrameChannel } from '../../../contracts/channel'
+import type { ChannelLivenessProbeOptions, ChannelState, Frame, FrameChannel } from '../../../contracts/channel'
 import { capacityWaitFailure, type CapacityPressure } from '../../../contracts/capacity'
 import { CAPACITY_WAIT_MAGIC, decodeCapacityWait } from '../capacity-wait-codec'
 import { equalBytes } from '../../../crypto/bytes'
@@ -65,6 +65,11 @@ export class OpaqueRelayFrameChannel implements FrameChannel {
 
   sendTerminal(frame: Frame, signal?: AbortSignal): Promise<void> {
     return this.#enqueue(frame, true, signal)
+  }
+
+  probeLiveness(options?: ChannelLivenessProbeOptions): void {
+    if (this.#socketLifetime.signal.aborted) return
+    this.#heartbeat.probeNow(options?.deadlineMilliseconds)
   }
 
   close(): Promise<void> {

@@ -1,12 +1,15 @@
 import {
-  isTerminalRecoveryFailure, isShareRecoveryFailure, isLaneRecoveryFailure, isSessionFailure,
-  latestRecoveryRetry, recoveryBandwidthWait, recoveryRetry, RelayCooldownError,
+  hasBlockInactivityTimeout, isTerminalRecoveryFailure, isShareRecoveryFailure,
+  isLaneRecoveryFailure, isSessionFailure, latestRecoveryRetry, recoveryBandwidthWait,
+  recoveryRetry, RelayCooldownError, stalledBlockLaneIds,
 } from './recovery-failure'
 import {
   defaultReconnectBackoff, generationReconnectBackoff, reconnectPhase, requireBackoff,
   systemReconnectClock, waitingReconnectBackoff, type ReconnectClock,
 } from './recovery-clock'
-import { RecoveryWake } from './recovery-wake'
+import {
+  RecoveryWake, SystemWakeMonitor, WAKE_PROBE_TIMEOUT_MILLISECONDS, type SystemWakeKind,
+} from './recovery-wake'
 import { observeRecovery, type RecoveryObservation } from './recovery-observation'
 import { ReceiverConnectionState, type ReceiverReconnectActivity } from './connection-state'
 import type { CatalogOperationClient } from '../catalog/client'
@@ -113,7 +116,7 @@ export class ReceiverReconnectSupervisor implements ContentGenerationProvider {
   readonly #clock: ReconnectClock
   readonly #generationRecovery: GenerationRecoveryBudget
   readonly #recoveryWake = new RecoveryWake()
-  readonly #networkAvailable = () => this.requestReconnect()
+  readonly #wakeMonitor: SystemWakeMonitor
   #recoveryAttempt = 0
   #recoveryPhase: 'fast' | 'waiting' = 'fast'
   readonly #generationBackoffMilliseconds: (attempt: number) => number
@@ -175,7 +178,7 @@ export class ReceiverReconnectSupervisor implements ContentGenerationProvider {
         return isTerminalRecoveryFailure(error) ? 'stop' : 'retry'
       },
     })
-    globalThis.addEventListener?.('online', this.#networkAvailable)
+    this.#wakeMonitor = new SystemWakeMonitor({ onWake: kind => this.#handleSystemWake(kind) })
     this.pathActivity.subscribe(snapshot => {
       this.#directUsable = snapshot.lanes.some(lane => lane.route === 'direct')
       for (const metrics of this.#downloads.values()) metrics.availability(this.#directUsable)
@@ -266,19 +269,62 @@ export class ReceiverReconnectSupervisor implements ContentGenerationProvider {
       await this.#ready(signal)
       return true
     }
-    if (!isLaneRecoveryFailure(error) || managed.lanes.size > 0) return false
+    if (!isLaneRecoveryFailure(error)) return false
+    if (managed.lanes.size > 0) return this.#recoverStalledLanes(managed, error, signal)
+    return this.#awaitLaneRecovery(managed, signal)
+  }
+
+  async #recoverStalledLanes(
+    managed: ReceiverGeneration,
+    error: unknown,
+    signal: AbortSignal | undefined,
+  ): Promise<boolean> {
+    if (!hasBlockInactivityTimeout(error)) return false
+    const attributed = stalledBlockLaneIds(error)
+    const targets = attributed.length > 0 ? attributed : managed.lanes.laneIds()
+    const retirements: Promise<void>[] = []
+    for (const laneId of targets) {
+      const epoch = managed.lanes.laneEpoch(laneId) ?? managed.session.laneEpoch?.(laneId)
+      if (epoch !== undefined) retirements.push(managed.session.retireLane(laneId, epoch))
+    }
+    if (retirements.length === 0) return false
+    this.#traceConnection({ transition: 'retry_requested', failure: error })
+    await awaitSettledOrAbort(retirements, signal)
+    signal?.throwIfAborted()
+    this.#throwIfTerminal()
+    if (!this.isCurrent(managed) || managed.retired) {
+      await this.#ready(signal)
+      return true
+    }
+    return managed.lanes.size === 0 ? this.#awaitLaneRecovery(managed, signal) : true
+  }
+
+  async #awaitLaneRecovery(
+    managed: ReceiverGeneration,
+    signal: AbortSignal | undefined,
+  ): Promise<boolean> {
     try {
       await managed.lanes.waitForContentAdmission(signal)
       return true
     } catch {
       signal?.throwIfAborted()
       this.#throwIfTerminal()
-      if (!this.isCurrent(generation) || managed.retired) {
+      if (!this.isCurrent(managed) || managed.retired) {
         await this.#ready(signal)
         return true
       }
       return false
     }
+  }
+
+  #handleSystemWake(kind: SystemWakeKind): void {
+    if (this.#stopped || this.#failed) return
+    this.requestReconnect()
+    if (this.#current.retired) return
+    // Confirmed network return or sleep drift justifies a short verification
+    // window; ordinary tab switches only nudge an advisory probe.
+    const options = kind === 'visible' ? undefined : { deadlineMilliseconds: WAKE_PROBE_TIMEOUT_MILLISECONDS }
+    this.#current.session.probeLiveness?.(options)
   }
 
   isCurrent(generation: ContentGeneration): boolean {
@@ -628,7 +674,7 @@ export class ReceiverReconnectSupervisor implements ContentGenerationProvider {
     this.#traceConnection({ transition: 'terminal', failure: reason })
     this.connection.failed(reason)
     this.#lifetime.abort(reason)
-    globalThis.removeEventListener?.('online', this.#networkAvailable)
+    this.#wakeMonitor.close()
     for (const waiter of this.#waiters) waiter.reject(reason)
     this.#waiters.clear()
     this.#current.retired = true
@@ -663,7 +709,7 @@ export class ReceiverReconnectSupervisor implements ContentGenerationProvider {
     this.#stopped = true
     this.connection.close()
     this.#lifetime.abort(new DOMException('Receiver supervisor stopped', 'AbortError'))
-    globalThis.removeEventListener?.('online', this.#networkAvailable)
+    this.#wakeMonitor.close()
     for (const waiter of this.#waiters) waiter.reject(this.#lifetime.signal.reason)
     this.#waiters.clear()
     this.#current.retired = true
@@ -679,6 +725,17 @@ export class ReceiverReconnectSupervisor implements ContentGenerationProvider {
     ])
     this.#factory.close()
   }
+}
+
+async function awaitSettledOrAbort(tasks: readonly Promise<unknown>[], signal?: AbortSignal): Promise<void> {
+  const settled = Promise.allSettled(tasks).then(() => undefined)
+  if (signal === undefined) return settled
+  signal.throwIfAborted()
+  return new Promise<void>((resolve, reject) => {
+    const abort = () => reject(signal.reason ?? new DOMException('Lane retirement aborted', 'AbortError'))
+    signal.addEventListener('abort', abort, { once: true })
+    settled.then(() => { signal.removeEventListener('abort', abort); resolve() })
+  })
 }
 
 async function closeCore(core: ProtocolGenerationCore): Promise<void> {

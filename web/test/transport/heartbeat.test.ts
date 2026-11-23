@@ -120,4 +120,55 @@ describe('relay heartbeat ownership', () => {
     expect(failed).not.toHaveBeenCalled()
     expect(vi.getTimerCount()).toBe(0)
   })
+
+  it('fails promptly after a wake probe deadline if silent, yet stays alive on any inbound frame', async () => {
+    vi.useFakeTimers()
+    const socket = { bufferedAmount: 0, send: vi.fn() }
+    const failed = vi.fn()
+    const heartbeat = new RelayHeartbeat(socket, failed)
+    try {
+      await vi.advanceTimersByTimeAsync(2_000)
+      heartbeat.probeNow(5_000)
+      expect(socket.send).toHaveBeenCalledTimes(1)
+      // Rate-limited repeat calls within 1 s coalesce without flooding probes.
+      heartbeat.probeNow(5_000)
+      expect(socket.send).toHaveBeenCalledTimes(1)
+
+      // Any accepted inbound frame cancels the verification deadline.
+      await vi.advanceTimersByTimeAsync(2_000)
+      heartbeat.observeInbound()
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(failed).not.toHaveBeenCalled()
+
+      // Without inbound frames, a verification probe retires a silent socket at its deadline.
+      heartbeat.probeNow(5_000)
+      expect(socket.send).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(4_999)
+      expect(failed).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(failed).toHaveBeenCalledExactlyOnceWith(expect.any(RelayHeartbeatError))
+    } finally {
+      heartbeat.close()
+    }
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('sends an advisory probe without shortening the full silence timeout on slow healthy links', async () => {
+    vi.useFakeTimers()
+    const socket = { bufferedAmount: 0, send: vi.fn() }
+    const failed = vi.fn()
+    const heartbeat = new RelayHeartbeat(socket, failed)
+    try {
+      await vi.advanceTimersByTimeAsync(2_000)
+      heartbeat.probeNow()
+      expect(socket.send).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(TIMEOUT - 2_001)
+      expect(failed).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(failed).toHaveBeenCalledExactlyOnceWith(expect.any(RelayHeartbeatError))
+    } finally {
+      heartbeat.close()
+    }
+    expect(vi.getTimerCount()).toBe(0)
+  })
 })

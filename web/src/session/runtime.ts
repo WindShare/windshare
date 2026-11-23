@@ -3,7 +3,7 @@ import { cancellationTraceReason } from './operation-diagnostics'
 import { cancellationFromSignal } from './operations/cancellation'
 import { decodePeerPathControl } from '../protocol/peer-path-control'
 import type { ShareDescriptor } from '../catalog/records'
-import type { FrameChannel } from '../contracts/channel'
+import type { ChannelLivenessProbeOptions, FrameChannel } from '../contracts/channel'
 import {
   decodeLaneGrant,
   encodeLaneAttachRequest,
@@ -135,6 +135,16 @@ export class ReceiverSessionRuntime {
 
   availableLaneIds(): readonly number[] {
     return Object.freeze([...this.#lanes.values()].filter(lane => lane.available).map(lane => lane.id))
+  }
+
+  laneEpoch(laneId: number): number | undefined {
+    return this.#lanes.get(laneId)?.epoch
+  }
+
+  probeLiveness(options?: ChannelLivenessProbeOptions): void {
+    for (const lane of this.#lanes.values()) {
+      if (lane.available) lane.probeLiveness(options)
+    }
   }
 
   get hasAttachedLanes(): boolean { return this.#lanes.size > 0 }

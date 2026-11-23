@@ -3,12 +3,15 @@ import { RELAY_ERROR } from '../../src/transport/relay/protocol'
 import { RelayReceiverError } from '../../src/transport/relay/receiver'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FileGeometry } from '../../src/content/geometry'
-import type {
-  BlockDemand,
-  BlockDispatchObservation,
-  BlockLane,
-  BlockRouteEligibility,
+import {
+  BlockLaneAttemptsError,
+  type BlockDemand,
+  type BlockDispatchObservation,
+  type BlockLane,
+  type BlockRouteEligibility,
 } from '../../src/content/broker'
+import { BlockInactivityTimeoutError } from '../../src/content/scheduling/block-response-wait'
+import { SystemWakeMonitor } from '../../src/receiver/recovery-wake'
 import type { BlockRecord, FileRevisionDescriptor } from '../../src/content/records'
 import type { Suite02CapabilityKey } from '../../src/crypto/suite02-link'
 import {
@@ -862,4 +865,94 @@ it('one stopped relay must not prevent generation recovery through another endpo
   const result = await outcome
   await supervisor.close()
   expect(result).toBe('recovered')
+})
+
+describe('wake detection and stalled-lane recovery loop', () => {
+  it('classifies online, sleep clock drift, and ordinary tab visibility transitions cleanly', () => {
+    const windowTarget = new EventTarget()
+    const documentTarget = Object.assign(new EventTarget(), {
+      visibilityState: 'visible' as DocumentVisibilityState,
+    })
+    let wall = 100_000
+    let mono = 1_000
+    const wakes: string[] = []
+    const monitor = new SystemWakeMonitor({
+      onWake: kind => wakes.push(kind),
+      windowTarget,
+      documentTarget,
+      wallNow: () => wall,
+      monoNow: () => mono,
+    })
+
+    // Ordinary tab switch (wall and monotonic advance together) -> advisory 'visible'.
+    documentTarget.visibilityState = 'hidden'
+    documentTarget.dispatchEvent(new Event('visibilitychange'))
+    wall += 30_000
+    mono += 30_000
+    documentTarget.visibilityState = 'visible'
+    documentTarget.dispatchEvent(new Event('visibilitychange'))
+
+    // OS sleep where monotonic pauses while wall clock jumps -> 'clock-jump'.
+    documentTarget.visibilityState = 'hidden'
+    documentTarget.dispatchEvent(new Event('visibilitychange'))
+    wall += 60_000
+    mono += 500
+    documentTarget.visibilityState = 'visible'
+    documentTarget.dispatchEvent(new Event('visibilitychange'))
+
+    windowTarget.dispatchEvent(new Event('online'))
+    monitor.close()
+    windowTarget.dispatchEvent(new Event('online'))
+
+    expect(wakes).toEqual(['visible', 'clock-jump', 'online'])
+  })
+
+  it('retires a stalled attached lane on BlockInactivityTimeoutError and replaces the generation', async () => {
+    const firstSession = new FakeSession([1])
+    const secondSession = new FakeSession([10])
+    const factory = new FakeSessionFactory()
+    factory.connectFreshImpl = async () => core(secondSession, new TrackedRelay(10))
+    const { supervisor } = supervisorFixture(firstSession, new TrackedRelay(1), factory)
+    const activation = supervisor.beginConnectivity('download')
+
+    let stalledGeneration = supervisor.currentGeneration()!
+    expect(stalledGeneration.lanes.size).toBe(1)
+
+    const stall = new BlockLaneAttemptsError([
+      new BlockInactivityTimeoutError('awaiting_first_fragment', 15_000, 0, { laneId: 1 }),
+    ])
+    const recovered = await supervisor.recover(stalledGeneration, stall, undefined)
+    expect(recovered).toBe(true)
+    expect(supervisor.generationId).toBe(2)
+    expect(factory.connectFreshCalls).toBe(1)
+    stalledGeneration = supervisor.currentGeneration()!
+    expect(stalledGeneration.id).toBe(2)
+
+    activation.close()
+    await supervisor.close()
+  })
+
+  it('retires only the stalled lane when another healthy lane remains attached', async () => {
+    const session = new FakeSession([1])
+    const factory = new FakeSessionFactory()
+    const { supervisor } = supervisorFixture(session, new TrackedRelay(1), factory)
+    const activation = supervisor.beginConnectivity('download')
+    session.attach(7)
+    await supervisor.execute(undefined, async generation => generation.connectivity.addRelayLane(7))
+
+    const current = supervisor.currentGeneration()!
+    expect(current.lanes.laneIds()).toEqual([1, 7])
+
+    const stall = new BlockLaneAttemptsError([
+      new BlockInactivityTimeoutError('receiving_fragments', 15_000, 0, { laneId: 7 }),
+    ])
+    const recovered = await supervisor.recover(current, stall, undefined)
+    expect(recovered).toBe(true)
+    expect(supervisor.generationId).toBe(1)
+    expect(factory.connectFreshCalls).toBe(0)
+    expect(current.lanes.laneIds()).toEqual([1])
+
+    activation.close()
+    await supervisor.close()
+  })
 })

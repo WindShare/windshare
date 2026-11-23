@@ -69,7 +69,9 @@ export class FragmentAssembler {
   #lastProgressAt = 0
   #cancelledAt: number | undefined
 
-  constructor(operationId: bigint, now: () => number = () => Date.now()) {
+  // Use monotonic time so OS sleep or NTP calendar adjustments cannot falsely
+  // trigger fragment reassembly inactivity timeouts or tombstone expiry.
+  constructor(operationId: bigint, now: () => number = () => performance.now()) {
     if (typeof operationId !== 'bigint' || operationId < 1n || operationId > 0xffff_ffff_ffff_ffffn) {
       throw new CborError('fragment operation ID must be a nonzero uint64')
     }

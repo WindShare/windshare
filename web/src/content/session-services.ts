@@ -459,7 +459,7 @@ export class SessionBlockLane implements BlockLane {
   readonly id: number
   readonly #session: ReceiverSessionRuntime
   readonly #revisions: RevisionService
-  readonly #responses = new BlockResponseQueue()
+  readonly #responses: BlockResponseQueue
   readonly #lifetime = new AbortController()
 
   constructor(
@@ -470,6 +470,7 @@ export class SessionBlockLane implements BlockLane {
     this.id = id
     this.#session = session
     this.#revisions = revisions
+    this.#responses = new BlockResponseQueue(id)
   }
 
   async fetchBlock(demand: BlockDemand, signal: AbortSignal, observer?: BlockReadObserver): Promise<BlockRecord> {

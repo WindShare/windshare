@@ -8,22 +8,34 @@ export class BlockInactivityTimeoutError extends SessionRuntimeError {
   readonly phase: BlockReceivePhase
   readonly waitedMilliseconds: number
   readonly queueProgress: number
+  readonly laneId?: number
 
-  constructor(phase: BlockReceivePhase, waitedMilliseconds: number, queueProgress: number, options?: ErrorOptions) {
+  constructor(
+    phase: BlockReceivePhase,
+    waitedMilliseconds: number,
+    queueProgress: number,
+    options?: ErrorOptions & Readonly<{ laneId?: number }>,
+  ) {
     super('lane', `Block receive made no authenticated progress (${phase})`, options)
     this.name = 'BlockInactivityTimeoutError'
     this.phase = phase
     this.waitedMilliseconds = waitedMilliseconds
     this.queueProgress = queueProgress
+    if (options?.laneId !== undefined) this.laneId = options.laneId
   }
 }
 
 /** One content lane's finite, ordered set of outstanding response waits. */
 export class BlockResponseQueue {
   readonly #pending = new Set<BlockResponseWait>()
+  readonly #laneId: number | undefined
+
+  constructor(laneId?: number) {
+    this.#laneId = laneId
+  }
 
   begin(signal: AbortSignal): BlockResponseWait {
-    const wait = new BlockResponseWait(this.#pending, signal)
+    const wait = new BlockResponseWait(this.#pending, signal, this.#laneId)
     this.#pending.add(wait)
     return wait
   }
@@ -31,6 +43,7 @@ export class BlockResponseQueue {
 
 export class BlockResponseWait {
   readonly #pending: Set<BlockResponseWait>
+  readonly #laneId: number | undefined
   readonly #timeout = new AbortController()
   readonly #linked: ReturnType<typeof linkAbortSignals>
   readonly #started = performance.now()
@@ -40,8 +53,9 @@ export class BlockResponseWait {
   #reading = true
   #timer: ReturnType<typeof globalThis.setTimeout>
 
-  constructor(pending: Set<BlockResponseWait>, signal: AbortSignal) {
+  constructor(pending: Set<BlockResponseWait>, signal: AbortSignal, laneId?: number) {
     this.#pending = pending
+    this.#laneId = laneId
     this.#linked = linkAbortSignals(signal, this.#timeout.signal)
     this.#timer = globalThis.setTimeout(() => this.#checkDeadline(), FRAGMENT_INACTIVITY_TIMEOUT_MILLISECONDS)
   }
@@ -92,7 +106,12 @@ export class BlockResponseWait {
   }
 
   inactivityError(options?: ErrorOptions): BlockInactivityTimeoutError {
-    return new BlockInactivityTimeoutError(this.#phase, performance.now() - this.#started, this.#queueProgress, options)
+    return new BlockInactivityTimeoutError(
+      this.#phase,
+      performance.now() - this.#started,
+      this.#queueProgress,
+      { ...options, ...(this.#laneId === undefined ? {} : { laneId: this.#laneId }) },
+    )
   }
 
   close(): void {

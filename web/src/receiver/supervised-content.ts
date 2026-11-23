@@ -18,6 +18,11 @@ import {
   RevisionService,
 } from '../content/session-services'
 import type { FileRevisionDescriptor } from '../content/records'
+import { hasBlockInactivityTimeout } from './recovery-failure'
+
+// Bound consecutive inactivity-timeout recoveries at the same byte offset so a
+// wedged sender eventually yields to transfer-layer resumable pause instead of spinning.
+const MAXIMUM_STALLED_RECOVERIES = 3
 
 export interface ContentGeneration {
   readonly id: number
@@ -207,7 +212,12 @@ export class SupervisedContent {
     authorization.requireDescriptor(descriptor)
     authorization.requireRoutes(routes)
     const checked = descriptor.geometry.requireRange(requested)
-    const progress: RangeProgress = { offset: checked.start, replacementOffset: undefined }
+    const progress: RangeProgress = {
+      offset: checked.start,
+      replacementOffset: undefined,
+      stalledRecoveries: 0,
+      stalledOffset: undefined,
+    }
     authorization.beginRead()
     try {
       while (progress.offset < checked.end) {
@@ -242,7 +252,15 @@ export class SupervisedContent {
       progress.replacementOffset = progress.offset
       return
     }
+    const stalled = hasBlockInactivityTimeout(error)
+    if (stalled && progress.stalledOffset === progress.offset && progress.stalledRecoveries >= MAXIMUM_STALLED_RECOVERIES) {
+      throw error
+    }
     if (!(await this.#provider.recover(binding.generation, error, signal))) throw error
+    if (stalled) {
+      progress.stalledRecoveries = progress.stalledOffset === progress.offset ? progress.stalledRecoveries + 1 : 1
+      progress.stalledOffset = progress.offset
+    }
     authorization.invalidate(binding)
   }
 
@@ -562,6 +580,8 @@ function awaitBinding<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> 
 interface RangeProgress {
   offset: bigint
   replacementOffset: bigint | undefined
+  stalledRecoveries: number
+  stalledOffset: bigint | undefined
 }
 
 async function* readGenerationRange(
@@ -578,6 +598,8 @@ async function* readGenerationRange(
   )) {
     yielded = true
     progress.offset = requireNextOffset(slice, progress.offset, end)
+    progress.stalledRecoveries = 0
+    progress.stalledOffset = undefined
     yield slice
   }
   if (!yielded && progress.offset < end) {

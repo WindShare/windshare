@@ -11,6 +11,7 @@ import {
   LaneSet,
   type RouteAuthorizedBlockRangeReader,
 } from '../../src/content/broker'
+import { BlockInactivityTimeoutError } from '../../src/content/scheduling/block-response-wait'
 import { REVISION_CODE_QUOTA } from '../../src/content/flow'
 import {
   type OpenedRevision,
@@ -560,5 +561,56 @@ describe('v2 supervised connectivity activation ownership', () => {
     expect(third.begins[0]?.delegateCloses).toBe(1)
     await supervised.close()
     expect(third.closeCalls).toBe(1)
+  })
+})
+
+describe('v2 supervised stalled-recovery bounds', () => {
+  it('bounds consecutive zero-progress inactivity recoveries and resets after progress', async () => {
+    const stable = revision()
+    const stall = () => new BlockLaneAttemptsError([
+      new BlockInactivityTimeoutError('awaiting_first_fragment', 15_000, 0, { laneId: 1 }),
+    ])
+    let reads = 0
+    const fixture = generationFixture(1, stable, async function* (range) {
+      reads += 1
+      if (reads === 1) {
+        yield { offset: range.start, data: Uint8Array.of(9) }
+        throw stall()
+      }
+      if (reads === 2) {
+        yield { offset: range.start, data: Uint8Array.of(8) }
+        throw stall()
+      }
+      // Subsequent reads make zero progress at offset 2n -> must stop after 3 recoveries.
+      throw stall()
+    })
+    let recoveries = 0
+    const provider: ContentGenerationProvider = {
+      execute: async (_signal, op) => ({ generation: fixture.generation, value: await op(fixture.generation) }),
+      recover: async () => {
+        recoveries += 1
+        return true
+      },
+      isCurrent: () => true,
+      contentLaneCount: () => 1,
+    }
+    const content = new SupervisedContent(provider)
+    const routes = new ConnectivityRouteAuthority()
+    const scoped = content.forRoutes(routes)
+    const opened = await scoped.revisions.open(stable.fileId)
+    const received: number[] = []
+
+    await expect(async () => {
+      for await (const slice of scoped.broker.readRange(opened.descriptor, opened.leaseId, byteRange(0n, 4n))) {
+        received.push(...slice.data)
+      }
+    }).rejects.toBeInstanceOf(BlockLaneAttemptsError)
+
+    expect(received).toEqual([9, 8])
+    // 1 recovery at offset 1n + 3 consecutive zero-progress recoveries at offset 2n = 4 total.
+    expect(recoveries).toBe(4)
+    expect(reads).toBe(5)
+    await opened.release()
+    content.close()
   })
 })

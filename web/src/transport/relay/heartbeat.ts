@@ -14,6 +14,8 @@ export const RELAY_HEARTBEAT_TIMEOUT_MILLISECONDS = 45_000
 // Acknowledgements can lag several probes on a slow downlink while content
 // keeps the connection alive; untracked probes lose only their round-trip trace.
 const MAXIMUM_TRACKED_PROBES = 8
+// Coalesce bursty wake/reconnect triggers so on-demand probes cannot flood a relay.
+const MINIMUM_ON_DEMAND_PROBE_INTERVAL_MILLISECONDS = 1_000
 
 let nextHeartbeatConnectionId = 0n
 
@@ -52,9 +54,12 @@ export class RelayHeartbeat {
   readonly #trace: ((event: RelayHeartbeatTrace) => void) | undefined
   #probeTimer: ReturnType<typeof setTimeout> | undefined
   #silenceTimer: ReturnType<typeof setTimeout> | undefined
+  #verifyTimer: ReturnType<typeof setTimeout> | undefined
+  #verifyDeadlineAt: number | undefined
   #round = 0n
   #acknowledged = 0n
   #tracked: TrackedProbe[] = []
+  #lastProbeSentAt = -Infinity
   // Calendar corrections must not postpone relay loss or revoke a healthy path.
   #lastInboundAt = performance.now()
   #closed = false
@@ -70,6 +75,34 @@ export class RelayHeartbeat {
   /** Records a frame the connection accepted; the silence timer rereads it lazily. */
   observeInbound(): void {
     this.#lastInboundAt = performance.now()
+    this.#clearVerify()
+  }
+
+  /**
+   * Sends an immediate probe (rate-limited) without violating the inbound-silence
+   * liveness invariant. When a verification deadline is supplied (e.g. after OS
+   * wake or network recovery), any accepted inbound frame before that deadline
+   * clears it; continued silence fails the stale connection promptly.
+   */
+  probeNow(deadlineMilliseconds?: number): void {
+    if (this.#closed) return
+    const now = performance.now()
+    if (now - this.#lastProbeSentAt >= MINIMUM_ON_DEMAND_PROBE_INTERVAL_MILLISECONDS) {
+      globalThis.clearTimeout(this.#probeTimer)
+      this.#probeTimer = undefined
+      this.#probe()
+      if (this.#closed) return
+    }
+    if (deadlineMilliseconds === undefined || deadlineMilliseconds <= 0) return
+    const targetDeadline = now + deadlineMilliseconds
+    if (this.#verifyDeadlineAt !== undefined && this.#verifyDeadlineAt <= targetDeadline) return
+    this.#clearVerify()
+    this.#verifyDeadlineAt = targetDeadline
+    const requestedAt = now
+    this.#verifyTimer = globalThis.setTimeout(
+      () => this.#checkVerify(requestedAt),
+      Math.max(0, Math.ceil(targetDeadline - performance.now())),
+    )
   }
 
   /**
@@ -98,6 +131,15 @@ export class RelayHeartbeat {
     this.#tracked = []
     globalThis.clearTimeout(this.#probeTimer)
     globalThis.clearTimeout(this.#silenceTimer)
+    this.#clearVerify()
+  }
+
+  #clearVerify(): void {
+    if (this.#verifyTimer !== undefined) {
+      globalThis.clearTimeout(this.#verifyTimer)
+      this.#verifyTimer = undefined
+    }
+    this.#verifyDeadlineAt = undefined
   }
 
   #scheduleProbe(): void {
@@ -112,6 +154,7 @@ export class RelayHeartbeat {
     if (this.#closed) return
     this.#round += 1n
     const now = performance.now()
+    this.#lastProbeSentAt = now
     this.#tracked.push({ round: this.#round, sentAt: now })
     if (this.#tracked.length > MAXIMUM_TRACKED_PROBES) this.#tracked.shift()
     this.#emit('probe', this.#round, 0)
@@ -124,6 +167,13 @@ export class RelayHeartbeat {
       return
     }
     this.#scheduleProbe()
+  }
+
+  #checkVerify(requestedAt: number): void {
+    this.#verifyTimer = undefined
+    this.#verifyDeadlineAt = undefined
+    if (this.#closed || this.#lastInboundAt >= requestedAt) return
+    this.#failed(new RelayHeartbeatError('Relay liveness probe timed out'), performance.now() - this.#lastInboundAt)
   }
 
   #checkSilence(): void {

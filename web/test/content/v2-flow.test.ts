@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   decodeOpenResults,
@@ -107,4 +107,27 @@ describe('v2 fragment inactivity accounting', () => {
       name: 'FragmentInactivityError',
     })
   })
+
+  it('uses a monotonic default clock so forward wall-clock jumps do not abort reassembly', async () => {
+    vi.useFakeTimers()
+    try {
+      const operationId = 13n
+      const object = new Uint8Array(FRAGMENT_PAYLOAD_BYTES + 1).fill(0x33)
+      const fragments = fragmentRecord(operationId, object)
+      const assembler = new FragmentAssembler(operationId)
+
+      await expect(assembler.accept(fragments[0]!)).resolves.toMatchObject({ status: 'accepted' })
+      // Calendar jumps forward by 1 hour while only 1 second of monotonic time passes.
+      vi.setSystemTime(Date.now() + 60 * 60 * 1_000)
+      await vi.advanceTimersByTimeAsync(1_000)
+      await expect(assembler.accept(fragments[1]!)).resolves.toMatchObject({
+        status: 'complete',
+        object,
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
+
+afterEach(() => vi.useRealTimers())
