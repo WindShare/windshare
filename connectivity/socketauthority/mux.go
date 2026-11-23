@@ -28,6 +28,8 @@ func (m *Mux) endpoint(addr net.Addr) (*ice.UniversalUDPMuxDefault, error) {
 	return nil, fmt.Errorf("socket endpoint unavailable: %s", addr)
 }
 
+// The socket survives across attempts. Its current owner must cancel and drain
+// outstanding discovery before releasing the claim to its successor.
 func (m *Mux) DiscoverXORMappedAddr(ctx context.Context, local netip.AddrPort, server *net.UDPAddr, timeout time.Duration) (netip.AddrPort, error) {
 	endpoint, err := m.endpoint(net.UDPAddrFromAddrPort(local))
 	if err != nil {

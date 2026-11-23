@@ -15,7 +15,7 @@ type candidateDispatch struct {
 	current          *candidateSubscription
 	queue            []candidateEvent
 	draining         bool
-	pionEnded        bool
+	trickle          candidateTrickleState
 	observing        bool
 	afterObservation func()
 }
@@ -30,14 +30,34 @@ type candidateSubscription struct {
 
 	// The single drain owns gathering state, including when callbacks replace
 	// themselves while handling a host or its mapped candidate.
-	seen      map[MappedEndpoint]bool
-	pending   int
-	pionEnded bool
+	seen             map[MappedEndpoint]bool
+	pending          int
+	pionEnded        bool
+	profileUncertain bool
 }
 
+type candidateTrickleState uint8
+
+const (
+	awaitingFirstCandidate candidateTrickleState = iota
+	collectingCandidates
+	awaitingTrickleEnd
+	trickleEnded
+)
+
+type candidateEventKind uint8
+
+const (
+	gatheredCandidate candidateEventKind = iota
+	lateCandidate
+	hostProbeCompleted
+	pionGatheringEnded
+	transferredTrickleEnd
+)
+
 type candidateEvent struct {
+	kind      candidateEventKind
 	candidate *pion.ICECandidate
-	late      bool
 	probe     *hostProbeResult
 }
 
@@ -58,9 +78,24 @@ func (c *Connection) OnICECandidate(callback func(*pion.ICECandidate)) {
 // socket cleanup, but its probes cannot start until the predecessor has left.
 func (d *candidateDispatch) replace(next *candidateSubscription) {
 	d.mu.Lock()
+	if next != nil && d.trickle == trickleEnded {
+		d.mu.Unlock()
+		next.cancel()
+		return
+	}
 	old := d.current
 	d.current = next
 	d.queue = nil
+	if next != nil {
+		// An accepted host may still be queued when its subscription is
+		// retired. Only a fresh discovery can then establish profile health.
+		next.profileUncertain = d.trickle != awaitingFirstCandidate
+		if d.trickle == awaitingTrickleEnd {
+			// Preserve the signaling obligation without replaying candidates or
+			// making a gathering claim on behalf of the retired subscription.
+			d.queue = append(d.queue, candidateEvent{kind: transferredTrickleEnd})
+		}
+	}
 	d.mu.Unlock()
 	if old != nil {
 		old.cancel()
@@ -77,14 +112,22 @@ func (d *candidateDispatch) replace(next *candidateSubscription) {
 func (d *candidateDispatch) receive(candidate *pion.ICECandidate) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.current == nil || (candidate == nil && d.pionEnded) {
+	if d.current == nil {
 		return
 	}
-	event := candidateEvent{candidate: candidate, late: d.pionEnded}
+	kind := gatheredCandidate
 	if candidate == nil {
-		d.pionEnded = true
+		if d.trickle >= awaitingTrickleEnd {
+			return
+		}
+		d.trickle = awaitingTrickleEnd
+		kind = pionGatheringEnded
+	} else if d.trickle >= awaitingTrickleEnd {
+		kind = lateCandidate
+	} else {
+		d.trickle = collectingCandidates
 	}
-	d.enqueueLocked(event)
+	d.enqueueLocked(candidateEvent{kind: kind, candidate: candidate})
 }
 
 func (d *candidateDispatch) enqueueLocked(event candidateEvent) {
@@ -114,6 +157,25 @@ func (d *candidateDispatch) drain() {
 	}
 	d.draining = false
 	d.mu.Unlock()
+}
+
+// Replacing the handler from inside a gathering observer must hand off the
+// pending nil. Replacing it from inside the final callback must not replay it.
+func (s *candidateSubscription) endTrickle() {
+	d := &s.connection.candidates
+	d.mu.Lock()
+	if d.current != s || d.trickle != awaitingTrickleEnd {
+		d.mu.Unlock()
+		return
+	}
+	d.trickle = trickleEnded
+	callback := s.callback
+	s.callback = nil
+	s.seen = nil
+	d.mu.Unlock()
+	if callback != nil {
+		callback(nil)
+	}
 }
 
 // Only the drain admits observations and application callbacks. A handoff can

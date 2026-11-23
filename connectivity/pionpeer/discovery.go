@@ -13,25 +13,29 @@ type hostProbeResult struct {
 }
 
 func (s *candidateSubscription) handle(event candidateEvent) {
-	switch {
-	case event.probe != nil:
+	switch event.kind {
+	case gatheredCandidate:
+		s.gather(event.candidate)
+		return
+	case lateCandidate:
+		// Pion pairs an active TCP host internally when a remote passive
+		// candidate arrives. The SDP may already have ended wire trickle.
+		s.observe(func() { s.connection.observeCandidate(event.candidate) })
+		return
+	case transferredTrickleEnd:
+		s.endTrickle()
+		return
+	case hostProbeCompleted:
 		s.pending--
 		s.recordProbe(event.probe)
-	case event.candidate != nil:
-		if event.late {
-			// Pion pairs a new active TCP host internally when a remote passive
-			// candidate arrives. The initial SDP or a consumer of nil may already
-			// have signaled end-of-candidates; this remains a local observation.
-			s.observe(func() { s.connection.observeCandidate(event.candidate) })
-		} else {
-			s.gather(event.candidate)
-		}
-		return
-	default:
+	case pionGatheringEnded:
 		s.pionEnded = true
 	}
 	if s.pionEnded && s.pending == 0 {
-		s.emit(nil)
+		if !s.profileUncertain {
+			s.observe(func() { s.connection.observeCandidate(nil) })
+		}
+		s.endTrickle()
 	}
 }
 
@@ -78,7 +82,7 @@ func (s *candidateSubscription) startProbes(local netip.AddrPort, host *pion.ICE
 			result := &hostProbeResult{host: host, mapping: MappedEndpoint{Local: local, External: external, Protocol: "udp"}, found: err == nil}
 			d.mu.Lock()
 			if d.current == s {
-				d.enqueueLocked(candidateEvent{probe: result})
+				d.enqueueLocked(candidateEvent{kind: hostProbeCompleted, probe: result})
 			}
 			d.mu.Unlock()
 		})
@@ -91,6 +95,7 @@ func (s *candidateSubscription) recordProbe(result *hostProbeResult) {
 		s.observe(func() { s.connection.observe("stun_host_port_failed", family) })
 		return
 	}
+	s.profileUncertain = false
 	// A matching router mapping suppresses a second advertisement. STUN still
 	// succeeded on this socket, and profile accounting precedes gathering completion.
 	s.observe(func() { s.connection.observe(HostSTUNDiscovered, family) })

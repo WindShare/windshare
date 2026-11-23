@@ -234,6 +234,9 @@ func TestLateActiveTCPCandidateObservedAfterEndOfTrickle(t *testing.T) {
 		peer.candidates.receive(host)
 		peer.candidates.receive(nil)
 		synctest.Wait()
+		if peer.candidates.current.callback != nil || peer.candidates.current.seen != nil {
+			t.Fatal("completed gathering retained its signaling callback or mapped candidates")
+		}
 		active := &pion.ICECandidate{Typ: pion.ICECandidateTypeHost, Protocol: pion.ICEProtocolTCP, Address: "192.0.2.2", Port: 2001, Component: 1, TCPType: "active"}
 		peer.OnICECandidate(callback)
 		peer.candidates.receive(active)
@@ -245,7 +248,7 @@ func TestLateActiveTCPCandidateObservedAfterEndOfTrickle(t *testing.T) {
 		if len(observations) != 3 || observations[1].Milestone != GatheringComplete || observations[2].Candidate == nil || observations[2].Candidate.TCPType != "active" {
 			t.Fatalf("late TCP observation or unique completion missing: %+v", observations)
 		}
-		if peer.candidates.draining || peer.candidates.queue != nil {
+		if peer.candidates.draining || peer.candidates.queue != nil || peer.candidates.current.callback != nil {
 			t.Fatal("idle candidate stream retained work")
 		}
 	})
