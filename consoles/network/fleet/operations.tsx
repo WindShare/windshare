@@ -31,15 +31,22 @@ function canEscalateDrainPending(
     (command.kind === 'disable' || command.kind === 'remove') && !command.early_cutoff
 }
 
+function listingToken(node: Pick<NodeDetails, 'state' | 'version'>): string {
+  return `${node.state}:${node.version}`
+}
+
 export function FleetControls({ node, api, refresh }: { node: NodeDetails; api: AuthorityClient; refresh: () => Promise<void> }) {
   const t = useCopy(networkCopy)
   const action = useAction()
   const [pending, setPending] = useState<PendingAction | null>(null)
+  const [feedbackListing, setFeedbackListing] = useState<string | null>(null)
+  const currentListing = listingToken(node)
   const disabled = node.state === 'disabled'
   const canDrain = servesRelay(node) && (node.state === 'canary' || node.state === 'active')
   const details = pending && confirmDetails(t, pending)
   function run(command: FleetAction, observed = node) {
     void action.run(async () => {
+      setFeedbackListing(listingToken(observed))
       try {
         await api.manage(observed, command)
       } catch (error) {
@@ -56,6 +63,8 @@ export function FleetControls({ node, api, refresh }: { node: NodeDetails; api: 
     })
   }
   const next = disabled ? 'remove' : 'disable'
+  // Manage preconditions bind to (state, version), so errors expire once a refresh advances either.
+  const feedback = feedbackListing === currentListing ? action.feedback : null
   return <section className="panel padded stack"><h2>{t.fleetOperations}</h2>
     <div className="actions">
       {node.state !== 'active' && <button type="button" disabled={action.busy}
@@ -70,6 +79,6 @@ export function FleetControls({ node, api, refresh }: { node: NodeDetails; api: 
         setPending(null)
         run({ kind: pending.kind, early_cutoff: pending.earlyCutoff }, pending.node)
       }}><p>{details.body}</p></Confirm>}
-    <Notice feedback={action.feedback} />
+    <Notice feedback={feedback} />
   </section>
 }
