@@ -18,17 +18,25 @@ import (
 )
 
 type fakeWindowsRevisionMetadata struct {
-	identity       windowsRevisionFileIDInfo
-	identityErr    error
-	information    windows.ByHandleFileInformation
-	informationErr error
-	basic          windowsFileBasicInfo
-	basicErr       error
-	filesystem     string
-	filesystemErr  error
-	path           string
-	pathErr        error
-	volumeCalls    int
+	identity         windowsRevisionFileIDInfo
+	identityErr      error
+	information      windows.ByHandleFileInformation
+	informationErr   error
+	basic            windowsFileBasicInfo
+	basicErr         error
+	attributeTag     windowsAttributeTagInfo
+	attributeTagErr  error
+	fileType             uint32
+	fileTypeErr          error
+	placeholderState     uint32
+	lastPlaceholderAttrs uint32
+	filesystem           string
+	filesystemErr    error
+	path             string
+	pathErr          error
+	volumeCalls      int
+	attrTagCalls     int
+	fileTypeCalls    int
 }
 
 func (api *fakeWindowsRevisionMetadata) FileIdentity(windows.Handle) (windowsRevisionFileIDInfo, error) {
@@ -39,6 +47,31 @@ func (api *fakeWindowsRevisionMetadata) FileInformation(windows.Handle) (windows
 }
 func (api *fakeWindowsRevisionMetadata) BasicInformation(windows.Handle) (windowsFileBasicInfo, error) {
 	return api.basic, api.basicErr
+}
+func (api *fakeWindowsRevisionMetadata) AttributeTag(windows.Handle) (windowsAttributeTagInfo, error) {
+	api.attrTagCalls++
+	if api.attributeTagErr != nil {
+		return windowsAttributeTagInfo{}, api.attributeTagErr
+	}
+	info := api.attributeTag
+	if info.FileAttributes == 0 {
+		info.FileAttributes = api.information.FileAttributes
+	}
+	return info, nil
+}
+func (api *fakeWindowsRevisionMetadata) FileType(windows.Handle) (uint32, error) {
+	api.fileTypeCalls++
+	if api.fileTypeErr != nil {
+		return 0, api.fileTypeErr
+	}
+	if api.fileType == 0 {
+		return windows.FILE_TYPE_DISK, nil
+	}
+	return api.fileType, nil
+}
+func (api *fakeWindowsRevisionMetadata) PlaceholderState(attributes uint32, _ uint32) uint32 {
+	api.lastPlaceholderAttrs = attributes
+	return api.placeholderState
 }
 func (api *fakeWindowsRevisionMetadata) Filesystem(windows.Handle) (string, error) {
 	api.volumeCalls++
@@ -354,5 +387,152 @@ func TestWindowsStableTokenUsesCachedFilesystemMetadata(t *testing.T) {
 		if api.volumeCalls != 0 {
 			t.Fatal("block verification repeated filesystem metadata probes")
 		}
+	}
+}
+
+func TestWindowsOrdinaryFileReadDoesNotAddAttributeTagOrFileTypeQueries(t *testing.T) {
+	api := windowsMetadataFixture()
+	file := windowsPreliminaryFile(t)
+	defer file.Close()
+	metadata := windowsRootRevisionMetadata{windowsRevisionMetadata: &api, filesystem: "NTFS"}
+	native := &nativeWindowsRevisionFile{file: file, metadata: metadata}
+	baseline, err := native.Token()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stable := &windowsStableFile{handle: native, baseline: baseline}
+	if err := stable.Verify(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 4)
+	if _, err := stable.ReadAt(context.Background(), buf, 0); err != nil {
+		t.Fatal(err)
+	}
+	if api.attrTagCalls != 0 || api.fileTypeCalls != 0 {
+		t.Fatalf("ordinary file incurred extra queries: attrTag=%d fileType=%d", api.attrTagCalls, api.fileTypeCalls)
+	}
+}
+
+func TestWindowsCloudMetadataAdmitsHydratedAndDetectsMidShareDehydrationDrift(t *testing.T) {
+	hydratedState := cfPlaceholderStatePlaceholder | cfPlaceholderStateInSync
+	api := windowsMetadataFixture()
+	api.information.FileAttributes = windows.FILE_ATTRIBUTE_ARCHIVE | windows.FILE_ATTRIBUTE_REPARSE_POINT
+	api.attributeTag = windowsAttributeTagInfo{
+		FileAttributes: api.information.FileAttributes,
+		ReparseTag:     testReparseTagCloudPinned,
+	}
+	api.placeholderState = hydratedState
+	api.fileType = windows.FILE_TYPE_DISK
+
+	file := windowsPreliminaryFile(t)
+	defer file.Close()
+	metadata := windowsRootRevisionMetadata{windowsRevisionMetadata: &api, filesystem: "NTFS"}
+	native := &nativeWindowsRevisionFile{file: file, metadata: metadata}
+	baseline, err := native.Token()
+	if err != nil {
+		t.Fatalf("hydrated cloud file rejected: %v", err)
+	}
+	stable := &windowsStableFile{handle: native, baseline: baseline}
+	if err := stable.Verify(context.Background()); err != nil {
+		t.Fatalf("hydrated cloud verify failed: %v", err)
+	}
+	buf := make([]byte, 4)
+	if _, err := stable.ReadAt(context.Background(), buf, 0); err != nil {
+		t.Fatalf("hydrated cloud read failed: %v", err)
+	}
+	// FileType must be checked once when first binding the cloud handle and reused afterwards.
+	if api.fileTypeCalls != 1 {
+		t.Fatalf("hydrated cloud fileTypeCalls = %d, want 1", api.fileTypeCalls)
+	}
+
+	// Simulate mid-share dehydration via RECALL_ON_DATA_ACCESS and OFFLINE.
+	for _, mutatedAttr := range []uint32{windowsAttrRecallOnDataAccess, windowsAttrOffline} {
+		api.information.FileAttributes = windows.FILE_ATTRIBUTE_ARCHIVE | windows.FILE_ATTRIBUTE_REPARSE_POINT | mutatedAttr
+		api.attributeTag.FileAttributes = api.information.FileAttributes
+		if err := stable.Verify(context.Background()); !errors.Is(err, content.ErrSourceDrift) {
+			t.Fatalf("mutated attr %#x Verify() = %v, want ErrSourceDrift", mutatedAttr, err)
+		}
+		if _, err := stable.ReadAt(context.Background(), buf, 0); !errors.Is(err, content.ErrSourceDrift) {
+			t.Fatalf("mutated attr %#x ReadAt() = %v, want ErrSourceDrift", mutatedAttr, err)
+		}
+	}
+
+	// Simulate non-disk file type or unsupported reparse tag failing closed on bind/reopen.
+	for _, tc := range []struct {
+		name      string
+		configure func(*fakeWindowsRevisionMetadata)
+		want      error
+	}{
+		{
+			name: "non-disk hydrated cloud handle",
+			configure: func(m *fakeWindowsRevisionMetadata) {
+				m.fileType = windows.FILE_TYPE_PIPE
+			},
+			want: content.ErrRevisionStale,
+		},
+		{
+			name: "WOF reparse tag",
+			configure: func(m *fakeWindowsRevisionMetadata) {
+				m.attributeTag.ReparseTag = testReparseTagWOF
+			},
+			want: content.ErrRevisionStale,
+		},
+		{
+			name: "mount point tag",
+			configure: func(m *fakeWindowsRevisionMetadata) {
+				m.attributeTag.ReparseTag = windows.IO_REPARSE_TAG_MOUNT_POINT
+			},
+			want: content.ErrRevisionStale,
+		},
+		{
+			name: "invalid placeholder state",
+			configure: func(m *fakeWindowsRevisionMetadata) {
+				m.placeholderState = cfPlaceholderStateInvalid
+			},
+			want: content.ErrRevisionStale,
+		},
+		{
+			name: "partial placeholder on reopen",
+			configure: func(m *fakeWindowsRevisionMetadata) {
+				m.placeholderState = hydratedState | cfPlaceholderStatePartial
+			},
+			want: content.ErrRevisionStale,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := windowsMetadataFixture()
+			m.information.FileAttributes = windows.FILE_ATTRIBUTE_ARCHIVE | windows.FILE_ATTRIBUTE_REPARSE_POINT
+			m.attributeTag = windowsAttributeTagInfo{FileAttributes: m.information.FileAttributes, ReparseTag: testReparseTagCloudPinned}
+			m.placeholderState = hydratedState
+			m.fileType = windows.FILE_TYPE_DISK
+			tc.configure(&m)
+			if _, err := inspectWindowsFileToken(1, &m); !errors.Is(err, tc.want) {
+				t.Fatalf("inspectWindowsFileToken() = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestVerifyWindowsHandleMetadataMasksEAAndGuardsNilFiles(t *testing.T) {
+	api := windowsMetadataFixture()
+	api.information.FileAttributes = windows.FILE_ATTRIBUTE_ARCHIVE | windows.FILE_ATTRIBUTE_REPARSE_POINT | testAttrEA
+	api.attributeTag = windowsAttributeTagInfo{
+		FileAttributes: api.information.FileAttributes,
+		ReparseTag:     testReparseTagCloudPinned,
+	}
+	api.placeholderState = cfPlaceholderStatePlaceholder | cfPlaceholderStateInSync
+	api.fileType = windows.FILE_TYPE_DISK
+
+	if _, err := inspectWindowsFileToken(1, &api); err != nil {
+		t.Fatalf("inspectWindowsFileToken with EA = %v", err)
+	}
+	if api.lastPlaceholderAttrs&windowsAttrEA != 0 {
+		t.Fatalf("PlaceholderState received unmasked EA bit: %#08x", api.lastPlaceholderAttrs)
+	}
+	if _, err := (nativeWindowsRevisionPlatform{}).Token(nil); !errors.Is(err, content.ErrUnsupportedStability) {
+		t.Fatalf("Token(nil) = %v, want ErrUnsupportedStability", err)
+	}
+	if _, err := (&nativeWindowsRevisionFile{}).Token(); !errors.Is(err, content.ErrUnsupportedStability) {
+		t.Fatalf("nil file Token() = %v, want ErrUnsupportedStability", err)
 	}
 }

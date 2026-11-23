@@ -62,10 +62,9 @@ impl Desktop {
                 theme, share, settled, pending, playback, locale,
             ))
             .child(file_summary(theme, share, locale))
-            .when(
-                revealed && (share.error().is_some() || share.relay_notice().is_some()),
-                |el| el.child(Self::share_notice(theme, share, cx)),
-            )
+            .when(revealed && share.has_notice(), |el| {
+                el.child(Self::share_notice(theme, share, cx))
+            })
             .child(
                 self.result_action(theme, share.id, publication, cx)
                     .with_spring(
@@ -199,19 +198,36 @@ impl Desktop {
     }
 
     pub(crate) fn share_notice(theme: Theme, share: &Share, cx: &Context<Self>) -> Div {
+        let locale = language(cx);
         column()
+            .w_full()
+            .min_w_0()
             .gap(px(8.))
-            .when_some(share.error(), |el, error| {
+            .when_some(share.error_message(locale), |el, error| {
                 el.child(
                     theme
-                        .label(error.to_owned(), 15.)
+                        .label(error, 15.)
+                        .w_full()
+                        .min_w_0()
                         .text_color(Tone::Rose.text(theme)),
                 )
             })
             .when_some(share.relay_notice(), |el, message| {
                 el.child(
                     theme
-                        .caption(language(cx).text(message))
+                        .caption(locale.text(message))
+                        .w_full()
+                        .min_w_0()
+                        .text_color(Tone::Peach.text(theme)),
+                )
+            })
+            .when_some(share.omission_notice(locale), |el, message| {
+                el.child(
+                    theme
+                        .caption(message)
+                        .w_full()
+                        .min_w_0()
+                        .line_clamp(3)
                         .text_color(Tone::Peach.text(theme)),
                 )
             })

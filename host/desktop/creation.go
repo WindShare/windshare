@@ -149,7 +149,7 @@ func (a *Application) prepareAdmission(ctx context.Context, op *operation, trace
 	if errors.Is(err, engine.ErrNetworkUnavailable) {
 		return networkBlocked(err)
 	}
-	return terminal{result: Completion{Outcome: OutcomeFailed, StopReason: NoStopReason, Error: err.Error()}, error: failure("creation_failed", err)}
+	return terminal{result: Completion{Outcome: OutcomeFailed, StopReason: NoStopReason, Error: errorText(err)}, error: engineFailure("creation_failed", err)}
 }
 
 func (a *Application) completeAdmission(ctx context.Context, op *operation, phase operationPhase) {

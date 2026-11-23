@@ -1,5 +1,5 @@
 use crate::{
-    model::{Share, ShareAge, ShareContents, ShareState},
+    model::{Share, ShareAge, ShareContents, ShareError, ShareState},
     sharing::SharePublication,
 };
 use std::time::{Duration, SystemTime};
@@ -7,18 +7,31 @@ use windshare_host::{Operation, OperationState, Outcome, SelectedRoot, ShareStat
 use windshare_ui::Icon;
 
 pub fn update_share(share: &mut Share, operation: &Operation) {
-    let error = operation.error().map(str::to_owned);
+    let error = operation
+        .failure()
+        .map(ShareError::from_failure)
+        .or_else(|| {
+            operation
+                .error()
+                .map(|msg| ShareError::Message(msg.to_owned()))
+        });
     match &operation.state {
         OperationState::Submitting => {
+            share.omissions = None;
             share.state = ShareState::Preparing { error: None };
         }
         OperationState::Rejected(_) => {
+            share.omissions = None;
             share.state = ShareState::Failed {
                 error,
                 authorization: None,
             };
         }
         OperationState::Accepted(task) => {
+            share.omissions = task
+                .omissions
+                .clone()
+                .filter(|omissions| omissions.count > 0);
             if let Some(created) =
                 SystemTime::UNIX_EPOCH.checked_add(Duration::from_millis(task.created_at_ms))
             {

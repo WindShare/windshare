@@ -2,10 +2,12 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"net"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,6 +54,7 @@ func TestDescribeFailureCoversDomainCategoriesAndContext(t *testing.T) {
 		{"selection missing", &catalog.SelectionError{Label: "a.txt", Cause: &catalog.SourceError{Failure: catalog.SourceFailureMissing}}, FailureSourceMissing},
 		{"source access", &catalog.SourceError{Failure: catalog.SourceFailureAccessDenied}, FailureSourceAccessDenied},
 		{"source unsupported", &catalog.SourceError{Failure: catalog.SourceFailureUnsupported}, FailureSourceUnsupported},
+		{"source cloud placeholder", &catalog.SelectionError{Label: "cloud.docx", Cause: &catalog.SourceError{Failure: catalog.SourceFailureCloudPlaceholder}}, FailureSourceCloudPlaceholder},
 		{"source stale", &catalog.SourceError{Failure: catalog.SourceFailureStale}, FailureSourceChanged},
 		{"source unavailable", &catalog.SourceError{Failure: catalog.SourceFailureUnavailable}, FailureSourceUnavailable},
 		{"selection collision", &catalog.SelectionNameCollisionError{FirstLabel: "a", SecondLabel: "A"}, FailureSelectionCollision},
@@ -156,6 +159,48 @@ func TestWorkflowEventTranslationAndDiagnosticRecords(t *testing.T) {
 		source, ok := ev.(diagnostics.Source)
 		if !ok || !source.DiagnosticRecord().Valid() {
 			t.Fatalf("event %T produced invalid diagnostic record", ev)
+		}
+	}
+}
+
+func TestCloudPlaceholderFailurePreservesPathAndOmissionRecordRedactsNames(t *testing.T) {
+	f, ok := DescribeFailure(&catalog.SelectionError{
+		Label: `C:\OneDrive\cloud.docx`,
+		Cause: &catalog.SourceError{Failure: catalog.SourceFailureCloudPlaceholder},
+	})
+	if !ok || f.Code != FailureSourceCloudPlaceholder || f.SourcePath != `C:\OneDrive\cloud.docx` {
+		t.Fatalf("cloud placeholder selection failure = (%+v, %v)", f, ok)
+	}
+
+	event := SourceOmissions{Summary: catalog.SourceOmissions{
+		DirectoryPath: `C:\Users\alice\OneDrive\Private`,
+		Count:         2,
+		Samples: []catalog.SourceOmission{
+			{Name: "secret-cloud.docx", Reason: catalog.SourceOmissionCloudPlaceholder},
+			{Name: "Report.txt", Reason: catalog.SourceOmissionNameCollision, Detail: `collides with sibling "report.txt"`},
+		},
+	}}
+	record := event.DiagnosticRecord()
+	if !record.Valid() || record.Name() != "source_omissions" {
+		t.Fatalf("unexpected record: %+v", record)
+	}
+	payload := record.Payload()
+	if payload.Get("count").Uint() != 2 {
+		t.Fatalf("count = %v", payload.Get("count"))
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(encoded)
+	for _, secret := range []string{"secret-cloud.docx", "Report.txt", "report.txt", "Private", "collides"} {
+		if strings.Contains(body, secret) {
+			t.Fatalf("default diagnostic record leaked %q: %s", secret, body)
+		}
+	}
+	for _, want := range []string{`"cloud_placeholder"`, `"name_collision"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("diagnostic record missing reason %s: %s", want, body)
 		}
 	}
 }

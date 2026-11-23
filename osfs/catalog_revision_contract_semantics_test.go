@@ -160,7 +160,12 @@ func TestSelectedCatalogSourceClassifiesFilesystemAndIdentityFailures(t *testing
 		t.Fatal(err)
 	}
 	defer authority.Close()
-	if _, _, err := source.scanChild(cancelled, authority, sourceLocation{}, entries[0]); !errors.Is(err, context.Canceled) {
+	dirHandle, err := authority.Open(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dirHandle.Close()
+	if _, _, _, err := source.scanChild(cancelled, authority, dirHandle, sourceLocation{}, entries[0]); !errors.Is(err, context.Canceled) {
 		t.Fatalf("child cancellation error = %v", err)
 	}
 	components := []string{strings.Repeat("a", maxNativeSourcePathBytes-1)}
@@ -168,7 +173,7 @@ func TestSelectedCatalogSourceClassifiesFilesystemAndIdentityFailures(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := source.scanChild(context.Background(), authority, sourceLocation{path: string(parentLocator.Bytes()[sourceReferenceHeaderBytes:])}, entries[0]); !errors.Is(err, catalog.ErrInvalidPath) {
+	if _, _, _, err := source.scanChild(context.Background(), authority, dirHandle, sourceLocation{path: string(parentLocator.Bytes()[sourceReferenceHeaderBytes:])}, entries[0]); !errors.Is(err, catalog.ErrInvalidPath) {
 		t.Fatalf("expanded child locator error = %v", err)
 	}
 	closedHandle, err := os.Open(directRoot)

@@ -99,6 +99,7 @@ impl Desktop {
                     age: ShareAge::CreatedAt(SystemTime::now()),
                     tone: Tone::Mint,
                     symbol: Icon::Folder,
+                    omissions: None,
                     state: ShareState::Preparing { error: None },
                 },
             );

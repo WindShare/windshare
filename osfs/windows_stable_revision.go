@@ -11,6 +11,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sync"
 	"syscall"
@@ -96,6 +97,7 @@ func WindowsCatalogBaseline(file *os.File) (catalog.SourceIdentity, catalog.Vers
 	if file == nil {
 		return catalog.SourceIdentity{}, catalog.VersionCandidate{}, content.ErrUnsupportedStability
 	}
+	defer runtime.KeepAlive(file)
 	token, err := inspectWindowsMutationToken(windows.Handle(file.Fd()))
 	if err != nil {
 		return catalog.SourceIdentity{}, catalog.VersionCandidate{}, classifyWindowsIdentityError(err)
@@ -119,6 +121,7 @@ func windowsCatalogObjectBaseline(file *os.File) (catalog.SourceIdentity, catalo
 	if file == nil {
 		return catalog.SourceIdentity{}, catalog.VersionCandidate{}, content.ErrUnsupportedStability
 	}
+	defer runtime.KeepAlive(file)
 	handle := windows.Handle(file.Fd())
 	token, err := inspectWindowsCatalogToken(handle)
 	if err != nil {
@@ -218,11 +221,12 @@ func (b *WindowsStabilityBinder) ValidateRoots(roots []*os.Root) error {
 		return content.ErrUnsupportedStability
 	}
 	for index, root := range roots {
-		file, err := root.Open(".")
+		file, err := openRootObjectNoRecall(root, ".")
 		if err != nil {
 			return fmt.Errorf("open Windows root authority %d: %w", index, err)
 		}
 		osIdentity, identityErr := inspectWindowsHandleIdentity(windows.Handle(file.Fd()))
+		runtime.KeepAlive(file)
 		closeErr := file.Close()
 		if identityErr != nil || closeErr != nil {
 			return fmt.Errorf("inspect Windows root authority %d: %w", index, errors.Join(identityErr, closeErr))
@@ -272,6 +276,9 @@ func (f *windowsStableFile) Verify(ctx context.Context) error {
 func (f *windowsStableFile) verifyLocked() error {
 	current, err := f.handle.Token()
 	if err != nil {
+		if errors.Is(err, content.ErrRevisionStale) || isWindowsPlaceholderError(err) {
+			return fmt.Errorf("%w: %w", content.ErrSourceDrift, err)
+		}
 		return fmt.Errorf("inspect Windows stable source: %w", err)
 	}
 	if !current.sameOpenedRevision(f.baseline) {

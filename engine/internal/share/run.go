@@ -32,6 +32,7 @@ func Run(ctx context.Context, request Request, dependencies Dependencies) task.C
 	}
 	started := d.Control.Now()
 	o := newObservations(d.Control, request)
+	o.bindController(d.Controller)
 	resourceContext, cancelResources := context.WithCancel(context.WithoutCancel(ctx))
 	active := &activeShare{dependencies: d, observations: o, cancelResources: cancelResources}
 	class, operationErr := active.run(ctx, resourceContext, request)

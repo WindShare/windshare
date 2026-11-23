@@ -2,6 +2,7 @@ package osfs
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"path/filepath"
 	"sync"
@@ -13,19 +14,7 @@ import (
 type catalogOmissions struct {
 	count   uint64
 	samples []catalog.SourceOmission
-}
-
-func catalogOmissionFor(info fs.FileInfo) catalog.SourceOmissionReason {
-	switch {
-	case info.Mode()&fs.ModeSymlink != 0:
-		return catalog.SourceOmissionSymbolicLink
-	case isReparsePoint(info):
-		return catalog.SourceOmissionReparsePoint
-	case !info.IsDir() && !info.Mode().IsRegular():
-		return catalog.SourceOmissionSpecialFile
-	default:
-		return catalog.SourceOmissionNone
-	}
+	audits  []sourceEntryAudit
 }
 
 // A denied child must not hide readable siblings. Permission fixes take effect
@@ -63,7 +52,11 @@ func (source *SelectedCatalogSource) newScanOmissionReporter(
 				samples = append(samples, additionalSamples[:min(len(additionalSamples), remaining)]...)
 			}
 			for index, sample := range samples {
-				source.traceCatalogOmission(request, parent, sample, uint64(index+1))
+				var audit sourceEntryAudit
+				if index < len(initial.audits) {
+					audit = initial.audits[index]
+				}
+				source.traceCatalogOmission(request, parent, sample, audit, uint64(index+1))
 			}
 			source.traceCatalogOmissionSummary(request, totalCount)
 			source.observeCatalogOmissions(request, directoryPath, catalogOmissions{
@@ -95,17 +88,56 @@ func catalogScanCorrelation(request catalog.ScanRequest) diag.Fields {
 }
 
 func (source *SelectedCatalogSource) traceCatalogOmission(
-	request catalog.ScanRequest, parent sourceLocation, omission catalog.SourceOmission, count uint64,
+	request catalog.ScanRequest, parent sourceLocation, omission catalog.SourceOmission, audit sourceEntryAudit, count uint64,
 ) {
 	if !source.diagnostics.Enabled() || count > catalog.MaxSourceOmissionSamples {
 		return
 	}
-	source.diagnostics.Emit(diag.New("catalog_source_omission", diag.Fields{
+	fields := diag.Fields{
 		"root_slot":     diag.Uint(uint64(parent.RootSlot())),
 		"relative_path": diag.Text(filepath.ToSlash(filepath.Join(parent.RelativePath(), omission.Name))),
 		"reason":        diag.Text(string(omission.Reason)),
 		"detail":        diag.Text(omission.Detail),
-	}).Correlate(catalogScanCorrelation(request)))
+	}
+	addPolicyAuditFields(fields, omission.Reason, audit)
+	source.diagnostics.Emit(diag.New("catalog_source_omission", fields).Correlate(catalogScanCorrelation(request)))
+}
+
+func addPolicyAuditFields(fields diag.Fields, reason catalog.SourceOmissionReason, audit sourceEntryAudit) {
+	if !audit.present() {
+		return
+	}
+	var decision string
+	switch reason {
+	case catalog.SourceOmissionCloudPlaceholder:
+		decision = "cloud_placeholder"
+	case catalog.SourceOmissionReparsePoint:
+		decision = "rejected_reparse"
+	default:
+		return
+	}
+	fields["attributes"] = diag.Text(fmt.Sprintf("0x%08x", audit.attributes))
+	fields["reparse_tag"] = diag.Text(fmt.Sprintf("0x%08x", audit.reparseTag))
+	fields["decision"] = diag.Text(decision)
+	if audit.hasCloudState {
+		fields["placeholder_state"] = diag.Text(fmt.Sprintf("0x%08x", audit.placeholderState))
+	}
+}
+
+func (source *SelectedCatalogSource) traceSelectedRootPolicy(slot RootSlot, decision string, audit sourceEntryAudit) {
+	if !source.diagnostics.Enabled() || !audit.present() {
+		return
+	}
+	fields := diag.Fields{
+		"root_slot":   diag.Uint(uint64(slot)),
+		"decision":    diag.Text(decision),
+		"attributes":  diag.Text(fmt.Sprintf("0x%08x", audit.attributes)),
+		"reparse_tag": diag.Text(fmt.Sprintf("0x%08x", audit.reparseTag)),
+	}
+	if audit.hasCloudState {
+		fields["placeholder_state"] = diag.Text(fmt.Sprintf("0x%08x", audit.placeholderState))
+	}
+	source.diagnostics.Emit(diag.New("catalog_source_policy", fields))
 }
 
 func (source *SelectedCatalogSource) traceCatalogOmissionSummary(request catalog.ScanRequest, count uint64) {

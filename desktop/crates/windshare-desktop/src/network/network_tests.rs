@@ -16,10 +16,7 @@ fn global_context(id: &str) -> SetupContext {
 }
 
 fn failure(message: &str) -> Failure {
-    Failure {
-        code: "setup_failed".into(),
-        message: message.into(),
-    }
+    Failure::new("setup_failed", message)
 }
 
 #[test]

@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -93,6 +95,11 @@ type windowsRevisionMetadata interface {
 	FileIdentity(windows.Handle) (windowsRevisionFileIDInfo, error)
 	FileInformation(windows.Handle) (windows.ByHandleFileInformation, error)
 	BasicInformation(windows.Handle) (windowsFileBasicInfo, error)
+	AttributeTag(windows.Handle) (windowsAttributeTagInfo, error)
+	FileType(windows.Handle) (uint32, error)
+	// PlaceholderState decodes Cloud Files state for handle-sourced attributes
+	// with FILE_ATTRIBUTE_EA (0x00040000) already cleared.
+	PlaceholderState(attributes, reparseTag uint32) uint32
 	Filesystem(windows.Handle) (string, error)
 	FinalPath(windows.Handle) (string, error)
 }
@@ -115,6 +122,18 @@ func (nativeWindowsRevisionMetadata) BasicInformation(handle windows.Handle) (wi
 	var basic windowsFileBasicInfo
 	err := windows.GetFileInformationByHandleEx(handle, windows.FileBasicInfo, (*byte)(unsafe.Pointer(&basic)), uint32(unsafe.Sizeof(basic)))
 	return basic, err
+}
+
+func (nativeWindowsRevisionMetadata) AttributeTag(handle windows.Handle) (windowsAttributeTagInfo, error) {
+	return queryWindowsHandleAttributeTag(handle)
+}
+
+func (nativeWindowsRevisionMetadata) FileType(handle windows.Handle) (uint32, error) {
+	return windows.GetFileType(handle)
+}
+
+func (nativeWindowsRevisionMetadata) PlaceholderState(attributes, reparseTag uint32) uint32 {
+	return queryWindowsHandlePlaceholderState(attributes, reparseTag)
 }
 
 func (nativeWindowsRevisionMetadata) Filesystem(handle windows.Handle) (string, error) {
@@ -240,6 +259,10 @@ func (p nativeWindowsRevisionPlatform) OpenRoot(path string) (windowsRevisionRoo
 }
 
 func (p nativeWindowsRevisionPlatform) Token(file *os.File) (windowsMutationToken, error) {
+	if file == nil {
+		return windowsMutationToken{}, content.ErrUnsupportedStability
+	}
+	defer runtime.KeepAlive(file)
 	token, err := inspectWindowsFileToken(windows.Handle(file.Fd()), p.metadataAPI())
 	return token, classifyWindowsIdentityError(err)
 }
@@ -257,18 +280,8 @@ func (metadata windowsRootRevisionMetadata) Filesystem(windows.Handle) (string, 
 // A retained selection can move while sharing. Duplicating its handle keeps
 // native write exclusion bound to that original directory instead of its name.
 func retainWindowsRevisionRoot(authority *os.Root) (windowsRevisionRoot, error) {
-	file, err := authority.Open(".")
+	handle, err := duplicateRootHandleNoRecall(authority)
 	if err != nil {
-		return nil, err
-	}
-	var handle windows.Handle
-	process := windows.CurrentProcess()
-	duplicateErr := windows.DuplicateHandle(process, windows.Handle(file.Fd()), process, &handle, 0, false, windows.DUPLICATE_SAME_ACCESS)
-	closeErr := file.Close()
-	if err := errors.Join(duplicateErr, closeErr); err != nil {
-		if duplicateErr == nil {
-			err = errors.Join(err, windows.CloseHandle(handle))
-		}
 		return nil, err
 	}
 	return adoptNativeWindowsRevisionRoot(handle, nativeWindowsRevisionMetadata{})
@@ -329,13 +342,24 @@ func (r *nativeWindowsRevisionRoot) Close() error {
 }
 
 type nativeWindowsRevisionFile struct {
-	file     *os.File
-	metadata windowsRevisionMetadata
+	file             *os.File
+	metadata         windowsRevisionMetadata
+	verifiedDiskFile atomic.Bool
 }
 
 func (f *nativeWindowsRevisionFile) Token() (windowsMutationToken, error) {
-	token, directory, err := inspectWindowsObjectMetadata(windows.Handle(f.file.Fd()), f.metadata)
+	if f == nil || f.file == nil {
+		return windowsMutationToken{}, content.ErrUnsupportedStability
+	}
+	defer runtime.KeepAlive(f.file)
+	knownDisk := f.verifiedDiskFile.Load()
+	token, directory, err := inspectWindowsObjectMetadataWith(windows.Handle(f.file.Fd()), f.metadata, knownDisk)
 	if err == nil && directory {
+		err = content.ErrRevisionStale
+	}
+	if err == nil {
+		f.verifiedDiskFile.Store(true)
+	} else if isWindowsPlaceholderError(err) {
 		err = content.ErrRevisionStale
 	}
 	return token, classifyWindowsIdentityError(err)
@@ -365,6 +389,9 @@ func inspectWindowsFileToken(handle windows.Handle, api windowsRevisionMetadata)
 	if err == nil && directory {
 		err = content.ErrRevisionStale
 	}
+	if isWindowsPlaceholderError(err) {
+		err = content.ErrRevisionStale
+	}
 	return token, err
 }
 
@@ -374,14 +401,23 @@ func inspectWindowsCatalogToken(handle windows.Handle) (windowsMutationToken, er
 }
 
 func inspectWindowsObjectMetadata(handle windows.Handle, api windowsRevisionMetadata) (windowsMutationToken, bool, error) {
+	return inspectWindowsObjectMetadataWith(handle, api, false)
+}
+
+func inspectWindowsObjectMetadataWith(
+	handle windows.Handle,
+	api windowsRevisionMetadata,
+	knownDiskFile bool,
+) (windowsMutationToken, bool, error) {
 	information, err := api.FileInformation(handle)
 	if err != nil {
 		return windowsMutationToken{}, false, err
 	}
-	if information.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-		return windowsMutationToken{}, false, content.ErrRevisionStale
+	kind, err := verifyWindowsHandleMetadata(handle, information.FileAttributes, api, knownDiskFile)
+	if err != nil {
+		return windowsMutationToken{}, false, err
 	}
-	directory := information.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0
+	directory := kind == sourceEntryDirectory
 	identity, err := inspectWindowsFileIdentity(handle, information, api)
 	if err != nil {
 		return windowsMutationToken{}, directory, err
@@ -406,6 +442,68 @@ func inspectWindowsObjectMetadata(handle windows.Handle, api windowsRevisionMeta
 		identity: identity, size: size, lastWrite: basic.LastWriteTime, changeTime: basic.ChangeTime,
 	}, directory, nil
 }
+
+func verifyWindowsHandleMetadata(
+	handle windows.Handle,
+	attributes uint32,
+	api windowsRevisionMetadata,
+	knownDiskFile bool,
+) (sourceEntryKind, error) {
+	// Ordinary local files have no reparse point and reuse FileInformation with
+	// zero extra AttributeTag or GetFileType queries.
+	if attributes&windows.FILE_ATTRIBUTE_REPARSE_POINT == 0 {
+		kind, _ := classifyWindowsEntry(windowsEntryFacts{
+			source:        windowsAttributesFromHandle,
+			attributes:    attributes,
+			hasAttributes: true,
+		})
+		switch kind {
+		case sourceEntryDirectory, sourceEntryRegularFile:
+			return kind, nil
+		case sourceEntryCloudPlaceholder:
+			return 0, errSourceCloudPlaceholder
+		default:
+			return 0, content.ErrRevisionStale
+		}
+	}
+	tagInfo, err := api.AttributeTag(handle)
+	if err != nil {
+		return 0, err
+	}
+	hasReparseTag := tagInfo.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0
+	var state uint32
+	if hasReparseTag && isCloudReparseTag(tagInfo.ReparseTag) {
+		state = api.PlaceholderState(tagInfo.FileAttributes&^windowsAttrEA, tagInfo.ReparseTag)
+	}
+	kind, audit := classifyWindowsEntry(windowsEntryFacts{
+		source:           windowsAttributesFromHandle,
+		attributes:       tagInfo.FileAttributes,
+		hasAttributes:    true,
+		hasReparseTag:    hasReparseTag,
+		reparseTag:       tagInfo.ReparseTag,
+		placeholderState: state,
+	})
+	switch kind {
+	case sourceEntryDirectory:
+		return sourceEntryDirectory, nil
+	case sourceEntryRegularFile:
+		if audit.hydratedCloud && !knownDiskFile {
+			fileType, ftErr := api.FileType(handle)
+			if ftErr != nil {
+				return 0, ftErr
+			}
+			if fileType != windows.FILE_TYPE_DISK {
+				return 0, content.ErrRevisionStale
+			}
+		}
+		return sourceEntryRegularFile, nil
+	case sourceEntryCloudPlaceholder:
+		return 0, errSourceCloudPlaceholder
+	default:
+		return 0, content.ErrRevisionStale
+	}
+}
+
 func openWindowsRootHandle(path string) (windows.Handle, error) {
 	name, err := windows.NewNTUnicodeString(windowsNTPath(path))
 	if err != nil {
@@ -417,12 +515,15 @@ func openWindowsRootHandle(path string) (windows.Handle, error) {
 	}
 	var handle windows.Handle
 	var status windows.IO_STATUS_BLOCK
+	// Omitting FILE_OPEN_REPARSE_POINT while keeping OBJ_DONT_REPARSE admits
+	// Cloud Files sync roots/directories and rejects junctions/symlinks in the kernel.
+	// FILE_OPEN_NO_RECALL cannot be combined with FILE_DIRECTORY_FILE in NtCreateFile.
 	err = windows.NtCreateFile(
 		&handle, windows.FILE_LIST_DIRECTORY|windows.FILE_TRAVERSE|windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE,
 		attributes, &status, nil, 0,
 		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
 		windows.FILE_OPEN,
-		windows.FILE_DIRECTORY_FILE|windows.FILE_OPEN_REPARSE_POINT|windows.FILE_SYNCHRONOUS_IO_NONALERT,
+		windows.FILE_DIRECTORY_FILE|windows.FILE_SYNCHRONOUS_IO_NONALERT,
 		0, 0,
 	)
 	return handle, normalizeWindowsNTError(err)
@@ -462,7 +563,10 @@ func windowsStableShareMode() uint32 {
 func windowsStableDesiredAccess() uint32 { return windows.FILE_GENERIC_READ }
 
 func windowsStableOpenOptions() uint32 {
-	return windows.FILE_NON_DIRECTORY_FILE | windows.FILE_OPEN_REPARSE_POINT |
+	// Combine OBJ_DONT_REPARSE with FILE_OPEN_NO_RECALL (and omit FILE_OPEN_REPARSE_POINT):
+	// the kernel rejects intermediate junctions and leaf symlinks while opening
+	// hydrated Cloud Files without triggering implicit hydration.
+	return windows.FILE_NON_DIRECTORY_FILE | windows.FILE_OPEN_NO_RECALL |
 		windows.FILE_RANDOM_ACCESS | windows.FILE_SYNCHRONOUS_IO_NONALERT
 }
 

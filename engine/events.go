@@ -209,13 +209,13 @@ type SourceOmissions struct {
 func (SourceOmissions) EngineEvent() {}
 
 func (e SourceOmissions) DiagnosticRecord() diagnostics.Record {
+	// Default support logs retain omission counts and reason categories only.
+	// Sample names and details can carry user filenames or colliding sibling spellings.
 	samples := make([]diagnostics.Value, 0, len(e.Summary.Samples))
 	for _, sample := range e.Summary.Samples {
-		item := diagnostics.Fields{"reason": diagnostics.Text(string(sample.Reason))}
-		if sample.Detail != "" {
-			item["detail"] = diagnostics.Text(sample.Detail)
-		}
-		samples = append(samples, diagnostics.Object(item))
+		samples = append(samples, diagnostics.Object(diagnostics.Fields{
+			"reason": diagnostics.Text(string(sample.Reason)),
+		}))
 	}
 	return diagnostics.New("source_omissions", diagnostics.Fields{
 		"count":   diagnostics.Uint(e.Summary.Count),

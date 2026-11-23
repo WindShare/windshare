@@ -46,14 +46,14 @@ func networkBlocked(err error) operationPhase {
 	case engine.NetworkTrustStateUnreadable, engine.NetworkTrustStateInvalid, engine.NetworkTrustStateUnwritable:
 		block.Recovery = RepairTrustState
 	}
-	failure := failure("network_unavailable", err)
+	blockFailure := engineFailure("network_unavailable", err)
 	if block.Recovery != RetryCreation {
-		return awaitingConfiguration{block: block, failure: failure}
+		return awaitingConfiguration{block: block, failure: blockFailure}
 	}
 	if !unavailable.RetryAt.IsZero() {
 		block.RetryAtMS = unavailable.RetryAt.UnixMilli()
 	}
-	return awaitingNetwork{block: block, failure: failure}
+	return awaitingNetwork{block: block, failure: blockFailure}
 }
 
 // A fresh attempt must own a new engine task. Keeping the file and relay
@@ -74,7 +74,7 @@ func (a *Application) retainFailedSelection(op *operation) {
 	}
 	op.phase = awaitingNetwork{
 		block:   CreationBlock{Reason: "selected_relays_unavailable", Recovery: RetryCreation},
-		failure: failure("selected_relays_unavailable", state.Result.Err),
+		failure: engineFailure("selected_relays_unavailable", state.Result.Err),
 	}
 	a.deps.log("host.share_waiting_for_selected_relays", map[string]string{"operation_id": op.id, "task_id": string(current.task.ID())})
 }

@@ -50,11 +50,12 @@ type stabilityRootValidator interface {
 }
 
 type RootedRevisionSource struct {
-	mu     sync.RWMutex
-	roots  []*os.Root
-	binder StabilityBinder
-	closer io.Closer
-	closed bool
+	mu        sync.RWMutex
+	roots     []*os.Root
+	inspector rootInspector
+	binder    StabilityBinder
+	closer    io.Closer
+	closed    bool
 }
 
 func NewRootedRevisionSource(config RootedRevisionSourceConfig) (*RootedRevisionSource, error) {
@@ -112,7 +113,11 @@ func adoptRootedRevisionSource(roots []*os.Root, binder StabilityBinder, closer 
 			return nil, errors.Join(err, closeRoots(roots), closeOwnedBinder(closer))
 		}
 	}
-	return &RootedRevisionSource{roots: roots, binder: binder, closer: closer}, nil
+	inspector, err := newRootInspector(roots)
+	if err != nil {
+		return nil, errors.Join(err, closeRoots(roots), closeOwnedBinder(closer))
+	}
+	return &RootedRevisionSource{roots: roots, inspector: inspector, binder: binder, closer: closer}, nil
 }
 
 func closeOwnedBinder(closer io.Closer) error {
@@ -153,40 +158,25 @@ func (s *RootedRevisionSource) OpenStable(ctx context.Context, record catalog.No
 		return nil, content.WithRevisionComparison(content.ErrRevisionStale, content.RevisionComparisonMismatch)
 	}
 	root := s.roots[slot]
-	before, err := root.Lstat(locator.RelativePath())
+	before, beforeOK, err := s.inspector.inspectRelativeRegularFile(root, slot, locator.RelativePath())
 	if err != nil {
 		s.mu.RUnlock()
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, content.WithRevisionComparison(errors.Join(content.ErrRevisionStale, err), content.RevisionComparisonUnavailable)
-		}
-		return nil, content.WithRevisionComparison(
-			pathfailure.Filesystem("inspect stable revision", locator.RelativePath(), err), content.RevisionComparisonUnavailable,
-		)
+		return nil, classifyRootRelativeOpenError("inspect stable revision", locator.RelativePath(), err)
 	}
-	if !before.Mode().IsRegular() || before.Mode()&os.ModeSymlink != 0 || isReparsePoint(before) {
+	if !beforeOK {
 		s.mu.RUnlock()
 		return nil, content.WithRevisionComparison(content.ErrRevisionStale, content.RevisionComparisonMismatch)
 	}
-	handle, err := root.Open(locator.RelativePath())
+	handle, err := openRootObjectNoRecall(root, locator.RelativePath())
 	if err != nil {
 		s.mu.RUnlock()
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, content.WithRevisionComparison(errors.Join(content.ErrRevisionStale, err), content.RevisionComparisonUnavailable)
-		}
-		return nil, content.WithRevisionComparison(
-			pathfailure.Filesystem("open stable revision", locator.RelativePath(), err), content.RevisionComparisonUnavailable,
-		)
+		return nil, classifyRootRelativeOpenError("open stable revision", locator.RelativePath(), err)
 	}
-	after, lstatErr := root.Lstat(locator.RelativePath())
+	after, afterOK, afterErr := s.inspector.inspectRelativeRegularFile(root, slot, locator.RelativePath())
 	s.mu.RUnlock()
-	if lstatErr != nil {
+	if afterErr != nil {
 		_ = handle.Close()
-		if errors.Is(lstatErr, os.ErrNotExist) {
-			return nil, content.WithRevisionComparison(errors.Join(content.ErrRevisionStale, lstatErr), content.RevisionComparisonUnavailable)
-		}
-		return nil, content.WithRevisionComparison(
-			pathfailure.Filesystem("reinspect stable revision", locator.RelativePath(), lstatErr), content.RevisionComparisonUnavailable,
-		)
+		return nil, classifyRootRelativeOpenError("reinspect stable revision", locator.RelativePath(), afterErr)
 	}
 	owned := false
 	defer func() {
@@ -194,18 +184,18 @@ func (s *RootedRevisionSource) OpenStable(ctx context.Context, record catalog.No
 			_ = handle.Close()
 		}
 	}()
-	info, err := handle.Stat()
+	opened, err := inspectOpenedSourceHandle(handle)
 	if err != nil {
 		return nil, content.WithRevisionComparison(
-			pathfailure.Filesystem("stat stable revision", locator.RelativePath(), err), content.RevisionComparisonUnavailable,
+			pathfailure.Filesystem("classify stable revision", locator.RelativePath(), err), content.RevisionComparisonUnavailable,
 		)
 	}
-	// Lstat on both sides of Open prevents a path replacement from being
-	// accepted merely because its final target is regular. The binder then
-	// matches the opened handle to the parent generation's private identity.
-	if !after.Mode().IsRegular() || after.Mode()&os.ModeSymlink != 0 || isReparsePoint(after) ||
-		!info.Mode().IsRegular() || isReparsePoint(info) || !os.SameFile(before, info) || !os.SameFile(after, info) ||
-		uint64(info.Size()) != record.Entry().ExpectedSize() {
+	// No-follow metadata inspection on both sides of Open prevents a path
+	// replacement from being accepted merely because its final target is regular.
+	// The binder then matches the opened handle to the parent generation's private identity.
+	if !afterOK || opened.kind != sourceEntryRegularFile ||
+		!before.sameObject(opened.identity) || !after.sameObject(opened.identity) ||
+		opened.size != record.Entry().ExpectedSize() {
 		return nil, content.WithRevisionComparison(content.ErrRevisionStale, content.RevisionComparisonMismatch)
 	}
 	stable, err := s.binder.BindStable(ctx, StableBinding{
@@ -230,10 +220,12 @@ func (s *RootedRevisionSource) Close() error {
 	s.closed = true
 	roots := s.roots
 	s.roots = nil
+	inspector := s.inspector
+	s.inspector = rootInspector{}
 	closer := s.closer
 	s.closer = nil
 	s.mu.Unlock()
-	var result error
+	result := inspector.Close()
 	for index := range slices.Backward(roots) {
 		result = errors.Join(result, roots[index].Close())
 	}

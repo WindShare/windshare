@@ -95,10 +95,7 @@ impl Controller {
                 .map_err(|error| format!("Share queue unavailable: {error}"))
         }) {
             Ok(()) => OperationState::Submitting,
-            Err(message) => OperationState::Rejected(Failure {
-                code: "submission_failed".into(),
-                message,
-            }),
+            Err(message) => OperationState::Rejected(Failure::new("submission_failed", message)),
         };
         let submitted = matches!(state, OperationState::Submitting);
         if let OperationState::Rejected(failure) = &state {

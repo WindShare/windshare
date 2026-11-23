@@ -1,5 +1,5 @@
 mod share;
-pub use share::{Share, ShareSource, ShareState};
+pub use share::{Share, ShareError, ShareSource, ShareState};
 
 use crate::localization::{Language, LanguageChoice, Text};
 use crate::sharing::{LinkKind, SharePublication};
@@ -183,6 +183,7 @@ pub fn demo_shares() -> Vec<Share> {
             age: ShareAge::JustNow,
             tone: Tone::Lavender,
             symbol: Icon::Folder,
+            omissions: None,
             state: ShareState::Live {
                 publication: SharePublication::preview(1),
                 relay_status: None,
@@ -197,6 +198,7 @@ pub fn demo_shares() -> Vec<Share> {
             age: ShareAge::MinutesAgo(12),
             tone: Tone::Peach,
             symbol: Icon::Image,
+            omissions: None,
             state: ShareState::Live {
                 publication: SharePublication::preview(2),
                 relay_status: None,
@@ -211,6 +213,7 @@ pub fn demo_shares() -> Vec<Share> {
             age: ShareAge::Yesterday,
             tone: Tone::Blue,
             symbol: Icon::Music,
+            omissions: None,
             state: ShareState::Stopped { error: None },
         },
     ]

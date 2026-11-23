@@ -77,6 +77,9 @@ type SourceOmissionsObserved struct{ Summary catalog.SourceOmissions }
 func (SourceOmissionsObserved) EngineEvent() {}
 
 func (o *observations) ObserveSourceOmissions(summary catalog.SourceOmissions) {
+	if o.controller != nil && o.controller.RecordSourceOmissions(summary) {
+		o.control.NotifyStateChanged()
+	}
 	if o.control.Emit != nil {
 		o.control.Emit(SourceOmissionsObserved{Summary: summary})
 	}
@@ -84,6 +87,7 @@ func (o *observations) ObserveSourceOmissions(summary catalog.SourceOmissions) {
 
 type observations struct {
 	control    task.Control
+	controller *Controller
 	detailed   bool
 	protocol   observationstream.Producer[sessionobs.ProtocolObservation]
 	mu         sync.Mutex
@@ -101,6 +105,10 @@ func newObservations(control task.Control, request Request) *observations {
 		readObservations(o, consumer, func(value sessionobs.ProtocolObservation) { o.control.Diagnostics.Record(value) })
 	}
 	return o
+}
+
+func (o *observations) bindController(controller *Controller) {
+	o.controller = controller
 }
 
 func (o *observations) sourceFactory(factory liveshare.FileSourceFactory) liveshare.FileSourceFactory {

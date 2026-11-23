@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relaysetup"
 	"github.com/windshare/windshare/internal/diaglog"
@@ -91,6 +92,22 @@ func TestControlLogsExcludeCredentialsFromAcceptedAndRejectedRequests(t *testing
 		OperationID: "share-fixture", URL: "https://example.test/s/sample#share-key-fixture",
 		BackupURL: "https://backup.example/s/sample#backup-key-fixture",
 		Selection: &Selection{Root: &SelectedRoot{Name: "private-file-fixture"}}, State: Sharing,
+		Error: &Failure{
+			Code:       "startup_failed",
+			EngineCode: "selection_collision",
+			Message:    "private-error-message-fixture",
+			SourcePath: `C:\Users\secret\private-source-fixture.docx`,
+			SelectionCollision: &engine.SelectionCollision{
+				FirstPath:  `C:\Users\secret\collision-first-fixture.txt`,
+				SecondPath: `D:\Users\secret\collision-second-fixture.txt`,
+			},
+		},
+		Omissions: &SourceOmissions{
+			Count: 3,
+			Samples: []SourceOmission{
+				{Name: "private-omitted-fixture.docx", Reason: "cloud_placeholder", Detail: "private-omission-detail-fixture"},
+			},
+		},
 	})
 	if err := log.Close(); err != nil {
 		t.Fatal(err)
@@ -104,7 +121,13 @@ func TestControlLogsExcludeCredentialsFromAcceptedAndRejectedRequests(t *testing
 		t.Fatal(err)
 	}
 	body := string(data)
-	for _, secret := range []string{key, password, "password-fixture", "private-path", "query-fixture", "fragment-fixture", "share-key-fixture", "backup-key-fixture", "private-file-fixture"} {
+	for _, secret := range []string{
+		key, password, "password-fixture", "private-path", "query-fixture", "fragment-fixture",
+		"share-key-fixture", "backup-key-fixture", "private-file-fixture",
+		"private-error-message-fixture", "private-source-fixture",
+		"collision-first-fixture", "collision-second-fixture",
+		"private-omitted-fixture", "private-omission-detail-fixture",
+	} {
 		if strings.Contains(body, secret) {
 			t.Fatalf("log contains credential-bearing input %q", secret)
 		}
@@ -114,7 +137,7 @@ func TestControlLogsExcludeCredentialsFromAcceptedAndRejectedRequests(t *testing
 		{`"event":"host.request_result"`, `"request_id":"accepted-setup"`, `"setup_id":"relay-setup"`, `"accepted":true`, `"relay_origin":"https://relay.example:8443"`},
 		{`"event":"host.request_result"`, `"request_id":"account-login"`, `"operation_id":"account-operation"`, `"action":"login"`, `"accepted":false`},
 		{`"event":"host.setup_completed"`, `"setup_id":"relay-setup"`, `"state":"failed"`, `"error_code":"setup_failed"`},
-		{`"event":"host.share_state"`, `"operation_id":"share-fixture"`, `"state":"sharing"`},
+		{`"event":"host.share_state"`, `"operation_id":"share-fixture"`, `"state":"sharing"`, `"engine_error_code":"selection_collision"`, `"omitted_count":3`},
 	} {
 		found := false
 		for line := range strings.SplitSeq(body, "\n") {

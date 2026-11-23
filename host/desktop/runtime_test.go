@@ -34,8 +34,8 @@ func TestHostReadinessAndJoinedShutdownAreIndependentOfConfiguration(t *testing.
 	}
 	host.app.execute(createRequest())
 	view := awaitShare(t, host.app, "operation", func(s Share) bool { return s.State == AwaitingConfiguration })
-	if view.Error == nil || view.Error.Code != "settings_unavailable" {
-		t.Fatal("missing configuration is not actionable")
+	if view.Error == nil || view.Error.Code != "settings_unavailable" || view.Error.EngineCode != "" {
+		t.Fatalf("missing configuration failure = %+v", view.Error)
 	}
 	if err := host.Close(); err != nil {
 		t.Fatal(err)

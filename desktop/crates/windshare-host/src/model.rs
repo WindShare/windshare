@@ -42,6 +42,8 @@ pub struct Share {
     #[serde(default)]
     pub created_at_ms: u64,
     pub selection: Option<Selection>,
+    #[serde(default)]
+    pub omissions: Option<SourceOmissions>,
     #[serde(flatten)]
     pub state: ShareState,
 }
@@ -49,6 +51,19 @@ pub struct Share {
 impl Share {
     pub const fn is_finished(&self) -> bool {
         matches!(self.state, ShareState::Finished { .. })
+    }
+
+    pub const fn failure(&self) -> Option<&Failure> {
+        match &self.state {
+            ShareState::AwaitingConfiguration { error, .. }
+            | ShareState::AwaitingNetwork { error, .. }
+            | ShareState::Preparing { error, .. }
+            | ShareState::Finished { error, .. } => error.as_ref(),
+            ShareState::AwaitingAuthorization { .. }
+            | ShareState::Admitting
+            | ShareState::Sharing { .. }
+            | ShareState::Stopping { .. } => None,
+        }
     }
 
     pub fn error(&self) -> Option<&str> {
@@ -220,17 +235,54 @@ pub enum SelectedRoot {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct SelectionCollision {
+    pub first_path: String,
+    pub second_path: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct SourceOmission {
+    pub name: String,
+    pub reason: String,
+    #[serde(default)]
+    pub detail: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct SourceOmissions {
+    pub count: u64,
+    #[serde(default)]
+    pub samples: Vec<SourceOmission>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct Failure {
     pub code: String,
     pub message: String,
+    #[serde(default)]
+    pub engine_code: Option<String>,
+    #[serde(default)]
+    pub source_path: Option<String>,
+    #[serde(default)]
+    pub selection_collision: Option<SelectionCollision>,
+}
+
+impl Failure {
+    #[must_use]
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+            engine_code: None,
+            source_path: None,
+            selection_collision: None,
+        }
+    }
 }
 
 impl From<String> for Failure {
     fn from(message: String) -> Self {
-        Self {
-            code: "request_rejected".into(),
-            message,
-        }
+        Self::new("request_rejected", message)
     }
 }
 
@@ -262,6 +314,14 @@ impl Operation {
         match &self.state {
             OperationState::Accepted(share) => Some(share),
             _ => None,
+        }
+    }
+
+    pub fn failure(&self) -> Option<&Failure> {
+        match &self.state {
+            OperationState::Rejected(error) => Some(error),
+            OperationState::Accepted(share) => share.failure(),
+            OperationState::Submitting => None,
         }
     }
 

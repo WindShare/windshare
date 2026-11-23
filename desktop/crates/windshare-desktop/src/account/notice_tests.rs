@@ -32,6 +32,7 @@ fn share(state: ShareState) -> Share {
         age: ShareAge::JustNow,
         tone: Tone::Mint,
         symbol: Icon::File,
+        omissions: None,
         state,
     }
 }

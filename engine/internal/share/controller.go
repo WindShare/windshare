@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/windshare/windshare/connectivity/relayset"
+	"github.com/windshare/windshare/core/catalog"
 )
 
 // Controller retains the first service-ready result independently of diagnostic
@@ -15,6 +16,10 @@ type Controller struct {
 	relayStatus      func() relayset.SenderStatus
 	finalRelayStatus relayset.SenderStatus
 	hasRelayStatus   bool
+	finished         bool
+	omittedDirs      map[catalog.DirectoryID]struct{}
+	omittedCount     uint64
+	omittedSamples   []catalog.SourceOmission
 	ready            Ready
 	readyErr         error
 	readyDone        chan struct{}
@@ -71,10 +76,14 @@ func (c *Controller) CancelBeforeReady(cancel func()) bool {
 
 func (c *Controller) finish(err error) {
 	c.mu.Lock()
+	c.finished = true
 	if c.relayStatus != nil {
 		c.finalRelayStatus = c.relayStatus()
 		c.relayStatus = nil
 	}
+	// Release the per-directory deduplication map once scans have joined;
+	// terminal snapshots retain only the bounded aggregate count and samples.
+	c.omittedDirs = nil
 	c.mu.Unlock()
 	c.readyOnce.Do(func() {
 		c.readyErr = err

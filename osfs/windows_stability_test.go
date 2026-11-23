@@ -481,7 +481,7 @@ func TestWindowsStableNativeOpenContractDeniesWritesAndReparseTraversal(t *testi
 		windowsStableShareMode() != windows.FILE_SHARE_READ|windows.FILE_SHARE_DELETE {
 		t.Fatalf("stable share mode=%#x", windowsStableShareMode())
 	}
-	wantOptions := uint32(windows.FILE_NON_DIRECTORY_FILE | windows.FILE_OPEN_REPARSE_POINT |
+	wantOptions := uint32(windows.FILE_NON_DIRECTORY_FILE | windows.FILE_OPEN_NO_RECALL |
 		windows.FILE_RANDOM_ACCESS | windows.FILE_SYNCHRONOUS_IO_NONALERT)
 	if windowsStableOpenOptions() != wantOptions {
 		t.Fatalf("stable open options=%#x want=%#x", windowsStableOpenOptions(), wantOptions)
