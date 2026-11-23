@@ -220,7 +220,8 @@ function selectTreeZipChoice(
   if (fitsOpfs) {
     return makeChoice('opfs:zip', 'opfs', zipArtifact, true, recommended, shape.knownBytes)
   }
-  if (caps.portable && (!shape.complete || shape.knownBytes <= PORTABLE_MAX_BYTES)) {
+  // knownBytes is a monotonic lower bound, so reject portable ZIP as soon as it exceeds the cap.
+  if (caps.portable && shape.knownBytes <= PORTABLE_MAX_BYTES) {
     return makeChoice('portable:zip', 'portable', zipArtifact, false, recommended, shape.knownBytes)
   }
   return null
