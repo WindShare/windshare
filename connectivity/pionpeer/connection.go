@@ -67,7 +67,7 @@ type Connection struct {
 	release        func()
 	request        AttemptConfig
 	mapped         []MappedEndpoint
-	mux            *socketauthority.Mux
+	mux            hostPortDiscovery
 	candidateMu    sync.Mutex
 	stopCandidates context.CancelFunc
 	closed         bool

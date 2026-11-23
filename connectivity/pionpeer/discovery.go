@@ -13,6 +13,10 @@ import (
 
 const hostSTUNTimeout = 5 * time.Second
 
+type hostPortDiscovery interface {
+	DiscoverXORMappedAddr(context.Context, netip.AddrPort, *net.UDPAddr, time.Duration) (netip.AddrPort, error)
+}
+
 type candidateEvent struct {
 	candidate *pion.ICECandidate
 	mapping   *MappedEndpoint
