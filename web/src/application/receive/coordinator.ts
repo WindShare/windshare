@@ -55,10 +55,12 @@ import {
 import { executeRetainedTaskAction, loadRetainedTasks } from './retained'
 import { openNewOutputSession } from './session-opener'
 import { BeforeUnloadGuard, type BeforeUnloadEventTarget } from './unload-guard'
+import { ScreenWakeLockGuard, type ScreenWakeLockWindowTarget } from './wake-lock-guard'
 
 const PROGRESS_THROTTLE_MS = 100
 
-export type ReceiveWindowPort = BrowserOutputWindow & Partial<BeforeUnloadEventTarget>
+export type ReceiveWindowPort =
+  BrowserOutputWindow & Partial<BeforeUnloadEventTarget> & ScreenWakeLockWindowTarget
 
 export interface ReceiveRuntimePorts {
   readonly windowPort?: ReceiveWindowPort
@@ -81,6 +83,7 @@ export interface ReceiveCoordinatorOptions extends ReceiveRuntimePorts {
 export class ReceiveCoordinator {
   readonly #options: ReceiveCoordinatorOptions
   readonly #unloadGuard: BeforeUnloadGuard
+  readonly #wakeLockGuard: ScreenWakeLockGuard
   readonly #listeners = new Set<() => void>()
   readonly #lifetimeAbort = new AbortController()
   #storePromise: Promise<ReceiveStore> | undefined
@@ -116,6 +119,7 @@ export class ReceiveCoordinator {
   constructor(options: ReceiveCoordinatorOptions) {
     this.#options = options
     this.#unloadGuard = new BeforeUnloadGuard(options.windowPort)
+    this.#wakeLockGuard = new ScreenWakeLockGuard(options.windowPort)
     this.#snapshot = this.#buildSnapshot()
   }
 
@@ -380,6 +384,7 @@ export class ReceiveCoordinator {
     this.#disposed = true
     this.#lifetimeAbort.abort()
     this.#unloadGuard.dispose()
+    this.#wakeLockGuard.dispose()
     this.#offerAbort?.abort()
     this.#activeJob?.stop()
     if (this.#progressTimer !== undefined) {
@@ -518,6 +523,7 @@ export class ReceiveCoordinator {
 
     try {
       this.#unloadGuard.setArmed(true)
+      this.#wakeLockGuard.setArmed(true)
       this.#publish()
       const result = await job.run()
       this.#flushProgressNow()
@@ -546,6 +552,7 @@ export class ReceiveCoordinator {
       this.#activeJob = null
       this.#activeSession = null
       this.#unloadGuard.setArmed(false)
+      this.#wakeLockGuard.setArmed(false)
       await session.close().catch(() => undefined)
       try { connectivity.close() } catch { /* Best-effort connectivity release. */ }
       this.#publish()
