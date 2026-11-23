@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/windshare/windshare/connectivity/nativepeer"
+	"github.com/windshare/windshare/connectivity/v2peer"
 )
 
 const (
@@ -16,8 +16,8 @@ const (
 	RefillWindow              = 600 * time.Second
 	AttemptsPerWave           = 3
 	WaveBudget                = 120 * time.Second
-	AttemptBudget             = nativepeer.AttemptBudget
-	MinimumAttemptOpportunity = nativepeer.MinimumPreparationOpportunity
+	DefaultAttemptBudget      = v2peer.DefaultPeerNegotiationBudget + v2peer.DefaultPeerAdmissionBudget
+	MinimumAttemptOpportunity = v2peer.PeerCheckingOpportunity
 	PrewarmRetention          = 30 * time.Second
 	MaximumPaths              = 8
 	ResourceRetryDelay        = time.Second
@@ -49,7 +49,7 @@ func (b *Budget) refundUnstartedAttempt() {
 	b.attempts = min(AttemptsPerWindow, b.attempts+1)
 }
 
-func (b *Budget) reserve(now time.Time) (func(time.Duration), time.Duration) {
+func (b *Budget) reserve(now time.Time, duration time.Duration) (func(time.Duration), time.Duration) {
 	b.mu.Lock()
 	elapsed := max(now.Sub(b.updated), 0)
 	b.attempts = min(AttemptsPerWindow, b.attempts+float64(elapsed)*AttemptsPerWindow/float64(RefillWindow))
@@ -58,20 +58,20 @@ func (b *Budget) reserve(now time.Time) (func(time.Duration), time.Duration) {
 		b.updated = now
 	}
 	waitCount := (1 - b.attempts) * float64(RefillWindow) / AttemptsPerWindow
-	waitTime := (float64(AttemptBudget) - b.active) * float64(RefillWindow) / float64(ActiveTimePerWindow)
+	waitTime := (float64(duration) - b.active) * float64(RefillWindow) / float64(ActiveTimePerWindow)
 	wait := time.Duration(max(waitCount, waitTime, 0))
-	if b.attempts < 1 || b.active < float64(AttemptBudget) {
+	if b.attempts < 1 || b.active < float64(duration) {
 		b.mu.Unlock()
 		return nil, max(wait, time.Nanosecond)
 	}
 	b.attempts--
-	b.active -= float64(AttemptBudget)
+	b.active -= float64(duration)
 	b.mu.Unlock()
 	var once sync.Once
 	return func(used time.Duration) {
 		once.Do(func() {
 			b.mu.Lock()
-			b.active = min(float64(ActiveTimePerWindow), b.active+float64(AttemptBudget-min(max(used, 0), AttemptBudget)))
+			b.active = min(float64(ActiveTimePerWindow), b.active+float64(duration-min(max(used, 0), duration)))
 			b.mu.Unlock()
 		})
 	}, 0
@@ -85,8 +85,8 @@ type reservedAttempt struct {
 	once   sync.Once
 }
 
-func (b *Budget) reserveDeferred(now time.Time) *reservedAttempt {
-	refund, _ := b.reserve(now)
+func (b *Budget) reserveDeferred(now time.Time, duration time.Duration) *reservedAttempt {
+	refund, _ := b.reserve(now, duration)
 	if refund == nil {
 		return nil
 	}

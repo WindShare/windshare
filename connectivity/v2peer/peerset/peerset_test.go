@@ -90,13 +90,13 @@ func TestBudgetReplenishesAcrossGenerationsWithoutReset(t *testing.T) {
 	now := time.Unix(10, 0)
 	budget := NewBudget(now)
 	for range 4 {
-		refund, delay := budget.reserve(now)
+		refund, delay := budget.reserve(now, DefaultAttemptBudget)
 		if refund == nil || delay != 0 {
 			t.Fatal("available budget denied")
 		}
-		refund(AttemptBudget)
+		refund(DefaultAttemptBudget)
 	}
-	if refund, delay := budget.reserve(now); refund != nil || delay <= 0 {
+	if refund, delay := budget.reserve(now, DefaultAttemptBudget); refund != nil || delay <= 0 {
 		t.Fatal("active-time debt not enforced")
 	}
 	// A new protocol/network owner shares the same receive budget.
@@ -104,7 +104,7 @@ func TestBudgetReplenishesAcrossGenerationsWithoutReset(t *testing.T) {
 	if fresh.config.Budget != budget {
 		t.Fatal("generation replaced the receive budget")
 	}
-	refund, delay := budget.reserve(now.Add(RefillWindow))
+	refund, delay := budget.reserve(now.Add(RefillWindow), DefaultAttemptBudget)
 	if refund == nil || delay != 0 {
 		t.Fatal("budget did not replenish")
 	}
@@ -121,16 +121,16 @@ func TestAttemptCountRemainsBoundedWhenSetupFailsImmediately(t *testing.T) {
 	now := time.Unix(10, 0)
 	budget := NewBudget(now)
 	for range AttemptsPerWindow {
-		refund, _ := budget.reserve(now)
+		refund, _ := budget.reserve(now, DefaultAttemptBudget)
 		if refund == nil {
 			t.Fatal("early depletion")
 		}
 		refund(0)
 	}
-	if refund, delay := budget.reserve(now); refund != nil || delay != RefillWindow/AttemptsPerWindow {
+	if refund, delay := budget.reserve(now, DefaultAttemptBudget); refund != nil || delay != RefillWindow/AttemptsPerWindow {
 		t.Fatal("count bucket bypassed")
 	}
-	if refund, _ := budget.reserve(now.Add(-time.Hour)); refund != nil {
+	if refund, _ := budget.reserve(now.Add(-time.Hour), DefaultAttemptBudget); refund != nil {
 		t.Fatal("clock reversal replenished budget")
 	}
 }
@@ -148,7 +148,7 @@ func TestPrewarmContentTakeoverRetainsSameAttemptAndReleasesOnDemandEnd(t *testi
 		t.Fatal(err)
 	}
 	attempt := receive(t, attempts)
-	nextTimer(t, clock, AttemptBudget)
+	nextTimer(t, clock, DefaultAttemptBudget)
 	close(attempt.ready)
 	receive(t, path.Ready())
 	hold := nextTimer(t, clock, PrewarmRetention)
@@ -191,7 +191,7 @@ func TestPrewarmHasOneAttemptAndBoundedRetention(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer path.Close()
-	nextTimer(t, clock, AttemptBudget)
+	nextTimer(t, clock, DefaultAttemptBudget)
 	close(attempt.ready)
 	receive(t, path.Ready())
 	nextTimer(t, clock, PrewarmRetention).fire(clock.Now())
@@ -220,7 +220,7 @@ func TestRetryAdvancesIdentityAndWaveCannotTruncateICEOpportunity(t *testing.T) 
 	}
 	first := receive(t, bindings)
 	a := receive(t, attempts)
-	nextTimer(t, clock, AttemptBudget)
+	nextTimer(t, clock, DefaultAttemptBudget)
 	a.Close()
 	backoff := nextTimer(t, clock, time.Second)
 	clock.advance(time.Second)
@@ -230,8 +230,8 @@ func TestRetryAdvancesIdentityAndWaveCannotTruncateICEOpportunity(t *testing.T) 
 	if first.PeerPathID != second.PeerPathID || first.AttemptID == second.AttemptID || second.AttemptSequence != 2 {
 		t.Fatal("fresh retry lost stable identity")
 	}
-	timer := nextTimer(t, clock, AttemptBudget)
-	clock.advance(AttemptBudget)
+	timer := nextTimer(t, clock, DefaultAttemptBudget)
+	clock.advance(DefaultAttemptBudget)
 	timer.fire(clock.Now())
 	backoff = nextTimer(t, clock, 2*time.Second)
 	clock.advance(2 * time.Second)
@@ -262,7 +262,7 @@ func TestPathIdentityAndCapacityAreIndependent(t *testing.T) {
 	}
 	// Each path gets an independent lifecycle, while the receive account
 	// reserves enough elapsed-time budget before admitting concurrent attempts.
-	for range int(ActiveTimePerWindow / AttemptBudget) {
+	for range int(ActiveTimePerWindow / DefaultAttemptBudget) {
 		receive(t, started)
 	}
 	if _, err := owner.Open(context.Background(), PathConfig{Start: start}); err == nil {

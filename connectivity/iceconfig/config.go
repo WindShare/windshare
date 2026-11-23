@@ -3,6 +3,7 @@ package iceconfig
 
 import (
 	"errors"
+	"math"
 	"slices"
 
 	"github.com/pion/stun/v4"
@@ -15,22 +16,33 @@ const (
 
 var ErrConfiguration = errors.New("invalid ICE connection configuration")
 
+// STUNServer is a UDP discovery endpoint with its default port already applied.
+type STUNServer struct {
+	Host string
+	Port uint16
+}
+
 // Connection is a snapshot consumed by one gathering generation.
 type Connection struct {
-	discovery []string
+	discovery []STUNServer
 }
 
 func NewDirect(discovery []string) (Connection, error) {
 	if len(discovery) > MaximumURLs {
 		return Connection{}, ErrConfiguration
 	}
-	for _, raw := range discovery {
-		uri, err := stun.ParseURI(raw)
-		if len(raw) > MaximumURLBytes || err != nil || uri.Scheme != stun.SchemeTypeSTUN {
+	servers := make([]STUNServer, len(discovery))
+	for i, raw := range discovery {
+		if len(raw) > MaximumURLBytes {
 			return Connection{}, ErrConfiguration
 		}
+		uri, err := stun.ParseURI(raw)
+		if err != nil || uri.Scheme != stun.SchemeTypeSTUN || uri.Port < 1 || uri.Port > math.MaxUint16 {
+			return Connection{}, ErrConfiguration
+		}
+		servers[i] = STUNServer{Host: uri.Host, Port: uint16(uri.Port)}
 	}
-	return Connection{discovery: slices.Clone(discovery)}, nil
+	return Connection{discovery: servers}, nil
 }
 
-func (c Connection) DiscoveryURLs() []string { return slices.Clone(c.discovery) }
+func (c Connection) DiscoveryServers() []STUNServer { return slices.Clone(c.discovery) }

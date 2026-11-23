@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/netip"
 	"strings"
@@ -27,6 +28,8 @@ func (m *Mux) endpoint(addr net.Addr) (*ice.UniversalUDPMuxDefault, error) {
 	return nil, fmt.Errorf("socket endpoint unavailable: %s", addr)
 }
 
+// The socket survives across attempts. Its current owner must cancel and drain
+// outstanding discovery before releasing the claim to its successor.
 func (m *Mux) DiscoverXORMappedAddr(ctx context.Context, local netip.AddrPort, server *net.UDPAddr, timeout time.Duration) (netip.AddrPort, error) {
 	endpoint, err := m.endpoint(net.UDPAddrFromAddrPort(local))
 	if err != nil {
@@ -36,11 +39,19 @@ func (m *Mux) DiscoverXORMappedAddr(ctx context.Context, local netip.AddrPort, s
 	if err != nil {
 		return netip.AddrPort{}, err
 	}
-	ip, ok := netip.AddrFromSlice(mapped.IP)
-	if !ok || mapped.Port <= 0 || mapped.Port > 65535 || ip.Unmap().Is4() != local.Addr().Is4() {
+	return stunMappedEndpoint(local.Addr(), mapped.IP, mapped.Port)
+}
+
+func stunMappedEndpoint(local netip.Addr, mappedIP net.IP, port int) (netip.AddrPort, error) {
+	ip, ok := netip.AddrFromSlice(mappedIP)
+	ip = ip.Unmap()
+	// A reflexive address has no interface scope on the wire. Private unicast
+	// can work across a LAN or VPN. The peer decides whether to admit loopback.
+	if !ok || port < 1 || port > math.MaxUint16 || ip.Is4() != local.Unmap().Is4() ||
+		(!ip.IsGlobalUnicast() && !ip.IsLoopback()) {
 		return netip.AddrPort{}, ErrInvalid
 	}
-	return netip.AddrPortFrom(ip.Unmap(), uint16(mapped.Port)), nil
+	return netip.AddrPortFrom(ip, uint16(port)), nil
 }
 
 func (m *Mux) GetConn(ufrag string, addr net.Addr) (net.PacketConn, error) {

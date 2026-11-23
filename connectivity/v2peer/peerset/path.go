@@ -20,6 +20,14 @@ type recoveryWave struct {
 
 const MappingOpportunityDelay = 10 * time.Second
 
+type attemptProgress uint8
+
+const (
+	attemptUnstarted attemptProgress = iota
+	attemptStarted
+	attemptAdmitted
+)
+
 type attemptOpportunity struct {
 	binding v2signal.Binding
 	start   Starter
@@ -41,7 +49,7 @@ func (p *Path) run() {
 			p.finish(*stop)
 			return
 		}
-		if wave.exhausted(p.owner.config.Clock.Now()) {
+		if wave.exhausted(p.owner.config.Clock.Now(), p.minimumOpportunity()) {
 			if stop := p.nextWave(&wave); stop != nil {
 				p.finish(*stop)
 				return
@@ -58,8 +66,8 @@ func (p *Path) run() {
 		wave.attempts++
 		wave.opportunities++
 		p.setResourceActive(true)
-		result, admitted := p.executePrepared(opportunity)
-		if stop := p.afterAttempt(&wave, result, admitted); stop != nil {
+		result, progress := p.executePrepared(opportunity)
+		if stop := p.afterAttempt(&wave, result, progress); stop != nil {
 			p.finish(*stop)
 			return
 		}
@@ -93,8 +101,12 @@ func (p *Path) stopReason() *Result {
 	}
 	return nil
 }
-func (w recoveryWave) exhausted(now time.Time) bool {
-	return w.attempts >= AttemptsPerWave || ((w.opportunities > 0 || w.attempts > 0) && now.Sub(w.started)+MinimumAttemptOpportunity > WaveBudget)
+func (w recoveryWave) remaining(now time.Time) time.Duration {
+	return WaveBudget - now.Sub(w.started)
+}
+
+func (w recoveryWave) exhausted(now time.Time, minimum time.Duration) bool {
+	return w.attempts >= AttemptsPerWave || ((w.opportunities > 0 || w.attempts > 0) && w.remaining(now) < minimum)
 }
 func (p *Path) nextWave(wave *recoveryWave) *Result {
 	p.deferred.settle(false, 0)
@@ -112,12 +124,12 @@ func (p *Path) nextWave(wave *recoveryWave) *Result {
 func (p *Path) awaitMappingOpportunity(wave recoveryWave) bool {
 	now := p.owner.config.Clock.Now()
 	if p.config.Purpose != v2signal.ThroughputExploration && wave.attempts == 0 && p.deferred == nil && p.config.Native != nil && p.currentDemand() == ContentDemand {
-		p.deferred = p.budget().reserveDeferred(now)
+		p.deferred = p.budget().reserveDeferred(now, p.attemptBudget())
 	}
 	if p.deferred == nil || wave.attempts != AttemptsPerWave-1 || p.mappingReady() {
 		return true
 	}
-	delay := max(min(MappingOpportunityDelay, WaveBudget-MinimumAttemptOpportunity)-now.Sub(wave.started), 0)
+	delay := max(min(MappingOpportunityDelay, WaveBudget-p.minimumOpportunity())-now.Sub(wave.started), 0)
 	p.setResourceActive(true)
 	return p.wait(delay)
 }
@@ -128,10 +140,11 @@ func (p *Path) prepareOpportunity(wave *recoveryWave) (*attemptOpportunity, *Res
 	now := p.owner.config.Clock.Now()
 	if wave.opportunities == 0 {
 		wave.started = now
-	} else if wave.exhausted(now) {
+	} else if wave.exhausted(now, p.minimumOpportunity()) {
 		return nil, nil
 	}
-	refund, delay := p.reserveAttemptBudget(wave.attempts)
+	limit := min(p.attemptBudget(), wave.remaining(now))
+	refund, delay := p.reserveAttemptBudget(now, wave.attempts, limit)
 	if refund == nil {
 		if p.config.StopAfterWave {
 			return nil, &Result{Cause: ErrWaveExhausted}
@@ -147,17 +160,25 @@ func (p *Path) prepareOpportunity(wave *recoveryWave) (*attemptOpportunity, *Res
 	binding, err := p.freshBinding()
 	if err != nil {
 		refund(0)
+		p.budget().refundUnstartedAttempt()
 		return nil, &Result{Scope: protocolsession.PeerFailurePathTerminal, Cause: err}
 	}
-	return p.prepareProvider(wave, binding, refund), nil
+	opportunity, err := p.prepareProvider(wave, binding, limit, refund)
+	if err == nil {
+		return opportunity, nil
+	}
+	refund(0)
+	wave.attempts++
+	wave.opportunities++
+	return nil, p.afterAttempt(wave, Result{Cause: err, Stopped: p.ctx.Err() != nil}, attemptUnstarted)
 }
 
-func (p *Path) reserveAttemptBudget(attempts int) (func(time.Duration), time.Duration) {
+func (p *Path) reserveAttemptBudget(now time.Time, attempts int, limit time.Duration) (func(time.Duration), time.Duration) {
 	ready := p.consumeMapping()
 	if p.deferred != nil && (ready || attempts == AttemptsPerWave-1) {
 		return p.takeDeferred(), 0
 	}
-	refund, delay := p.budget().reserve(p.owner.config.Clock.Now())
+	refund, delay := p.budget().reserve(now, limit)
 	if refund == nil && p.deferred != nil {
 		return p.takeDeferred(), 0
 	}
@@ -186,7 +207,12 @@ func (p *Path) freshBinding() (v2signal.Binding, error) {
 	}
 	return binding, nil
 }
-func (p *Path) afterAttempt(wave *recoveryWave, result Result, admitted bool) *Result {
+func (p *Path) afterAttempt(wave *recoveryWave, result Result, progress attemptProgress) *Result {
+	deferred := result.Scope == protocolsession.PeerFailureResourceDeferred || errors.Is(result.Cause, socketauthority.ErrCapacity) ||
+		(progress == attemptUnstarted && errors.Is(result.Cause, context.DeadlineExceeded))
+	if progress == attemptUnstarted || (deferred && progress == attemptStarted) {
+		p.budget().refundUnstartedAttempt()
+	}
 	p.setResourceActive(p.deferred != nil)
 	if p.config.Purpose == v2signal.ThroughputExploration {
 		return &result
@@ -201,15 +227,17 @@ func (p *Path) afterAttempt(wave *recoveryWave, result Result, admitted bool) *R
 	if result.Stopped || result.Scope == protocolsession.PeerFailureSessionTerminal || result.Scope == protocolsession.PeerFailurePathTerminal {
 		return &result
 	}
-	if admitted {
+	if progress == attemptAdmitted {
 		*wave = recoveryWave{started: p.owner.config.Clock.Now()}
 		return nil
 	}
+	if errors.Is(result.Cause, ErrWaveExhausted) {
+		return p.nextWave(wave)
+	}
 	// Capacity deferral proves the remote did not start ICE. Preserve the finite
 	// wall-clock wave and application rate limits, but return its negotiation allowance.
-	if result.Scope == protocolsession.PeerFailureResourceDeferred || errors.Is(result.Cause, socketauthority.ErrCapacity) {
+	if deferred {
 		wave.attempts--
-		p.budget().refundUnstartedAttempt()
 		if !p.wait(ResourceRetryDelay) {
 			return &Result{Stopped: true}
 		}
@@ -242,7 +270,7 @@ func (p *Path) awaitContentDemand() bool {
 	return p.ctx.Err() == nil && p.currentDemand() == ContentDemand
 }
 
-func (p *Path) executeStart(start Starter, binding v2signal.Binding, opportunity time.Duration, refund func(time.Duration)) (Result, bool) {
+func (p *Path) executeStart(start Starter, binding v2signal.Binding, opportunity time.Duration, refund func(time.Duration)) (Result, attemptProgress) {
 	started := p.owner.config.Clock.Now()
 	child, cancel := context.WithCancel(p.ctx)
 	defer cancel()
@@ -271,10 +299,10 @@ func (p *Path) executeStart(start Starter, binding v2signal.Binding, opportunity
 	attempt, err := start(child, binding)
 	if child.Err() != nil {
 		p.closeAttempt(attempt)
-		return Result{Cause: context.DeadlineExceeded, Stopped: p.ctx.Err() != nil}, false
+		return Result{Cause: context.DeadlineExceeded, Stopped: p.ctx.Err() != nil}, attemptStarted
 	}
 	if err != nil || attempt == nil {
-		return Result{Cause: err}, false
+		return Result{Cause: err}, attemptStarted
 	}
 	p.mu.Lock()
 	p.current = attempt
@@ -301,18 +329,18 @@ func (p *Path) executeStart(start Starter, binding v2signal.Binding, opportunity
 			retention.Stop()
 		}
 	}()
-	admitted := false
+	progress := attemptStarted
 	for {
 		select {
 		case <-p.ctx.Done():
-			return Result{Stopped: true}, admitted
+			return Result{Stopped: true}, progress
 		case <-p.wake:
 			if cause := p.consumeRestart(); cause != nil {
-				return Result{Cause: cause}, admitted
+				return Result{Cause: cause}, progress
 			}
 			switch p.currentDemand() {
 			case NoDemand:
-				return Result{Stopped: true}, admitted
+				return Result{Stopped: true}, progress
 			case ContentDemand:
 				if retention != nil {
 					retention.Stop()
@@ -322,15 +350,15 @@ func (p *Path) executeStart(start Starter, binding v2signal.Binding, opportunity
 		case <-deadline:
 			// The enclosing attempt cap never resets when the provider advances stages.
 			cancel()
-			return Result{Cause: context.DeadlineExceeded}, admitted
+			return Result{Cause: context.DeadlineExceeded}, progress
 		case <-retainUntil:
 			if p.currentDemand() != ContentDemand {
-				return Result{}, admitted
+				return Result{}, progress
 			}
 			retainUntil = nil
 		case <-ready:
 			ready = nil
-			admitted = true
+			progress = attemptAdmitted
 			p.deferred.settle(false, 0)
 			p.deferred = nil
 			deadline = nil
@@ -347,7 +375,7 @@ func (p *Path) executeStart(start Starter, binding v2signal.Binding, opportunity
 			}
 		case <-attempt.Done():
 			outcome := attempt.Outcome()
-			return Result{Scope: outcome.RecoveryScope(), Cause: outcome.RetainedCause(), Stopped: outcome.LocallyCanceled() && p.ctx.Err() != nil}, admitted
+			return Result{Scope: outcome.RecoveryScope(), Cause: outcome.RetainedCause(), Stopped: outcome.LocallyCanceled() && p.ctx.Err() != nil}, progress
 		}
 	}
 }

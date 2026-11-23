@@ -25,7 +25,7 @@ func TestResourceDeferralsPreserveNegotiationAllowanceButNotWaveDeadline(t *test
 		opportunity.refund(0)
 		settled := make(chan *Result, 1)
 		go func() {
-			settled <- path.afterAttempt(&wave, Result{Scope: protocolsession.PeerFailureResourceDeferred}, false)
+			settled <- path.afterAttempt(&wave, Result{Scope: protocolsession.PeerFailureResourceDeferred}, attemptStarted)
 		}()
 		timer := nextTimer(t, clock, ResourceRetryDelay)
 		clock.advance(ResourceRetryDelay)
@@ -44,7 +44,7 @@ func TestResourceDeferralsPreserveNegotiationAllowanceButNotWaveDeadline(t *test
 		t.Fatal("deferral charged receive budget", remaining)
 	}
 	clock.advance(WaveBudget)
-	if !wave.exhausted(clock.Now()) {
+	if !wave.exhausted(clock.Now(), path.minimumOpportunity()) {
 		t.Fatal("busy peer removed deadline")
 	}
 	if stop := path.nextWave(&wave); stop == nil || stop.Cause != ErrWaveExhausted {
@@ -60,7 +60,7 @@ func TestResourceRetryRemainsCancelable(t *testing.T) {
 	wave := recoveryWave{started: clock.Now(), attempts: 1, opportunities: 1}
 	done := make(chan *Result, 1)
 	go func() {
-		done <- path.afterAttempt(&wave, Result{Scope: protocolsession.PeerFailureResourceDeferred}, false)
+		done <- path.afterAttempt(&wave, Result{Scope: protocolsession.PeerFailureResourceDeferred}, attemptStarted)
 	}()
 	nextTimer(t, clock, time.Second)
 	cancel()

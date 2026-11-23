@@ -70,7 +70,7 @@ func TestFreshAttemptsFreezeProfileAndReuseExactSocketWithinGeneration(t *testin
 	if a.SocketLease != b.SocketLease || a.SocketLease.Endpoints()[0] != b.SocketLease.Endpoints()[0] || a.AttemptID == b.AttemptID {
 		t.Fatal(a, b)
 	}
-	if a.ICEProfileID == "" || a.ProtocolSessionID != first.ProtocolSessionID || a.NetworkGenerationID != 1 || len(a.ICE.DiscoveryURLs()) != 0 {
+	if a.ICEProfileID == "" || a.ProtocolSessionID != first.ProtocolSessionID || a.NetworkGenerationID != 1 || len(a.ICE.DiscoveryServers()) != 0 {
 		t.Fatal(a)
 	}
 	changes, _ := h.native.SetDemand(first.ProtocolSessionID, first.Binding.PeerPathID, true, false)
@@ -211,14 +211,19 @@ func TestNativeDemandAdmissionBoundsAndMonitorFailure(t *testing.T) {
 		t.Fatal("invalid context allocated a provider")
 	}
 }
-func TestProfileFactsComeFromProviderCandidatesWithoutInventedEndpointSuccess(t *testing.T) {
+func TestSTUNSuccessSurvivesCandidateDeduplication(t *testing.T) {
 	h := newHarness(t)
-	_, _ = h.native.NewPeerConnection(context.Background(), request(1))
+	h.native.config.Pool = icepolicy.DefaultPool
+	_, _ = h.native.NewPeerConnection(t.Context(), request(1))
 	emit := h.requests[0].Observe
-	emit(pionpeer.Event{At: h.now.Add(time.Second), Candidate: &pionpeer.CandidateFacts{Type: "host"}})
-	emit(pionpeer.Event{At: h.now.Add(2 * time.Second), Candidate: &pionpeer.CandidateFacts{Type: "srflx", Origin: "ordinary"}})
+	// The router advertised this mapping first. The successful probe has no second candidate to publish.
+	emit(pionpeer.Event{At: h.now, Candidate: &pionpeer.CandidateFacts{Type: "srflx", Origin: "mapped"}})
+	discovered := h.now.Add(time.Second)
+	emit(pionpeer.Event{At: discovered, Milestone: pionpeer.HostSTUNDiscovered})
+	emit(pionpeer.Event{At: discovered.Add(time.Second), Milestone: pionpeer.GatheringComplete})
 	facts := h.native.facts.Snapshot()
-	if len(facts.Endpoints) != 0 || len(facts.Profiles) != 1 || !facts.Profiles[0].ServerReflexiveProduced {
+	if len(facts.Endpoints) != 0 || len(facts.Profiles) != 1 || !facts.Profiles[0].ServerReflexiveProduced ||
+		!facts.Profiles[0].ObservedAt.Equal(discovered) {
 		t.Fatal(facts)
 	}
 }

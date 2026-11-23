@@ -195,7 +195,7 @@ func TestSocketCarriesSTUNGatherChecksPayloadAndFreshReplacement(t *testing.T) {
 		})
 	}
 }
-func serveSTUN(server net.PacketConn, observed chan<- netip.AddrPort, count *atomic.Int32) {
+func serveSTUN(server net.PacketConn, observed chan<- netip.AddrPort, mappedIP net.IP) {
 	buffer := make([]byte, 1500)
 	for {
 		n, source, err := server.ReadFrom(buffer)
@@ -210,10 +210,11 @@ func serveSTUN(server net.PacketConn, observed chan<- netip.AddrPort, count *ato
 		if observed != nil {
 			observed <- address.AddrPort()
 		}
-		if count != nil {
-			count.Add(1)
+		ip := mappedIP
+		if ip == nil {
+			ip = address.IP
 		}
-		reply, err := stun.Build(stun.NewTransactionIDSetter(message.TransactionID), stun.BindingSuccess, &stun.XORMappedAddress{IP: address.IP, Port: address.Port})
+		reply, err := stun.Build(stun.NewTransactionIDSetter(message.TransactionID), stun.BindingSuccess, &stun.XORMappedAddress{IP: ip, Port: address.Port})
 		if err == nil {
 			_, _ = server.WriteTo(reply.Raw, source)
 		}

@@ -3,10 +3,65 @@ package nativepeer
 import (
 	"context"
 	"errors"
+	"github.com/windshare/windshare/connectivity/networkstate"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"testing"
 	"time"
 )
+
+type expiringSnapshot struct{ expire func() }
+
+func (m expiringSnapshot) Poll(ctx context.Context, _ time.Time) (networkstate.Snapshot, bool, error) {
+	m.expire()
+	return networkstate.Snapshot{}, false, ctx.Err()
+}
+
+func TestImmediateAdmissionDeclinesColdSnapshotWithoutPolling(t *testing.T) {
+	_, _, makeNative := newAdmissionFixture(t, 0)
+	n := makeNative()
+	n.config.Monitor = expiringSnapshot{expire: func() { t.Fatal("cold snapshot polled without queue time") }}
+	if _, err := n.PrepareAttemptWithin(t.Context(), attemptFor(1), 0); !errors.Is(err, ErrAdmission) {
+		t.Fatalf("cold immediate admission = %v", err)
+	}
+}
+
+func TestQueueDeadlineInterruptsSnapshotBeforeReservingCapacity(t *testing.T) {
+	gate, clock, makeNative := newAdmissionFixture(t, 0)
+	n := makeNative()
+	const wait = 3 * time.Second
+	n.config.Monitor = expiringSnapshot{expire: func() { clock.advance(wait) }}
+	if _, err := n.PrepareAttemptWithin(t.Context(), attemptFor(1), wait); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("snapshot deadline cause = %v", err)
+	}
+	if gate.active != 0 || gate.starts != StartsPerWindow || gate.activeTime != float64(ActiveTimePerWindow) {
+		t.Fatal("expired snapshot acquired a resource permit")
+	}
+}
+
+func TestDelayedPollCannotRetireCurrentGenerationLease(t *testing.T) {
+	_, _, makeNative := newAdmissionFixture(t, 0)
+	n := makeNative()
+	monitor := n.config.Monitor.(*testMonitor)
+	stale := &testMonitor{state: monitor.state}
+	n.Maintain(t.Context())
+	monitor.state.ResumeSequence++
+	_ = startActual(t, n, 1).Close()
+	generation := n.NetworkGeneration()
+	if generation != 2 {
+		t.Fatal("missing replacement generation", generation)
+	}
+	n.config.Monitor = stale
+	request := attemptFor(1)
+	request.Binding.AttemptSequence++
+	prepared, err := n.PrepareAttempt(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prepared.Close()
+	if prepared.snapshot.GenerationID() != generation || prepared.path.lease == nil || prepared.path.lease.GenerationID() != generation {
+		t.Fatal("delayed first-generation sample displaced the current lease")
+	}
+}
 
 func TestProcessProviderQueueHasFiniteCapacityAndManagerCloseDetachesWaiters(t *testing.T) {
 	gate, _, makeNative := newAdmissionFixture(t, 0)
@@ -61,7 +116,7 @@ func TestUnstartedPreparationExpiresAndCannotBeReused(t *testing.T) {
 	if _, err := prepared.Start(missingContext); !errors.Is(err, ErrAdmission) {
 		t.Fatal(err)
 	}
-	clock.advance(AttemptBudget)
+	clock.advance(PermitLifetime)
 	if _, err := prepared.Start(context.Background()); !errors.Is(err, ErrAdmission) {
 		t.Fatal("expired preparation revived", err)
 	}

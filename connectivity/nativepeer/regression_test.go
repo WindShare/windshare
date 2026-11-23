@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/windshare/windshare/connectivity/iceconfig"
 	"github.com/windshare/windshare/connectivity/icepolicy"
 	"github.com/windshare/windshare/connectivity/networkstate"
 	"github.com/windshare/windshare/connectivity/pionpeer"
@@ -84,7 +85,7 @@ func TestLoopbackIPv6DoesNotEnableIPv6OnlySTUNSelection(t *testing.T) {
 	}
 	h.native.config.Pool = func() icepolicy.ICEEndpointPool { return pool }
 	_, _ = h.native.NewPeerConnection(context.Background(), request(1))
-	if got := h.requests[0].ICE.DiscoveryURLs(); !slices.Equal(got, []string{"stun:v4.example:3478"}) {
+	if got := h.requests[0].ICE.DiscoveryServers(); !slices.Equal(got, []iceconfig.STUNServer{{Host: "v4.example", Port: 3478}}) {
 		t.Fatalf("loopback ::1 caused IPv6-only STUN selection: %v", got)
 	}
 }
@@ -106,24 +107,25 @@ func TestProfilesRotateOnceAndNeverLoseSingletonSTUNOnLaterAttempts(t *testing.T
 				_, _ = h.native.NewPeerConnection(context.Background(), request(i))
 			}
 			a, b, c := h.requests[0], h.requests[1], h.requests[2]
-			if len(a.ICE.DiscoveryURLs()) == 0 || len(b.ICE.DiscoveryURLs()) == 0 || !slices.Equal(b.ICE.DiscoveryURLs(), c.ICE.DiscoveryURLs()) || b.ICEProfileID != c.ICEProfileID {
-				t.Fatal(a.ICE.DiscoveryURLs(), b.ICE.DiscoveryURLs(), c.ICE.DiscoveryURLs())
+			primary, backup, retry := a.ICE.DiscoveryServers(), b.ICE.DiscoveryServers(), c.ICE.DiscoveryServers()
+			if len(primary) == 0 || len(backup) == 0 || !slices.Equal(backup, retry) || b.ICEProfileID != c.ICEProfileID {
+				t.Fatal(primary, backup, retry)
 			}
-			if count == 1 && !slices.Equal(a.ICE.DiscoveryURLs(), b.ICE.DiscoveryURLs()) {
+			if count == 1 && !slices.Equal(primary, backup) {
 				t.Fatal("singleton was consumed")
 			}
-			if count == 4 && (len(a.ICE.DiscoveryURLs()) != 2 || len(b.ICE.DiscoveryURLs()) != 2 || slices.Contains(a.ICE.DiscoveryURLs(), b.ICE.DiscoveryURLs()[0])) {
+			if count == 4 && (len(primary) != 2 || len(backup) != 2 || slices.Contains(primary, backup[0])) {
 				t.Fatal("backup did not explore unused domains")
 			}
 			h.monitor.state.ResumeSequence++
 			_, _ = h.native.NewPeerConnection(context.Background(), request(4))
 			replacement := h.requests[3]
-			if replacement.NetworkGenerationID == c.NetworkGenerationID || replacement.ICEProfileID == c.ICEProfileID || !slices.Equal(replacement.ICE.DiscoveryURLs(), c.ICE.DiscoveryURLs()) {
-				t.Fatal("network replacement reset wave footprint", replacement.ICE.DiscoveryURLs(), c.ICE.DiscoveryURLs())
+			if replacement.NetworkGenerationID == c.NetworkGenerationID || replacement.ICEProfileID == c.ICEProfileID || !slices.Equal(replacement.ICE.DiscoveryServers(), retry) {
+				t.Fatal("network replacement reset wave footprint", replacement.ICE.DiscoveryServers(), retry)
 			}
 			h.native.BeginWave(a.ProtocolSessionID, request(1).Binding.PeerPathID)
 			_, _ = h.native.NewPeerConnection(context.Background(), request(5))
-			if len(h.requests[4].ICE.DiscoveryURLs()) == 0 {
+			if len(h.requests[4].ICE.DiscoveryServers()) == 0 {
 				t.Fatal("new wave could not select")
 			}
 		})
@@ -131,11 +133,12 @@ func TestProfilesRotateOnceAndNeverLoseSingletonSTUNOnLaterAttempts(t *testing.T
 }
 func TestMappedCandidateCannotClaimSTUNSuccess(t *testing.T) {
 	h := newHarness(t)
+	h.native.config.Pool = icepolicy.DefaultPool
 	_, _ = h.native.NewPeerConnection(context.Background(), request(1))
 	emit := h.requests[0].Observe
 	emit(pionpeer.Event{At: h.now, Candidate: &pionpeer.CandidateFacts{Type: "host", Origin: "ordinary"}})
 	emit(pionpeer.Event{At: h.now.Add(time.Second), Candidate: &pionpeer.CandidateFacts{Type: "srflx", Origin: "mapped"}})
-	emit(pionpeer.Event{At: h.now.Add(2 * time.Second), Milestone: "gathering_complete"})
+	emit(pionpeer.Event{At: h.now.Add(2 * time.Second), Milestone: pionpeer.GatheringComplete})
 	facts := h.native.facts.Snapshot()
 	if len(facts.Profiles) != 1 || facts.Profiles[0].ServerReflexiveProduced || len(facts.Endpoints) != 0 {
 		t.Fatal(facts)
