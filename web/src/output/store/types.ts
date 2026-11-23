@@ -17,6 +17,8 @@ export interface FSATargetRecord {
   readonly reservedName: string
   readonly collisionIndex: number
   readonly singleFile: boolean
+  /** Timestamp before reserving the destination so resume can recognize uncommitted empty placeholders. */
+  readonly reservedAtMs: number
 }
 
 export interface OPFSTargetRecord {

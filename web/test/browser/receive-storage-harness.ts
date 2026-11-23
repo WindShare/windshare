@@ -269,6 +269,64 @@ export async function verifyFSABackendOverNativeHandles(databaseName: string) {
   }
 }
 
+export async function startUncommittedFSAFirstWrite(databaseName: string, sandboxName: string, taskId: string) {
+  const store = await ReceiveStore.open(databaseName)
+  const root = await navigator.storage.getDirectory()
+  const parent = await root.getDirectoryHandle(sandboxName, { create: true })
+  const session = await openNewFSASession({
+    task: {
+      taskId,
+      selection: { shareInstance: 'share-fsa', syntheticRoot: 'root', defaultSelected: true, rules: [] },
+      selectionKey: 'sel-placeholder',
+      artifact: { kind: 'directory-tree', name: 'Drafts' },
+      lifecycle: initialReceiveState(taskId),
+    },
+    parentHandle: parent,
+    store,
+  })
+  const file = await session.transferOutput.openFile({
+    fileId: 'f1', path: ['report.bin'], sourcePath: ['Drafts', 'report.bin'], revision: 'r1', exactSize: 8n,
+  }, new AbortController().signal)
+  await file.writeAt(0n, new Uint8Array([1, 2, 3, 4]))
+  // Intentionally leave the session, writable stream, and Web Lock open for the page close to sever.
+  return { taskId }
+}
+
+export async function resumeFSAPlaceholderAfterPageClose(databaseName: string, sandboxName: string, taskId: string) {
+  const store = await ReceiveStore.open(databaseName)
+  const root = await navigator.storage.getDirectory()
+  try {
+    const parent = await root.getDirectoryHandle(sandboxName)
+    const dir = await parent.getDirectoryHandle('Drafts')
+    const beforeSize = (await (await dir.getFileHandle('report.bin')).getFile()).size
+    const beforeRecord = await store.getFile(taskId, 'f1')
+    const task = await store.getTask(taskId)
+    if (task === undefined) throw new Error('missing persisted task')
+    const reopened = await reopenFSASession({ task, store, allowPermissionPrompt: false })
+    try {
+      const resumed = await reopened.transferOutput.openFile({
+        fileId: 'f1', path: ['report.bin'], sourcePath: ['Drafts', 'report.bin'], revision: 'r1', exactSize: 8n,
+      }, new AbortController().signal)
+      const payload = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8])
+      await resumed.writeAt(0n, payload)
+      await resumed.commit([byteRange(0n, 8n)])
+    } finally {
+      await reopened.close()
+    }
+    const finalBytes = [...new Uint8Array(await (await (await dir.getFileHandle('report.bin')).getFile()).arrayBuffer())]
+    return {
+      beforeSize,
+      hadRecordBeforeResume: beforeRecord !== undefined,
+      finalBytes,
+      completedAfterResume: (await store.getFile(taskId, 'f1'))?.status === 'completed',
+    }
+  } finally {
+    store.close()
+    await root.removeEntry(sandboxName, { recursive: true }).catch(() => undefined)
+    await deleteDatabase(databaseName)
+  }
+}
+
 export async function verifyFSADiscardSafetyOverNativeHandles(databaseName: string) {
   const store = await ReceiveStore.open(databaseName)
   const root = await navigator.storage.getDirectory()

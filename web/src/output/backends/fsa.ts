@@ -23,7 +23,9 @@ import {
   type ReceiveTaskRecord,
 } from '../store/types'
 import type { BrowserOutputWindow, OutputSessionHandle, StartBackendTaskInput } from './contract'
-import { cleanupFSATaskEntries, isMissingFSAEntry, sameFSAEntry } from './fsa-cleanup'
+import {
+  cleanupFSATaskEntries, isMissingFSAEntry, isUncommittedEmptyPlaceholder, readFSADiskFingerprint, sameFSAEntry,
+} from './fsa-cleanup'
 import { destinationChanged, FSAOutputFile, verifyExistingFSAFile } from './fsa-file'
 import { SafeNameRegistry, decideCollisionName, deterministicSafeComponent } from './safe-name'
 
@@ -76,6 +78,7 @@ export async function openNewFSASession(input: Readonly<{
   try {
     const singleFile = input.task.artifact.singleFileId !== undefined
     const safeNames = new SafeNameRegistry()
+    const reservedAtMs = Date.now()
     const { reservedName, collisionIndex, rootHandle } = await reserveFSATarget(
       input.parentHandle,
       input.task.artifact.name,
@@ -88,6 +91,7 @@ export async function openNewFSASession(input: Readonly<{
       reservedName,
       collisionIndex,
       singleFile,
+      reservedAtMs,
     })
     const display = input.task.display === undefined
       ? undefined
@@ -143,6 +147,8 @@ export async function reopenFSASession(input: Readonly<{
     throw error
   }
   try {
+    // Capture the upper bound once the task lock proves no previous session is still allocating placeholders.
+    const reopenedAtMs = Date.now()
     const perm = await ensureFSAPermission(input.task.target.parentHandle, input.allowPermissionPrompt, input.signal)
     input.signal?.throwIfAborted()
     if (perm !== 'granted') {
@@ -179,6 +185,7 @@ export async function reopenFSASession(input: Readonly<{
       new SafeNameRegistry(),
       input.diagnostics,
       priorFiles,
+      reopenedAtMs,
     )
   } catch (error) {
     emitOutputTrace(input.diagnostics?.trace, 'reopen', {
@@ -274,10 +281,13 @@ class FSASessionHandle implements OutputSessionHandle {
   readonly #lock: TaskLock
   readonly #safeNames: SafeNameRegistry
   readonly #diagnostics: OutputDiagnosticsPorts | undefined
+  readonly #reopenedAtMs: number | undefined
   readonly #files: FSAFileRecords
   readonly #dirCache = new Map<string, Promise<FSADirectory>>()
   readonly #createdDirectories = new Set<FileSystemDirectoryHandle>()
   readonly #fileDirectories = new Set<FileSystemDirectoryHandle>()
+  readonly #reclaimedPlaceholders: FileSystemFileHandle[] = []
+  #reclaimTail: Promise<void> = Promise.resolve()
 
   constructor(
     record: FSATaskRecord,
@@ -287,6 +297,7 @@ class FSASessionHandle implements OutputSessionHandle {
     safeNames: SafeNameRegistry,
     diagnostics?: OutputDiagnosticsPorts,
     priorFiles: readonly ReceiveFileRecord[] = [],
+    reopenedAtMs?: number,
   ) {
     this.taskId = record.taskId
     this.#record = record
@@ -295,6 +306,7 @@ class FSASessionHandle implements OutputSessionHandle {
     this.#lock = lock
     this.#safeNames = safeNames
     this.#diagnostics = diagnostics
+    this.#reopenedAtMs = reopenedAtMs
     this.#files = new FSAFileRecords(store, priorFiles)
     this.transferOutput = Object.freeze({
       sessionId: record.taskId,
@@ -382,7 +394,7 @@ class FSASessionHandle implements OutputSessionHandle {
       if (handle === undefined) record = undefined
     }
     signal.throwIfAborted()
-    const openedAtMs = Date.now()
+    let openedAtMs = Date.now()
     if (handle === undefined) {
       const entry = await openFSAFile(parent.handle, request.path, leaf, this.#safeNames)
       handle = entry.handle
@@ -390,7 +402,11 @@ class FSASessionHandle implements OutputSessionHandle {
         // A repeated discovery can hit a completed file; a crash or a user edit can occupy the same name.
         // Resolve that rare case from IndexedDB without retaining a file ID for every ordinary success.
         record = await this.#store.getFile(this.taskId, request.fileId)
-        if (record === undefined) throw destinationChanged(this.#displayPath([...parent.physicalPath, handle.name]))
+        if (record === undefined) {
+          openedAtMs = await this.#reclaimUncommittedPlaceholder(
+            handle, request.fileId, this.#displayPath([...parent.physicalPath, handle.name]),
+          )
+        }
       }
     }
     const physicalPath = [...parent.physicalPath, handle.name]
@@ -401,6 +417,36 @@ class FSASessionHandle implements OutputSessionHandle {
       taskId: this.taskId, request, parentDir: parent.handle, handle, physicalPath,
       displayPath, openedAtMs, signal, store: this.#files, existing, diagnostics: this.#diagnostics,
     })
+  }
+
+  async #reclaimUncommittedPlaceholder(
+    handle: FileSystemFileHandle, fileId: string, displayPath: string,
+  ): Promise<number> {
+    if (this.#reopenedAtMs === undefined) throw destinationChanged(displayPath)
+    // Serialize claim checks so concurrent openFile calls cannot reclaim the same entry twice.
+    const previous = this.#reclaimTail
+    let release!: () => void
+    this.#reclaimTail = new Promise<void>(resolve => { release = resolve })
+    await previous
+    try {
+      for (const prior of this.#reclaimedPlaceholders) {
+        if (await sameFSAEntry(prior, handle)) throw destinationChanged(displayPath)
+      }
+      const disk = await readFSADiskFingerprint(handle).catch((cause: unknown) => {
+        throw destinationChanged(displayPath, cause)
+      })
+      if (!isUncommittedEmptyPlaceholder(disk, this.#record.target.reservedAtMs, this.#reopenedAtMs)) {
+        throw destinationChanged(displayPath)
+      }
+      this.#reclaimedPlaceholders.push(handle)
+      emitOutputTrace(this.#diagnostics?.trace, 'reopen', {
+        backend: 'file_system_access', task_id: this.taskId, file_id: fileId, transition: 'placeholder_reclaimed',
+      })
+      // Preserve the placeholder's original timestamp so an abort before publication can still clean it up.
+      return disk.lastModified
+    } finally {
+      release()
+    }
   }
 
   async #locateRecordedFile(parent: FSADirectory, leaf: string, record: ReceiveFileRecord): Promise<FileSystemFileHandle | undefined> {

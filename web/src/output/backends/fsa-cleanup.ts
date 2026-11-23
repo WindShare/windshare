@@ -5,6 +5,16 @@ import type { FSADiskFingerprint, FSATargetRecord, ReceiveFileRecord } from '../
 // FAT32 truncates file timestamps downward to 2-second boundaries.
 const PLACEHOLDER_MTIME_SKEW_MS = 2_000
 
+export function isUncommittedEmptyPlaceholder(
+  fingerprint: FSADiskFingerprint,
+  earliestMs: number,
+  latestMs: number,
+): boolean {
+  return fingerprint.size === 0 &&
+    fingerprint.lastModified >= earliestMs - PLACEHOLDER_MTIME_SKEW_MS &&
+    fingerprint.lastModified <= latestMs
+}
+
 export async function readFSADiskFingerprint(handle: FileSystemFileHandle): Promise<FSADiskFingerprint> {
   const file = await handle.getFile()
   return { size: file.size, lastModified: file.lastModified }
@@ -72,7 +82,7 @@ export async function removeUncommittedEmptyPlaceholder(
   if (!await sameFSAEntry(current, expected)) return 'changed'
   const file = await readFSADiskFingerprint(current)
   if (expected !== current && !matchesFSADiskFingerprint(await readFSADiskFingerprint(expected), file)) return 'changed'
-  if (file.size !== 0 || file.lastModified < openedAtMs - PLACEHOLDER_MTIME_SKEW_MS || file.lastModified > acquiredAtMs) return 'changed'
+  if (!isUncommittedEmptyPlaceholder(file, openedAtMs, acquiredAtMs)) return 'changed'
   return removeVerifiedFSALeaf(parent, name, expected, file)
 }
 

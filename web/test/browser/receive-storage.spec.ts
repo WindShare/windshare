@@ -120,6 +120,45 @@ test('FSA backend reserves collision names, verifies physical files on resume, a
   })
 })
 
+test('FSA resume reclaims its uncommitted 0-byte placeholder after closing a page during first write', async ({
+  context,
+  browserName,
+}) => {
+  const db = `windshare-fsa-close-test-${crypto.randomUUID()}`
+  const sandbox = `fsa-close-sandbox-${crypto.randomUUID()}`
+  const taskId = `fsa-close-${crypto.randomUUID()}`
+
+  const firstPage = await context.newPage()
+  try {
+    await firstPage.goto(BROWSER_CONTRACT_HOST_PATH)
+    await requireOriginPrivateStorage(firstPage, browserName)
+    await firstPage.evaluate(async ({ path, dbName, sandboxName, id }) => {
+      const harness = await import(path) as typeof import('./receive-storage-harness')
+      await harness.startUncommittedFSAFirstWrite(dbName, sandboxName, id)
+    }, { path: HARNESS_PATH, dbName: db, sandboxName: sandbox, id: taskId })
+  } finally {
+    await firstPage.close()
+  }
+
+  const resumedPage = await context.newPage()
+  try {
+    await resumedPage.goto(BROWSER_CONTRACT_HOST_PATH)
+    const result = await resumedPage.evaluate(async ({ path, dbName, sandboxName, id }) => {
+      const harness = await import(path) as typeof import('./receive-storage-harness')
+      return harness.resumeFSAPlaceholderAfterPageClose(dbName, sandboxName, id)
+    }, { path: HARNESS_PATH, dbName: db, sandboxName: sandbox, id: taskId })
+
+    expect(result).toEqual({
+      beforeSize: 0,
+      hadRecordBeforeResume: false,
+      finalBytes: [1, 2, 3, 4, 5, 6, 7, 8],
+      completedAfterResume: true,
+    })
+  } finally {
+    await resumedPage.close()
+  }
+})
+
 test('FSA discard preserves foreign and replaced files and removes the result directory only when empty', async ({
   page,
   browserName,

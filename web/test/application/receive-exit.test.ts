@@ -89,7 +89,7 @@ function pausedTask(f: ReturnType<typeof fixture>) {
     shareInstance: f.source.descriptor.shareInstanceId, backend: 'fsa' as const,
     artifact: { kind: 'directory-tree' as const, name: 'data.bin', singleFileId: 'data' },
     target: { kind: 'fsa' as const, parentHandle: f.parent as unknown as FileSystemDirectoryHandle,
-      reservedName: 'data.bin', collisionIndex: 0, singleFile: true },
+      reservedName: 'data.bin', collisionIndex: 0, singleFile: true, reservedAtMs: 0 },
     lifecycle: transitionReceiveState(initialReceiveState('resuming'), { kind: 'paused', reason: 'user',
       completedFiles: 0n, completedBytes: 0n, retainedBytes: 0n, discoveredFiles: 1n, discoveredBytes: 8n, discoveryComplete: false }),
     discoveryComplete: false, updatedAt: 0,
