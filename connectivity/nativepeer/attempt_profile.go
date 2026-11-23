@@ -2,14 +2,15 @@ package nativepeer
 
 import (
 	"fmt"
+	"net/netip"
+	"sync"
+	"time"
+
 	"github.com/windshare/windshare/connectivity/icepolicy"
 	"github.com/windshare/windshare/connectivity/networkstate"
 	"github.com/windshare/windshare/connectivity/pionpeer"
 	"github.com/windshare/windshare/connectivity/reachability"
 	"github.com/windshare/windshare/connectivity/v2signal"
-	"net/netip"
-	"sync"
-	"time"
 )
 
 func (n *NativePeerConnectivity) selectProfileLocked(snapshot networkstate.Snapshot, path *pathResources, sequence uint64, now time.Time) icepolicy.AttemptICEProfile {
@@ -64,18 +65,16 @@ func (n *NativePeerConnectivity) attemptObserver(key pathKey, path *pathResource
 	generation := path.generation
 	subject := Subject{ProtocolSessionID: key.session, PeerPathID: [16]byte(key.path), AttemptID: [16]byte(binding.AttemptID), AttemptSequence: binding.AttemptSequence, NetworkGenerationID: generation, ICEProfileID: profile.ID(), Side: n.config.Side}
 	facts := n.facts
-	var observationMu sync.Mutex
-	produced := false
+	var profileResult sync.Once
 	return func(event pionpeer.Event) {
-		observationMu.Lock()
-		if event.Candidate != nil && event.Candidate.Type == "srflx" && event.Candidate.Origin == "ordinary" {
-			produced = true
-			facts.RecordProfile(profile, true, event.At)
+		switch event.Milestone {
+		case pionpeer.HostSTUNDiscovered, pionpeer.GatheringComplete:
+			// A probe can confirm an already-advertised mapping. Only discovery, or
+			// gathering that finished without it, settles the profile's outcome.
+			profileResult.Do(func() {
+				facts.RecordProfile(profile, event.Milestone == pionpeer.HostSTUNDiscovered, event.At)
+			})
 		}
-		if event.Milestone == "gathering_complete" && !produced {
-			facts.RecordProfile(profile, false, event.At)
-		}
-		observationMu.Unlock()
 		n.recordSelectedMapping(key, path, generation, event.Pair)
 		n.observeProvider(subject, event)
 	}

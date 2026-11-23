@@ -3,7 +3,6 @@
 package pionpeer
 
 import (
-	"context"
 	"errors"
 	"net"
 	"net/netip"
@@ -63,16 +62,16 @@ type Event struct {
 
 type Connection struct {
 	*pion.PeerConnection
-	lease          *socketauthority.Lease
-	release        func()
-	request        AttemptConfig
-	mapped         []MappedEndpoint
-	mux            hostPortDiscovery
-	candidateMu    sync.Mutex
-	stopCandidates context.CancelFunc
-	closed         bool
-	closeOnce      sync.Once
-	closeErr       error
+	lease       *socketauthority.Lease
+	release     func()
+	request     AttemptConfig
+	mapped      []MappedEndpoint
+	mux         hostPortDiscovery
+	candidateMu sync.Mutex
+	candidates  candidateDispatch
+	closed      bool
+	closeOnce   sync.Once
+	closeErr    error
 }
 
 // NewPeerConnection acquires an exclusive attempt reference. The caller's path
@@ -192,12 +191,14 @@ func localEndpointFilter(endpoints []netip.AddrPort) func(net.IP) bool {
 // Supplemental mapped candidates travel by trickle, outside Pion's local SDP.
 func (c *Connection) LocalDescription() *pion.SessionDescription {
 	description := c.PeerConnection.LocalDescription()
-	if description == nil || c.mux == nil || (len(c.request.ICE.DiscoveryURLs()) == 0 && len(c.mapped) == 0) {
+	hasSTUN := c.mux != nil && len(c.request.ICE.DiscoveryServers()) != 0
+	if description == nil || (len(c.mapped) == 0 && !hasSTUN) {
 		return description
 	}
-	copy := *description
-	copy.SDP = strings.ReplaceAll(copy.SDP, "a=end-of-candidates\r\n", "")
-	return &copy
+	return &pion.SessionDescription{
+		Type: description.Type,
+		SDP:  strings.ReplaceAll(description.SDP, "a=end-of-candidates\r\n", ""),
+	}
 }
 
 func (c *Connection) event(milestone, state string) Event {
@@ -232,18 +233,20 @@ func (c *Connection) OnConnectionStateChange(callback func(pion.PeerConnectionSt
 	})
 }
 func (c *Connection) Close() error {
+	var publishClosed bool
 	c.closeOnce.Do(func() {
 		c.candidateMu.Lock()
 		c.closed = true
-		if c.stopCandidates != nil {
-			c.stopCandidates()
-		}
+		c.candidates.replace(nil)
 		c.candidateMu.Unlock()
 		c.closeErr = c.PeerConnection.Close()
 		c.release()
 		c.closeErr = errors.Join(c.closeErr, c.lease.Close())
-		c.observe("provider_closed", "")
+		publishClosed = true
 	})
+	if publishClosed {
+		c.candidates.observeClosed(func() { c.observe("provider_closed", "") })
+	}
 	return c.closeErr
 }
 

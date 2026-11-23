@@ -7,6 +7,11 @@ import (
 	pion "github.com/pion/webrtc/v4"
 )
 
+const (
+	HostSTUNDiscovered = "stun_host_port_discovered"
+	GatheringComplete  = "gathering_complete"
+)
+
 type CandidateFacts struct {
 	Priority uint32
 	TCPType  string
@@ -125,7 +130,7 @@ func (c *Connection) observeSelectedPair(pair *pion.ICECandidatePair) {
 
 func (c *Connection) observeCandidate(candidate *pion.ICECandidate) {
 	if candidate == nil {
-		c.observe("gathering_complete", "")
+		c.observe(GatheringComplete, "")
 		return
 	}
 	if c.request.Observe == nil {

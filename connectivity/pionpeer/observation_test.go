@@ -2,11 +2,13 @@ package pionpeer
 
 import (
 	"fmt"
+	"net"
 	"net/netip"
 	"sync"
 	"testing"
 
 	pion "github.com/pion/webrtc/v4"
+	"github.com/windshare/windshare/connectivity/iceconfig"
 	"github.com/windshare/windshare/connectivity/socketauthority"
 )
 
@@ -18,9 +20,19 @@ func TestCandidateFactsPreserveMappedProvenanceAndActualMilestones(t *testing.T)
 	// Port-preserving mappings must stay distinguishable from host candidates,
 	// regardless of which candidate the concurrent gatherers publish last.
 	external := netip.AddrPortFrom(netip.MustParseAddr("203.0.113.1"), local.Port())
+	stunServer, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stunServer.Close()
+	go serveSTUN(stunServer, nil, external.Addr().AsSlice())
+	config, err := iceconfig.New([]string{"stun:" + stunServer.LocalAddr().String()})
+	if err != nil {
+		t.Fatal(err)
+	}
 	var mu sync.Mutex
 	var events []Event
-	request := AttemptConfig{ProtocolSessionID: lease.SessionID(), NetworkGenerationID: 1, PeerPathID: lease.PathID(), SocketLease: lease, MappedEndpoints: []MappedEndpoint{{Local: local, External: external}},
+	request := AttemptConfig{ProtocolSessionID: lease.SessionID(), NetworkGenerationID: 1, PeerPathID: lease.PathID(), SocketLease: lease, ICE: config, MappedEndpoints: []MappedEndpoint{{Local: local, External: external}},
 		Observe: func(event Event) { mu.Lock(); events = append(events, event); mu.Unlock() }, allowLoopback: true}
 	connection, err := NewPeerConnection(pion.Configuration{}, request)
 	if err != nil {
@@ -34,6 +46,7 @@ func TestCandidateFactsPreserveMappedProvenanceAndActualMilestones(t *testing.T)
 	}
 	complete := make(chan struct{})
 	var advertised, host string
+	var srflxCount int
 	connection.OnICECandidate(func(candidate *pion.ICECandidate) {
 		if candidate == nil {
 			close(complete)
@@ -43,6 +56,7 @@ func TestCandidateFactsPreserveMappedProvenanceAndActualMilestones(t *testing.T)
 			return
 		}
 		if candidate.Typ == pion.ICECandidateTypeSrflx && candidate.Address == external.Addr().String() && candidate.Port == external.Port() {
+			srflxCount++
 			advertised = candidate.ToJSON().Candidate
 		}
 		if candidate.Typ == pion.ICECandidateTypeHost && candidate.Address == local.Addr().String() && candidate.Port == local.Port() {
@@ -57,6 +71,9 @@ func TestCandidateFactsPreserveMappedProvenanceAndActualMilestones(t *testing.T)
 		t.Fatal(err)
 	}
 	await(t, complete)
+	if srflxCount != 1 {
+		t.Fatalf("router and STUN advertised the same socket %d times", srflxCount)
+	}
 	if !connection.IsMappedCandidate(advertised) {
 		t.Fatalf("frozen mapping not recognized: local=%s external=%s advertised=%q", local, external, advertised)
 	}
@@ -75,6 +92,7 @@ func TestCandidateFactsPreserveMappedProvenanceAndActualMilestones(t *testing.T)
 	mu.Lock()
 	defer mu.Unlock()
 	sawMapped, sawHost, sawPair, sawClosed := false, false, false, false
+	var stunSuccesses, gatheringCompletions int
 	for _, event := range events {
 		if event.PeerPathID != lease.PathID() || event.NetworkGenerationID != 1 || event.At.IsZero() {
 			t.Fatal("lost provider identity")
@@ -95,11 +113,19 @@ func TestCandidateFactsPreserveMappedProvenanceAndActualMilestones(t *testing.T)
 		if event.Pair != nil {
 			sawPair = true
 		}
-		if event.Milestone == "provider_closed" {
+		switch event.Milestone {
+		case HostSTUNDiscovered:
+			stunSuccesses++
+		case GatheringComplete:
+			gatheringCompletions++
+			if stunSuccesses != 1 {
+				t.Fatalf("gathering completed after %d successful probes", stunSuccesses)
+			}
+		case "provider_closed":
 			sawClosed = true
 		}
 	}
-	if !sawMapped || !sawHost || !sawPair || !sawClosed {
+	if !sawMapped || !sawHost || !sawPair || !sawClosed || stunSuccesses != 1 || gatheringCompletions != 1 {
 		t.Fatalf("incomplete actual provider facts: %+v", events)
 	}
 }
