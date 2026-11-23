@@ -11,13 +11,6 @@ import type { ReceiveFileRecord, ReceiveTaskRecord } from '../../src/output/stor
 import { transferSingleFile } from '../../src/transfer/file-transfer'
 import { initialReceiveState } from '../../src/transfer/state'
 
-let fakeClockMs = 1_700_000_000_000
-
-function nextFakeTimestamp(): number {
-  fakeClockMs += 1_000
-  return fakeClockMs
-}
-
 class MemoryReceiveStore {
   readonly tasks = new Map<string, ReceiveTaskRecord>()
   readonly files = new Map<string, ReceiveFileRecord>()
@@ -57,30 +50,41 @@ class MemoryReceiveStore {
   }
 }
 
+interface FakeFsStats {
+  recursiveRemoveCalls: number
+}
+
 class FakeFileHandle {
   readonly kind = 'file' as const
   readonly name: string
+  readonly path: string
   bytes = new Uint8Array(0)
   readonly writableCalls: boolean[] = []
-  lastModified = nextFakeTimestamp()
+  lastModified = Date.now()
+  getFileCalls = 0
   readonly #events: string[]
 
-  constructor(name: string, events: string[]) {
+  constructor(name: string, path: string, events: string[], lastModified = Date.now()) {
     this.name = name
+    this.path = path
     this.#events = events
+    this.lastModified = lastModified
   }
 
+  // Matches Chromium's path-based FSA handle equality (not inode-based), ensuring
+  // tests prove same-name swaps are stopped by fingerprints rather than isSameEntry.
   async isSameEntry(other: FileSystemHandle): Promise<boolean> {
-    return other === (this as unknown as FileSystemHandle)
+    return other instanceof FakeFileHandle && other.path === this.path
   }
 
   async getFile(): Promise<File> {
+    this.getFileCalls += 1
     return new File([this.bytes], this.name, { lastModified: this.lastModified })
   }
 
-  overwriteExternally(bytes: Uint8Array): void {
+  overwriteExternally(bytes: Uint8Array, lastModified = Math.max(Date.now() + 10_000, this.lastModified + 1_000)): void {
     this.bytes = new Uint8Array(bytes)
-    this.lastModified = nextFakeTimestamp()
+    this.lastModified = lastModified
   }
 
   async createWritable(options?: { keepExistingData?: boolean }) {
@@ -99,7 +103,7 @@ class FakeFileHandle {
       },
       close: async () => {
         this.bytes = buffer
-        this.lastModified = nextFakeTimestamp()
+        this.lastModified = Math.max(Date.now(), this.lastModified + 1)
         this.#events.push(`writer.close:${this.name}`)
       },
       abort: async () => undefined,
@@ -110,37 +114,40 @@ class FakeFileHandle {
 class FakeDirectoryHandle {
   readonly kind = 'directory' as const
   readonly name: string
+  readonly path: string
   readonly children = new Map<string, FakeDirectoryHandle | FakeFileHandle>()
+  readonly stats: FakeFsStats
   readonly #events: string[]
   readonly #rejectNames: Set<string>
 
-  constructor(name: string, events: string[], rejectNames: readonly string[] = []) {
+  constructor(
+    name: string,
+    events: string[],
+    rejectNames: readonly string[] = [],
+    path = `/${name}`,
+    stats: FakeFsStats = { recursiveRemoveCalls: 0 },
+  ) {
     this.name = name
+    this.path = path
     this.#events = events
     this.#rejectNames = new Set(rejectNames)
+    this.stats = stats
   }
 
   async queryPermission(): Promise<'granted'> { return 'granted' }
   async requestPermission(): Promise<'granted'> { return 'granted' }
 
   async isSameEntry(other: FileSystemHandle): Promise<boolean> {
-    return other === (this as unknown as FileSystemHandle)
-  }
-
-  async *keys(): AsyncIterableIterator<string> {
-    for (const key of this.children.keys()) yield key
+    return other instanceof FakeDirectoryHandle && other.path === this.path
   }
 
   async resolve(target: FileSystemHandle): Promise<string[] | null> {
-    if (target === (this as unknown as FileSystemHandle)) return []
-    for (const [name, child] of this.children) {
-      if (child === (target as unknown)) return [name]
-      if (child instanceof FakeDirectoryHandle) {
-        const nested = await child.resolve(target)
-        if (nested !== null) return [name, ...nested]
-      }
-    }
-    return null
+    const candidate = target as FakeDirectoryHandle | FakeFileHandle
+    if (typeof candidate.path !== 'string') return null
+    if (candidate.path === this.path) return []
+    const prefix = `${this.path}/`
+    if (!candidate.path.startsWith(prefix)) return null
+    return candidate.path.slice(prefix.length).split('/')
   }
 
   async getDirectoryHandle(name: string, options?: { create?: boolean }): Promise<FakeDirectoryHandle> {
@@ -149,7 +156,13 @@ class FakeDirectoryHandle {
     if (existing instanceof FakeDirectoryHandle) return existing
     if (existing instanceof FakeFileHandle) throw new DOMException('type mismatch', 'TypeMismatchError')
     if (!options?.create) throw new DOMException('missing', 'NotFoundError')
-    const created = new FakeDirectoryHandle(name, this.#events, [...this.#rejectNames])
+    const created = new FakeDirectoryHandle(
+      name,
+      this.#events,
+      [...this.#rejectNames],
+      `${this.path}/${name}`,
+      this.stats,
+    )
     this.children.set(name, created)
     return created
   }
@@ -160,12 +173,13 @@ class FakeDirectoryHandle {
     if (existing instanceof FakeFileHandle) return existing
     if (existing instanceof FakeDirectoryHandle) throw new DOMException('type mismatch', 'TypeMismatchError')
     if (!options?.create) throw new DOMException('missing', 'NotFoundError')
-    const created = new FakeFileHandle(name, this.#events)
+    const created = new FakeFileHandle(name, `${this.path}/${name}`, this.#events)
     this.children.set(name, created)
     return created
   }
 
   async removeEntry(name: string, options?: { recursive?: boolean }): Promise<void> {
+    if (options?.recursive) this.stats.recursiveRemoveCalls += 1
     const existing = this.children.get(name)
     if (existing === undefined) throw new DOMException('missing', 'NotFoundError')
     if (existing instanceof FakeDirectoryHandle && existing.children.size > 0 && !options?.recursive) {
@@ -173,10 +187,17 @@ class FakeDirectoryHandle {
     }
     this.children.delete(name)
   }
+
+  putUserFile(name: string, bytes: Uint8Array, lastModified = Date.now() - 86_400_000): FakeFileHandle {
+    const file = new FakeFileHandle(name, `${this.path}/${name}`, this.#events, lastModified)
+    file.bytes = new Uint8Array(bytes)
+    this.children.set(name, file)
+    return file
+  }
 }
 
 describe('FSA backend safety boundaries', () => {
-  it('allocates collision names, flushes before IDB checkpoint, verifies physical files on resume, and keeps completed files on discard', async () => {
+  it('allocates collision names, flushes before IDB checkpoint, skips fingerprint I/O on commit, verifies physical files on resume, and keeps completed and modified files on discard', async () => {
     const store = new MemoryReceiveStore()
     const parent = new FakeDirectoryHandle('Downloads', store.events, ['CON.txt'])
     await parent.getDirectoryHandle('Photos', { create: true })
@@ -205,6 +226,12 @@ describe('FSA backend safety boundaries', () => {
     await fileA.commit([byteRange(0n, 4n)])
     expect(session.transferOutput.safeRenamedSummary?.()?.count).toBe(1)
 
+    // Completed files must not pay extra getFile() I/O or persist a discard fingerprint.
+    const completedRow = await store.getFile('fsa-task-1', 'f1')
+    expect(completedRow?.fsaDiskFingerprint).toBeUndefined()
+    const physicalA = [...reserved.children.values()].find(entry => entry instanceof FakeFileHandle) as FakeFileHandle
+    expect(physicalA.getFileCalls).toBe(0)
+
     const closeIdx = store.events.findIndex(e => e.startsWith('writer.close:'))
     const putIdx = store.events.findIndex(e => e === 'putFile:f1:completed')
     expect(closeIdx).toBeGreaterThanOrEqual(0)
@@ -216,6 +243,7 @@ describe('FSA backend safety boundaries', () => {
     }, new AbortController().signal)
     await fileB.writeAt(0n, new Uint8Array([9, 8, 7, 6]))
     await fileB.pause([byteRange(0n, 4n)])
+    expect((await store.getFile('fsa-task-1', 'f2'))?.fsaDiskFingerprint?.size).toBe(4)
 
     // Write partial third file to test external truncation rejection separately from unmodified discard.
     const fileC = await session.transferOutput.openFile({
@@ -231,7 +259,7 @@ describe('FSA backend safety boundaries', () => {
     })
     await session.close()
 
-    // Reopen: physical file for f1 is intact (alreadyCompleted), f2 resumes from [0..4).
+    // Reopen: physical file for f1 is intact (alreadyCompleted), f3 rejects stale IDB ranges if truncated.
     const reopened = await reopenFSASession({
       task: pausedTask, store: store as unknown as ReceiveStore, allowPermissionPrompt: true,
     })
@@ -240,7 +268,6 @@ describe('FSA backend safety boundaries', () => {
     }, new AbortController().signal)
     expect(resumedA.alreadyCompleted).toBe(true)
 
-    // Simulate external truncation of f3 -> verification MUST reject stale IDB ranges!
     const physicalC = reserved.children.get('truncated.bin') as FakeFileHandle
     physicalC.overwriteExternally(new Uint8Array(2))
     const resumedC = await reopened.transferOutput.openFile({
@@ -254,6 +281,7 @@ describe('FSA backend safety boundaries', () => {
     expect(reserved.children.has('big.bin')).toBe(false)
     expect(reserved.children.has('truncated.bin')).toBe(true)
     expect(reserved.children.size).toBe(2)
+    expect(parent.stats.recursiveRemoveCalls).toBe(0)
     expect(await store.getTask('fsa-task-1')).toBeUndefined()
   })
 
@@ -364,7 +392,9 @@ describe('FSA backend safety boundaries', () => {
     expect(physical.bytes[chunkBytes * 2]).toBe(13)
     expect(physical.bytes[chunkBytes * 3 - 1]).toBe(23)
   })
+})
 
+describe('FSA discard safety', () => {
   it('preserves foreign user files when discarding a directory download with zero completed files', async () => {
     const store = new MemoryReceiveStore()
     const parent = new FakeDirectoryHandle('Downloads', store.events)
@@ -393,16 +423,15 @@ describe('FSA backend safety boundaries', () => {
     })
     await session.close()
 
-    // User places their own file inside the result directory before discarding.
     const reserved = parent.children.get('Trip') as FakeDirectoryHandle
-    const userFile = await reserved.getFileHandle('user-notes.txt', { create: true })
-    userFile.overwriteExternally(new TextEncoder().encode('keep me'))
+    reserved.putUserFile('user-notes.txt', new TextEncoder().encode('keep me'))
 
     await discardFSATask(paused, store as unknown as ReceiveStore, undefined, {
       backend: 'file_system_access',
       trace: { current: event => traces.push(event) },
     })
 
+    expect(parent.stats.recursiveRemoveCalls).toBe(0)
     expect(parent.children.has('Trip')).toBe(true)
     expect(reserved.children.has('sub')).toBe(false)
     expect(reserved.children.has('user-notes.txt')).toBe(true)
@@ -448,11 +477,12 @@ describe('FSA backend safety boundaries', () => {
     await session.close()
 
     await discardFSATask(paused, store as unknown as ReceiveStore)
+    expect(parent.stats.recursiveRemoveCalls).toBe(0)
     expect(parent.children.has('Bundle')).toBe(false)
     expect(await store.getTask('fsa-safe-dir')).toBeUndefined()
   })
 
-  it('refuses to touch a replaced root directory whose handle identity no longer matches', async () => {
+  it('preserves a same-name swapped user directory and replaced file even when path-based isSameEntry returns true', async () => {
     const store = new MemoryReceiveStore()
     const parent = new FakeDirectoryHandle('Downloads', store.events)
     const session = await openNewFSASession({
@@ -466,26 +496,35 @@ describe('FSA backend safety boundaries', () => {
       parentHandle: parent as unknown as FileSystemDirectoryHandle,
       store: store as unknown as ReceiveStore,
     })
+    const file = await session.transferOutput.openFile({
+      fileId: 'f1', path: ['tax.pdf'], sourcePath: ['Docs', 'tax.pdf'], revision: 'rev1', exactSize: 16n,
+    }, new AbortController().signal)
+    await file.writeAt(0n, new Uint8Array([1, 2, 3, 4]))
+    await file.pause([byteRange(0n, 4n)])
     const paused = await session.settle({
       status: 'paused', pauseReason: 'user',
-      completedFiles: 0n, completedBytes: 0n, discoveredFiles: 0n, discoveredBytes: 0n,
-      discoveryComplete: false, failedFiles: 0n, failedDirectories: 0n,
+      completedFiles: 0n, completedBytes: 0n, discoveredFiles: 1n, discoveredBytes: 16n,
+      discoveryComplete: true, failedFiles: 0n, failedDirectories: 0n,
     })
     await session.close()
 
-    // User deletes empty Docs and creates a brand-new Docs directory of their own.
-    await parent.removeEntry('Docs')
+    // User removes unfinished Docs/ and places their own Docs/ at the exact same path,
+    // including a same-size, same-name file with a different mtime (path-based isSameEntry === true).
+    await parent.removeEntry('Docs', { recursive: true })
+    parent.stats.recursiveRemoveCalls = 0
     const userDocs = await parent.getDirectoryHandle('Docs', { create: true })
-    const userFile = await userDocs.getFileHandle('tax.pdf', { create: true })
-    userFile.overwriteExternally(new Uint8Array([1, 2, 3]))
+    userDocs.putUserFile('tax.pdf', new Uint8Array([9, 8, 7, 6]))
+    userDocs.putUserFile('passport.pdf', new Uint8Array([42]))
 
     await discardFSATask(paused, store as unknown as ReceiveStore)
+    expect(parent.stats.recursiveRemoveCalls).toBe(0)
     expect(parent.children.get('Docs')).toBe(userDocs)
-    expect(userDocs.children.has('tax.pdf')).toBe(true)
+    expect([...(userDocs.children.get('tax.pdf') as FakeFileHandle).bytes]).toEqual([9, 8, 7, 6])
+    expect(userDocs.children.has('passport.pdf')).toBe(true)
     expect(await store.getTask('fsa-replaced-root')).toBeUndefined()
   })
 
-  it('verifies identity before deleting single-file FSA downloads and preserves replaced files', async () => {
+  it('verifies fingerprint before deleting single-file downloads and refuses to delete unverified records', async () => {
     const store = new MemoryReceiveStore()
     const parent = new FakeDirectoryHandle('Downloads', store.events)
     const session = await openNewFSASession({
@@ -512,16 +551,77 @@ describe('FSA backend safety boundaries', () => {
     })
     await session.close()
 
-    // Replace report.pdf in-place with user content (same handle object, mimicking Chromium path-based isSameEntry).
     const physical = parent.children.get('report.pdf') as FakeFileHandle
     physical.overwriteExternally(new TextEncoder().encode('real report'))
 
     await discardFSATask(paused, store as unknown as ReceiveStore)
+    expect(parent.stats.recursiveRemoveCalls).toBe(0)
     expect(parent.children.has('report.pdf')).toBe(true)
-    expect(await store.getTask('fsa-single')).toBeUndefined()
+
+    // Records missing a disk fingerprint must also be skipped rather than matched by size alone.
+    const unverifiedSession = await openNewFSASession({
+      task: {
+        taskId: 'fsa-no-fp',
+        selection: { shareInstance: 's1', syntheticRoot: 'r1', defaultSelected: true, rules: [] },
+        selectionKey: 'sel-no-fp',
+        artifact: { kind: 'directory-tree', name: 'draft.bin', singleFileId: 'f2' },
+        lifecycle: initialReceiveState('fsa-no-fp'),
+      },
+      parentHandle: parent as unknown as FileSystemDirectoryHandle,
+      store: store as unknown as ReceiveStore,
+    })
+    const draft = await unverifiedSession.transferOutput.openFile({
+      fileId: 'f2', path: ['draft.bin'], sourcePath: ['draft.bin'], revision: 'rev2', exactSize: 8n,
+    }, new AbortController().signal)
+    await draft.writeAt(0n, new Uint8Array([1, 2, 3, 4]))
+    await draft.pause([byteRange(0n, 4n)])
+    const unverifiedPaused = await unverifiedSession.settle({
+      status: 'paused', pauseReason: 'user',
+      completedFiles: 0n, completedBytes: 0n, discoveredFiles: 1n, discoveredBytes: 8n,
+      discoveryComplete: true, failedFiles: 0n, failedDirectories: 0n,
+    })
+    await unverifiedSession.close()
+
+    const savedRow = (await store.getFile('fsa-no-fp', 'f2'))!
+    const rowWithoutFingerprint = Object.fromEntries(
+      Object.entries(savedRow).filter(([key]) => key !== 'fsaDiskFingerprint'),
+    ) as unknown as ReceiveFileRecord
+    await store.putFile(rowWithoutFingerprint)
+
+    await discardFSATask(unverifiedPaused, store as unknown as ReceiveStore)
+    expect(parent.children.has('draft.bin')).toBe(true)
   })
 
-  it('cleans fresh 0-byte files and empty subdirectories on stop while preserving foreign files', async () => {
+  it('never deletes a regular file when the user replaced a reserved directory with a same-name file', async () => {
+    const store = new MemoryReceiveStore()
+    const parent = new FakeDirectoryHandle('Downloads', store.events)
+    const session = await openNewFSASession({
+      task: {
+        taskId: 'fsa-dir-to-file',
+        selection: { shareInstance: 's1', syntheticRoot: 'r1', defaultSelected: true, rules: [] },
+        selectionKey: 'sel-dir-to-file',
+        artifact: { kind: 'directory-tree', name: 'Backup' },
+        lifecycle: initialReceiveState('fsa-dir-to-file'),
+      },
+      parentHandle: parent as unknown as FileSystemDirectoryHandle,
+      store: store as unknown as ReceiveStore,
+    })
+    const paused = await session.settle({
+      status: 'paused', pauseReason: 'user',
+      completedFiles: 0n, completedBytes: 0n, discoveredFiles: 0n, discoveredBytes: 0n,
+      discoveryComplete: false, failedFiles: 0n, failedDirectories: 0n,
+    })
+    await session.close()
+
+    await parent.removeEntry('Backup')
+    parent.putUserFile('Backup', new Uint8Array([1, 2, 3, 4]))
+
+    await discardFSATask(paused, store as unknown as ReceiveStore)
+    expect(parent.stats.recursiveRemoveCalls).toBe(0)
+    expect(parent.children.get('Backup')).toBeInstanceOf(FakeFileHandle)
+  })
+
+  it('cleans fresh 0-byte placeholders and empty subdirectories on stop while preserving older pre-existing 0-byte user files', async () => {
     const store = new MemoryReceiveStore()
     const parent = new FakeDirectoryHandle('Downloads', store.events)
     const session = await openNewFSASession({
@@ -555,5 +655,39 @@ describe('FSA backend safety boundaries', () => {
 
     await discardFSATask(stopped, store as unknown as ReceiveStore)
     expect(parent.children.has('CancelMe')).toBe(false)
+
+    // Pre-existing older 0-byte user file in a reopened directory must survive abort().
+    const reopenSession = await openNewFSASession({
+      task: {
+        taskId: 'fsa-reopen-abort',
+        selection: { shareInstance: 's1', syntheticRoot: 'r1', defaultSelected: true, rules: [] },
+        selectionKey: 'sel-reopen-abort',
+        artifact: { kind: 'directory-tree', name: 'Existing' },
+        lifecycle: initialReceiveState('fsa-reopen-abort'),
+      },
+      parentHandle: parent as unknown as FileSystemDirectoryHandle,
+      store: store as unknown as ReceiveStore,
+    })
+    const pausedReopen = await reopenSession.settle({
+      status: 'paused', pauseReason: 'user',
+      completedFiles: 0n, completedBytes: 0n, discoveredFiles: 0n, discoveredBytes: 0n,
+      discoveryComplete: false, failedFiles: 0n, failedDirectories: 0n,
+    })
+    await reopenSession.close()
+
+    const existingDir = parent.children.get('Existing') as FakeDirectoryHandle
+    existingDir.putUserFile('.gitkeep', new Uint8Array(0), Date.now() - 86_400_000)
+
+    const reopened = await reopenFSASession({
+      task: pausedReopen, store: store as unknown as ReceiveStore, allowPermissionPrompt: true,
+    })
+    const abortedUserFile = await reopened.transferOutput.openFile({
+      fileId: 'f2', path: ['.gitkeep'], sourcePath: ['Existing', '.gitkeep'], revision: 'rev2', exactSize: 10n,
+    }, new AbortController().signal)
+    await abortedUserFile.abort(new DOMException('stopped', 'AbortError'))
+    await reopened.close()
+
+    expect(existingDir.children.has('.gitkeep')).toBe(true)
+    expect(parent.stats.recursiveRemoveCalls).toBe(0)
   })
 })

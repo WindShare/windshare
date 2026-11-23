@@ -137,6 +137,7 @@ test('FSA discard preserves foreign and replaced files and removes the result di
     preservedText: 'do-not-delete',
     cleanRootRemoved: true,
     replacedText: 'user-owned-replacement',
+    dirToFileText: 'user-backup-file',
     allTasksDeleted: true,
   })
 })

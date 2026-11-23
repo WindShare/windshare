@@ -32,8 +32,8 @@ import type { BrowserOutputWindow, OutputSessionHandle, StartBackendTaskInput } 
 import {
   cleanupFSATaskEntries,
   pruneEmptySubdirectories,
-  readPhysicalFileStat,
-  removeFreshEmptyFile,
+  readFSADiskFingerprint,
+  removeUncommittedEmptyPlaceholder,
 } from './fsa-cleanup'
 import { SafeNameRegistry, decideCollisionName, deterministicSafeComponent } from './safe-name'
 
@@ -90,7 +90,6 @@ export async function openNewFSASession(input: Readonly<{
     const target: FSATargetRecord = Object.freeze({
       kind: 'fsa',
       parentHandle: input.parentHandle,
-      ...(singleFile ? {} : { rootHandle }),
       reservedName,
       collisionIndex,
       singleFile,
@@ -159,16 +158,12 @@ export async function reopenFSASession(input: Readonly<{
     const rootHandle = target.singleFile
       ? target.parentHandle
       : await target.parentHandle.getDirectoryHandle(target.reservedName, { create: true })
-    const updatedTarget: FSATargetRecord = target.singleFile
-      ? target
-      : Object.freeze({ ...target, rootHandle })
     const downloading = transitionReceiveState(input.task.lifecycle, {
       kind: 'downloading',
       phase: 'receiving',
     })
     const updated: ReceiveTaskRecord = Object.freeze({
       ...input.task,
-      target: updatedTarget,
       lifecycle: downloading,
       updatedAt: Date.now(),
     })
@@ -306,6 +301,7 @@ class FSASessionHandle implements OutputSessionHandle {
       ? this.#rootHandle
       : await this.#resolveDirectory(parentPath, signal)
 
+    const openedAtMs = Date.now()
     const { handle, physicalName } = verified?.handle !== undefined
       ? { handle: verified.handle, physicalName: verified.physicalName ?? verified.handle.name }
       : await createOrOpenFSAFile(parentDir, request.path, leafName, this.#safeNames)
@@ -317,6 +313,7 @@ class FSASessionHandle implements OutputSessionHandle {
       parentDir,
       handle,
       physicalName,
+      openedAtMs,
       freshUnpersisted: existing === undefined,
       store: this.#store,
       initialRanges,
@@ -367,6 +364,7 @@ class FSAOutputFile implements TransferOutputFile {
   readonly #parentDir: FileSystemDirectoryHandle
   readonly #handle: FileSystemFileHandle
   readonly #physicalName: string
+  readonly #openedAtMs: number
   readonly #store: ReceiveStore
   readonly #diagnostics: OutputDiagnosticsPorts | undefined
   #freshUnpersisted: boolean
@@ -380,6 +378,7 @@ class FSAOutputFile implements TransferOutputFile {
     parentDir: FileSystemDirectoryHandle
     handle: FileSystemFileHandle
     physicalName: string
+    openedAtMs: number
     freshUnpersisted: boolean
     store: ReceiveStore
     initialRanges: readonly ByteRange[]
@@ -393,6 +392,7 @@ class FSAOutputFile implements TransferOutputFile {
     this.#parentDir = input.parentDir
     this.#handle = input.handle
     this.#physicalName = input.physicalName
+    this.#openedAtMs = input.openedAtMs
     this.#freshUnpersisted = input.freshUnpersisted
     this.#store = input.store
     this.#diagnostics = input.diagnostics
@@ -443,7 +443,12 @@ class FSAOutputFile implements TransferOutputFile {
     }
     if (this.#freshUnpersisted) {
       this.#freshUnpersisted = false
-      await removeFreshEmptyFile(this.#parentDir, this.#physicalName, this.#handle)
+      await removeUncommittedEmptyPlaceholder(
+        this.#parentDir,
+        this.#physicalName,
+        this.#handle,
+        this.#openedAtMs,
+      )
     }
   }
 
@@ -465,10 +470,10 @@ class FSAOutputFile implements TransferOutputFile {
   }
 
   async #persist(status: 'receiving' | 'completed', ranges: readonly ByteRange[]): Promise<void> {
-    // Capture physical stat only for unfinished checkpoints/pauses so discard can verify
-    // the file was not replaced externally without adding stat calls to completed small files.
-    const physicalStat = status === 'receiving'
-      ? await readPhysicalFileStat(this.#handle)
+    // Capture local disk identity only for unfinished writes so discard can reject
+    // user-edited or swapped entries without adding stat calls to completed files.
+    const fsaDiskFingerprint = status === 'receiving'
+      ? await readFSADiskFingerprint(this.#handle)
       : undefined
     const row: ReceiveFileRecord = Object.freeze({
       id: fileRecordId(this.#taskId, this.#request.fileId),
@@ -482,7 +487,7 @@ class FSAOutputFile implements TransferOutputFile {
       completedRanges: toRangeTuples(ranges),
       status,
       handle: this.#handle,
-      ...(physicalStat === undefined ? {} : physicalStat),
+      ...(fsaDiskFingerprint === undefined ? {} : { fsaDiskFingerprint }),
     })
     await this.#store.putFile(row)
   }

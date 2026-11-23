@@ -377,11 +377,41 @@ export async function verifyFSADiscardSafetyOverNativeHandles(databaseName: stri
     await discardFSATask(replacedPaused, store)
     const replacedText = await (await (await replacedDir.getFileHandle('clip.bin')).getFile()).text()
 
+    // Case 4: Reserved directory removed and replaced by a same-name regular file -> user file preserved.
+    const dirToFileTaskId = `fsa-dir-to-file-${crypto.randomUUID()}`
+    const dirToFileSession = await openNewFSASession({
+      task: {
+        taskId: dirToFileTaskId,
+        selection: { shareInstance: 'share-fsa', syntheticRoot: 'root', defaultSelected: true, rules: [] },
+        selectionKey: 'sel-dir-to-file',
+        artifact: { kind: 'directory-tree', name: 'Backup' },
+        lifecycle: initialReceiveState(dirToFileTaskId),
+      },
+      parentHandle: parent,
+      store,
+    })
+    const dirToFilePaused = await dirToFileSession.settle({
+      status: 'paused', pauseReason: 'user',
+      completedFiles: 0n, completedBytes: 0n, discoveredFiles: 0n, discoveredBytes: 0n,
+      discoveryComplete: false, failedFiles: 0n, failedDirectories: 0n,
+    })
+    await dirToFileSession.close()
+
+    await parent.removeEntry('Backup')
+    const userBackupFile = await parent.getFileHandle('Backup', { create: true })
+    const backupWriter = await userBackupFile.createWritable()
+    await backupWriter.write('user-backup-file')
+    await backupWriter.close()
+
+    await discardFSATask(dirToFilePaused, store)
+    const dirToFileText = await (await (await parent.getFileHandle('Backup')).getFile()).text()
+
     return {
       tripNames,
       preservedText,
       cleanRootRemoved,
       replacedText,
+      dirToFileText,
       allTasksDeleted: (await store.listTasks()).length === 0,
     }
   } finally {

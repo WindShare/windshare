@@ -1,34 +1,24 @@
 import { emitOutputTrace, type OutputDiagnosticsPorts } from '../diagnostics'
-import { maxRangeEnd, type FSATargetRecord, type ReceiveFileRecord } from '../store/types'
+import type { FSADiskFingerprint, FSATargetRecord, ReceiveFileRecord } from '../store/types'
 
-type IterableDirectoryHandle = FileSystemDirectoryHandle & {
-  keys?: () => AsyncIterableIterator<string>
-  values?: () => AsyncIterableIterator<FileSystemHandle>
-}
+// FAT32 truncates file timestamps downward to 2-second boundaries.
+const PLACEHOLDER_MTIME_SKEW_MS = 2_000
 
-export interface PhysicalFileStat {
-  readonly physicalSize: bigint
-  readonly physicalLastModified: number
-}
-
-export async function readPhysicalFileStat(
+export async function readFSADiskFingerprint(
   handle: FileSystemFileHandle,
-): Promise<PhysicalFileStat | undefined> {
+): Promise<FSADiskFingerprint | undefined> {
   try {
     const file = await handle.getFile()
-    return Object.freeze({
-      physicalSize: BigInt(file.size),
-      physicalLastModified: file.lastModified,
-    })
+    return Object.freeze({ size: file.size, lastModified: file.lastModified })
   } catch {
     return undefined
   }
 }
 
 /**
- * Removes only task-owned unfinished files verified by handle identity and physical
- * stat, then prunes directories non-recursively so foreign or completed files are
- * never deleted. Never uses `{ recursive: true }` on user-owned folders.
+ * Removes only task-owned unfinished files verified by handle containment and disk
+ * fingerprint, then prunes directories non-recursively so foreign or completed files
+ * are never deleted. Never uses `{ recursive: true }` on user-owned folders.
  */
 export async function cleanupFSATaskEntries(
   taskId: string,
@@ -36,27 +26,57 @@ export async function cleanupFSATaskEntries(
   files: readonly ReceiveFileRecord[],
   diagnostics?: OutputDiagnosticsPorts,
 ): Promise<void> {
-  if (target.singleFile) {
-    await cleanupSingleFileTask(taskId, target, files, diagnostics)
-    return
+  const rootDir = target.singleFile
+    ? target.parentHandle
+    : await target.parentHandle.getDirectoryHandle(target.reservedName).catch(() => undefined)
+  if (rootDir === undefined) return
+
+  const hasCompleted = files.some(file => file.status === 'completed')
+  const candidateDirs = new Map<string, readonly string[]>()
+  let removedFiles = 0
+  let skippedFiles = 0
+
+  for (const file of files) {
+    if (file.status === 'completed') continue
+    const outcome = await removeVerifiedUnfinishedFile(rootDir, target, file, candidateDirs)
+    if (outcome === 'removed') removedFiles += 1
+    else if (outcome === 'skipped') skippedFiles += 1
   }
-  await cleanupDirectoryTask(taskId, target, files, diagnostics)
+
+  let removedRoot = false
+  if (!target.singleFile) {
+    await pruneEmptyDirectoryPaths(rootDir, candidateDirs)
+    if (!hasCompleted) {
+      removedRoot = await removeDirectoryIfEmpty(target.parentHandle, target.reservedName)
+    }
+  }
+
+  emitOutputTrace(diagnostics?.trace, 'cleanup', {
+    backend: 'file_system_access',
+    task_id: taskId,
+    transition: 'completed',
+    removed_files: removedFiles,
+    skipped_unverified_files: skippedFiles,
+    removed_root: removedRoot,
+  })
 }
 
 /**
- * Removes a newly created 0-byte placeholder file when an uncheckpointed write is
- * aborted before any bytes are committed. Refuses to delete non-empty or foreign files.
+ * Removes a newly created 0-byte placeholder left when an uncheckpointed write is
+ * aborted, refusing to touch non-empty or older pre-existing files in a reopened folder.
  */
-export async function removeFreshEmptyFile(
+export async function removeUncommittedEmptyPlaceholder(
   parentDir: FileSystemDirectoryHandle,
   physicalName: string,
   expectedHandle: FileSystemFileHandle,
+  openedAtMs: number,
 ): Promise<void> {
   const current = await parentDir.getFileHandle(physicalName).catch(() => undefined)
-  if (current === undefined) return
-  if (!await isSameHandle(current, expectedHandle)) return
+  if (current === undefined || !await isSameHandle(current, expectedHandle)) return
   const file = await current.getFile().catch(() => undefined)
-  if (file === undefined || file.size !== 0) return
+  if (file === undefined || file.size !== 0 || file.lastModified < openedAtMs - PLACEHOLDER_MTIME_SKEW_MS) {
+    return
+  }
   await parentDir.removeEntry(physicalName).catch(() => undefined)
 }
 
@@ -77,92 +97,27 @@ export async function pruneEmptySubdirectories(
   await pruneEmptyDirectoryPaths(rootDir, candidatePaths)
 }
 
-async function cleanupSingleFileTask(
-  taskId: string,
-  target: FSATargetRecord,
-  files: readonly ReceiveFileRecord[],
-  diagnostics?: OutputDiagnosticsPorts,
-): Promise<void> {
-  if (files.some(file => file.status === 'completed')) {
-    emitCleanupTrace(diagnostics, taskId, 'completed', 0, 0, false)
-    return
-  }
-  let removedFiles = 0
-  let skippedFiles = 0
-  for (const file of files) {
-    const outcome = await removeVerifiedSingleFile(target.parentHandle, target.reservedName, file)
-    if (outcome === 'removed') removedFiles += 1
-    else if (outcome === 'skipped') skippedFiles += 1
-  }
-  emitCleanupTrace(diagnostics, taskId, 'completed', removedFiles, skippedFiles, false)
-}
-
-async function cleanupDirectoryTask(
-  taskId: string,
-  target: FSATargetRecord,
-  files: readonly ReceiveFileRecord[],
-  diagnostics?: OutputDiagnosticsPorts,
-): Promise<void> {
-  const rootDir = await target.parentHandle.getDirectoryHandle(target.reservedName).catch(() => undefined)
-  if (rootDir === undefined) return
-
-  if (target.rootHandle !== undefined && !await isSameHandle(rootDir, target.rootHandle)) {
-    emitOutputTrace(diagnostics?.trace, 'cleanup', {
-      backend: 'file_system_access',
-      task_id: taskId,
-      transition: 'skipped_unverified_root',
-    })
-    return
-  }
-
-  const candidateDirs = new Map<string, readonly string[]>()
-  let removedFiles = 0
-  let skippedFiles = 0
-  for (const file of files) {
-    if (file.status === 'completed') continue
-    const outcome = await removeVerifiedTreeFile(rootDir, file, candidateDirs)
-    if (outcome === 'removed') removedFiles += 1
-    else if (outcome === 'skipped') skippedFiles += 1
-  }
-
-  await pruneEmptyDirectoryPaths(rootDir, candidateDirs)
-
-  let removedRoot = false
-  if (!files.some(file => file.status === 'completed')) {
-    removedRoot = await removeEmptyDirectory(target.parentHandle, target.reservedName, rootDir)
-  }
-  emitCleanupTrace(diagnostics, taskId, 'completed', removedFiles, skippedFiles, removedRoot)
-}
-
 type FileCleanupOutcome = 'removed' | 'missing' | 'skipped'
 
-async function removeVerifiedSingleFile(
-  parentHandle: FileSystemDirectoryHandle,
-  reservedName: string,
-  file: ReceiveFileRecord,
-): Promise<FileCleanupOutcome> {
-  if (file.handle === undefined) return 'skipped'
-  const relativePath = await resolveRelativePath(parentHandle, file.handle)
-  if (relativePath === null || relativePath.length !== 1 || relativePath[0] !== reservedName) {
-    return 'skipped'
-  }
-  return verifyAndRemoveLeaf(parentHandle, reservedName, file)
-}
-
-async function removeVerifiedTreeFile(
+async function removeVerifiedUnfinishedFile(
   rootDir: FileSystemDirectoryHandle,
+  target: FSATargetRecord,
   file: ReceiveFileRecord,
   candidateDirs: Map<string, readonly string[]>,
 ): Promise<FileCleanupOutcome> {
-  if (file.handle === undefined) return 'skipped'
+  if (file.handle === undefined || file.fsaDiskFingerprint === undefined) return 'skipped'
   const relativePath = await resolveRelativePath(rootDir, file.handle)
   if (relativePath === null || relativePath.length === 0) return 'skipped'
+  if (target.singleFile && (relativePath.length !== 1 || relativePath[0] !== target.reservedName)) {
+    return 'skipped'
+  }
 
   const parentPath = relativePath.slice(0, -1)
   const parentDir = await resolveDirectoryChain(rootDir, parentPath)
   if (parentDir === undefined) return 'missing'
 
-  const outcome = await verifyAndRemoveLeaf(parentDir, relativePath.at(-1)!, file)
+  const leafName = relativePath.at(-1)!
+  const outcome = await verifyAndRemoveLeaf(parentDir, leafName, file.handle, file.fsaDiskFingerprint)
   if (outcome === 'removed' && parentPath.length > 0) {
     collectDirectoryPrefixes(candidateDirs, parentPath)
   }
@@ -172,13 +127,27 @@ async function removeVerifiedTreeFile(
 async function verifyAndRemoveLeaf(
   parentDir: FileSystemDirectoryHandle,
   leafName: string,
-  file: ReceiveFileRecord,
+  expectedHandle: FileSystemFileHandle,
+  expectedFingerprint: FSADiskFingerprint,
 ): Promise<FileCleanupOutcome> {
-  const probe = await probeFileHandle(parentDir, leafName)
-  if (probe.kind === 'missing') return 'missing'
-  if (probe.kind === 'mismatch') return 'skipped'
-  if (file.handle === undefined || !await isSameHandle(probe.handle, file.handle)) return 'skipped'
-  if (!await matchesRecordedPhysicalFile(probe.handle, file)) return 'skipped'
+  let currentHandle: FileSystemFileHandle
+  try {
+    currentHandle = await parentDir.getFileHandle(leafName)
+  } catch (error) {
+    return error instanceof DOMException && error.name === 'NotFoundError' ? 'missing' : 'skipped'
+  }
+
+  if (!await isSameHandle(currentHandle, expectedHandle)) return 'skipped'
+  // Chromium's native `isSameEntry` compares paths rather than OS inodes, so checking
+  // both size and lastModified prevents deleting a same-name user replacement.
+  const current = await readFSADiskFingerprint(currentHandle)
+  if (
+    current === undefined ||
+    current.size !== expectedFingerprint.size ||
+    current.lastModified !== expectedFingerprint.lastModified
+  ) {
+    return 'skipped'
+  }
 
   try {
     await parentDir.removeEntry(leafName)
@@ -186,50 +155,6 @@ async function verifyAndRemoveLeaf(
   } catch {
     return 'skipped'
   }
-}
-
-async function probeFileHandle(
-  parentDir: FileSystemDirectoryHandle,
-  name: string,
-): Promise<
-  | Readonly<{ kind: 'found'; handle: FileSystemFileHandle }>
-  | Readonly<{ kind: 'missing' }>
-  | Readonly<{ kind: 'mismatch' }>
-> {
-  try {
-    return { kind: 'found', handle: await parentDir.getFileHandle(name) }
-  } catch (error) {
-    if (error instanceof DOMException && error.name === 'NotFoundError') {
-      return { kind: 'missing' }
-    }
-    return { kind: 'mismatch' }
-  }
-}
-
-/**
- * Chromium's native `isSameEntry` compares handle URLs (paths) rather than OS inodes,
- * so checking the last recorded size and mtime prevents deleting a foreign file that
- * replaced the unfinished download at the exact same path.
- */
-async function matchesRecordedPhysicalFile(
-  handle: FileSystemFileHandle,
-  record: ReceiveFileRecord,
-): Promise<boolean> {
-  const current = await readPhysicalFileStat(handle)
-  if (current === undefined) return false
-  if (record.physicalSize !== undefined && current.physicalSize !== record.physicalSize) {
-    return false
-  }
-  if (
-    record.physicalLastModified !== undefined &&
-    current.physicalLastModified !== record.physicalLastModified
-  ) {
-    return false
-  }
-  if (record.physicalSize === undefined && current.physicalSize !== maxRangeEnd(record.completedRanges)) {
-    return false
-  }
-  return true
 }
 
 function collectDirectoryPrefixes(
@@ -250,49 +175,22 @@ async function pruneEmptyDirectoryPaths(
   for (const dirPath of ordered) {
     const parent = await resolveDirectoryChain(rootDir, dirPath.slice(0, -1))
     if (parent === undefined) continue
-    const leafName = dirPath.at(-1)!
-    const child = await parent.getDirectoryHandle(leafName).catch(() => undefined)
-    if (child === undefined) continue
-    await removeEmptyDirectory(parent, leafName, child)
+    await removeDirectoryIfEmpty(parent, dirPath.at(-1)!)
   }
 }
 
-async function removeEmptyDirectory(
+async function removeDirectoryIfEmpty(
   parentDir: FileSystemDirectoryHandle,
   name: string,
-  dir: FileSystemDirectoryHandle,
 ): Promise<boolean> {
-  if (!await isDirectoryEmpty(dir)) return false
   try {
-    // Non-recursive removeEntry relies on the OS to reject non-empty directories atomically.
+    // Verify the entry is still a directory so a same-name regular file is never deleted,
+    // then rely on non-recursive removeEntry to reject non-empty directories atomically.
+    await parentDir.getDirectoryHandle(name)
     await parentDir.removeEntry(name)
     return true
   } catch {
     return false
-  }
-}
-
-async function isDirectoryEmpty(dir: FileSystemDirectoryHandle): Promise<boolean> {
-  const iterable = dir as IterableDirectoryHandle
-  try {
-    if (typeof iterable.keys === 'function') {
-      return await isAsyncIteratorEmpty(iterable.keys())
-    }
-    if (typeof iterable.values === 'function') {
-      return await isAsyncIteratorEmpty(iterable.values())
-    }
-    return true
-  } catch {
-    return false
-  }
-}
-
-async function isAsyncIteratorEmpty(iterator: AsyncIterableIterator<unknown>): Promise<boolean> {
-  try {
-    const first = await iterator.next()
-    return Boolean(first.done)
-  } finally {
-    await iterator.return?.().catch(() => undefined)
   }
 }
 
@@ -332,22 +230,4 @@ async function isSameHandle(
   } catch {
     return false
   }
-}
-
-function emitCleanupTrace(
-  diagnostics: OutputDiagnosticsPorts | undefined,
-  taskId: string,
-  transition: string,
-  removedFiles: number,
-  skippedUnverifiedFiles: number,
-  removedRoot: boolean,
-): void {
-  emitOutputTrace(diagnostics?.trace, 'cleanup', {
-    backend: 'file_system_access',
-    task_id: taskId,
-    transition,
-    removed_files: removedFiles,
-    skipped_unverified_files: skippedUnverifiedFiles,
-    removed_root: removedRoot,
-  })
 }

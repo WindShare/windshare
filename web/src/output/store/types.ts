@@ -14,7 +14,6 @@ export type CompletedRangeTuple = readonly [bigint, bigint]
 export interface FSATargetRecord {
   readonly kind: 'fsa'
   readonly parentHandle: FileSystemDirectoryHandle
-  readonly rootHandle?: FileSystemDirectoryHandle
   readonly reservedName: string
   readonly collisionIndex: number
   readonly singleFile: boolean
@@ -66,6 +65,15 @@ export interface ZipEntryLayoutRecord {
 }
 
 /**
+ * Local OS file metadata captured immediately after flushing an unfinished FSA
+ * write, used on discard to verify the entry was not edited or replaced.
+ */
+export interface FSADiskFingerprint {
+  readonly size: number
+  readonly lastModified: number
+}
+
+/**
  * Plain JSON per-file row stored in the `files` IndexedDB object store.
  * Unifies both FSA direct-write progress and OPFS single-file / progressive-ZIP progress.
  */
@@ -81,8 +89,7 @@ export interface ReceiveFileRecord {
   readonly completedRanges: readonly CompletedRangeTuple[]
   readonly status: 'receiving' | 'completed' | 'failed'
   readonly handle?: FileSystemFileHandle
-  readonly physicalSize?: bigint
-  readonly physicalLastModified?: number
+  readonly fsaDiskFingerprint?: FSADiskFingerprint
   readonly zipEntry?: ZipEntryLayoutRecord
 }
 
