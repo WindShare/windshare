@@ -52,7 +52,7 @@ test('discover_node enforces SSRF, DNS, redirect, size, and role/identity guards
   );
   const admin = await initAdmin(worker);
 
-  async function adminPost(path, body, status = 200) {
+  async function adminPost(path, body, status = 200, headers = {}) {
     const response = await worker.fetch('https://localhost' + path, {
       method: 'POST',
       headers: {
@@ -60,12 +60,23 @@ test('discover_node enforces SSRF, DNS, redirect, size, and role/identity guards
         Origin: 'https://localhost',
         Cookie: admin.cookie,
         'X-CSRF-Token': admin.csrf,
+        ...headers,
       },
       body: JSON.stringify(body),
     });
     const value = await response.json();
     assert.equal(response.status, status, JSON.stringify(value));
     return value;
+  }
+
+  // Edge-prepared admin routes must fail CSRF in the DO before any outbound DNS or HTTP fetch.
+  for (const [path, body] of [
+    ['/v1/admin/nodes/discover', { url: enrollment.url }],
+    ['/v1/admin/nodes', enrollment],
+  ]) {
+    const rejected = await adminPost(path, body, 403, { 'X-CSRF-Token': 'wrong' });
+    assert.equal(rejected.reason, 'csrf', path);
+    assert.equal(requests.length, 0, `${path} invalid CSRF must not trigger outbound fetch`);
   }
 
   // Reserved frontend/control origins and non-canonical URLs fail before any outbound DNS or HTTP request.
@@ -278,13 +289,14 @@ test('enrolling and managing a canary publishes signed revisions and coalesces K
   const admin = await initAdmin(worker);
 
   async function call(path, body, { method = 'POST', status = 200, adminAuth = false, secret, headers = {} } = {}) {
-    const reqHeaders = { 'Content-Type': 'application/json', ...headers };
+    const reqHeaders = { 'Content-Type': 'application/json' };
     if (adminAuth) {
       reqHeaders.Origin = 'https://localhost';
       reqHeaders.Cookie = admin.cookie;
       reqHeaders['X-CSRF-Token'] = admin.csrf;
     }
     if (secret) reqHeaders.Authorization = 'Bearer ' + secret;
+    Object.assign(reqHeaders, headers);
     const response = await worker.fetch('https://localhost' + path, {
       method,
       headers: reqHeaders,
@@ -310,7 +322,12 @@ test('enrolling and managing a canary publishes signed revisions and coalesces K
   assert.equal(directoryDigest(await publicHead.json()), head.digest);
   const command = { node_key: enrollment.node_key, expected_state: enrolled.state,
     expected_policy_version: enrolled.version, action: { kind: 'activate' } };
-  await call('/v1/admin/nodes/manage', command, { headers: { Cookie: admin.cookie, 'X-CSRF-Token': 'wrong' }, status: 403 });
+  const badManageCsrf = await call('/v1/admin/nodes/manage', command, {
+    adminAuth: true,
+    headers: { 'X-CSRF-Token': 'wrong' },
+    status: 403,
+  });
+  assert.equal(badManageCsrf.value.reason, 'csrf');
   await call('/v1/admin/nodes/manage', command, { adminAuth: true });
   const current = (await call('/v1/admin/nodes', enrollment, { adminAuth: true })).value;
   assert.equal(current.state, 'active');
