@@ -49,7 +49,9 @@ export interface DiscoveryCallbacks {
 }
 
 const DEFAULT_ARCHIVE_NAME = 'windshare-download'
-const SHAPE_PROBE_DIRECTORY_LIMIT = 4
+// Bound unhinted fallback directory reads when locating explicit targets without
+// valid ancestry hints, so offer probing never scans an entire share upfront.
+const SHAPE_FALLBACK_DIRECTORY_LIMIT = 4
 // Bound guided ancestor verification to the maximum legal catalog depth plus root
 // so deep explicitly selected targets still resolve without allowing unbounded walks.
 const SHAPE_GUIDED_DIRECTORY_LIMIT = CATALOG_PATH_DEPTH + 1
@@ -80,12 +82,14 @@ interface ProbeState {
   selectedDirectories: number
   knownBytes: bigint
   commonRoot: readonly string[] | undefined
-  unprobedPaths: (readonly string[])[]
+  unprobedRoot: readonly string[] | undefined
+  failedUnselectedRoot: readonly string[] | undefined
+  firstDirectoryError: unknown
   complete: boolean
 }
 
 interface ProbeBudget {
-  regularScanned: number
+  fallbackScanned: number
   guidedScanned: number
 }
 
@@ -127,7 +131,7 @@ class SelectionDiscoveryTracker {
 
   isHintedDirectory(directoryAncestry: readonly string[]): boolean {
     for (const target of this.#remaining.values()) {
-      if (target.parentAncestry !== undefined && isAncestryPrefix(directoryAncestry, target.parentAncestry)) {
+      if (target.parentAncestry !== undefined && isSegmentPrefix(directoryAncestry, target.parentAncestry)) {
         return true
       }
     }
@@ -166,16 +170,17 @@ class DiscoveryQueues<T extends TraversableFrame> {
     return undefined
   }
 
-  pendingPaths(tracker: SelectionDiscoveryTracker): readonly (readonly string[])[] {
-    const paths: (readonly string[])[] = []
+  forEachPendingPath(
+    tracker: SelectionDiscoveryTracker,
+    visit: (path: readonly string[]) => void,
+  ): void {
     for (const frame of this.#guided) {
-      if (frame.selected || tracker.hasRemainingTargets) paths.push(frame.path)
+      if (frame.selected || tracker.hasRemainingTargets) visit(frame.path)
     }
-    for (const frame of this.#selected) paths.push(frame.path)
+    for (const frame of this.#selected) visit(frame.path)
     if (tracker.hasRemainingTargets) {
-      for (const frame of this.#fallback) paths.push(frame.path)
+      for (const frame of this.#fallback) visit(frame.path)
     }
-    return paths
   }
 
   #nextGuided(tracker: SelectionDiscoveryTracker): T | undefined {
@@ -225,7 +230,7 @@ function normalizeParentAncestry(
   return ancestry.slice(0, -1)
 }
 
-function isAncestryPrefix(prefix: readonly string[], full: readonly string[]): boolean {
+function isSegmentPrefix(prefix: readonly string[], full: readonly string[]): boolean {
   if (prefix.length > full.length) return false
   for (let index = 0; index < prefix.length; index++) {
     if (prefix[index] !== full[index]) return false
@@ -245,8 +250,9 @@ function shouldTraverseDirectory(
 }
 
 /**
- * Inspects just enough of the authenticated catalog to classify the user's selection
- * (empty / single file / multi-item tree) without forcing a full-tree scan upfront.
+ * Classifies the user's selection (empty / single file / tree) and anchors its
+ * result root without descending into already-selected directories. Directory
+ * contents and size totals are discovered progressively during transfer.
  */
 export async function inspectSelectionShape(
   descriptor: ShareDescriptor,
@@ -254,45 +260,55 @@ export async function inspectSelectionShape(
   selection: FrozenSelectionPolicy,
   signal: AbortSignal,
 ): Promise<SelectionShape> {
-  const rootCommitted = await catalog.loadDirectory(descriptor.syntheticRoot, { signal })
-  const rootAncestry = [descriptor.syntheticRootId]
-  const rootEntries = await readFirstEntries(catalog, rootCommitted, signal, 3)
-
-  // Fast path: sole root file selected.
-  if (rootCommitted.entryCount === 1 && rootEntries[0]?.kind === 'file') {
-    const file = rootEntries[0]
-    if (!selection.selected(file, rootAncestry)) return Object.freeze({ kind: 'empty' })
-    return Object.freeze({
-      kind: 'single-file',
-      file,
-      sourcePath: Object.freeze([file.name]),
-      exactBytes: file.expectedSize,
-    })
+  signal.throwIfAborted()
+  const rootSelected = selection.directorySelected(descriptor.syntheticRootId, [])
+  const tracker = new SelectionDiscoveryTracker(selection, descriptor.syntheticRootId)
+  if (!rootSelected && !tracker.hasRemainingTargets) {
+    return Object.freeze({ kind: 'empty' })
   }
 
-  return probeSelectionSubtree(descriptor, catalog, selection, rootCommitted, signal)
+  const rootCommitted = await catalog.loadDirectory(descriptor.syntheticRoot, { signal })
+  if (rootCommitted.entryCount === 0) {
+    return Object.freeze({ kind: 'empty' })
+  }
+
+  const rootAncestry = [descriptor.syntheticRootId]
+  // Fast path: sole root file selected.
+  if (rootCommitted.entryCount === 1) {
+    const sole = await readFirstEntry(catalog, rootCommitted, signal)
+    if (sole?.kind === 'file') {
+      if (!selection.selected(sole, rootAncestry)) return Object.freeze({ kind: 'empty' })
+      return Object.freeze({
+        kind: 'single-file',
+        file: sole,
+        sourcePath: Object.freeze([sole.name]),
+        exactBytes: sole.expectedSize,
+      })
+    }
+  }
+
+  return probeSelectionSubtree(descriptor, catalog, selection, tracker, rootSelected, rootCommitted, signal)
 }
 
-async function readFirstEntries(
+async function readFirstEntry(
   catalog: CatalogClient,
   committed: CommittedDir,
   signal: AbortSignal,
-  limit: number,
-): Promise<CatalogEntry[]> {
-  const entries: CatalogEntry[] = []
+): Promise<CatalogEntry | undefined> {
   for (let pageIndex = 0; pageIndex < committed.pageCount; pageIndex++) {
     signal.throwIfAborted()
     const page = await catalog.page(committed, pageIndex, signal)
-    entries.push(...page.entries)
-    if (entries.length >= limit) break
+    if (page.entries.length > 0) return page.entries[0]
   }
-  return entries
+  return undefined
 }
 
 async function probeSelectionSubtree(
   descriptor: ShareDescriptor,
   catalog: CatalogClient,
   selection: FrozenSelectionPolicy,
+  tracker: SelectionDiscoveryTracker,
+  rootSelected: boolean,
   rootCommitted: CommittedDir,
   signal: AbortSignal,
 ): Promise<SelectionShape> {
@@ -302,10 +318,11 @@ async function probeSelectionSubtree(
     selectedDirectories: 0,
     knownBytes: 0n,
     commonRoot: undefined,
-    unprobedPaths: [],
+    unprobedRoot: undefined,
+    failedUnselectedRoot: undefined,
+    firstDirectoryError: undefined,
     complete: true,
   }
-  const tracker = new SelectionDiscoveryTracker(selection, descriptor.syntheticRootId)
   const visited = new Set<string>([descriptor.syntheticRootId])
   const queues = new DiscoveryQueues<ProbeFrame>()
   const rootFrame: ProbeFrame = {
@@ -313,44 +330,72 @@ async function probeSelectionSubtree(
     idText: descriptor.syntheticRootId,
     path: EMPTY_PATH,
     ancestry: [descriptor.syntheticRootId],
-    selected: selection.directorySelected(descriptor.syntheticRootId, []),
+    selected: rootSelected,
     committed: rootCommitted,
   }
   queues.enqueue(rootFrame, tracker.isHintedDirectory(rootFrame.ancestry))
 
-  const budget: ProbeBudget = { regularScanned: 0, guidedScanned: 0 }
-  while (state.complete) {
+  const budget: ProbeBudget = { fallbackScanned: 0, guidedScanned: 0 }
+  while (true) {
     signal.throwIfAborted()
     const next = queues.next(tracker)
     if (next === undefined) break
-    if (!admitProbeDirectory(next.guided, state, budget)) {
+    // A selected directory enqueued only for a hinted descendant becomes redundant
+    // once that hint is satisfied elsewhere; never load its contents.
+    if (next.frame.selected && next.frame.committed === undefined && !next.guided) continue
+    if (!admitProbeDirectory(next.guided, budget)) {
       state.complete = false
-      state.unprobedPaths.push(next.frame.path)
+      state.unprobedRoot = mergePathPrefix(state.unprobedRoot, next.frame.path)
+      queues.forEachPendingPath(tracker, path => {
+        state.unprobedRoot = mergePathPrefix(state.unprobedRoot, path)
+      })
       break
     }
-    const committed = next.frame.committed ?? await catalog.loadDirectory(next.frame.id, { signal })
+    const committed = await loadProbeDirectory(catalog, next.frame, state, signal)
+    if (committed === undefined) continue
     await probeDirectoryPages(catalog, selection, tracker, next.frame, committed, visited, queues, state, signal)
   }
 
-  if (!state.complete) {
-    state.unprobedPaths.push(...queues.pendingPaths(tracker))
+  if (state.selectedFiles === 0 && state.selectedDirectories === 0 && state.firstDirectoryError !== undefined) {
+    throw state.firstDirectoryError
+  }
+  if (tracker.hasRemainingTargets && state.failedUnselectedRoot !== undefined) {
+    state.complete = false
+    state.unprobedRoot = mergePathPrefix(state.unprobedRoot, state.failedUnselectedRoot)
   }
 
   return buildProbeShape(state)
 }
 
-function admitProbeDirectory(guided: boolean, state: ProbeState, budget: ProbeBudget): boolean {
-  const canUseGuidedBudget = guided &&
-    state.selectedDirectories === 0 &&
-    state.selectedFiles <= 1 &&
-    budget.guidedScanned < SHAPE_GUIDED_DIRECTORY_LIMIT
-  if (canUseGuidedBudget) {
+function admitProbeDirectory(guided: boolean, budget: ProbeBudget): boolean {
+  if (guided && budget.guidedScanned < SHAPE_GUIDED_DIRECTORY_LIMIT) {
     budget.guidedScanned += 1
     return true
   }
-  if (budget.regularScanned >= SHAPE_PROBE_DIRECTORY_LIMIT) return false
-  budget.regularScanned += 1
+  if (budget.fallbackScanned >= SHAPE_FALLBACK_DIRECTORY_LIMIT) return false
+  budget.fallbackScanned += 1
   return true
+}
+
+async function loadProbeDirectory(
+  catalog: CatalogClient,
+  frame: ProbeFrame,
+  state: ProbeState,
+  signal: AbortSignal,
+): Promise<CommittedDir | undefined> {
+  if (frame.committed !== undefined) return frame.committed
+  try {
+    return await catalog.loadDirectory(frame.id, { signal })
+  } catch (error) {
+    if (signal.aborted) throw error
+    // Tolerate per-directory failures while probing so one unreadable subtree
+    // cannot block healthy selected siblings; TransferJob reports the failure.
+    state.firstDirectoryError ??= error
+    if (!frame.selected) {
+      state.failedUnselectedRoot = mergePathPrefix(state.failedUnselectedRoot, frame.path)
+    }
+    return undefined
+  }
 }
 
 async function probeDirectoryPages(
@@ -371,11 +416,15 @@ async function probeDirectoryPages(
       recordProbedEntry(selection, tracker, dir, entry, visited, queues, state)
     }
     if (!dir.selected && !tracker.hasRemainingTargets) return
-    if (pageIndex + 1 < committed.pageCount && state.selectedDirectories > 0 && state.selectedFiles > 1) {
+    if (
+      pageIndex + 1 < committed.pageCount &&
+      dir.selected &&
+      !tracker.hasRemainingTargets &&
+      state.selectedDirectories > 0 &&
+      state.commonRoot !== undefined &&
+      isSegmentPrefix(state.commonRoot, dir.path)
+    ) {
       state.complete = false
-      if (dir.selected || tracker.hasRemainingTargets) {
-        state.unprobedPaths.push(dir.path)
-      }
       return
     }
   }
@@ -406,19 +455,25 @@ function recordProbedEntry(
   if (selected) {
     state.selectedDirectories += 1
     state.singleFile = undefined
+    state.complete = false
     extendCommonRoot(state, entryPath)
   }
   if (visited.has(entry.idText) || dir.ancestry.includes(entry.idText)) return
   visited.add(entry.idText)
-  if (!shouldTraverseDirectory(selection, tracker, entry.idText, dir.ancestry, selected)) return
   const childAncestry = [...dir.ancestry, entry.idText]
+  const hinted = tracker.isHintedDirectory(childAncestry)
+  // A selected directory already settles the shape as a tree anchored at or above
+  // its own path; only descend into it if a hinted descendant target must be matched
+  // to avoid fallback scans across unselected siblings.
+  if (selected && !hinted) return
+  if (!selected && !shouldTraverseDirectory(selection, tracker, entry.idText, dir.ancestry, false)) return
   queues.enqueue({
     id: entry.id,
     idText: entry.idText,
     path: entryPath,
     ancestry: childAncestry,
     selected,
-  }, tracker.isHintedDirectory(childAncestry))
+  }, hinted)
 }
 
 function buildProbeShape(state: ProbeState): SelectionShape {
@@ -444,10 +499,15 @@ function buildProbeShape(state: ProbeState): SelectionShape {
   })
 }
 
+function mergePathPrefix(
+  current: readonly string[] | undefined,
+  next: readonly string[],
+): readonly string[] {
+  return current === undefined ? next : commonPathPrefix(current, next)
+}
+
 function extendCommonRoot(state: ProbeState, directoryPath: readonly string[]): void {
-  state.commonRoot = state.commonRoot === undefined
-    ? directoryPath
-    : commonPathPrefix(state.commonRoot, directoryPath)
+  state.commonRoot = mergePathPrefix(state.commonRoot, directoryPath)
 }
 
 function commonPathPrefix(
@@ -465,9 +525,8 @@ function commonPathPrefix(
 function resolveProbeRootPath(state: ProbeState): readonly string[] {
   let root = state.commonRoot
   if (root === undefined) return EMPTY_PATH
-  for (const unprobed of state.unprobedPaths) {
-    root = commonPathPrefix(root, unprobed)
-    if (root.length === 0) return EMPTY_PATH
+  if (state.unprobedRoot !== undefined) {
+    root = commonPathPrefix(root, state.unprobedRoot)
   }
   return root.length === 0 ? EMPTY_PATH : root
 }

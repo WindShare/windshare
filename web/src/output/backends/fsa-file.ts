@@ -59,6 +59,9 @@ interface FSAFileOptions {
   signal: AbortSignal
   store: Pick<ReceiveStore, 'putFile' | 'deleteFiles'>
   existing: ReceiveFileRecord | undefined
+  /** Present when this writer adopted a task-owned single-file reservation placeholder. */
+  reservedPlaceholder?: FSADiskFingerprint
+  onReservedPlaceholderReleased?: () => void
   diagnostics: OutputDiagnosticsPorts | undefined
 }
 
@@ -67,7 +70,9 @@ interface ObservedPublication {
   readonly record: ReceiveFileRecord
 }
 
-type UnrecordedFile = { kind: 'placeholder'; acquiredAtMs: number } | { kind: 'published'; observed?: ObservedPublication }
+type UnrecordedFile =
+  | { kind: 'placeholder'; acquiredAtMs: number; reservedFingerprint?: FSADiskFingerprint }
+  | { kind: 'published'; observed?: ObservedPublication }
 
 export class FSAOutputFile implements TransferOutputFile {
   readonly completedRanges: readonly ByteRange[]
@@ -86,7 +91,13 @@ export class FSAOutputFile implements TransferOutputFile {
     this.#options = options
     const prior = options.existing
     this.#checkpoint = prior
-    this.#unrecorded = prior === undefined ? { kind: 'placeholder', acquiredAtMs: Date.now() } : undefined
+    this.#unrecorded = prior === undefined
+      ? {
+          kind: 'placeholder',
+          acquiredAtMs: Date.now(),
+          ...(options.reservedPlaceholder === undefined ? {} : { reservedFingerprint: options.reservedPlaceholder }),
+        }
+      : undefined
     this.completedRanges = fromRangeTuples(prior?.completedRanges ?? [])
     this.#savedBytes = coveredBytes(this.completedRanges)
     if (prior !== undefined) {
@@ -169,6 +180,18 @@ export class FSAOutputFile implements TransferOutputFile {
       return
     }
     const name = this.#options.physicalPath.at(-1)!
+    if (file.kind === 'placeholder' && file.reservedFingerprint !== undefined) {
+      // Task-owned single-file reservations survive retry, pause, and detach; terminal cleanup or discard removes them.
+      if (this.#hasIntent) {
+        const state = await inspectFSALeaf(parentDir, name, handle, file.reservedFingerprint)
+        if (state === 'matching' || state === 'missing') {
+          await store.deleteFiles([fileRecordId(taskId, request.fileId)])
+          this.#hasIntent = false
+        }
+      }
+      this.#options.onReservedPlaceholderReleased?.()
+      return
+    }
     const outcome = file.kind === 'placeholder'
       ? await removeUncommittedEmptyPlaceholder(parentDir, name, handle, openedAtMs, file.acquiredAtMs)
       : await this.#recoverPublication(file.observed)
@@ -240,7 +263,7 @@ export class FSAOutputFile implements TransferOutputFile {
       if (status === 'completed' && file?.kind === 'placeholder' && !this.#hasIntent &&
           request.exactSize <= MAX_FSA_PUBLISH_RETRY_BYTES && !signal.aborted &&
           cause instanceof DOMException && cause.name === 'InvalidStateError' &&
-          await this.#retireRejectedPlaceholder(writer, file.acquiredAtMs, cause)) {
+          await this.#retireRejectedPlaceholder(writer, file.acquiredAtMs, cause, file.reservedFingerprint)) {
         throw new RetryableFilePublishError(cause)
       }
       throw cause
@@ -249,18 +272,27 @@ export class FSAOutputFile implements TransferOutputFile {
     this.#unrecorded = { kind: 'published' }
   }
 
-  async #retireRejectedPlaceholder(writer: FileSystemWritableFileStream, acquiredAtMs: number, cause: DOMException): Promise<boolean> {
+  async #retireRejectedPlaceholder(
+    writer: FileSystemWritableFileStream,
+    acquiredAtMs: number,
+    cause: DOMException,
+    reservedFingerprint?: FSADiskFingerprint,
+  ): Promise<boolean> {
     const { parentDir, physicalPath, handle, openedAtMs, diagnostics, taskId, request } = this.#options
     try {
       await writer.abort(cause)
       this.#writer = undefined
-      const outcome = await removeUncommittedEmptyPlaceholder(parentDir, physicalPath.at(-1)!, handle, openedAtMs, acquiredAtMs)
+      const name = physicalPath.at(-1)!
+      const outcome = reservedFingerprint !== undefined
+        ? await removeVerifiedFSALeaf(parentDir, name, handle, reservedFingerprint)
+        : await removeUncommittedEmptyPlaceholder(parentDir, name, handle, openedAtMs, acquiredAtMs)
       emitOutputTrace(diagnostics?.trace, 'output_write', {
         backend: 'file_system_access', task_id: taskId, file_id: request.fileId,
         transition: 'fresh_publish_rejected', placeholder: outcome, error: classifyNativeError(cause),
       })
       if (outcome !== 'removed') return false
       this.#unrecorded = undefined
+      if (reservedFingerprint !== undefined) this.#options.onReservedPlaceholderReleased?.()
       return true
     } catch (cleanupError) {
       this.#traceRecovery('cleanup_deferred', cleanupError)

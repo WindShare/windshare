@@ -170,7 +170,96 @@ describe('v2 catalog page store', () => {
     expect(() => new MemoryCatalogPageStore({ maxEntries: 0, maxMetadataBytes: singlePageBytes }))
       .toThrow(CatalogPageStoreError)
   })
+
+  it('releases node ownership across all staged pages and generations of an aborted directory only', async () => {
+    const store = new MemoryCatalogPageStore()
+    await store.stage(page(0, 'alpha', [entry(1, 'one'), entry(2, 'two')]))
+    await store.stage(page(1, 'alpha', [entry(3, 'three')]))
+    await store.stage({ ...page(0, 'alpha', [entry(4, 'four')]), generationText: 'generation-2' })
+    await store.stage(page(0, 'beta', [entry(5, 'five')]))
+
+    await store.abort('alpha')
+
+    await expect(store.stage(page(0, 'gamma', [
+      entry(1, 'one'),
+      entry(2, 'two'),
+      entry(3, 'three'),
+      entry(4, 'four'),
+    ]))).resolves.toBeUndefined()
+
+    await expect(store.stage(page(1, 'gamma', [entry(5, 'five')])))
+      .rejects.toMatchObject({
+        name: 'CatalogPageStoreError',
+        kind: 'authenticated-ownership',
+      })
+  })
+
+  it('avoids share-wide map scans when beginning new directories or aborting an existing one', async () => {
+    const store = new MemoryCatalogPageStore()
+    const directoryCount = 200
+    const entriesPerDirectory = 4
+    let nextNodeId = 1
+    for (let dirIndex = 0; dirIndex < directoryCount; dirIndex += 1) {
+      const directoryId = `dir-${dirIndex}`
+      const entries = Array.from({ length: entriesPerDirectory }, (_, itemIndex) =>
+        entry(nextNodeId++, `file-${itemIndex}`),
+      )
+      await store.begin(directoryId)
+      await store.stage(page(0, directoryId, entries))
+    }
+
+    const beginFreshVisits = await countMapIterations(() => store.begin('brand-new-dir'))
+    expect(beginFreshVisits).toBe(0)
+
+    const abortExistingVisits = await countMapIterations(() => store.abort('dir-0'))
+    expect(abortExistingVisits).toBeLessThanOrEqual(4)
+  })
 })
+
+async function countMapIterations(operation: () => Promise<void>): Promise<number> {
+  let visited = 0
+  const originalIterator = Map.prototype[Symbol.iterator]
+  const originalEntries = Map.prototype.entries
+  const originalValues = Map.prototype.values
+  const originalKeys = Map.prototype.keys
+  const originalForEach = Map.prototype.forEach
+
+  function wrap<T>(
+    original: (this: Map<unknown, unknown>) => MapIterator<T>,
+  ): (this: Map<unknown, unknown>) => MapIterator<T> {
+    return function (this: Map<unknown, unknown>): MapIterator<T> {
+      const inner = original.call(this)
+      return (function* (): Generator<T, undefined, undefined> {
+        for (const item of inner) {
+          visited += 1
+          yield item
+        }
+        return undefined
+      })()
+    }
+  }
+
+  Map.prototype[Symbol.iterator] = wrap(originalIterator)
+  Map.prototype.entries = wrap(originalEntries)
+  Map.prototype.values = wrap(originalValues)
+  Map.prototype.keys = wrap(originalKeys)
+  Map.prototype.forEach = function (callback, thisArg) {
+    return originalForEach.call(this, (value, key, map) => {
+      visited += 1
+      callback.call(thisArg, value, key, map)
+    })
+  }
+  try {
+    await operation()
+  } finally {
+    Map.prototype[Symbol.iterator] = originalIterator
+    Map.prototype.entries = originalEntries
+    Map.prototype.values = originalValues
+    Map.prototype.keys = originalKeys
+    Map.prototype.forEach = originalForEach
+  }
+  return visited
+}
 
 function directoryFailure(directoryIdText: string, retryable: boolean): DirectoryFailure {
   return Object.freeze({

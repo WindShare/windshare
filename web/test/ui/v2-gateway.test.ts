@@ -232,9 +232,9 @@ describe('v2 joined-share projection authority', () => {
       kind: 'tree',
       suggestedName: 'shared',
       rootPath: ['shared'],
-      knownFileCount: 1,
-      knownBytes: 68n,
-      complete: true,
+      knownFileCount: 0,
+      knownBytes: 0n,
+      complete: false,
     })
     const offered = planArtifactOffers({
       epoch: 1n,

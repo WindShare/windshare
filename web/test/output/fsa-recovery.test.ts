@@ -2,11 +2,12 @@ import { describe, expect, it, vi } from 'vitest'
 import { byteRange } from '../../src/content/geometry'
 import { discardFSATask, openNewFSASession, reopenFSASession } from '../../src/output/backends/fsa'
 import type { OutputSessionHandle } from '../../src/output/backends/contract'
+import type { OutputTraceEvent } from '../../src/output/diagnostics'
 import type { ReceiveStore } from '../../src/output/store/database'
 import { RetryableFilePublishError } from '../../src/transfer/fault'
 import type { SettledTransferJobResult } from '../../src/transfer/job'
 import { initialReceiveState } from '../../src/transfer/state'
-import { openFolderFixture } from './fsa-fixture'
+import { FakeDirectoryHandle, MemoryReceiveStore, openFolderFixture } from './fsa-fixture'
 
 const paused = {
   status: 'paused', completedFiles: 0n, completedBytes: 0n, discoveredFiles: 1n, discoveredBytes: 8n,
@@ -237,6 +238,95 @@ describe('FSA publication and recovery', () => {
     expect([...physical.bytes]).toEqual([1, 2])
     expect((await memory.getFile(session.taskId, 'large'))?.completedRanges).toEqual([[0n, 2n]])
     await session.close()
+  })
+
+  it.each(['directory', 'single-file'] as const)('reclaims an uncommitted 0-byte %s placeholder after an abrupt exit during first write', async mode => {
+    const memory = new MemoryReceiveStore()
+    const parent = new FakeDirectoryHandle('Downloads', memory.events)
+    const store = memory as unknown as ReceiveStore
+    const artifact = mode === 'single-file'
+      ? { kind: 'directory-tree' as const, name: 'large', singleFileId: 'large' }
+      : { kind: 'directory-tree' as const, name: 'Folder' }
+    const session = await openNewFSASession({
+      task: {
+        taskId: `crash-${mode}`, selectionKey: 'selection',
+        selection: { shareInstance: 'share', syntheticRoot: 'root', defaultSelected: true, rules: [] },
+        artifact, lifecycle: initialReceiveState(`crash-${mode}`),
+      },
+      parentHandle: parent as unknown as FileSystemDirectoryHandle, store,
+    })
+    const writer = await session.transferOutput.openFile(request, signal)
+    await writer.writeAt(0n, Uint8Array.of(1, 2, 3, 4))
+    // Simulate closing the page before commit or pause: no file row is persisted and disk stays 0 bytes.
+    await session.close()
+    const container = mode === 'single-file' ? parent : await parent.getDirectoryHandle('Folder')
+    expect([...(await container.getFileHandle('large')).bytes]).toEqual([])
+    expect(await memory.getFile(session.taskId, 'large')).toBeUndefined()
+
+    const traces: OutputTraceEvent[] = []
+    const persisted = (await memory.getTask(session.taskId))!
+    const reopened = await reopenFSASession({
+      task: persisted, store, allowPermissionPrompt: false,
+      diagnostics: { backend: 'file_system_access', trace: { current: event => traces.push(event) } },
+    })
+    // Concurrent opens colliding onto the same reclaimed placeholder handle must admit only one owner.
+    const [firstOutcome, secondOutcome] = await Promise.allSettled([
+      reopened.transferOutput.openFile(request, signal),
+      reopened.transferOutput.openFile({ ...request, fileId: 'other' }, signal),
+    ])
+    expect(firstOutcome.status).toBe('fulfilled')
+    expect(secondOutcome).toMatchObject({ status: 'rejected', reason: { fault: { code: 'target-collision' } } })
+    if (firstOutcome.status !== 'fulfilled') throw new Error('expected first open to reclaim placeholder')
+    const resumed = firstOutcome.value
+    expect(resumed.completedRanges).toEqual([])
+    expect(traces).toContainEqual({
+      eventName: 'reopen',
+      payload: { backend: 'file_system_access', task_id: session.taskId, file_id: 'large', transition: 'placeholder_reclaimed' },
+    })
+    const payload = Uint8Array.of(1, 2, 3, 4, 5, 6, 7, 8)
+    await resumed.writeAt(0n, payload)
+    await resumed.commit([byteRange(0n, 8n)])
+    expect([...(await container.getFileHandle('large')).bytes]).toEqual([...payload])
+    expect(await memory.getFile(session.taskId, 'large')).toMatchObject({ status: 'completed', completedRanges: [[0n, 8n]] })
+    await reopened.close()
+  })
+
+  it('removes a reclaimed 0-byte placeholder cleanly when the resumed attempt aborts before publication', async () => {
+    const { open, root, session, store } = await openFolderFixture()
+    const file = await open('large')
+    await file.writeAt(0n, Uint8Array.of(1, 2))
+    const physical = await root.getFileHandle('large')
+    // Age the task and placeholder together to confirm abort uses the placeholder's original mtime, not reopen time.
+    const earlier = Date.now() - 60_000
+    const task = (await store.getTask(session.taskId))!
+    if (task.target.kind === 'fsa') {
+      await store.putTask({ ...task, target: { ...task.target, reservedAtMs: earlier } })
+    }
+    physical.lastModified = earlier + 500
+    await session.close()
+
+    const reopened = await reopenFSASession({ task: (await store.getTask(session.taskId))!, store, allowPermissionPrompt: false })
+    const resumed = await reopened.transferOutput.openFile(request, signal)
+    await resumed.abort(new DOMException('stopped', 'AbortError'))
+    expect(root.children.has('large')).toBe(false)
+    await reopened.close()
+  })
+
+  it('rejects foreign or post-reopen 0-byte files while still rejecting unexpected files in a fresh session', async () => {
+    const { root, session, store } = await openFolderFixture()
+    // Fresh session must never reclaim an unexpected 0-byte entry created externally.
+    root.putUserFile('fresh', new Uint8Array(0), Date.now())
+    await expect(session.transferOutput.openFile({ ...request, fileId: 'fresh', path: ['fresh'] }, signal))
+      .rejects.toMatchObject({ fault: { code: 'target-collision' } })
+    expect(root.children.has('fresh')).toBe(true)
+
+    const reopened = await reopen(session, store)
+    // A 0-byte file created after reopenFSASession acquired the task lock cannot be a prior session's placeholder.
+    root.putUserFile('newer', new Uint8Array(0), Date.now() + 10_000)
+    await expect(reopened.transferOutput.openFile({ ...request, fileId: 'newer', path: ['newer'] }, signal))
+      .rejects.toMatchObject({ fault: { code: 'target-collision' } })
+    expect(root.children.has('newer')).toBe(true)
+    await reopened.close()
   })
 })
 

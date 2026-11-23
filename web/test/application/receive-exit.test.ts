@@ -12,7 +12,7 @@ import { ReceiveStore } from '../../src/output/store/database'
 import type { TransferOutputSession } from '../../src/transfer/output-port'
 import { initialReceiveState, transitionReceiveState } from '../../src/transfer/state'
 import { TransferJob, type TransferJobOptions } from '../../src/transfer/job'
-import { FakeDirectoryHandle, MemoryReceiveStore } from '../output/fsa-fixture'
+import { FakeDirectoryHandle, FakeFileHandle, MemoryReceiveStore } from '../output/fsa-fixture'
 import { makeShareFixture } from '../transfer/share-fixture'
 
 function gate() {
@@ -30,14 +30,20 @@ function fixture(picker?: () => Promise<FileSystemDirectoryHandle>) {
   const parent = new FakeDirectoryHandle('Downloads', memory.events)
   const connection = new ReceiverConnectionState()
   const waiting = gate()
-  let interrupted = true, held = false
+  let interrupted = true
+  const held = new Set<string>()
   let releasing: ReturnType<typeof gate> | undefined
-  const locks = { request: async (_name: string, _options: unknown, cb: (lock: object | null) => Promise<void>) => {
-    if (held) return cb(null)
-    held = true
+  const locks = { request: async (name: string, options: LockOptions, cb: (lock: object | null) => Promise<void>) => {
+    if (held.has(name)) {
+      if (options.ifAvailable) return cb(null)
+      throw new Error(`Unexpected blocking lock wait for ${name}`)
+    }
+    held.add(name)
     try { await cb({}) } finally {
-      if (releasing !== undefined) await releasing.promise
-      held = false; memory.events.push('lock.release')
+      const isTaskLock = name.startsWith('windshare-receive:')
+      if (isTaskLock && releasing !== undefined) await releasing.promise
+      held.delete(name)
+      if (isTaskLock) memory.events.push('lock.release')
     }
   } } as unknown as LockManager
   const broker: BlockRangeReader = {
@@ -79,17 +85,28 @@ function fixture(picker?: () => Promise<FileSystemDirectoryHandle>) {
     expect(receive.startDownload(backend + ':file')).toBe(true)
   }
   return { memory, close, store, locks, share, source, parent, connection, subscribeConnection, startConnectivity, coordinator, waiting, start, trace,
-    isLocked: () => held, reconnect: () => { interrupted = false }, holdRelease: () => (releasing = gate()) }
+    isLocked: () => [...held].some(name => name.startsWith('windshare-receive:')), reconnect: () => { interrupted = false }, holdRelease: () => (releasing = gate()) }
 }
 
 function pausedTask(f: ReturnType<typeof fixture>) {
+  const reservedHandle = new FakeFileHandle('data.bin', '/Downloads/data.bin', f.memory.events)
   return {
     taskId: 'resuming', selectionKey: 'key', selection: { shareInstance: f.source.descriptor.shareInstanceId,
       syntheticRoot: 'root', defaultSelected: true, rules: [] },
     shareInstance: f.source.descriptor.shareInstanceId, backend: 'fsa' as const,
     artifact: { kind: 'directory-tree' as const, name: 'data.bin', singleFileId: 'data' },
-    target: { kind: 'fsa' as const, parentHandle: f.parent as unknown as FileSystemDirectoryHandle,
-      reservedName: 'data.bin', collisionIndex: 0, singleFile: true },
+    target: {
+      kind: 'fsa' as const,
+      parentHandle: f.parent as unknown as FileSystemDirectoryHandle,
+      reservedName: 'data.bin',
+      collisionIndex: 0,
+      singleFile: true as const,
+      reservedAtMs: 0,
+      reservedFile: {
+        handle: reservedHandle as unknown as FileSystemFileHandle,
+        fingerprint: { size: 0, lastModified: reservedHandle.lastModified },
+      },
+    },
     lifecycle: transitionReceiveState(initialReceiveState('resuming'), { kind: 'paused', reason: 'user',
       completedFiles: 0n, completedBytes: 0n, retainedBytes: 0n, discoveredFiles: 1n, discoveredBytes: 8n, discoveryComplete: false }),
     discoveryComplete: false, updatedAt: 0,

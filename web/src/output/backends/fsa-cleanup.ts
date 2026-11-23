@@ -5,6 +5,16 @@ import type { FSADiskFingerprint, FSATargetRecord, ReceiveFileRecord } from '../
 // FAT32 truncates file timestamps downward to 2-second boundaries.
 const PLACEHOLDER_MTIME_SKEW_MS = 2_000
 
+export function isUncommittedEmptyPlaceholder(
+  fingerprint: FSADiskFingerprint,
+  earliestMs: number,
+  latestMs: number,
+): boolean {
+  return fingerprint.size === 0 &&
+    fingerprint.lastModified >= earliestMs - PLACEHOLDER_MTIME_SKEW_MS &&
+    fingerprint.lastModified <= latestMs
+}
+
 export async function readFSADiskFingerprint(handle: FileSystemFileHandle): Promise<FSADiskFingerprint> {
   const file = await handle.getFile()
   return { size: file.size, lastModified: file.lastModified }
@@ -72,7 +82,7 @@ export async function removeUncommittedEmptyPlaceholder(
   if (!await sameFSAEntry(current, expected)) return 'changed'
   const file = await readFSADiskFingerprint(current)
   if (expected !== current && !matchesFSADiskFingerprint(await readFSADiskFingerprint(expected), file)) return 'changed'
-  if (file.size !== 0 || file.lastModified < openedAtMs - PLACEHOLDER_MTIME_SKEW_MS || file.lastModified > acquiredAtMs) return 'changed'
+  if (!isUncommittedEmptyPlaceholder(file, openedAtMs, acquiredAtMs)) return 'changed'
   return removeVerifiedFSALeaf(parent, name, expected, file)
 }
 
@@ -92,8 +102,24 @@ export async function cleanupFSATaskEntries(
   const unfinished = files.filter(file => file.status !== 'completed')
   const directories = new Map<string, readonly string[]>()
   const { retired, removed, changed, failures } = await cleanupUnfinishedFiles(root, target, unfinished, directories, options)
+  let removedFiles = removed
+  let skippedFiles = changed
   let removedRoot = false
-  if (!target.singleFile && typeof root !== 'string') {
+  if (target.singleFile && files.length === 0) {
+    try {
+      const outcome = await removeVerifiedFSALeaf(
+        target.parentHandle,
+        target.reservedName,
+        target.reservedFile.handle,
+        target.reservedFile.fingerprint,
+        options.beginRemoval,
+      )
+      if (outcome === 'removed') removedFiles++
+      else if (outcome === 'changed') skippedFiles++
+    } catch (error) {
+      failures.push(error)
+    }
+  } else if (!target.singleFile && typeof root !== 'string') {
     try {
       removedRoot = await pruneTaskDirectories(root, target, directories, files.length === unfinished.length, options)
     } catch (error) {
@@ -106,7 +132,7 @@ export async function cleanupFSATaskEntries(
   }
   emitOutputTrace(options.diagnostics?.trace, 'cleanup', {
     backend: 'file_system_access', task_id: taskId, transition: failures.length === 0 ? 'completed' : 'failed',
-    removed_files: removed, skipped_unverified_files: changed, removed_root: removedRoot,
+    removed_files: removedFiles, skipped_unverified_files: skippedFiles, removed_root: removedRoot,
   })
   if (failures.length > 0) throw failures[0]
 }
@@ -181,7 +207,7 @@ async function pruneEmptyDirectoryPaths(
   }
 }
 
-async function removeDirectoryIfEmpty(parent: FileSystemDirectoryHandle, name: string, beginRemoval?: () => void): Promise<boolean> {
+export async function removeDirectoryIfEmpty(parent: FileSystemDirectoryHandle, name: string, beginRemoval?: () => void): Promise<boolean> {
   try {
     await parent.getDirectoryHandle(name)
     beginRemoval?.()

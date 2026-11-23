@@ -942,3 +942,196 @@ describe('FSA resume completion skip', () => {
     expect([...physical.bytes]).toEqual([...payload])
   })
 })
+
+function makeBlockingLockManager(): LockManager {
+  const queues = new Map<string, Promise<void>>()
+  const held = new Set<string>()
+  return {
+    request: async (
+      name: string,
+      options: LockOptions,
+      callback: (lock: Lock | null) => Promise<unknown>,
+    ) => {
+      if (options.ifAvailable && held.has(name)) return callback(null)
+      const previous = queues.get(name) ?? Promise.resolve()
+      let release!: () => void
+      const current = new Promise<void>(resolve => { release = resolve })
+      queues.set(name, current)
+      await previous
+      held.add(name)
+      try {
+        return await callback({ name, mode: options.mode ?? 'exclusive' })
+      } finally {
+        held.delete(name)
+        release()
+      }
+    },
+  } as unknown as LockManager
+}
+
+describe('FSA root target reservation', () => {
+  const singleTask = (taskId: string, name = 'report.bin') => ({
+    taskId,
+    selection: { shareInstance: `share-${taskId}`, syntheticRoot: 'root', defaultSelected: true, rules: [] },
+    selectionKey: `sel-${taskId}`,
+    artifact: { kind: 'directory-tree' as const, name, singleFileId: `file-${taskId}` },
+    lifecycle: initialReceiveState(taskId),
+  })
+
+  it('serializes concurrent single-file and folder reservations targeting the same directory', async () => {
+    const store = new MemoryReceiveStore()
+    const parent = new FakeDirectoryHandle('Downloads', store.events)
+    const locks = makeBlockingLockManager()
+
+    const [sessionA, sessionB] = await Promise.all([
+      openNewFSASession({
+        task: singleTask('task-a'),
+        parentHandle: parent as unknown as FileSystemDirectoryHandle,
+        store: store as unknown as ReceiveStore,
+        locks,
+      }),
+      openNewFSASession({
+        task: singleTask('task-b'),
+        parentHandle: parent as unknown as FileSystemDirectoryHandle,
+        store: store as unknown as ReceiveStore,
+        locks,
+      }),
+    ])
+
+    const payloadA = new TextEncoder().encode('first-report')
+    const payloadB = new TextEncoder().encode('second-report-content')
+    const [fileA, fileB] = await Promise.all([
+      sessionA.transferOutput.openFile({
+        fileId: 'file-task-a', path: ['report.bin'], sourcePath: ['report.bin'], revision: 'rev-a', exactSize: BigInt(payloadA.byteLength),
+      }, new AbortController().signal),
+      sessionB.transferOutput.openFile({
+        fileId: 'file-task-b', path: ['report.bin'], sourcePath: ['report.bin'], revision: 'rev-b', exactSize: BigInt(payloadB.byteLength),
+      }, new AbortController().signal),
+    ])
+    await Promise.all([
+      fileA.writeAt(0n, payloadA).then(() => fileA.commit([byteRange(0n, BigInt(payloadA.byteLength))])),
+      fileB.writeAt(0n, payloadB).then(() => fileB.commit([byteRange(0n, BigInt(payloadB.byteLength))])),
+    ])
+
+    const [settledA, settledB] = await Promise.all([
+      sessionA.settle({
+        status: 'completed', completedFiles: 1n, completedBytes: BigInt(payloadA.byteLength),
+        discoveredFiles: 1n, discoveredBytes: BigInt(payloadA.byteLength), discoveryComplete: true, failedFiles: 0n, failedDirectories: 0n,
+      }),
+      sessionB.settle({
+        status: 'completed', completedFiles: 1n, completedBytes: BigInt(payloadB.byteLength),
+        discoveredFiles: 1n, discoveredBytes: BigInt(payloadB.byteLength), discoveryComplete: true, failedFiles: 0n, failedDirectories: 0n,
+      }),
+    ])
+    await Promise.all([sessionA.close(), sessionB.close()])
+
+    expect(settledA.lifecycle.kind).toBe('saved')
+    expect(settledB.lifecycle.kind).toBe('saved')
+    expect(settledA.target.kind === 'fsa' ? settledA.target.reservedName : '').toBe('report.bin')
+    expect(settledB.target.kind === 'fsa' ? settledB.target.reservedName : '').toBe('report (1).bin')
+    expect(new TextDecoder().decode((parent.children.get('report.bin') as FakeFileHandle).bytes)).toBe('first-report')
+    expect(new TextDecoder().decode((parent.children.get('report (1).bin') as FakeFileHandle).bytes)).toBe('second-report-content')
+
+    const folderTask = (taskId: string) => ({
+      taskId,
+      selection: { shareInstance: `share-${taskId}`, syntheticRoot: 'root', defaultSelected: true, rules: [] },
+      selectionKey: `sel-${taskId}`,
+      artifact: { kind: 'directory-tree' as const, name: 'Photos' },
+      lifecycle: initialReceiveState(taskId),
+    })
+    const [dirA, dirB] = await Promise.all([
+      openNewFSASession({ task: folderTask('dir-a'), parentHandle: parent as unknown as FileSystemDirectoryHandle, store: store as unknown as ReceiveStore }),
+      openNewFSASession({ task: folderTask('dir-b'), parentHandle: parent as unknown as FileSystemDirectoryHandle, store: store as unknown as ReceiveStore }),
+    ])
+    await Promise.all([dirA.close(), dirB.close()])
+    expect(parent.children.has('Photos')).toBe(true)
+    expect(parent.children.has('Photos (1)')).toBe(true)
+  })
+
+  it('recognizes its own single-file placeholder across reopen, rejects external swaps, cleans up on stop/discard, and rolls back failed opens', async () => {
+    const store = new MemoryReceiveStore()
+    const parent = new FakeDirectoryHandle('Downloads', store.events)
+
+    // 1. Reopen before first checkpoint recognizes the persisted placeholder while protecting the slot from sibling tasks.
+    const pausedSession = await openNewFSASession({
+      task: singleTask('single-reopen'),
+      parentHandle: parent as unknown as FileSystemDirectoryHandle,
+      store: store as unknown as ReceiveStore,
+    })
+    expect(parent.children.has('report.bin')).toBe(true)
+    const paused = await pausedSession.settle({
+      status: 'paused', pauseReason: 'user',
+      completedFiles: 0n, completedBytes: 0n, discoveredFiles: 1n, discoveredBytes: 4n, discoveryComplete: false, failedFiles: 0n, failedDirectories: 0n,
+    })
+    await pausedSession.close()
+
+    const sibling = await openNewFSASession({
+      task: singleTask('single-sibling'),
+      parentHandle: parent as unknown as FileSystemDirectoryHandle,
+      store: store as unknown as ReceiveStore,
+    })
+    const siblingStopped = await sibling.settle({
+      status: 'stopped',
+      completedFiles: 0n, completedBytes: 0n, discoveredFiles: 0n, discoveredBytes: 0n, discoveryComplete: false, failedFiles: 0n, failedDirectories: 0n,
+    })
+    await sibling.close()
+    expect(siblingStopped.target.kind === 'fsa' ? siblingStopped.target.reservedName : '').toBe('report (1).bin')
+    // Terminal stop removes the untouched reserved placeholder instead of leaking a 0-byte file.
+    expect(parent.children.has('report (1).bin')).toBe(false)
+
+    const reopened = await reopenFSASession({
+      task: paused, store: store as unknown as ReceiveStore, allowPermissionPrompt: false,
+    })
+    const writer = await reopened.transferOutput.openFile({
+      fileId: 'file-single-reopen', path: ['report.bin'], sourcePath: ['report.bin'], revision: 'rev1', exactSize: 4n,
+    }, new AbortController().signal)
+    await writer.writeAt(0n, new Uint8Array([1, 2, 3, 4]))
+    await writer.commit([byteRange(0n, 4n)])
+    await reopened.close()
+    expect([...(parent.children.get('report.bin') as FakeFileHandle).bytes]).toEqual([1, 2, 3, 4])
+
+    // 2. External replacement of the reserved placeholder is detected and preserved.
+    const replacedSession = await openNewFSASession({
+      task: singleTask('single-swapped', 'invoice.pdf'),
+      parentHandle: parent as unknown as FileSystemDirectoryHandle,
+      store: store as unknown as ReceiveStore,
+    })
+    const userInvoice = parent.putUserFile('invoice.pdf', new TextEncoder().encode('real-invoice'))
+    await expect(replacedSession.transferOutput.openFile({
+      fileId: 'file-single-swapped', path: ['invoice.pdf'], sourcePath: ['invoice.pdf'], revision: 'rev1', exactSize: 4n,
+    }, new AbortController().signal)).rejects.toMatchObject({ fault: { code: 'target-collision' } })
+    expect(userInvoice.writableCalls).toEqual([])
+    const swappedPaused = await replacedSession.settle({
+      status: 'paused', pauseReason: 'user',
+      completedFiles: 0n, completedBytes: 0n, discoveredFiles: 1n, discoveredBytes: 4n, discoveryComplete: true, failedFiles: 0n, failedDirectories: 0n,
+    })
+    await replacedSession.close()
+    await discardFSATask(swappedPaused, store as unknown as ReceiveStore)
+    expect(parent.children.get('invoice.pdf')).toBe(userInvoice)
+
+    // 3. Discarding a paused single-file task with no writes removes the untouched 0-byte placeholder.
+    const discardableSession = await openNewFSASession({
+      task: singleTask('single-discard', 'empty.bin'),
+      parentHandle: parent as unknown as FileSystemDirectoryHandle,
+      store: store as unknown as ReceiveStore,
+    })
+    const discardablePaused = await discardableSession.settle({
+      status: 'paused', pauseReason: 'user',
+      completedFiles: 0n, completedBytes: 0n, discoveredFiles: 0n, discoveredBytes: 0n, discoveryComplete: false, failedFiles: 0n, failedDirectories: 0n,
+    })
+    await discardableSession.close()
+    expect(parent.children.has('empty.bin')).toBe(true)
+    await discardFSATask(discardablePaused, store as unknown as ReceiveStore)
+    expect(parent.children.has('empty.bin')).toBe(false)
+
+    // 4. Failed putTask rolls back the newly reserved file placeholder cleanly.
+    const failingStore = new MemoryReceiveStore()
+    failingStore.putTask = async () => { throw new DOMException('quota', 'QuotaExceededError') }
+    await expect(openNewFSASession({
+      task: singleTask('single-rollback', 'orphan.bin'),
+      parentHandle: parent as unknown as FileSystemDirectoryHandle,
+      store: failingStore as unknown as ReceiveStore,
+    })).rejects.toMatchObject({ name: 'QuotaExceededError' })
+    expect(parent.children.has('orphan.bin')).toBe(false)
+  })
+})

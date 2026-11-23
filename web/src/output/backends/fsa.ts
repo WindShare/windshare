@@ -15,22 +15,30 @@ import type {
 import { transitionReceiveState } from '../../transfer/state'
 import { emitOutputTrace, type OutputDiagnosticsPorts } from '../diagnostics'
 import type { ReceiveStore } from '../store/database'
-import { acquireTaskLock, type TaskLock } from '../store/tab-lock'
+import { acquireTaskLock, withFSAReservationLock, type TaskLock } from '../store/tab-lock'
 import {
   completedTuplesBytes, fileRecordId,
+  type FSADiskFingerprint,
+  type FSAReservedFile,
   type FSATargetRecord,
   type ReceiveFileRecord,
   type ReceiveTaskRecord,
 } from '../store/types'
 import type { BrowserOutputWindow, OutputSessionHandle, StartBackendTaskInput } from './contract'
-import { cleanupFSATaskEntries, isMissingFSAEntry, sameFSAEntry } from './fsa-cleanup'
+import {
+  cleanupFSATaskEntries, isMissingFSAEntry, isUncommittedEmptyPlaceholder,
+  matchesFSADiskFingerprint, readFSADiskFingerprint, sameFSAEntry,
+} from './fsa-cleanup'
 import { destinationChanged, FSAOutputFile, verifyExistingFSAFile } from './fsa-file'
-import { SafeNameRegistry, decideCollisionName, deterministicSafeComponent } from './safe-name'
+import {
+  openDirectory, openFSAFile, requiresSafeComponent, reserveFSATarget, rollbackReservedTarget,
+  type FSADirectory, type ReservedFSATarget,
+} from './fsa-reservation'
+import { SafeNameRegistry, deterministicSafeComponent } from './safe-name'
 
 type FSATaskRecord = ReceiveTaskRecord & { readonly target: FSATargetRecord }
 
 const FSA_MAX_CONCURRENT_FILES = 4
-const MAX_COLLISION_ATTEMPTS = 1_000
 
 /**
  * Starts the OS directory picker synchronously inside the user's click handler.
@@ -73,22 +81,37 @@ export async function openNewFSASession(input: Readonly<{
   diagnostics?: OutputDiagnosticsPorts
 }>): Promise<OutputSessionHandle> {
   const lock = await acquireTaskLock(input.task.taskId, input.locks)
+  let reserved: ReservedFSATarget | undefined
   try {
     const singleFile = input.task.artifact.singleFileId !== undefined
     const safeNames = new SafeNameRegistry()
-    const { reservedName, collisionIndex, rootHandle } = await reserveFSATarget(
-      input.parentHandle,
-      input.task.artifact.name,
-      singleFile,
-      safeNames,
+    const reservedAtMs = Date.now()
+    reserved = await withFSAReservationLock(
+      () => reserveFSATarget(input.parentHandle, input.task.artifact.name, singleFile, safeNames),
+      input.locks,
     )
-    const target: FSATargetRecord = Object.freeze({
-      kind: 'fsa',
-      parentHandle: input.parentHandle,
-      reservedName,
-      collisionIndex,
-      singleFile,
-    })
+    const target: FSATargetRecord = reserved.entry.kind === 'file'
+      ? Object.freeze({
+          kind: 'fsa',
+          parentHandle: input.parentHandle,
+          reservedName: reserved.reservedName,
+          collisionIndex: reserved.collisionIndex,
+          singleFile: true,
+          reservedAtMs,
+          reservedFile: Object.freeze({
+            handle: reserved.entry.handle,
+            fingerprint: reserved.entry.fingerprint,
+          }),
+        })
+      : Object.freeze({
+          kind: 'fsa',
+          parentHandle: input.parentHandle,
+          reservedName: reserved.reservedName,
+          collisionIndex: reserved.collisionIndex,
+          singleFile: false,
+          reservedAtMs,
+        })
+    const rootHandle = reserved.entry.kind === 'directory' ? reserved.entry.handle : input.parentHandle
     const display = input.task.display === undefined
       ? undefined
       : Object.freeze({ ...input.task.display, destinationLabel: input.parentHandle.name })
@@ -114,8 +137,11 @@ export async function openNewFSASession(input: Readonly<{
       backend: 'file_system_access',
       transition: 'acquired',
     })
-    return new FSASessionHandle(record, rootHandle, input.store, lock, safeNames, input.diagnostics)
+    return new FSASessionHandle(record, rootHandle, input.store, lock, safeNames, input.locks, input.diagnostics)
   } catch (error) {
+    if (reserved !== undefined) {
+      await rollbackReservedTarget(input.parentHandle, reserved).catch(() => undefined)
+    }
     await lock.release()
     throw error
   }
@@ -143,6 +169,8 @@ export async function reopenFSASession(input: Readonly<{
     throw error
   }
   try {
+    // Capture the upper bound once the task lock proves no previous session is still allocating placeholders.
+    const reopenedAtMs = Date.now()
     const perm = await ensureFSAPermission(input.task.target.parentHandle, input.allowPermissionPrompt, input.signal)
     input.signal?.throwIfAborted()
     if (perm !== 'granted') {
@@ -177,8 +205,10 @@ export async function reopenFSASession(input: Readonly<{
       input.store,
       lock,
       new SafeNameRegistry(),
+      input.locks,
       input.diagnostics,
       priorFiles,
+      reopenedAtMs,
     )
   } catch (error) {
     emitOutputTrace(input.diagnostics?.trace, 'reopen', {
@@ -210,7 +240,10 @@ export async function discardFSATask(
     if (current.target.kind === 'fsa') {
       const files = await store.listTaskFiles(task.taskId)
       const unfinished = files.some(file => file.status !== 'completed')
-      if (unfinished || (current.lifecycle.kind === 'paused' && !current.target.singleFile && files.length === 0)) {
+      const hasReservedPlaceholder = files.length === 0 &&
+        current.lifecycle.kind !== 'saved' &&
+        current.lifecycle.kind !== 'partial'
+      if (unfinished || hasReservedPlaceholder) {
         const permission = await ensureFSAPermission(current.target.parentHandle, unfinished, signal)
         signal?.throwIfAborted()
         if (permission === 'granted') {
@@ -226,12 +259,6 @@ export async function discardFSATask(
   } finally {
     await lock.release()
   }
-}
-
-interface FSADirectory {
-  readonly handle: FileSystemDirectoryHandle
-  readonly physicalPath: readonly string[]
-  readonly created: boolean
 }
 
 /** While the task lock is held, unfinished rows can be reused directly after each successful IndexedDB transaction. */
@@ -273,11 +300,16 @@ class FSASessionHandle implements OutputSessionHandle {
   readonly #store: ReceiveStore
   readonly #lock: TaskLock
   readonly #safeNames: SafeNameRegistry
+  readonly #locks: LockManager | undefined
   readonly #diagnostics: OutputDiagnosticsPorts | undefined
+  readonly #reopenedAtMs: number | undefined
   readonly #files: FSAFileRecords
   readonly #dirCache = new Map<string, Promise<FSADirectory>>()
   readonly #createdDirectories = new Set<FileSystemDirectoryHandle>()
   readonly #fileDirectories = new Set<FileSystemDirectoryHandle>()
+  readonly #reclaimedPlaceholders: FileSystemFileHandle[] = []
+  #reservedPlaceholderActive = false
+  #reclaimTail: Promise<void> = Promise.resolve()
 
   constructor(
     record: FSATaskRecord,
@@ -285,8 +317,10 @@ class FSASessionHandle implements OutputSessionHandle {
     store: ReceiveStore,
     lock: TaskLock,
     safeNames: SafeNameRegistry,
+    locks?: LockManager,
     diagnostics?: OutputDiagnosticsPorts,
     priorFiles: readonly ReceiveFileRecord[] = [],
+    reopenedAtMs?: number,
   ) {
     this.taskId = record.taskId
     this.#record = record
@@ -294,7 +328,9 @@ class FSASessionHandle implements OutputSessionHandle {
     this.#store = store
     this.#lock = lock
     this.#safeNames = safeNames
+    this.#locks = locks
     this.#diagnostics = diagnostics
+    this.#reopenedAtMs = reopenedAtMs
     this.#files = new FSAFileRecords(store, priorFiles)
     this.transferOutput = Object.freeze({
       sessionId: record.taskId,
@@ -382,16 +418,14 @@ class FSASessionHandle implements OutputSessionHandle {
       if (handle === undefined) record = undefined
     }
     signal.throwIfAborted()
-    const openedAtMs = Date.now()
+    let openedAtMs = Date.now()
+    let reservedPlaceholder: FSADiskFingerprint | undefined
     if (handle === undefined) {
-      const entry = await openFSAFile(parent.handle, request.path, leaf, this.#safeNames)
-      handle = entry.handle
-      if (!entry.created) {
-        // A repeated discovery can hit a completed file; a crash or a user edit can occupy the same name.
-        // Resolve that rare case from IndexedDB without retaining a file ID for every ordinary success.
-        record = await this.#store.getFile(this.taskId, request.fileId)
-        if (record === undefined) throw destinationChanged(this.#displayPath([...parent.physicalPath, handle.name]))
-      }
+      const opened = await this.#openUnrecordedFile(parent, request, leaf, openedAtMs)
+      handle = opened.handle
+      record = opened.record
+      openedAtMs = opened.openedAtMs
+      reservedPlaceholder = opened.reservedPlaceholder
     }
     const physicalPath = [...parent.physicalPath, handle.name]
     const displayPath = this.#displayPath(physicalPath)
@@ -399,8 +433,149 @@ class FSASessionHandle implements OutputSessionHandle {
     if (parent.created) this.#fileDirectories.add(parent.handle)
     return new FSAOutputFile({
       taskId: this.taskId, request, parentDir: parent.handle, handle, physicalPath,
-      displayPath, openedAtMs, signal, store: this.#files, existing, diagnostics: this.#diagnostics,
+      displayPath, openedAtMs, signal, store: this.#files, existing,
+      ...(reservedPlaceholder === undefined
+        ? {}
+        : { reservedPlaceholder, onReservedPlaceholderReleased: () => { this.#reservedPlaceholderActive = false } }),
+      diagnostics: this.#diagnostics,
     })
+  }
+
+  async #openUnrecordedFile(
+    parent: FSADirectory,
+    request: TransferFileRequest,
+    leaf: string,
+    openedAtMs: number,
+  ): Promise<{
+    readonly handle: FileSystemFileHandle
+    readonly record?: ReceiveFileRecord
+    readonly openedAtMs: number
+    readonly reservedPlaceholder?: FSADiskFingerprint
+  }> {
+    const target = this.#record.target
+    const entry = target.singleFile
+      ? await this.#openSingleFileEntry(parent.handle, request.path, leaf)
+      : await openFSAFile(parent.handle, request.path, leaf, this.#safeNames)
+    const candidatePath = this.#displayPath([...parent.physicalPath, entry.handle.name])
+    if (entry.created) {
+      if (!target.singleFile) return { handle: entry.handle, openedAtMs }
+      const refreshed = await this.#refreshReservedFile(entry.handle, candidatePath)
+      this.#reservedPlaceholderActive = true
+      return { handle: entry.handle, openedAtMs: refreshed.lastModified, reservedPlaceholder: refreshed }
+    }
+    // A repeated discovery can hit a completed file; a crash or a user edit can occupy the same name.
+    // Resolve that rare case from IndexedDB without retaining a file ID for every ordinary success.
+    const record = await this.#store.getFile(this.taskId, request.fileId)
+    if (record !== undefined) return { handle: entry.handle, record, openedAtMs }
+    if (target.singleFile) {
+      const claimed = await this.#claimReservedFile(entry.handle, target.reservedFile, request.fileId, candidatePath)
+      return { handle: entry.handle, openedAtMs: claimed.lastModified, reservedPlaceholder: claimed }
+    }
+    const reclaimedAtMs = await this.#reclaimUncommittedPlaceholder(entry.handle, request.fileId, candidatePath)
+    return { handle: entry.handle, openedAtMs: reclaimedAtMs }
+  }
+
+  async #openSingleFileEntry(
+    parent: FileSystemDirectoryHandle,
+    logicalPath: readonly string[],
+    leaf: string,
+  ): Promise<{ handle: FileSystemFileHandle; created: boolean }> {
+    try {
+      return { handle: await parent.getFileHandle(leaf), created: false }
+    } catch (error) {
+      if (!isMissingFSAEntry(error)) throw error
+    }
+    // Coordinate recreating a deleted/retired single-file placeholder with new root allocations.
+    return withFSAReservationLock(() => openFSAFile(parent, logicalPath, leaf, this.#safeNames), this.#locks)
+  }
+
+  #claimReservedFile(
+    handle: FileSystemFileHandle,
+    reserved: FSAReservedFile,
+    fileId: string,
+    displayPath: string,
+  ): Promise<FSADiskFingerprint> {
+    return this.#serializePlaceholderClaim(async () => {
+      if (this.#reservedPlaceholderActive || !await this.#matchesReservedFile(handle, reserved, displayPath)) {
+        throw destinationChanged(displayPath)
+      }
+      this.#reservedPlaceholderActive = true
+      if (this.#reopenedAtMs !== undefined) {
+        emitOutputTrace(this.#diagnostics?.trace, 'reopen', {
+          backend: 'file_system_access', task_id: this.taskId, file_id: fileId, transition: 'placeholder_reclaimed',
+        })
+      }
+      return reserved.fingerprint
+    })
+  }
+
+  #reclaimUncommittedPlaceholder(
+    handle: FileSystemFileHandle, fileId: string, displayPath: string,
+  ): Promise<number> {
+    if (this.#reopenedAtMs === undefined) return Promise.reject(destinationChanged(displayPath))
+    const reopenedAtMs = this.#reopenedAtMs
+    return this.#serializePlaceholderClaim(async () => {
+      for (const prior of this.#reclaimedPlaceholders) {
+        if (await sameFSAEntry(prior, handle)) throw destinationChanged(displayPath)
+      }
+      const disk = await readFSADiskFingerprint(handle).catch((cause: unknown) => {
+        throw destinationChanged(displayPath, cause)
+      })
+      if (!isUncommittedEmptyPlaceholder(disk, this.#record.target.reservedAtMs, reopenedAtMs)) {
+        throw destinationChanged(displayPath)
+      }
+      this.#reclaimedPlaceholders.push(handle)
+      emitOutputTrace(this.#diagnostics?.trace, 'reopen', {
+        backend: 'file_system_access', task_id: this.taskId, file_id: fileId, transition: 'placeholder_reclaimed',
+      })
+      // Preserve the placeholder's original timestamp so an abort before publication can still clean it up.
+      return disk.lastModified
+    })
+  }
+
+  async #serializePlaceholderClaim<T>(work: () => Promise<T>): Promise<T> {
+    // Serialize claim checks so concurrent openFile calls cannot reclaim the same entry twice.
+    const previous = this.#reclaimTail
+    let release!: () => void
+    this.#reclaimTail = new Promise<void>(resolve => { release = resolve })
+    await previous
+    try {
+      return await work()
+    } finally {
+      release()
+    }
+  }
+
+  async #matchesReservedFile(
+    handle: FileSystemFileHandle,
+    reserved: FSAReservedFile,
+    displayPath: string,
+  ): Promise<boolean> {
+    if (!await sameFSAEntry(handle, reserved.handle)) return false
+    const disk = await readFSADiskFingerprint(handle).catch((cause: unknown) => {
+      throw destinationChanged(displayPath, cause)
+    })
+    return matchesFSADiskFingerprint(disk, reserved.fingerprint)
+  }
+
+  async #refreshReservedFile(handle: FileSystemFileHandle, displayPath: string): Promise<FSADiskFingerprint> {
+    const target = this.#record.target
+    if (!target.singleFile) throw new TypeError('Cannot refresh reserved file on a directory FSA task')
+    const fingerprint = await readFSADiskFingerprint(handle).catch((cause: unknown) => {
+      throw destinationChanged(displayPath, cause)
+    })
+    if (fingerprint.size !== 0) throw destinationChanged(displayPath)
+    const nextRecord: FSATaskRecord = Object.freeze({
+      ...this.#record,
+      target: Object.freeze({
+        ...target,
+        reservedFile: Object.freeze({ handle, fingerprint }),
+      }),
+      updatedAt: Date.now(),
+    })
+    await this.#store.putTask(nextRecord)
+    this.#record = nextRecord
+    return fingerprint
   }
 
   async #locateRecordedFile(parent: FSADirectory, leaf: string, record: ReceiveFileRecord): Promise<FileSystemFileHandle | undefined> {
@@ -463,102 +638,6 @@ class FSASessionHandle implements OutputSessionHandle {
     }
     if (next.created) this.#createdDirectories.add(next.handle)
     return next
-  }
-}
-
-function requiresSafeComponent(error: unknown): boolean {
-  return error instanceof TypeError || (error instanceof DOMException && error.name === 'TypeMismatchError')
-}
-
-async function openDirectory(parent: FSADirectory, name: string): Promise<FSADirectory> {
-  const existing = await parent.handle.getDirectoryHandle(name).catch((error: unknown) => {
-    if (!isMissingFSAEntry(error)) throw error
-  })
-  const handle = existing ?? await parent.handle.getDirectoryHandle(name, { create: true })
-  return { handle, physicalPath: [...parent.physicalPath, handle.name], created: existing === undefined }
-}
-
-async function openFSAFile(
-  parent: FileSystemDirectoryHandle, logicalPath: readonly string[], leaf: string, safeNames: SafeNameRegistry,
-): Promise<{ handle: FileSystemFileHandle; created: boolean }> {
-  const open = async (name: string) => {
-    try {
-      return { handle: await parent.getFileHandle(name), created: false }
-    } catch (error) {
-      if (!isMissingFSAEntry(error)) throw error
-    }
-    return { handle: await parent.getFileHandle(name, { create: true }), created: true }
-  }
-  try {
-    return await open(leaf)
-  } catch (error) {
-    if (!requiresSafeComponent(error)) throw error
-    const name = await deterministicSafeComponent({ logicalPath, entryKind: 'file' })
-    const entry = await open(name)
-    safeNames.record(logicalPath, 'file', name)
-    return entry
-  }
-}
-
-async function reserveFSATarget(
-  parentHandle: FileSystemDirectoryHandle,
-  requestedName: string,
-  singleFile: boolean,
-  safeNames: SafeNameRegistry,
-): Promise<{
-  readonly reservedName: string
-  readonly collisionIndex: number
-  readonly rootHandle: FileSystemDirectoryHandle
-}> {
-  const kind = singleFile ? 'file' : 'directory'
-  for (let collisionIndex = 0; collisionIndex < MAX_COLLISION_ATTEMPTS; collisionIndex++) {
-    let reservedName = decideCollisionName(requestedName, kind, collisionIndex)
-    let rootHandle = await reserveRootName(parentHandle, reservedName, singleFile)
-    if (rootHandle === 'invalid-name') {
-      reservedName = await deterministicSafeComponent({ logicalPath: [requestedName], entryKind: kind, collisionIndex })
-      rootHandle = await reserveRootName(parentHandle, reservedName, singleFile)
-      if (typeof rootHandle !== 'string') safeNames.record([requestedName], kind, reservedName)
-    }
-    if (typeof rootHandle !== 'string') return { reservedName, collisionIndex, rootHandle }
-  }
-  throw new TransferFaultError(
-    outputFault(FaultScope.Job, OutputFaultCode.TargetCollision),
-    'Could not allocate a unique name in the selected folder',
-  )
-}
-
-async function reserveRootName(
-  parent: FileSystemDirectoryHandle, name: string, singleFile: boolean,
-): Promise<FileSystemDirectoryHandle | 'exists' | 'invalid-name'> {
-  const state = await entryExists(parent, name)
-  if (state !== 'missing') return state
-  try {
-    return singleFile ? parent : await parent.getDirectoryHandle(name, { create: true })
-  } catch (error) {
-    if (error instanceof TypeError) return 'invalid-name'
-    if (error instanceof DOMException && error.name === 'TypeMismatchError') return 'exists'
-    throw error
-  }
-}
-
-async function entryExists(
-  parent: FileSystemDirectoryHandle,
-  name: string,
-): Promise<'missing' | 'exists' | 'invalid-name'> {
-  const fileProbe = await probeHandle(() => parent.getFileHandle(name))
-  if (fileProbe !== 'missing') return fileProbe
-  return probeHandle(() => parent.getDirectoryHandle(name))
-}
-
-async function probeHandle(open: () => Promise<unknown>): Promise<'missing' | 'exists' | 'invalid-name'> {
-  try {
-    await open()
-    return 'exists'
-  } catch (error) {
-    if (error instanceof DOMException && error.name === 'TypeMismatchError') return 'exists'
-    if (error instanceof TypeError) return 'invalid-name'
-    if (isMissingFSAEntry(error)) return 'missing'
-    throw error
   }
 }
 

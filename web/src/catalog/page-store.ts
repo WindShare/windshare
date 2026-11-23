@@ -193,10 +193,7 @@ export class MemoryCatalogPageStore implements CatalogPageStore {
   async abort(directoryIdText: string): Promise<void> {
     this.#directories.delete(directoryIdText)
     this.#failures.delete(directoryIdText)
-    this.#pages.delete(directoryIdText)
-    for (const [node, owner] of this.#nodeOwners) {
-      if (owner === directoryIdText) this.#nodeOwners.delete(node)
-    }
+    this.#releaseDirectoryPages(directoryIdText)
     this.#nameOwners.delete(directoryIdText)
     const charge = this.#directoryCharges.get(directoryIdText)
     if (charge !== undefined) {
@@ -204,6 +201,21 @@ export class MemoryCatalogPageStore implements CatalogPageStore {
       this.#metadataBytes = Math.max(0, this.#metadataBytes - charge.metadataBytes)
       this.#directoryCharges.delete(directoryIdText)
     }
+  }
+
+  #releaseDirectoryPages(directoryIdText: string): void {
+    const generations = this.#pages.get(directoryIdText)
+    if (generations === undefined) return
+    // Node ownership is recorded atomically alongside staged pages in stage(),
+    // so releasing via #pages avoids scanning the share-wide #nodeOwners map.
+    for (const pages of generations.values()) {
+      for (const page of pages.values()) {
+        for (const entry of page.entries) {
+          this.#nodeOwners.delete(entry.idText)
+        }
+      }
+    }
+    this.#pages.delete(directoryIdText)
   }
 
   close(): void {}

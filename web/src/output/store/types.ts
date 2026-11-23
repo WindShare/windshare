@@ -11,13 +11,39 @@ import type { ZipCrcRange } from '../zip/crc-ranges'
 
 export type CompletedRangeTuple = readonly [bigint, bigint]
 
-export interface FSATargetRecord {
-  readonly kind: 'fsa'
-  readonly parentHandle: FileSystemDirectoryHandle
-  readonly reservedName: string
-  readonly collisionIndex: number
-  readonly singleFile: boolean
+/**
+ * Local OS file metadata captured immediately after reserving a single-file
+ * placeholder or flushing an unfinished FSA write, used to verify ownership.
+ */
+export interface FSADiskFingerprint {
+  readonly size: number
+  readonly lastModified: number
 }
+
+export interface FSAReservedFile {
+  readonly handle: FileSystemFileHandle
+  readonly fingerprint: FSADiskFingerprint
+}
+
+export type FSATargetRecord =
+  | Readonly<{
+      kind: 'fsa'
+      parentHandle: FileSystemDirectoryHandle
+      reservedName: string
+      collisionIndex: number
+      singleFile: false
+      /** Timestamp before reserving the destination so resume can recognize uncommitted empty placeholders. */
+      reservedAtMs: number
+    }>
+  | Readonly<{
+      kind: 'fsa'
+      parentHandle: FileSystemDirectoryHandle
+      reservedName: string
+      collisionIndex: number
+      singleFile: true
+      reservedAtMs: number
+      reservedFile: FSAReservedFile
+    }>
 
 export interface OPFSTargetRecord {
   readonly kind: 'opfs'
@@ -62,15 +88,6 @@ export interface ZipEntryLayoutRecord {
   readonly crcRanges: readonly ZipCrcRange[]
   readonly crc32?: number
   readonly modifiedTimeMilliseconds?: bigint
-}
-
-/**
- * Local OS file metadata captured immediately after flushing an unfinished FSA
- * write, used on discard to verify the entry was not edited or replaced.
- */
-export interface FSADiskFingerprint {
-  readonly size: number
-  readonly lastModified: number
 }
 
 /**

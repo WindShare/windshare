@@ -269,6 +269,64 @@ export async function verifyFSABackendOverNativeHandles(databaseName: string) {
   }
 }
 
+export async function startUncommittedFSAFirstWrite(databaseName: string, sandboxName: string, taskId: string) {
+  const store = await ReceiveStore.open(databaseName)
+  const root = await navigator.storage.getDirectory()
+  const parent = await root.getDirectoryHandle(sandboxName, { create: true })
+  const session = await openNewFSASession({
+    task: {
+      taskId,
+      selection: { shareInstance: 'share-fsa', syntheticRoot: 'root', defaultSelected: true, rules: [] },
+      selectionKey: 'sel-placeholder',
+      artifact: { kind: 'directory-tree', name: 'Drafts' },
+      lifecycle: initialReceiveState(taskId),
+    },
+    parentHandle: parent,
+    store,
+  })
+  const file = await session.transferOutput.openFile({
+    fileId: 'f1', path: ['report.bin'], sourcePath: ['Drafts', 'report.bin'], revision: 'r1', exactSize: 8n,
+  }, new AbortController().signal)
+  await file.writeAt(0n, new Uint8Array([1, 2, 3, 4]))
+  // Intentionally leave the session, writable stream, and Web Lock open for the page close to sever.
+  return { taskId }
+}
+
+export async function resumeFSAPlaceholderAfterPageClose(databaseName: string, sandboxName: string, taskId: string) {
+  const store = await ReceiveStore.open(databaseName)
+  const root = await navigator.storage.getDirectory()
+  try {
+    const parent = await root.getDirectoryHandle(sandboxName)
+    const dir = await parent.getDirectoryHandle('Drafts')
+    const beforeSize = (await (await dir.getFileHandle('report.bin')).getFile()).size
+    const beforeRecord = await store.getFile(taskId, 'f1')
+    const task = await store.getTask(taskId)
+    if (task === undefined) throw new Error('missing persisted task')
+    const reopened = await reopenFSASession({ task, store, allowPermissionPrompt: false })
+    try {
+      const resumed = await reopened.transferOutput.openFile({
+        fileId: 'f1', path: ['report.bin'], sourcePath: ['Drafts', 'report.bin'], revision: 'r1', exactSize: 8n,
+      }, new AbortController().signal)
+      const payload = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8])
+      await resumed.writeAt(0n, payload)
+      await resumed.commit([byteRange(0n, 8n)])
+    } finally {
+      await reopened.close()
+    }
+    const finalBytes = [...new Uint8Array(await (await (await dir.getFileHandle('report.bin')).getFile()).arrayBuffer())]
+    return {
+      beforeSize,
+      hadRecordBeforeResume: beforeRecord !== undefined,
+      finalBytes,
+      completedAfterResume: (await store.getFile(taskId, 'f1'))?.status === 'completed',
+    }
+  } finally {
+    store.close()
+    await root.removeEntry(sandboxName, { recursive: true }).catch(() => undefined)
+    await deleteDatabase(databaseName)
+  }
+}
+
 export async function verifyFSADiscardSafetyOverNativeHandles(databaseName: string) {
   const store = await ReceiveStore.open(databaseName)
   const root = await navigator.storage.getDirectory()
@@ -409,6 +467,84 @@ export async function verifyFSADiscardSafetyOverNativeHandles(databaseName: stri
       replacedText,
       dirToFileText,
       allTasksDeleted: (await store.listTasks()).length === 0,
+    }
+  } finally {
+    store.close()
+    await root.removeEntry(sandboxName, { recursive: true }).catch(() => undefined)
+    await deleteDatabase(databaseName)
+  }
+}
+
+export async function verifyFSAConcurrentSingleFileAllocationOverNativeHandles(databaseName: string) {
+  const store = await ReceiveStore.open(databaseName)
+  const root = await navigator.storage.getDirectory()
+  const sandboxName = `fsa-concurrent-${crypto.randomUUID()}`
+  const parent = await root.getDirectoryHandle(sandboxName, { create: true })
+  const taskA = `fsa-a-${crypto.randomUUID()}`
+  const taskB = `fsa-b-${crypto.randomUUID()}`
+  const payloadA = new TextEncoder().encode('report-from-task-a')
+  const payloadB = new TextEncoder().encode('report-from-task-b-longer')
+
+  try {
+    const [sessionA, sessionB] = await Promise.all([
+      openNewFSASession({
+        task: {
+          taskId: taskA,
+          selection: { shareInstance: 'share-a', syntheticRoot: 'root', defaultSelected: true, rules: [] },
+          selectionKey: 'sel-a',
+          artifact: { kind: 'directory-tree', name: 'report.bin', singleFileId: 'f-a' },
+          lifecycle: initialReceiveState(taskA),
+        },
+        parentHandle: parent,
+        store,
+      }),
+      openNewFSASession({
+        task: {
+          taskId: taskB,
+          selection: { shareInstance: 'share-b', syntheticRoot: 'root', defaultSelected: true, rules: [] },
+          selectionKey: 'sel-b',
+          artifact: { kind: 'directory-tree', name: 'report.bin', singleFileId: 'f-b' },
+          lifecycle: initialReceiveState(taskB),
+        },
+        parentHandle: parent,
+        store,
+      }),
+    ])
+
+    const [writerA, writerB] = await Promise.all([
+      sessionA.transferOutput.openFile({
+        fileId: 'f-a', path: ['report.bin'], sourcePath: ['report.bin'], revision: 'r-a', exactSize: BigInt(payloadA.byteLength),
+      }, new AbortController().signal),
+      sessionB.transferOutput.openFile({
+        fileId: 'f-b', path: ['report.bin'], sourcePath: ['report.bin'], revision: 'r-b', exactSize: BigInt(payloadB.byteLength),
+      }, new AbortController().signal),
+    ])
+
+    await Promise.all([
+      writerA.writeAt(0n, payloadA).then(() => writerA.commit([byteRange(0n, BigInt(payloadA.byteLength))])),
+      writerB.writeAt(0n, payloadB).then(() => writerB.commit([byteRange(0n, BigInt(payloadB.byteLength))])),
+    ])
+
+    const [settledA, settledB] = await Promise.all([
+      sessionA.settle({
+        status: 'completed', completedFiles: 1n, completedBytes: BigInt(payloadA.byteLength),
+        discoveredFiles: 1n, discoveredBytes: BigInt(payloadA.byteLength), discoveryComplete: true, failedFiles: 0n, failedDirectories: 0n,
+      }),
+      sessionB.settle({
+        status: 'completed', completedFiles: 1n, completedBytes: BigInt(payloadB.byteLength),
+        discoveredFiles: 1n, discoveredBytes: BigInt(payloadB.byteLength), discoveryComplete: true, failedFiles: 0n, failedDirectories: 0n,
+      }),
+    ])
+    await Promise.all([sessionA.close(), sessionB.close()])
+
+    const names = await listDirectoryKeys(parent)
+    const contents = await Promise.all(names.map(async name =>
+      await (await (await parent.getFileHandle(name)).getFile()).text()))
+
+    return {
+      lifecycleKinds: [settledA.lifecycle.kind, settledB.lifecycle.kind],
+      names,
+      contents: contents.sort(),
     }
   } finally {
     store.close()
