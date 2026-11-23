@@ -5,9 +5,14 @@ use windshare_relay_access::device_login::{Approval, Invitation};
 fn browser_session_authorizes_two_enrolled_nodes_with_independent_receipts() {
     let mut service = fixture();
     let now_ms = service.environment.now() * 1000;
-    let password = "example-service-password";
+    let password = test_verifier("example-service-password");
     let account = service
-        .register_with_password("source", registration(1), "sender", password)
+        .register_with_password(
+            "source",
+            registration(1),
+            "sender",
+            "example-service-password",
+        )
         .unwrap()
         .account;
     let generation = service.signing.generation;
@@ -29,7 +34,7 @@ fn browser_session_authorizes_two_enrolled_nodes_with_independent_receipts() {
         service.seed_node(node, Zone::Global, "region");
         let token = if cookie.is_empty() {
             let approved = service
-                .device_sign_in("source", &invitation_token, "sender", password)
+                .device_sign_in("source", &invitation_token, "sender", &password)
                 .unwrap();
             cookie = approved.session;
             approved.approval
@@ -51,7 +56,7 @@ fn browser_session_authorizes_two_enrolled_nodes_with_independent_receipts() {
             "source",
             &URL_SAFE_NO_PAD.encode([1; 32]),
             "sender",
-            "changed-service-password",
+            &test_verifier("changed-service-password"),
         )
         .unwrap();
     assert!(service.browser_account(&cookie).is_none());

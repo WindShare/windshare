@@ -105,8 +105,9 @@ impl Store for Memory {
 }
 struct Clock {
     now: u64,
-    next: u8,
+    next: u64,
     registration_email_configured: bool,
+    peppers: PepperRing,
 }
 impl Environment for Clock {
     fn now(&self) -> u64 {
@@ -115,10 +116,20 @@ impl Environment for Clock {
     fn registration_email_configured(&self) -> bool {
         self.registration_email_configured
     }
+    fn password_peppers(&self) -> &PepperRing {
+        &self.peppers
+    }
 
     fn random<const N: usize>(&mut self) -> Result<[u8; N]> {
         self.next += 1;
-        Ok([self.next; N])
+        let fill = u8::try_from(self.next & 0xff).unwrap();
+        let mut out = [fill; N];
+        if self.next > u64::from(u8::MAX) {
+            let counter = self.next.to_le_bytes();
+            let len = N.min(counter.len());
+            out[..len].copy_from_slice(&counter[..len]);
+        }
+        Ok(out)
     }
 }
 fn listed_node(key: [u8; 32], zone: Zone, region: &str) -> Node {
@@ -175,6 +186,14 @@ fn signing_fixture_for_root(root_seed: [u8; 32], number: u64) -> Signing {
 fn signing_fixture(number: u64) -> Signing {
     signing_fixture_for_root([41; 32], number)
 }
+fn test_peppers() -> PepperRing {
+    PepperRing::parse(&format!("v1:{}", URL_SAFE_NO_PAD.encode([0x5a_u8; 32]))).unwrap()
+}
+
+fn test_verifier(label: &str) -> PasswordVerifier {
+    PasswordVerifier::from_bytes(crate::registration::digest(label))
+}
+
 fn fixture() -> Authority<Memory, Clock> {
     Authority::new(
         Memory::default(),
@@ -182,6 +201,7 @@ fn fixture() -> Authority<Memory, Clock> {
             now: DAY_SECONDS * 2,
             next: 10,
             registration_email_configured: false,
+            peppers: test_peppers(),
         },
         signing_fixture(1),
     )
@@ -193,7 +213,7 @@ fn registration(secret: u8) -> Registration {
         challenge: None,
         solution: None,
         username: None,
-        password: None,
+        password_verifier: None,
     }
 }
 
@@ -224,11 +244,6 @@ impl Authority<Memory, Clock> {
         ))
     }
 
-    fn hash_password(&mut self, password: &str) -> Result<HashedPassword> {
-        let salt = self.environment.random::<PASSWORD_SALT_BYTES>()?;
-        HashedPassword::hash(password, &salt)
-    }
-
     fn initialize(
         &mut self,
         provided: &str,
@@ -236,20 +251,7 @@ impl Authority<Memory, Clock> {
         name: &str,
         password: &str,
     ) -> Result<String> {
-        self.prepare_initialization(provided, expected, name, password.len())?;
-        let hashed = self.hash_password(password)?;
-        self.complete_initialization(provided, expected, name, hashed)
-    }
-
-    fn admin_login(&mut self, source: &str, name: &str, password: &str) -> Result<String> {
-        let verifier = self.begin_admin_login(source, name)?;
-        anyhow::ensure!(
-            verifier.verify(password),
-            Fault::Denied {
-                reason: "credentials".into(),
-            }
-        );
-        self.complete_admin_login(verifier.fingerprint())
+        self.initialize_admin(provided, expected, name, &test_verifier(password))
     }
 
     fn register_with_password(
@@ -259,65 +261,9 @@ impl Authority<Memory, Clock> {
         name: &str,
         password: &str,
     ) -> Result<Session> {
-        let prepare = PasswordRegistrationPrepare {
-            client_secret: request.client_secret.clone(),
-            challenge: request.challenge.clone(),
-            solution: request.solution.clone(),
-            username: name.into(),
-            password_len: password.len(),
-        };
-        match self.prepare_password_registration(source, &prepare)? {
-            PasswordRegistrationPreparation::Existing { session } => Ok(*session),
-            PasswordRegistrationPreparation::Ready => {
-                request.username = Some(name.into());
-                request.password = Some(self.hash_password(password)?);
-                self.register(source, request)
-            }
-        }
-    }
-
-    fn login(&mut self, source: &str, name: &str, password: &str) -> Result<Session> {
-        let challenge = self.begin_account_login(source, name)?;
-        anyhow::ensure!(
-            challenge.password.verify(password),
-            Fault::Denied {
-                reason: "credentials".into(),
-            }
-        );
-        self.complete_account_login(challenge.account, challenge.password.fingerprint())
-    }
-
-    fn set_password(
-        &mut self,
-        source: &str,
-        secret: &str,
-        name: &str,
-        password: &str,
-    ) -> Result<Session> {
-        let prepared = self.prepare_password_change(source, secret, name, password.len())?;
-        let hashed = self.hash_password(password)?;
-        self.commit_password_change(secret, name, hashed, prepared.previous_verifier_digest)
-    }
-
-    fn device_sign_in(
-        &mut self,
-        source: &str,
-        invitation: &str,
-        name: &str,
-        password: &str,
-    ) -> Result<DeviceApproval> {
-        let challenge = self.begin_device_sign_in(source, invitation, name)?;
-        anyhow::ensure!(
-            challenge.password.verify(password),
-            Fault::Denied {
-                reason: "credentials".into(),
-            }
-        );
-        self.complete_device_sign_in(
-            invitation,
-            challenge.account,
-            challenge.password.fingerprint(),
-        )
+        request.username = Some(name.into());
+        request.password_verifier = Some(test_verifier(password));
+        self.register(source, request)
     }
 }
 fn batch(

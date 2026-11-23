@@ -1,4 +1,4 @@
-use crate::HashedPassword;
+use crate::{PasswordVerifier, StoredPassword};
 use serde::{Deserialize, Deserializer, Serialize};
 use windshare_relay_access::{
     AccountId, CredentialId,
@@ -136,7 +136,7 @@ pub struct Account {
     pub id: AccountId,
     pub created_at: u64,
     pub username: Option<String>,
-    pub password: Option<HashedPassword>,
+    pub password: Option<StoredPassword>,
     #[serde(default)]
     pub profile: Profile,
 }
@@ -173,7 +173,7 @@ pub struct Registration {
     pub challenge: Option<String>,
     pub solution: Option<String>,
     pub username: Option<String>,
-    pub password: Option<HashedPassword>,
+    pub password_verifier: Option<PasswordVerifier>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Session {

@@ -124,6 +124,7 @@ jobs:
           EXTRA_EMAIL_DOMAINS: ${{ vars.EXTRA_EMAIL_DOMAINS }}
           AUTHORITY_SIGNING_SEED: ${{ secrets.AUTHORITY_SIGNING_SEED }}
           INITIALIZATION_TOKEN: ${{ secrets.INITIALIZATION_TOKEN }}
+          PASSWORD_PEPPER: ${{ secrets.PASSWORD_PEPPER }}
         run: |
           python scripts/deploy/network-authority.py --network-release deploy/network/release.json
           echo 'Network authority deployed. Sign in at the configured API host under `/console`.' >> "$GITHUB_STEP_SUMMARY"

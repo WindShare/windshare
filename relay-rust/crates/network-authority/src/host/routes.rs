@@ -1,7 +1,7 @@
 use super::{WorkerEnvironment, failure, storage::Database};
 use crate::{
-    Authority, Block, Fault, Mailbox, NodePolicyChange, Registration, ReportPosition,
-    SettingsChanges, public_blocks::PublicBlockFeed,
+    Authority, Block, Fault, Mailbox, NodePolicyChange, PasswordVerifier, Registration,
+    ReportPosition, SettingsChanges, public_blocks::PublicBlockFeed,
 };
 use anyhow::{Result, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -119,6 +119,25 @@ struct Report {
 struct DismissReview {
     count: u64,
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PasswordLoginRequest {
+    username: String,
+    password_verifier: PasswordVerifier,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AdminInitializeRequest {
+    token: String,
+    username: String,
+    password_verifier: PasswordVerifier,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AdminPasswordChangeRequest {
+    current_password_verifier: PasswordVerifier,
+    new_password_verifier: PasswordVerifier,
+}
 pub(super) fn parse<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
     serde_json::from_slice(bytes).map_err(|_| Fault::Invalid.into())
 }
@@ -142,9 +161,6 @@ pub fn dispatch(
     bytes: &[u8],
     public_blocks: &mut PublicBlockFeed,
 ) -> Result<Response> {
-    if context.path.starts_with("/internal/") {
-        return super::internal_routes::dispatch(authority, context, bytes);
-    }
     if context.path.starts_with("/v1/admin/") {
         return admin_routes(authority, context, bytes);
     }
@@ -171,17 +187,27 @@ fn api_routes(
     } = context;
     let value = match (method, path.as_str()) {
         (Method::Post, "/v1/device/preview" | "/v1/device/approve") => {
-            return super::device_login::handle(authority, &path, &device_session, bytes);
+            return super::device_login::handle(authority, &path, &source, &device_session, bytes);
         }
         (Method::Post, "/v1/accounts") => {
-            let request: Registration = parse(bytes)?;
-            // Password registrations must hash on the stateless edge Worker and enter
-            // through /internal/accounts/register/commit.
-            ensure!(
-                request.username.is_none() && request.password.is_none(),
-                Fault::Invalid
-            );
-            serde_json::to_value(authority.register(&source, request)?)?
+            serde_json::to_value(authority.register(&source, parse::<Registration>(bytes)?)?)?
+        }
+        (Method::Post, "/v1/accounts/login") => {
+            let input: PasswordLoginRequest = parse(bytes)?;
+            serde_json::to_value(authority.login(
+                &source,
+                &input.username,
+                &input.password_verifier,
+            )?)?
+        }
+        (Method::Post, "/v1/accounts/password") => {
+            let input: PasswordLoginRequest = parse(bytes)?;
+            serde_json::to_value(authority.set_password(
+                &source,
+                &bearer,
+                &input.username,
+                &input.password_verifier,
+            )?)?
         }
         (Method::Post, "/v1/accounts/ticket") => serde_json::to_value(authority.refresh(&bearer)?)?,
         (Method::Post, "/v1/accounts/profile/nickname") => {
@@ -244,11 +270,35 @@ fn admin_routes(
         admin_after,
         account_query,
         method,
+        source,
         session,
         csrf: provided,
+        initialization,
         env,
         ..
     } = context;
+    if method == Method::Post {
+        match path.as_str() {
+            "/v1/admin/initialize" => {
+                let input: AdminInitializeRequest = parse(bytes)?;
+                return signed_in(&authority.initialize_admin(
+                    &input.token,
+                    &initialization,
+                    &input.username,
+                    &input.password_verifier,
+                )?);
+            }
+            "/v1/admin/login" => {
+                let input: PasswordLoginRequest = parse(bytes)?;
+                return signed_in(&authority.admin_login(
+                    &source,
+                    &input.username,
+                    &input.password_verifier,
+                )?);
+            }
+            _ => {}
+        }
+    }
     if method != Method::Get {
         verify_admin_csrf(&session, &provided)?;
     }
@@ -256,6 +306,15 @@ fn admin_routes(
         (Method::Post, "/v1/admin/logout") => {
             authority.logout(&session)?;
             return signed_in("");
+        }
+        (Method::Post, "/v1/admin/password") => {
+            let input: AdminPasswordChangeRequest = parse(bytes)?;
+            return signed_in(&authority.change_admin_password(
+                &source,
+                &session,
+                &input.current_password_verifier,
+                &input.new_password_verifier,
+            )?);
         }
         (Method::Get, "/v1/admin/console") => {
             authority.require_admin(&session)?;

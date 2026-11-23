@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import test from 'node:test';
-import { fixture } from './local-worker.mjs';
+import { derivePasswordVerifier, fixture } from './local-worker.mjs';
 
 test('the local Worker preserves account and node policy across signed reports and retries', async t => {
   const maintenanceToken = randomBytes(32).toString('base64url');
@@ -13,7 +13,12 @@ test('the local Worker preserves account and node policy across signed reports a
   const request = (input, options) => worker.fetch(String(input), options);
   const initialization = 'local-initialization-token';
   const enrollment = { ...proposed, zone: 'cn' };
-  const administrator = { username: 'local-operator', password: 'Local-P2-validation-2026' };
+  const adminPassword = 'Local-P2-validation-2026';
+  const rotatedAdminPassword = 'Rotated-P2-validation-2026';
+  const adminVerifier = derivePasswordVerifier('admin', 'local-operator', adminPassword);
+  const wrongAdminVerifier = derivePasswordVerifier('admin', 'local-operator', 'wrong-password-attempt');
+  const rotatedAdminVerifier = derivePasswordVerifier('admin', 'local-operator', rotatedAdminPassword);
+  const administrator = { username: 'local-operator', password_verifier: adminVerifier };
   let cookie = '';
   let csrf = '';
   async function call(path, body, options = {}) {
@@ -58,13 +63,13 @@ test('the local Worker preserves account and node policy across signed reports a
   });
   assert.equal(badCsrf.value.reason, 'csrf');
   const badPasswordChange = await call('/v1/admin/password', {
-    current_password: 'wrong-password-attempt', new_password: 'Rotated-P2-validation-2026',
+    current_password_verifier: wrongAdminVerifier, new_password_verifier: rotatedAdminVerifier,
   }, { admin: true, status: 403 });
   assert.equal(badPasswordChange.value.reason, 'credentials');
   const oldCookie = cookie;
   const oldCsrf = csrf;
   const changedPassword = await call('/v1/admin/password', {
-    current_password: administrator.password, new_password: 'Rotated-P2-validation-2026',
+    current_password_verifier: adminVerifier, new_password_verifier: rotatedAdminVerifier,
   }, { admin: true });
   cookie = changedPassword.response.headers.get('set-cookie').split(';')[0];
   csrf = changedPassword.value.csrf;
@@ -72,9 +77,9 @@ test('the local Worker preserves account and node policy across signed reports a
     method: 'GET', headers: { Cookie: oldCookie, 'X-CSRF-Token': oldCsrf }, status: 403,
   });
   await call('/v1/admin/login', administrator, { status: 403 });
-  await call('/v1/admin/login', { ...administrator, password: 'Rotated-P2-validation-2026' });
+  await call('/v1/admin/login', { username: administrator.username, password_verifier: rotatedAdminVerifier });
   const restoredPassword = await call('/v1/admin/password', {
-    current_password: 'Rotated-P2-validation-2026', new_password: administrator.password,
+    current_password_verifier: rotatedAdminVerifier, new_password_verifier: adminVerifier,
   }, { admin: true });
   cookie = restoredPassword.response.headers.get('set-cookie').split(';')[0];
   csrf = restoredPassword.value.csrf;
@@ -86,6 +91,7 @@ test('the local Worker preserves account and node policy across signed reports a
   });
   assert.equal(missingCookie.value.reason, 'administrator_session');
   const consoleState = (await call('/v1/admin/console', undefined, { admin: true, method: 'GET' })).value;
+  assert.equal(consoleState.username, administrator.username);
   await call('/v1/admin/settings', { registration: 'automatic' }, { admin: true, method: 'PATCH' });
   const secret = randomBytes(32).toString('base64url');
   const first = (await call('/v1/accounts', { client_secret: secret })).value;
@@ -95,8 +101,9 @@ test('the local Worker preserves account and node policy across signed reports a
   const refreshed = (await call('/v1/accounts/ticket', {}, { secret })).value;
   assert.deepEqual(refreshed.credential, first.credential);
   const username = 'probe-' + randomBytes(6).toString('hex');
-  await call('/v1/accounts/password', { username, password: administrator.password }, { secret });
-  const second = (await call('/v1/accounts/login', { username, password: administrator.password })).value;
+  const accountVerifier = derivePasswordVerifier('account', username, adminPassword);
+  await call('/v1/accounts/password', { username, password_verifier: accountVerifier }, { secret });
+  const second = (await call('/v1/accounts/login', { username, password_verifier: accountVerifier })).value;
   assert.deepEqual(second.account, first.account);
   assert.notDeepEqual(second.credential, first.credential);
   const enrolled = (await call('/v1/admin/nodes', enrollment, { admin: true })).value;

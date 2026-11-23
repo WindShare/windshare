@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash, createPublicKey, generateKeyPairSync, randomBytes, sign } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { fixture, signedDescriptor } from './local-worker.mjs';
+import { derivePasswordVerifier, fixture, signedDescriptor } from './local-worker.mjs';
 
 const MAX_DESCRIPTOR_BYTES = 16 * 1024;
 const MAX_DNS_BYTES = 16 * 1024;
@@ -43,13 +43,15 @@ function signVantageProof(identity, domain, payloadObject) {
   };
 }
 
+const OPERATOR_VERIFIER = derivePasswordVerifier('admin', 'operator', 'Operator-Password-2026!');
+
 async function initAdmin(worker) {
   const response = await worker.fetch('https://localhost/v1/admin/initialize', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Origin: 'https://localhost' },
     body: JSON.stringify({
       username: 'operator',
-      password: 'Operator-Password-2026!',
+      password_verifier: OPERATOR_VERIFIER,
       token: 'local-initialization-token',
     }),
   });

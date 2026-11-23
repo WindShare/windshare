@@ -368,49 +368,33 @@ fn node_details_and_load_remain_reachable_beyond_the_console_page() {
 }
 
 #[test]
-fn admin_password_change_invalidates_prior_sessions_and_rejects_stale_verifiers() {
+fn admin_password_change_invalidates_prior_sessions_and_console_exposes_username() {
     let mut authority = fixture();
+    let initial = test_verifier("correct horse battery");
+    let updated = test_verifier("updated-admin-password");
+    let wrong = test_verifier("wrong-admin-password");
     let first = authority
-        .initialize("once", "once", "admin", "correct horse battery")
+        .initialize_admin("once", "once", "Admin", &initial)
         .unwrap();
-    let second = authority
-        .admin_login("source", "admin", "correct horse battery")
-        .unwrap();
+    assert_eq!(authority.console(&first).unwrap()["username"], "admin");
+    let second = authority.admin_login("source", "admin", &initial).unwrap();
     assert!(
         authority
-            .prepare_admin_password_change("source", &first, 4)
-            .unwrap_err()
-            .downcast_ref::<Fault>()
-            .is_some_and(|fault| matches!(fault, Fault::Invalid))
-    );
-    let verifier = authority
-        .prepare_admin_password_change("source", &first, "updated-admin-password".len())
-        .unwrap();
-    assert!(verifier.verify("correct horse battery"));
-    let updated = authority.hash_password("updated-admin-password").unwrap();
-    assert!(
-        authority
-            .commit_admin_password_change(&first, updated.clone(), [0; 32])
+            .change_admin_password("source", &first, &wrong, &updated)
             .unwrap_err()
             .downcast_ref::<Fault>()
             .is_some_and(
-                |fault| matches!(fault, Fault::Denied { reason } if reason == "credentials_changed")
+                |fault| matches!(fault, Fault::Denied { reason } if reason == "credentials")
             )
     );
     let replacement = authority
-        .commit_admin_password_change(&first, updated, verifier.fingerprint())
+        .change_admin_password("source", &first, &initial, &updated)
         .unwrap();
     assert!(authority.require_admin(&first).is_err());
     assert!(authority.require_admin(&second).is_err());
     authority.require_admin(&replacement).unwrap();
-    assert!(
-        authority
-            .admin_login("source", "admin", "correct horse battery")
-            .is_err()
-    );
-    let signed_in = authority
-        .admin_login("source", "admin", "updated-admin-password")
-        .unwrap();
+    assert!(authority.admin_login("source", "admin", &initial).is_err());
+    let signed_in = authority.admin_login("source", "admin", &updated).unwrap();
     authority.require_admin(&signed_in).unwrap();
 }
 

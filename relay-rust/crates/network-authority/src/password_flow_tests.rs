@@ -1,8 +1,4 @@
 use super::*;
-use argon2::{
-    Argon2,
-    password_hash::{PasswordHasher, SaltString},
-};
 use sha2::{Digest, Sha256};
 use windshare_relay_access::{AccountId, device_login::Invitation};
 
@@ -14,40 +10,147 @@ fn seed_password_account(
     authority: &mut Authority<Memory, Clock>,
     secret_byte: u8,
     username: &str,
-    hash: &HashedPassword,
+    verifier: &PasswordVerifier,
 ) -> (AccountId, String) {
     let mut request = registration(secret_byte);
     let secret = request.client_secret.clone();
     request.username = Some(username.into());
-    request.password = Some(hash.clone());
+    request.password_verifier = Some(verifier.clone());
     let session = authority
         .register(&format!("seed-{secret_byte}"), request)
         .unwrap();
     (session.account, secret)
 }
 
-fn fast_hash_fixture() -> HashedPassword {
-    HashedPassword::hash("correct horse battery", &[7; PASSWORD_SALT_BYTES]).unwrap()
+#[test]
+fn hmac_sha256_matches_rfc4231_test_vector() {
+    // RFC 4231 Test Case 4 with 25-byte key (zero-padded to 32 bytes is equivalent to HMAC's 64-byte block padding).
+    let mut key = [0_u8; 32];
+    for (idx, slot) in key.iter_mut().take(25).enumerate() {
+        *slot = u8::try_from(idx + 1).unwrap();
+    }
+    let data = [0xcd_u8; 50];
+    let mac = crate::password::hmac_sha256(&key, &[&data[..17], &data[17..]]);
+    let expected: [u8; 32] = [
+        0x82, 0x55, 0x8a, 0x38, 0x9a, 0x44, 0x3c, 0x0e, 0xa4, 0xcc, 0x81, 0x98, 0x99, 0xf2, 0x08,
+        0x3a, 0x85, 0xf0, 0xfa, 0xa3, 0xe5, 0x78, 0xf8, 0x07, 0x7a, 0x2e, 0x3f, 0xf4, 0x67, 0x29,
+        0x66, 0x5b,
+    ];
+    assert_eq!(mac, expected);
 }
 
 #[test]
-fn independent_random_salts_prevent_cookie_resurrection_and_verify_legacy_hashes() {
+fn pepper_ring_validates_format_supports_rotation_and_redacts_secrets() {
+    let v1_key = URL_SAFE_NO_PAD.encode([0x11_u8; 32]);
+    let v2_key = URL_SAFE_NO_PAD.encode([0x22_u8; 32]);
+    let v1_only = PepperRing::parse(&format!("v1:{v1_key}")).unwrap();
+    let rotated = PepperRing::parse(&format!("v2:{v2_key},v1:{v1_key}")).unwrap();
+    let v2_only = PepperRing::parse(&format!("v2:{v2_key}")).unwrap();
+
+    let verifier = test_verifier("correct horse battery");
+    let wrong = test_verifier("different password");
+    let stored_v1 = StoredPassword::seal(&verifier, [3; PASSWORD_SALT_BYTES], &v1_only);
+    assert_eq!(stored_v1.pepper_id(), "v1");
+    assert!(stored_v1.verify(&verifier, &v1_only));
+    assert!(stored_v1.verify(&verifier, &rotated));
+    assert!(!stored_v1.verify(&wrong, &rotated));
+    assert!(!stored_v1.verify(&verifier, &v2_only));
+
+    let stored_v2 = StoredPassword::seal(&verifier, [3; PASSWORD_SALT_BYTES], &rotated);
+    assert_eq!(stored_v2.pepper_id(), "v2");
+    assert_ne!(stored_v1, stored_v2);
+    assert!(stored_v2.verify(&verifier, &rotated));
+    assert!(stored_v2.verify(&verifier, &v2_only));
+
+    // Debug representations must never expose verifier or MAC bytes.
+    let verifier_wire = String::from(verifier.clone());
+    assert!(!format!("{verifier:?}").contains(&verifier_wire));
+    let stored_wire = String::from(stored_v1.clone());
+    assert!(!format!("{stored_v1:?}").contains(&stored_wire));
+    assert!(!format!("{rotated:?}").contains(&v1_key));
+    assert!(!format!("{rotated:?}").contains(&v2_key));
+
+    // Malformed peppers and stored/verifier encodings fail closed.
+    let zeros = URL_SAFE_NO_PAD.encode([0_u8; 32]);
+    for bad in [
+        "",
+        "missing-colon",
+        &format!("BAD:{v1_key}"),
+        &format!("v1:{v1_key},v1:{v2_key}"),
+        "v1:short",
+        &format!("v1:{zeros}"),
+    ] {
+        assert!(PepperRing::parse(bad).is_err(), "{bad}");
+    }
+    assert!(PasswordVerifier::try_from(String::from("plaintext-password")).is_err());
+    assert!(StoredPassword::try_from(String::from("plaintext-password")).is_err());
+    assert!(StoredPassword::try_from(String::from("v1$bad$bad")).is_err());
+}
+
+#[test]
+fn shared_password_verifier_vectors_parse_and_verify_with_domain_separation() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../testdata/network/password-verifiers.json");
+    let fixture_json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let vectors = fixture_json["vectors"].as_array().unwrap();
+    assert!(vectors.len() >= 3);
+
     let mut authority = fixture();
-    let original = "correct horse battery";
-    let replacement = "another valid password";
+    let account_vector = &vectors[0];
+    let admin_vector = &vectors[1];
+    let account_verifier =
+        PasswordVerifier::try_from(account_vector["verifier"].as_str().unwrap().to_owned())
+            .unwrap();
+    let admin_verifier =
+        PasswordVerifier::try_from(admin_vector["verifier"].as_str().unwrap().to_owned()).unwrap();
+    assert_ne!(account_verifier, admin_verifier);
+
+    let username = account_vector["username"].as_str().unwrap();
+    authority
+        .initialize_admin("init", "init", username, &admin_verifier)
+        .unwrap();
+    let mut req = registration(40);
+    req.username = Some(username.into());
+    req.password_verifier = Some(account_verifier.clone());
+    authority.register("vector-ip", req).unwrap();
+
+    // Admin verifier cannot sign into the account, and account verifier cannot sign into admin.
+    assert!(
+        authority
+            .login("vector-ip", username, &admin_verifier)
+            .is_err()
+    );
+    assert!(
+        authority
+            .admin_login("vector-ip", username, &account_verifier)
+            .is_err()
+    );
+    assert!(
+        authority
+            .login("vector-ip", username, &account_verifier)
+            .is_ok()
+    );
+    assert!(
+        authority
+            .admin_login("vector-ip", username, &admin_verifier)
+            .is_ok()
+    );
+}
+
+#[test]
+fn independent_random_salts_prevent_cookie_resurrection() {
+    let mut authority = fixture();
+    let original = test_verifier("correct horse battery");
+    let replacement = test_verifier("another valid password");
     let secret = registration(1).client_secret;
     let session = authority
-        .register_with_password("source", registration(1), "alice", original)
+        .register_with_password("source", registration(1), "alice", "correct horse battery")
         .unwrap();
     let initial_account = load::<Account>(&authority.store, &key("account", &session.account))
         .unwrap()
         .unwrap();
-    let initial_hash = initial_account.password.unwrap();
-    let account_id_salt = SaltString::encode_b64(&session.account).unwrap();
-    assert!(
-        !initial_hash.as_str().contains(account_id_salt.as_str()),
-        "password salt must not reuse the public account ID"
-    );
+    let initial_stored = initial_account.password.unwrap();
 
     let signer = SigningKey::from_bytes(&[9; 32]);
     let node = signer.verifying_key().to_bytes();
@@ -64,88 +167,43 @@ fn independent_random_salts_prevent_cookie_resurrection_and_verify_legacy_hashes
     .issue(&signer)
     .unwrap();
     let cookie = authority
-        .device_sign_in("source", &invite, "alice", original)
+        .device_sign_in("source", &invite, "alice", &original)
         .unwrap()
         .session;
     assert!(authority.browser_account(&cookie).is_some());
 
     // Changing A -> B -> A must produce a fresh salt and keep the old cookie invalid.
     authority
-        .set_password("source", &secret, "alice", replacement)
+        .set_password("source", &secret, "alice", &replacement)
         .unwrap();
     authority
-        .set_password("source", &secret, "alice", original)
+        .set_password("source", &secret, "alice", &original)
         .unwrap();
-    let final_hash = load::<Account>(&authority.store, &key("account", &session.account))
+    let final_stored = load::<Account>(&authority.store, &key("account", &session.account))
         .unwrap()
         .unwrap()
         .password
         .unwrap();
-    assert_ne!(initial_hash, final_hash);
-    assert!(final_hash.verify(original));
+    assert_ne!(initial_stored, final_stored);
+    assert!(final_stored.verify(&original, &authority.environment.peppers));
     assert!(authority.browser_account(&cookie).is_none());
-
-    // Previously persisted Argon2::default() (19 MiB, t=2) hashes remain accepted.
-    let legacy_salt = SaltString::encode_b64(&[11; PASSWORD_SALT_BYTES]).unwrap();
-    let legacy_raw = Argon2::default()
-        .hash_password(original.as_bytes(), &legacy_salt)
-        .unwrap()
-        .to_string();
-    let legacy = HashedPassword::try_from(legacy_raw).unwrap();
-    assert!(legacy.verify(original));
-    assert!(!legacy.verify(replacement));
-    assert!(HashedPassword::try_from(String::from("plaintext-password")).is_err());
-    assert!(HashedPassword::try_from(String::new()).is_err());
-}
-
-#[test]
-fn password_change_rejects_stale_concurrent_updates() {
-    let mut authority = fixture();
-    let hash = fast_hash_fixture();
-    let (_, secret_a) = seed_password_account(&mut authority, 1, "alice", &hash);
-
-    let first = authority
-        .prepare_password_change("ip-cas-1", &secret_a, "alice", 16)
-        .unwrap();
-    let second = authority
-        .prepare_password_change("ip-cas-2", &secret_a, "alice", 16)
-        .unwrap();
-    let next_hash =
-        HashedPassword::hash("second valid password", &[8; PASSWORD_SALT_BYTES]).unwrap();
-    authority
-        .commit_password_change(
-            &secret_a,
-            "alice",
-            next_hash.clone(),
-            first.previous_verifier_digest,
-        )
-        .unwrap();
-    assert!(matches!(
-        fault_of(authority.commit_password_change(
-            &secret_a,
-            "alice",
-            next_hash,
-            second.previous_verifier_digest,
-        )),
-        Fault::Denied { reason } if reason == "credentials_changed"
-    ));
 }
 
 #[test]
 fn password_change_limits_atomically_without_burning_global_on_invalid_input() {
     let mut authority = fixture();
-    let hash = fast_hash_fixture();
-    let (_, secret_a) = seed_password_account(&mut authority, 1, "alice", &hash);
-    let (_, secret_b) = seed_password_account(&mut authority, 2, "bob", &hash);
+    let verifier = test_verifier("correct horse battery");
+    let (_, secret_a) = seed_password_account(&mut authority, 1, "alice", &verifier);
+    let (_, secret_b) = seed_password_account(&mut authority, 2, "bob", &verifier);
 
-    // Invalid inputs and taken usernames do not spend account or global quotas.
+    // Invalid usernames and taken usernames do not spend account or global quotas.
     for _ in 0..10 {
         assert!(matches!(
-            fault_of(authority.prepare_password_change("typo-ip", &secret_a, "alice", 5)),
+            fault_of(authority.set_password("typo-ip", &secret_a, "bad user", &verifier)),
             Fault::Invalid
         ));
         assert!(matches!(
-            fault_of(authority.prepare_password_change("typo-ip", &secret_a, "bob", 16)),
+            fault_of(authority.set_password("typo-ip", &secret_a, "bob", &verifier)),
             Fault::Denied { reason } if reason == "username_taken"
         ));
     }
@@ -161,47 +219,46 @@ fn password_change_limits_atomically_without_burning_global_on_invalid_input() {
     // Invalid credentials count against only the caller's source bucket.
     for _ in 0..5 {
         assert!(matches!(
-            fault_of(authority.prepare_password_change("bad-ip", "wrong-secret", "alice", 16)),
+            fault_of(authority.set_password("bad-ip", "wrong-secret", "alice", &verifier)),
             Fault::Denied { reason } if reason == "credentials"
         ));
     }
     assert!(matches!(
-        fault_of(authority.prepare_password_change("bad-ip", &secret_a, "alice", 16)),
+        fault_of(authority.set_password("bad-ip", &secret_a, "alice", &verifier)),
         Fault::RateLimited { retry_after: 60 }
     ));
 
     // Rotating source IPs hits the per-account bucket after 5 attempts.
     for i in 0..5 {
         authority
-            .prepare_password_change(&format!("ip-a-{i}"), &secret_a, "alice", 16)
+            .set_password(&format!("ip-a-{i}"), &secret_a, "alice", &verifier)
             .unwrap();
     }
     assert!(matches!(
-        fault_of(authority.prepare_password_change("ip-a-extra", &secret_a, "alice", 16)),
+        fault_of(authority.set_password("ip-a-extra", &secret_a, "alice", &verifier)),
         Fault::RateLimited { retry_after: 60 }
     ));
 
     // Exhaust the remaining global password-change burst (60 total; 5 spent above).
     let mut spent = 5;
     for acct_idx in 3..=20u8 {
-        let (_, secret) =
-            seed_password_account(&mut authority, acct_idx, &format!("user{acct_idx}"), &hash);
+        let (_, secret) = seed_password_account(
+            &mut authority,
+            acct_idx,
+            &format!("user{acct_idx}"),
+            &verifier,
+        );
         for attempt in 0..5 {
             let source = format!("global-{acct_idx}-{attempt}");
             let result =
-                authority.prepare_password_change(&source, &secret, &format!("user{acct_idx}"), 16);
+                authority.set_password(&source, &secret, &format!("user{acct_idx}"), &verifier);
             if spent < 60 {
                 result.unwrap();
                 spent += 1;
             } else {
                 // Global exhaustion must not drain bob's untouched source or account bucket.
                 assert!(matches!(
-                    fault_of(authority.prepare_password_change(
-                        "innocent-ip",
-                        &secret_b,
-                        "bob",
-                        16
-                    )),
+                    fault_of(authority.set_password("innocent-ip", &secret_b, "bob", &verifier)),
                     Fault::RateLimited { retry_after: 1 }
                 ));
                 assert!(matches!(
@@ -212,7 +269,7 @@ fn password_change_limits_atomically_without_burning_global_on_invalid_input() {
                 for _ in 0..5 {
                     authority.environment.now += 1;
                     authority
-                        .prepare_password_change("innocent-ip", &secret_b, "bob", 16)
+                        .set_password("innocent-ip", &secret_b, "bob", &verifier)
                         .unwrap();
                 }
                 return;
@@ -223,19 +280,20 @@ fn password_change_limits_atomically_without_burning_global_on_invalid_input() {
 }
 
 #[test]
-fn account_login_throttles_atomically_and_hides_block_status_until_verified() {
+fn account_login_isolates_unknown_usernames_and_hides_block_status_until_verified() {
     let mut authority = fixture();
+    let admin_verifier = test_verifier("admin password");
     let admin = authority
-        .complete_initialization("init", "init", "admin", fast_hash_fixture())
+        .initialize_admin("init", "init", "admin", &admin_verifier)
         .unwrap();
-    let hash = fast_hash_fixture();
-    let (alice_id, _) = seed_password_account(&mut authority, 1, "alice", &hash);
-    let (_, _) = seed_password_account(&mut authority, 2, "bob", &hash);
+    let verifier = test_verifier("correct horse battery");
+    let wrong = test_verifier("wrong password");
+    let (alice_id, _) = seed_password_account(&mut authority, 1, "alice", &verifier);
 
     // Unknown usernames deny immediately without creating per-account or global throttle rows.
     for i in 0..10 {
         assert!(matches!(
-            fault_of(authority.begin_account_login("probe-ip", &format!("missing{i}"))),
+            fault_of(authority.login("probe-ip", &format!("missing{i}"), &wrong)),
             Fault::Denied { reason } if reason == "credentials"
         ));
     }
@@ -256,11 +314,11 @@ fn account_login_throttles_atomically_and_hides_block_status_until_verified() {
         0
     );
     assert!(matches!(
-        fault_of(authority.begin_account_login("probe-ip", "alice")),
+        fault_of(authority.login("probe-ip", "alice", &verifier)),
         Fault::RateLimited { retry_after: 60 }
     ));
 
-    // Blocking alice must not be leaked during begin_account_login before password verification.
+    // Blocking alice stays hidden on wrong password and is revealed only after the verifier matches.
     authority
         .block(
             &admin,
@@ -270,34 +328,31 @@ fn account_login_throttles_atomically_and_hides_block_status_until_verified() {
             },
         )
         .unwrap();
-    let blocked_challenge = authority
-        .begin_account_login("blocked-probe", "alice")
-        .unwrap();
     assert!(matches!(
-        fault_of(authority.complete_account_login(
-            blocked_challenge.account,
-            blocked_challenge.password.fingerprint(),
-        )),
+        fault_of(authority.login("blocked-probe-1", "alice", &wrong)),
+        Fault::Denied { reason } if reason == "credentials"
+    ));
+    assert!(matches!(
+        fault_of(authority.login("blocked-probe-2", "alice", &verifier)),
         Fault::Denied { reason } if reason == "account_blocked"
     ));
-    authority
-        .block(
-            &admin,
-            Block::Account {
-                id: alice_id,
-                blocked: false,
-            },
-        )
-        .unwrap();
+}
 
-    // Distributed IPs targeting alice hit the per-account limit after 10 total attempts (1 above + 9 below).
-    for i in 0..9 {
+#[test]
+fn account_login_enforces_account_and_global_buckets_atomically() {
+    let mut authority = fixture();
+    let verifier = test_verifier("correct horse battery");
+    seed_password_account(&mut authority, 1, "alice", &verifier);
+    seed_password_account(&mut authority, 2, "bob", &verifier);
+
+    // Distributed IPs targeting alice hit the per-account limit after 10 attempts.
+    for i in 0..10 {
         authority
-            .begin_account_login(&format!("dist-a-{i}"), "alice")
+            .login(&format!("dist-a-{i}"), "alice", &verifier)
             .unwrap();
     }
     assert!(matches!(
-        fault_of(authority.begin_account_login("dist-a-extra", "alice")),
+        fault_of(authority.login("dist-a-extra", "alice", &verifier)),
         Fault::RateLimited { retry_after: 60 }
     ));
 
@@ -305,17 +360,17 @@ fn account_login_throttles_atomically_and_hides_block_status_until_verified() {
     let mut spent = 10;
     for acct_idx in 3..=16u8 {
         let name = format!("member{acct_idx}");
-        seed_password_account(&mut authority, acct_idx, &name, &hash);
+        seed_password_account(&mut authority, acct_idx, &name, &verifier);
         for attempt in 0..10 {
             let source = format!("login-global-{acct_idx}-{attempt}");
-            let result = authority.begin_account_login(&source, &name);
+            let result = authority.login(&source, &name, &verifier);
             if spent < 120 {
                 result.unwrap();
                 spent += 1;
             } else {
                 // Global exhaustion must not drain bob's untouched source or account bucket.
                 assert!(matches!(
-                    fault_of(authority.begin_account_login("bob-ip", "bob")),
+                    fault_of(authority.login("bob-ip", "bob", &verifier)),
                     Fault::RateLimited { retry_after: 1 }
                 ));
                 assert!(matches!(
@@ -324,7 +379,7 @@ fn account_login_throttles_atomically_and_hides_block_status_until_verified() {
                 ));
                 for _ in 0..10 {
                     authority.environment.now += 1;
-                    authority.begin_account_login("bob-ip", "bob").unwrap();
+                    authority.login("bob-ip", "bob", &verifier).unwrap();
                 }
                 return;
             }
@@ -334,18 +389,19 @@ fn account_login_throttles_atomically_and_hides_block_status_until_verified() {
 }
 
 #[test]
-fn admin_login_isolates_unknown_usernames_enforces_limits_and_rejects_stale_verifiers() {
+fn admin_login_isolates_unknown_usernames_and_enforces_limits() {
     let mut authority = fixture();
-    let hash = fast_hash_fixture();
+    let verifier = test_verifier("correct horse battery");
+    let wrong = test_verifier("wrong admin password");
     let admin_session = authority
-        .complete_initialization("init", "init", "admin", hash)
+        .initialize_admin("init", "init", "admin", &verifier)
         .unwrap();
     authority.require_admin(&admin_session).unwrap();
 
     // Wrong admin username spends only source budget, never the global admin bucket.
     for _ in 0..10 {
         assert!(matches!(
-            fault_of(authority.begin_admin_login("wrong-user-ip", "not-admin")),
+            fault_of(authority.admin_login("wrong-user-ip", "not-admin", &verifier)),
             Fault::Denied { reason } if reason == "credentials"
         ));
     }
@@ -358,85 +414,54 @@ fn admin_login_isolates_unknown_usernames_enforces_limits_and_rejects_stale_veri
         0
     );
     assert!(matches!(
-        fault_of(authority.begin_admin_login("wrong-user-ip", "admin")),
+        fault_of(authority.admin_login("wrong-user-ip", "admin", &verifier)),
         Fault::RateLimited { retry_after: 60 }
     ));
 
-    // Wrong admin password digest is refused in Phase 2.
+    // Wrong admin verifier is denied while consuming attempt capacity.
     assert!(matches!(
-        fault_of(authority.complete_admin_login([0; 32])),
+        fault_of(authority.admin_login("operator-ip", "admin", &wrong)),
         Fault::Denied { reason } if reason == "credentials"
     ));
 
-    // Successful two-phase admin login works through the helper.
+    // Successful admin login issues a valid session.
     let logged_in = authority
-        .admin_login("operator-ip", "admin", "correct horse battery")
+        .admin_login("operator-ip", "admin", &verifier)
         .unwrap();
     authority.require_admin(&logged_in).unwrap();
 
-    // Exhaust source bucket (9 remaining after the 1 login above).
-    for _ in 0..9 {
-        authority.begin_admin_login("operator-ip", "admin").unwrap();
+    // Exhaust source bucket (8 remaining after the 2 attempts above).
+    for _ in 0..8 {
+        authority
+            .admin_login("operator-ip", "admin", &verifier)
+            .unwrap();
     }
     assert!(matches!(
-        fault_of(authority.begin_admin_login("operator-ip", "admin")),
+        fault_of(authority.admin_login("operator-ip", "admin", &verifier)),
         Fault::RateLimited { retry_after: 60 }
     ));
 
     // Exhaust remaining global admin login burst (30 total; 10 spent above).
     for i in 0..20 {
         authority
-            .begin_admin_login(&format!("bot-{i}"), "admin")
+            .admin_login(&format!("bot-{i}"), "admin", &verifier)
             .unwrap();
     }
     // Global exhaustion must not drain a fresh operator IP's source bucket.
     assert!(matches!(
-        fault_of(authority.begin_admin_login("fresh-op", "admin")),
+        fault_of(authority.admin_login("fresh-op", "admin", &verifier)),
         Fault::RateLimited { retry_after: 2 }
     ));
     for _ in 0..10 {
         authority.environment.now += 2;
-        authority.begin_admin_login("fresh-op", "admin").unwrap();
+        authority
+            .admin_login("fresh-op", "admin", &verifier)
+            .unwrap();
     }
 }
 
 #[test]
-fn login_completion_rejects_password_changes_and_account_blocks_after_edge_verify() {
-    let mut authority = fixture();
-    let admin = authority
-        .complete_initialization("init", "init", "admin", fast_hash_fixture())
-        .unwrap();
-    let hash_a = fast_hash_fixture();
-    let hash_b = HashedPassword::hash("second valid password", &[8; PASSWORD_SALT_BYTES]).unwrap();
-    let (account, secret) = seed_password_account(&mut authority, 1, "alice", &hash_a);
-
-    let challenge = authority.begin_account_login("ip-1", "alice").unwrap();
-    authority
-        .commit_password_change(&secret, "alice", hash_b, Some(hash_a.fingerprint()))
-        .unwrap();
-    assert!(matches!(
-        fault_of(authority.complete_account_login(challenge.account, challenge.password.fingerprint())),
-        Fault::Denied { reason } if reason == "credentials"
-    ));
-
-    let fresh = authority.begin_account_login("ip-2", "alice").unwrap();
-    authority
-        .block(
-            &admin,
-            Block::Account {
-                id: account,
-                blocked: true,
-            },
-        )
-        .unwrap();
-    assert!(matches!(
-        fault_of(authority.complete_account_login(fresh.account, fresh.password.fingerprint())),
-        Fault::Denied { reason } if reason == "account_blocked"
-    ));
-}
-
-#[test]
-fn password_registration_prepare_keeps_valid_proof_for_commit_and_handles_retries() {
+fn password_registration_consumes_pow_proof_atomically_and_handles_retries() {
     let mut authority = fixture();
     let settings = Settings {
         registration: RegistrationPolicy::ProofOfWork,
@@ -446,14 +471,13 @@ fn password_registration_prepare_keeps_valid_proof_for_commit_and_handles_retrie
     save(&mut authority.store, "settings", &settings).unwrap();
 
     let base = registration(4);
-    let mut prepare = PasswordRegistrationPrepare {
-        client_secret: base.client_secret.clone(),
-        challenge: None,
-        solution: None,
-        username: "carol".into(),
-        password_len: 21,
+    let verifier = test_verifier("correct horse battery");
+    let mut request = Registration {
+        username: Some("carol".into()),
+        password_verifier: Some(verifier),
+        ..base
     };
-    let challenge = match fault_of(authority.prepare_password_registration("src", &prepare)) {
+    let challenge = match fault_of(authority.register("src", request.clone())) {
         Fault::Verification { challenge } => challenge,
         other => panic!("expected work challenge, got {other:?}"),
     };
@@ -467,43 +491,15 @@ fn password_registration_prepare_keeps_valid_proof_for_commit_and_handles_retrie
             digest[0].leading_zeros() >= u32::from(challenge.bits)
         })
         .unwrap();
-    prepare.challenge = Some(challenge.id.clone());
-    prepare.solution = Some(solution.clone());
+    request.challenge = Some(challenge.id);
+    request.solution = Some(solution);
 
-    assert!(matches!(
-        authority
-            .prepare_password_registration("src", &prepare)
-            .unwrap(),
-        PasswordRegistrationPreparation::Ready
-    ));
+    let created = authority.register("src", request.clone()).unwrap();
+    let retried = authority.register("src", request).unwrap();
+    assert_eq!(retried.account, created.account);
+    assert_eq!(retried.credential, created.credential);
 
-    // Commit consumes the preserved proof atomically without re-hashing inside DO.
-    let created = authority
-        .register(
-            "src",
-            Registration {
-                client_secret: base.client_secret,
-                challenge: Some(challenge.id),
-                solution: Some(solution),
-                username: Some("carol".into()),
-                password: Some(fast_hash_fixture()),
-            },
-        )
-        .unwrap();
-
-    // Idempotent retry short-circuits with Existing without running edge Argon2.
-    match authority
-        .prepare_password_registration("src", &prepare)
-        .unwrap()
-    {
-        PasswordRegistrationPreparation::Existing { session } => {
-            assert_eq!(session.account, created.account);
-            assert_eq!(session.credential, created.credential);
-        }
-        PasswordRegistrationPreparation::Ready => panic!("expected idempotent Existing session"),
-    }
-
-    // Mismatched username/password pair in direct register is rejected.
+    // Mismatched username/verifier pair in register is rejected.
     let mut mismatched = registration(5);
     mismatched.username = Some("orphan".into());
     assert!(matches!(

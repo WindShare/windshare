@@ -6,17 +6,22 @@ console in one SQLite Durable Object. Clients and nodes use `https://api.ourworl
 
 ## Deploy
 
-Generate the signing identity and the one-time administrator link on the operator machine:
+Generate the signing identity, password pepper, and one-time administrator link on the operator machine:
 
 ```text
 cargo run --manifest-path relay-rust/Cargo.toml -p windshare-network-authority --bin network-authority-keys -- <private-directory> 1
+python scripts/deploy/network-authority.py --prepare-pepper <private-directory>/password.pepper
 python scripts/deploy/network-authority.py --api-host <api-host> --prepare-initialization <private-directory>/initialize.token
 ```
 
 In GitHub Environment `network-authority`, set variables `AUTHORITY_API_HOST`,
 `AUTHORITY_WORKER_NAME`, `AUTHORITY_ALLOWED_ORIGINS` and `AUTHORITY_TRUST`
 (the entire public `trust-1.json`). Store `online-1.seed` as secret
-`AUTHORITY_SIGNING_SEED` and the saved token as `INITIALIZATION_TOKEN`.
+`AUTHORITY_SIGNING_SEED`, `initialize.token` as `INITIALIZATION_TOKEN`, and
+`password.pepper` as `PASSWORD_PEPPER`. Back up `PASSWORD_PEPPER` offline: it
+keys every stored password MAC in SQLite, so losing or overwriting it invalidates
+all account and administrator passwords. To rotate peppers without lockouts,
+prepend a new entry while keeping previous entries (`v2:<new-key>,v1:<old-key>`).
 Provide deployment secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
 For split DNS also set `AUTHORITY_ORIGIN_HOST`, `AUTHORITY_ZONE` and
 `AUTHORITY_TRUSTED_PROXY_IPS`. Set `DIRECTORY_KV_ID` to the shared frontend KV namespace, `DIRECTORY_CERTIFICATE` to the offline-root-signed directory certificate JSON, and secret `DIRECTORY_SIGNING_SEED` to its private key (the generated PEM file or an unpadded base64url Ed25519 seed). Use the [directory key ceremony](../../../deploy/network/README.md) for this separate signing generation.

@@ -5,14 +5,13 @@
 mod device_login;
 mod edge;
 mod fleet;
-mod internal_routes;
 mod mail;
-mod passwords;
 mod routes;
 mod storage;
 mod telemetry;
 use crate::{
-    Authority, Environment, Fault, NodeLoadReport, Signing, public_blocks::PublicBlockFeed,
+    Authority, Environment, Fault, NodeLoadReport, PepperRing, Signing,
+    public_blocks::PublicBlockFeed,
 };
 use futures_util::StreamExt;
 use std::{
@@ -41,9 +40,10 @@ async fn read_body(request: &mut Request) -> Result<Option<Vec<u8>>> {
     }
     Ok(Some(bytes))
 }
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct WorkerEnvironment {
     registration_email_configured: bool,
+    peppers: PepperRing,
 }
 
 impl Environment for WorkerEnvironment {
@@ -52,6 +52,9 @@ impl Environment for WorkerEnvironment {
     }
     fn registration_email_configured(&self) -> bool {
         self.registration_email_configured
+    }
+    fn password_peppers(&self) -> &PepperRing {
+        &self.peppers
     }
 
     fn random<const N: usize>(&mut self) -> anyhow::Result<[u8; N]> {
@@ -65,6 +68,7 @@ pub struct NetworkAuthority {
     state: State,
     env: Env,
     signing: OnceCell<Signing>,
+    peppers: OnceCell<PepperRing>,
     schema_ready: Cell<bool>,
     public_blocks: Rc<RefCell<PublicBlockFeed>>,
     publishing: futures_util::lock::Mutex<()>,
@@ -101,18 +105,36 @@ impl NetworkAuthority {
         Ok(self.signing.get_or_init(|| signing).clone())
     }
 
+    pub(super) fn peppers(&self) -> anyhow::Result<PepperRing> {
+        if let Some(peppers) = self.peppers.get() {
+            return Ok(peppers.clone());
+        }
+        let peppers = PepperRing::parse(&self.env.secret("PASSWORD_PEPPER")?.to_string())?;
+        tracing::debug!(
+            event = "authority_password_pepper_loaded",
+            active = peppers.active_id(),
+            count = peppers.len()
+        );
+        Ok(self.peppers.get_or_init(|| peppers).clone())
+    }
+
     // Keep live isolate load state synchronized across every DO transaction so
     // uncheckpointed node heartbeats are never lost between HTTP entry points.
     fn transact<T: 'static>(
         &self,
-        environment: WorkerEnvironment,
+        registration_email_configured: bool,
         action: impl FnOnce(&mut Authority<Database, WorkerEnvironment>, &Env) -> anyhow::Result<T>
         + 'static,
     ) -> anyhow::Result<T> {
         let signing = self.signing()?;
+        let peppers = self.peppers()?;
         let database = self.database()?;
         let env = self.env.clone();
         let loads = self.node_loads.borrow().clone();
+        let environment = WorkerEnvironment {
+            registration_email_configured,
+            peppers,
+        };
         let (value, updated_loads) = storage::transaction(&self.state, move || {
             let mut authority = Authority::new(database, environment, signing)?;
             authority.set_live_loads(loads);
@@ -130,6 +152,7 @@ impl DurableObject for NetworkAuthority {
             state,
             env,
             signing: OnceCell::new(),
+            peppers: OnceCell::new(),
             schema_ready: Cell::new(false),
             public_blocks: Rc::default(),
             node_loads: Rc::default(),
@@ -157,11 +180,9 @@ impl DurableObject for NetworkAuthority {
             _ => {}
         }
         let context = routes::Context::new(&request, &self.env)?;
-        let environment = WorkerEnvironment {
-            registration_email_configured: mail::Webhook::configured(&self.env).is_some(),
-        };
+        let registration_email_configured = mail::Webhook::configured(&self.env).is_some();
         let public_blocks = self.public_blocks.clone();
-        match self.transact(environment, move |authority, _| {
+        match self.transact(registration_email_configured, move |authority, _| {
             match routes::dispatch(authority, context, &bytes, &mut public_blocks.borrow_mut()) {
                 Ok(response) => Ok(response),
                 Err(error) => {

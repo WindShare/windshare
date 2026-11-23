@@ -17,6 +17,8 @@ CRATE = ROOT / "relay-rust/crates/network-authority"
 WRANGLER = ROOT / "relay-rust/crates/relay-cloudflare/node_modules/wrangler/bin/wrangler.js"
 HOST = re.compile(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,62}\Z")
 WORKER = re.compile(r"[a-z0-9][a-z0-9-]{0,62}\Z")
+PEPPER_ID = re.compile(r"[a-z0-9_-]{1,16}\Z")
+PEPPER_KEY = re.compile(r"[A-Za-z0-9_-]{43}\Z")
 
 
 def https_origin(address):
@@ -48,6 +50,40 @@ def verify_release_authority(release, api, root):
         )
 
 
+def validate_password_pepper(value):
+    trimmed = value.strip()
+    if not trimmed:
+        raise ValueError("A persisted PASSWORD_PEPPER ring is required")
+    seen = set()
+    normalized = []
+    for part in trimmed.split(","):
+        entry = part.strip()
+        pepper_id, sep, encoded = entry.partition(":")
+        if not sep or not PEPPER_ID.fullmatch(pepper_id):
+            raise ValueError("PASSWORD_PEPPER entries must use <id>:<base64url> format")
+        if pepper_id in seen:
+            raise ValueError(f"Duplicate PASSWORD_PEPPER id: {pepper_id}")
+        if not PEPPER_KEY.fullmatch(encoded):
+            raise ValueError(f"PASSWORD_PEPPER key for {pepper_id} must be 32-byte unpadded base64url")
+        raw = base64.urlsafe_b64decode(encoded + "=")
+        if len(raw) != 32 or base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=") != encoded or not any(raw):
+            raise ValueError(f"Invalid PASSWORD_PEPPER key for {pepper_id}")
+        seen.add(pepper_id)
+        normalized.append(f"{pepper_id}:{encoded}")
+    return ",".join(normalized)
+
+
+def prepare_pepper(path):
+    if os.environ.get("CI"):
+        raise ValueError("Prepare the password pepper on the operator machine")
+    if not path.exists():
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as output:
+            output.write(f"v1:{secrets.token_urlsafe(32)}")
+    validate_password_pepper(path.read_text(encoding="utf-8"))
+    print(f"Password pepper stored at {path}. Back it up offline; losing it invalidates stored passwords.")
+
+
 def prepare_token(path, host):
     if os.environ.get("CI"):
         raise ValueError("Prepare the administrator link on the operator machine")
@@ -77,6 +113,11 @@ def directory_seed(value):
 
 
 def deploy(args):
+    if getattr(args, "prepare_pepper", None):
+        prepare_pepper(args.prepare_pepper)
+        return
+    if not args.api_host:
+        raise ValueError("--api-host or AUTHORITY_API_HOST is required")
     host = args.api_host
     api = https_origin("https://" + host)
     if args.prepare_initialization:
@@ -99,6 +140,9 @@ def deploy(args):
     token = args.initialization_token.read_text(encoding="utf-8").strip() if args.initialization_token else os.environ.get("INITIALIZATION_TOKEN", "").strip()
     if not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", token):
         raise ValueError("A persisted initialization token is required")
+    pepper_arg = getattr(args, "password_pepper", None)
+    raw_pepper = pepper_arg.read_text(encoding="utf-8") if pepper_arg else os.environ.get("PASSWORD_PEPPER", "")
+    pepper = validate_password_pepper(raw_pepper)
     origins = [https_origin(v.strip()) for v in args.allowed_origins.split(",") if v.strip()]
     proxies = [str(ipaddress.ip_address(v.strip())) for v in args.trusted_proxy_ips.split(",") if v.strip()]
     config = (CRATE / "wrangler.toml").read_text(encoding="utf-8")
@@ -108,7 +152,11 @@ def deploy(args):
         config += "\n[[routes]]\npattern = " + json.dumps(host + "/*") + "\nzone_name = " + json.dumps(args.zone) + "\n"
     values = {"AUTHORITY_ROOT": trust["root"], "AUTHORITY_CERTIFICATE": trust["certificate"], "API_ORIGIN": api,
               "ALLOWED_ORIGINS": ",".join(dict.fromkeys([api, *origins])), "TRUSTED_PROXY_IPS": ",".join(proxies)}
-    secrets_to_upload = {"AUTHORITY_SIGNING_SEED": seed, "INITIALIZATION_TOKEN": token}
+    secrets_to_upload = {
+        "AUTHORITY_SIGNING_SEED": seed,
+        "INITIALIZATION_TOKEN": token,
+        "PASSWORD_PEPPER": pepper,
+    }
     maintenance = os.environ.get("FLEET_MAINTENANCE_TOKEN", "").strip()
     if maintenance:
         if not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", maintenance):
@@ -168,7 +216,7 @@ def deploy(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--api-host", default=os.environ.get("AUTHORITY_API_HOST"), required=not os.environ.get("AUTHORITY_API_HOST"))
+    parser.add_argument("--api-host", default=os.environ.get("AUTHORITY_API_HOST"))
     parser.add_argument("--worker-name", default=os.environ.get("AUTHORITY_WORKER_NAME") or "windshare-network-authority")
     parser.add_argument("--origin-host", default=os.environ.get("AUTHORITY_ORIGIN_HOST"))
     parser.add_argument("--zone", default=os.environ.get("AUTHORITY_ZONE"))
@@ -177,7 +225,9 @@ def main():
     parser.add_argument("--trust", type=Path)
     parser.add_argument("--online-seed", type=Path)
     parser.add_argument("--initialization-token", type=Path)
+    parser.add_argument("--password-pepper", type=Path)
     parser.add_argument("--prepare-initialization", type=Path)
+    parser.add_argument("--prepare-pepper", type=Path)
     parser.add_argument("--network-release", type=Path)
     deploy(parser.parse_args())
 

@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { randomBytes, sign } from 'node:crypto';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
-import { fixture } from './local-worker.mjs';
+import { derivePasswordVerifier, fixture } from './local-worker.mjs';
 
-test('the Worker runs password hashing and rate limits across edge and Durable Object boundaries', async t => {
+test('the Worker verifies client-derived password verifiers atomically inside the Durable Object', async t => {
   const { worker, mf, trust, nodeKey, node, activeNodeKey, activeNode, requests, mirrors, enrollment } = await fixture(t, {}, { activeNode: true });
   // Hashed console bundles are immutable while HTML entrypoints remain uncached.
   const consolePage = await worker.fetch('https://localhost/console');
@@ -22,9 +22,7 @@ test('the Worker runs password hashing and rate limits across edge and Durable O
     '/internal/fleet/stage',
     '/internal/fleet/tick',
     '/internal/accounts/login/complete',
-    '/internal/accounts/password/commit',
     '/internal/admin/login/complete',
-    '/internal/admin/password/commit',
   ]) {
     const blocked = await worker.fetch('https://localhost' + internalPath, {
       method: 'POST',
@@ -54,20 +52,17 @@ test('the Worker runs password hashing and rate limits across edge and Durable O
   const namespace = await mf.getDurableObjectNamespace('AUTHORITY', 'authority');
   const object = namespace.get(namespace.idFromName('network-authority-v1'));
   const publicURL = 'https://localhost/.well-known/windshare-network';
-  // A different loopback origin passes Miniflare's host guard but is outside the console's allowed origins.
   const preflight = await worker.fetch(publicURL, { method: 'OPTIONS', headers: { Origin: 'http://127.0.0.1:9090' } });
   assert.equal(preflight.status, 204, await preflight.text());
   assert.equal(preflight.headers.get('access-control-allow-origin'), '*');
   const cold = await worker.fetch(publicURL, { method: 'HEAD' });
   assert.equal(cold.headers.get('x-content-type-options'), 'nosniff');
   assert.equal(await cold.text(), '');
-  // A provisioned release can outlive its trust window in an old checkout.
   const release = JSON.parse(await readFile(new URL('../../../../deploy/network/release.json', import.meta.url)));
   const decode = raw => JSON.parse(Buffer.from(raw, 'base64url'));
   const payload = decode(release.snapshot.payload), grant = decode(release.snapshot.certificate.payload);
   const usable = Date.now() + 300_000 >= Date.parse(payload.issued_at) && Date.now() < Math.min(Date.parse(grant.expires_at), Date.parse(payload.expires_at) + 7 * 86400_000);
   assert.equal(cold.status, usable ? 200 : 503);
-  // Unknown paths under fleet prefixes return 404 without entering fleet dispatch or directory import.
   for (const unknownPath of ['/v1/vantage/unknown', '/v1/maintenance/unknown']) {
     const unknown = await worker.fetch('https://localhost' + unknownPath, {
       method: 'POST',
@@ -104,26 +99,37 @@ test('the Worker runs password hashing and rate limits across edge and Durable O
   if (usable) assert.deepEqual(await directory.json(), tickBody);
   else assert.equal(directory.headers.get('cache-control'), 'no-store');
 
-  // Two-phase admin initialize and login.
-  const operator = { username: 'operator', password: 'Operator-Password-2026!' };
+  // Single-transaction admin initialize, login, console username, and password rotation.
+  const operatorVerifier = derivePasswordVerifier('admin', 'operator', 'Operator-Password-2026!');
+  const wrongAdminVerifier = derivePasswordVerifier('admin', 'operator', 'wrong-password-attempt');
+  const rotatedAdminVerifier = derivePasswordVerifier('admin', 'operator', 'Operator-Rotated-Password-2026!');
+  const operator = { username: 'operator', password_verifier: operatorVerifier };
+  await call('/v1/admin/initialize', {
+    username: 'operator', password: 'Operator-Password-2026!', token: 'local-initialization-token',
+  }, { status: 400 });
   const initialized = await call('/v1/admin/initialize', { ...operator, token: 'local-initialization-token' });
   adminCookie = initialized.response.headers.get('set-cookie').split(';')[0];
   csrf = initialized.value.csrf;
+  const consoleRes = await worker.fetch('https://localhost/v1/admin/console', {
+    headers: { Cookie: adminCookie },
+  });
+  assert.equal(consoleRes.status, 200);
+  assert.equal((await consoleRes.json()).username, 'operator');
+
   await call('/v1/admin/initialize', { ...operator, token: 'local-initialization-token' }, { status: 403 });
-  await call('/v1/admin/login', { username: operator.username, password: 'wrong-password-attempt' }, { status: 403 });
+  await call('/v1/admin/login', { username: operator.username, password_verifier: wrongAdminVerifier }, { status: 403 });
   const adminLogin = await call('/v1/admin/login', operator);
   const priorAdminCookie = adminCookie;
   adminCookie = adminLogin.response.headers.get('set-cookie').split(';')[0];
   csrf = adminLogin.value.csrf;
-  const rotatedAdmin = 'Operator-Rotated-Password-2026!';
   await call('/v1/admin/password', {
-    current_password: 'wrong-password-attempt', new_password: rotatedAdmin,
+    current_password_verifier: wrongAdminVerifier, new_password_verifier: rotatedAdminVerifier,
   }, { admin: true, status: 403 });
   await call('/v1/admin/password', {
-    current_password: operator.password, new_password: 'short',
+    current_password_verifier: operatorVerifier, new_password_verifier: 'malformed-verifier',
   }, { admin: true, status: 400 });
   const passwordChanged = await call('/v1/admin/password', {
-    current_password: operator.password, new_password: rotatedAdmin,
+    current_password_verifier: operatorVerifier, new_password_verifier: rotatedAdminVerifier,
   }, { admin: true });
   adminCookie = passwordChanged.response.headers.get('set-cookie').split(';')[0];
   csrf = passwordChanged.value.csrf;
@@ -132,52 +138,54 @@ test('the Worker runs password hashing and rate limits across edge and Durable O
   });
   assert.equal(staleConsole.status, 403);
   await call('/v1/admin/login', operator, { status: 403 });
-  const relogged = await call('/v1/admin/login', { ...operator, password: rotatedAdmin });
+  const relogged = await call('/v1/admin/login', { username: operator.username, password_verifier: rotatedAdminVerifier });
   adminCookie = relogged.response.headers.get('set-cookie').split(';')[0];
   csrf = relogged.value.csrf;
   const dismissed = await call('/v1/admin/reviews/dismiss', { count: 1000 }, { admin: true });
   assert.deepEqual(dismissed.value, []);
   await call('/v1/admin/reviews/dismiss', { count: 0 }, { admin: true, status: 400 });
 
-  // Password registration + idempotent retry + login + edge oversized password rejection.
+  // Password registration + idempotent retry + login + malformed verifier rejection.
   const secret = randomBytes(32).toString('base64url');
-  const firstPassword = 'Correct-Horse-Battery-1';
-  const secondPassword = 'Correct-Horse-Battery-2';
+  const firstVerifier = derivePasswordVerifier('account', 'alice', 'Correct-Horse-Battery-1');
+  const secondVerifier = derivePasswordVerifier('account', 'alice', 'Correct-Horse-Battery-2');
+  const wrongAccountVerifier = derivePasswordVerifier('account', 'alice', 'wrong-password-attempt');
   await call('/v1/accounts', { client_secret: secret, username: 'alice' }, { status: 400 });
+  await call('/v1/accounts', { client_secret: secret, username: 'alice', password: 'plaintext-rejected' }, { status: 400 });
   const created = (await call('/v1/accounts', {
-    client_secret: secret, username: 'alice', password: firstPassword,
+    client_secret: secret, username: 'alice', password_verifier: firstVerifier,
   }, { source: '198.51.100.10' })).value;
   const retried = (await call('/v1/accounts', {
-    client_secret: secret, username: 'alice', password: firstPassword,
+    client_secret: secret, username: 'alice', password_verifier: firstVerifier,
   }, { source: '198.51.100.10' })).value;
   assert.deepEqual(retried.account, created.account);
   assert.deepEqual(retried.credential, created.credential);
 
-  await call('/v1/accounts/login', { username: 'alice', password: 'a'.repeat(300) }, {
+  await call('/v1/accounts/login', { username: 'alice', password_verifier: 'not-a-32-byte-verifier' }, {
+    status: 400, source: '198.51.100.11',
+  });
+  await call('/v1/accounts/login', { username: 'alice', password_verifier: wrongAccountVerifier }, {
     status: 403, source: '198.51.100.11',
   });
-  await call('/v1/accounts/login', { username: 'alice', password: 'wrong-password-attempt' }, {
-    status: 403, source: '198.51.100.11',
-  });
-  const loggedIn = (await call('/v1/accounts/login', { username: 'alice', password: firstPassword }, {
+  const loggedIn = (await call('/v1/accounts/login', { username: 'alice', password_verifier: firstVerifier }, {
     source: '198.51.100.11',
   })).value;
   assert.deepEqual(loggedIn.account, created.account);
   assert.notDeepEqual(loggedIn.credential, created.credential);
 
-  // Blocked account status stays hidden until the password actually matches.
+  // Blocked account status stays hidden until the password verifier actually matches.
   await call('/v1/admin/blocks', { kind: 'account', id: created.account, blocked: true }, { admin: true });
-  const blockedWrong = await call('/v1/accounts/login', { username: 'alice', password: 'wrong-password-attempt' }, {
+  const blockedWrong = await call('/v1/accounts/login', { username: 'alice', password_verifier: wrongAccountVerifier }, {
     status: 403, source: '198.51.100.15',
   });
   assert.equal(blockedWrong.value.reason, 'credentials');
-  const blockedRight = await call('/v1/accounts/login', { username: 'alice', password: firstPassword }, {
+  const blockedRight = await call('/v1/accounts/login', { username: 'alice', password_verifier: firstVerifier }, {
     status: 403, source: '198.51.100.16',
   });
   assert.equal(blockedRight.value.reason, 'account_blocked');
   await call('/v1/admin/blocks', { kind: 'account', id: created.account, blocked: false }, { admin: true });
 
-  // Device login with password, then password A -> B -> A keeps old cookie invalidated.
+  // Device login with verifier, then password A -> B -> A keeps old cookie invalidated.
   assert.equal(requests.length, 0);
   await call('/v1/admin/nodes/discover', { url: enrollment.url }, { status: 403 });
   assert.equal(requests.length, 0);
@@ -195,7 +203,6 @@ test('the Worker runs password hashing and rate limits across edge and Durable O
     method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'https://localhost', Cookie: adminCookie, 'X-CSRF-Token': csrf },
     body: JSON.stringify({ node_key: enrollment.node_key, operation_id: replacement.operation_id, status: 'canary' }),
   });
-  // Matching mirrors reach the DO. This local Worker has no production directory signing seed.
   const matched = await promotion();
   assert.equal(matched.status, 503);
   assert.equal(await matched.text(), 'fleet temporarily unavailable');
@@ -217,17 +224,17 @@ test('the Worker runs password hashing and rate limits across edge and Durable O
   };
   const stagedInvitation = signInvitation(node, nodeKey, 'https://relay.example');
   const blocked = await call('/v1/device/approve', {
-    invitation: stagedInvitation, login: { username: 'alice', password: firstPassword },
+    invitation: stagedInvitation, login: { username: 'alice', password_verifier: firstVerifier },
   }, { source: '198.51.100.12', status: 403 });
   assert.equal(blocked.value.reason, 'node_unavailable');
   await call('/v1/admin/nodes/cancel', { node_key: enrollment.node_key, operation_id: replacement.operation_id }, { admin: true });
   const cancelled = await call('/v1/device/approve', {
-    invitation: stagedInvitation, login: { username: 'alice', password: firstPassword },
+    invitation: stagedInvitation, login: { username: 'alice', password_verifier: firstVerifier },
   }, { source: '198.51.100.12', status: 403 });
   assert.equal(cancelled.value.reason, 'node_unavailable');
   const invitation = signInvitation(activeNode, activeNodeKey, 'https://active.example');
   const approved = await call('/v1/device/approve', {
-    invitation, login: { username: 'alice', password: firstPassword },
+    invitation, login: { username: 'alice', password_verifier: firstVerifier },
   }, { source: '198.51.100.12' });
   const deviceCookie = approved.response.headers.get('set-cookie').split(';')[0];
   assert.match(deviceCookie, /^windshare_service_login=/);
@@ -235,26 +242,40 @@ test('the Worker runs password hashing and rate limits across edge and Durable O
     cookie: deviceCookie, source: '198.51.100.12',
   });
 
-  // Short password rejects at the edge without spending rate limits; A -> B -> A invalidates cookie.
-  await call('/v1/accounts/password', { username: 'alice', password: 'short' }, {
+  // Malformed verifier rejects without spending rate limits; A -> B -> A invalidates cookie.
+  await call('/v1/accounts/password', { username: 'alice', password_verifier: 'short' }, {
     secret, source: '198.51.100.20', status: 400,
   });
-  await call('/v1/accounts/password', { username: 'alice', password: secondPassword }, {
+  await call('/v1/accounts/password', { username: 'alice', password_verifier: secondVerifier }, {
     secret, source: '198.51.100.20',
   });
-  await call('/v1/accounts/password', { username: 'alice', password: firstPassword }, {
+  await call('/v1/accounts/password', { username: 'alice', password_verifier: firstVerifier }, {
     secret, source: '198.51.100.21',
   });
   await call('/v1/device/approve', { invitation, username: 'alice' }, {
     cookie: deviceCookie, status: 403, source: '198.51.100.12',
   });
   for (let i = 0; i < 3; i++) {
-    await call('/v1/accounts/password', { username: 'alice', password: secondPassword }, {
+    await call('/v1/accounts/password', { username: 'alice', password_verifier: secondVerifier }, {
       secret, source: `198.51.100.${30 + i}`,
     });
   }
-  const limited = await call('/v1/accounts/password', { username: 'alice', password: firstPassword }, {
+  const limited = await call('/v1/accounts/password', { username: 'alice', password_verifier: firstVerifier }, {
     secret, source: '198.51.100.40', status: 429,
   });
   assert.equal(limited.value.kind, 'rate_limited');
+});
+
+test('the Worker fails closed when PASSWORD_PEPPER is missing or malformed', async t => {
+  const { worker } = await fixture(t, { PASSWORD_PEPPER: '' });
+  const response = await worker.fetch('https://localhost/v1/admin/initialize', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: 'https://localhost' },
+    body: JSON.stringify({
+      username: 'operator',
+      password_verifier: Buffer.alloc(32, 1).toString('base64url'),
+      token: 'local-initialization-token',
+    }),
+  });
+  assert.equal(response.status, 503);
 });

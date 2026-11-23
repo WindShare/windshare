@@ -93,13 +93,16 @@ impl NetworkAuthority {
             .get("X-Authority-Source")?
             .unwrap_or_default();
         let signing = self.signing().map_err(failure)?;
+        let peppers = self.peppers().map_err(failure)?;
         let mut database = self.database().map_err(failure)?;
         let admission_store = database.clone();
         let environment = WorkerEnvironment {
             registration_email_configured: true,
+            peppers,
         };
+        let admission_env = environment.clone();
         let outcome = storage::transaction(&self.state, move || {
-            let mut authority = Authority::new(admission_store, environment, signing)?;
+            let mut authority = Authority::new(admission_store, admission_env, signing)?;
             // Expected admission refusals commit their limiter state.
             match authority.prepare_email(&source, verification, &email) {
                 Ok(value) => Ok(Ok(value)),

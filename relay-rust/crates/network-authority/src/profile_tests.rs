@@ -23,13 +23,12 @@ fn nickname_deadline_follows_the_account_across_logins_and_restarts() {
     );
     authority.environment.now += 1;
     assert_eq!(authority.set_nickname(&secret, "春风 🌱").unwrap(), profile);
+    let verifier = test_verifier("correct horse battery");
     let login = authority
-        .set_password("source", &secret, "alice", "correct horse battery")
+        .set_password("source", &secret, "alice", &verifier)
         .unwrap();
     assert_eq!(login.profile, profile);
-    let sibling = authority
-        .login("source", "alice", "correct horse battery")
-        .unwrap();
+    let sibling = authority.login("source", "alice", &verifier).unwrap();
     assert_eq!(first.account, sibling.account);
     let sibling_secret = sibling.credential_secret.unwrap();
     authority = Authority::new(authority.store, authority.environment, authority.signing).unwrap();
@@ -465,26 +464,12 @@ fn email_registration_recovers_existing_accounts_and_blocks_evasion() {
     assert_eq!(retry.account, recovered.account);
     assert_eq!(retry.credential, recovered.credential);
 
-    // Password registration refuses an already-bound canonical email at prepare and commit.
+    // Password registration refuses an already-bound canonical email atomically.
     let pw_request =
         verified_email_registration(&mut authority, "pw-ip", 4, "alice+pw@googlemail.com");
-    let prepare = PasswordRegistrationPrepare {
-        client_secret: pw_request.client_secret.clone(),
-        challenge: pw_request.challenge.clone(),
-        solution: pw_request.solution.clone(),
-        username: "newuser".into(),
-        password_len: 16,
-    };
-    assert!(matches!(
-        authority
-            .prepare_password_registration("pw-ip", &prepare)
-            .unwrap_err()
-            .downcast_ref::<Fault>(),
-        Some(Fault::Denied { reason }) if reason == "email_taken"
-    ));
     let pw_commit = Registration {
         username: Some("newuser".into()),
-        password: Some(authority.hash_password("correct horse battery").unwrap()),
+        password_verifier: Some(test_verifier("correct horse battery")),
         ..pw_request
     };
     assert!(matches!(

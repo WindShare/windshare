@@ -230,8 +230,9 @@ impl<R: Store, E: Environment> Authority<R, E> {
         let account_count = self.account_count()?;
         let email_configured = self.environment.registration_email_configured();
         let registration_mode = settings.registration.mode(account_count, email_configured);
+        let username = self.administrator_username()?;
         Ok(
-            serde_json::json!({"settings":settings,"account_count":account_count,
+            serde_json::json!({"username":username,"settings":settings,"account_count":account_count,
             "registration_mode":registration_mode,"email_configured":email_configured,
             "reviews":reviews,"node_page":self.node_page(None)?,
             "restrictions":self.blocks()?}),

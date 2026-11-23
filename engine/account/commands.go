@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/diagnostics"
+	"github.com/windshare/windshare/core/serviceauthority"
 )
 
 var (
@@ -60,6 +61,13 @@ func (service *Service) Login(ctx context.Context, username, password string) er
 	if service == nil {
 		return ErrNotConfigured
 	}
+	canonical, err := serviceauthority.NormalizeUsername(username)
+	if err != nil {
+		return &fault{Kind: "invalid"}
+	}
+	if !serviceauthority.ValidLoginPassword(password) {
+		return &fault{Kind: "denied", Reason: "credentials"}
+	}
 	if err := service.lockOperation(ctx); err != nil {
 		return err
 	}
@@ -68,11 +76,15 @@ func (service *Service) Login(ctx context.Context, username, password string) er
 	if err != nil {
 		return err
 	}
+	verifier, err := serviceauthority.DerivePasswordVerifier(serviceauthority.PasswordRoleAccount, canonical, password)
+	if err != nil {
+		return &fault{Kind: "invalid"}
+	}
 	var result session
 	if err := service.call(ctx, "/v1/accounts/login", "", struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-	}{username, password}, &result); err != nil {
+		Username         string `json:"username"`
+		PasswordVerifier string `json:"password_verifier"`
+	}{canonical, verifier}, &result); err != nil {
 		return err
 	}
 	return service.install(ctx, previous, result, true)
@@ -100,11 +112,19 @@ func (service *Service) editAccount(ctx context.Context, accountID string, submi
 
 func (service *Service) SetPassword(ctx context.Context, accountID, username, password string) error {
 	return service.editAccount(ctx, accountID, func(record Record) error {
+		canonical, err := serviceauthority.NormalizeUsername(username)
+		if err != nil || !serviceauthority.ValidNewPassword(password) {
+			return &fault{Kind: "invalid"}
+		}
+		verifier, err := serviceauthority.DerivePasswordVerifier(serviceauthority.PasswordRoleAccount, canonical, password)
+		if err != nil {
+			return &fault{Kind: "invalid"}
+		}
 		var result session
 		if err := service.call(ctx, "/v1/accounts/password", record.Credential.Secret, struct {
-			Username string `json:"username"`
-			Password string `json:"password"`
-		}{username, password}, &result); err != nil {
+			Username         string `json:"username"`
+			PasswordVerifier string `json:"password_verifier"`
+		}{canonical, verifier}, &result); err != nil {
 			return err
 		}
 		return service.install(ctx, record, result, false)

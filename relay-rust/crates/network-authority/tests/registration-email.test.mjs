@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { TEST_PASSWORD_PEPPER, derivePasswordVerifier } from './local-worker.mjs';
 
 const crate = fileURLToPath(new URL('../', import.meta.url));
 const { Miniflare, Log, LogLevel, convertV4MiniflareOptions } =
@@ -28,7 +29,8 @@ test('the Worker isolates registration email challenges while tracking retries',
       bindings: { AUTHORITY_ROOT: trust.root, AUTHORITY_CERTIFICATE: trust.certificate,
         AUTHORITY_SIGNING_SEED: (await readFile(join(keys, 'online-1.seed'), 'utf8')).trim(),
         EMAIL_WEBHOOK_URL: 'https://mail.test/send', EMAIL_WEBHOOK_TOKEN: 'local-mail-token',
-        INITIALIZATION_TOKEN: 'local-initialization-token' },
+        INITIALIZATION_TOKEN: 'local-initialization-token',
+        PASSWORD_PEPPER: TEST_PASSWORD_PEPPER },
       durableObjects: { AUTHORITY: { className: 'NetworkAuthority', useSQLite: true } },
       outboundService: async request => {
         assert.equal(request.url, 'https://mail.test/send');
@@ -51,7 +53,10 @@ test('the Worker isolates registration email challenges while tracking retries',
     assert.equal(response.status, status, JSON.stringify(value));
     return { response, value };
   }
-  const operator = { username: 'local-operator', password: 'Local-P2-validation-2026' };
+  const operator = {
+    username: 'local-operator',
+    password_verifier: derivePasswordVerifier('admin', 'local-operator', 'Local-P2-validation-2026'),
+  };
   const initialized = await call('/v1/admin/initialize', { ...operator, token: 'local-initialization-token' });
   cookie = initialized.response.headers.get('set-cookie').split(';')[0];
   const console = (await call('/v1/admin/console', undefined, { method: 'GET', admin: true })).value;

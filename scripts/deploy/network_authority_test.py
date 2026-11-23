@@ -19,10 +19,12 @@ def load_module():
 
 DEPLOY = load_module()
 VALID_TOKEN = "a" * 32
+VALID_PEPPER = "v1:" + "W" * 42 + "Q"
 DIRECTORY_ENV = {
     "DIRECTORY_KV_ID": "1" * 32,
     "DIRECTORY_CERTIFICATE": '{"generation":1}',
     "DIRECTORY_SIGNING_SEED": "A" * 43,
+    "PASSWORD_PEPPER": VALID_PEPPER,
 }
 
 
@@ -98,7 +100,9 @@ class DeployReleaseConsistencyTests(unittest.TestCase):
             trust=trust_path,
             online_seed=seed_path,
             initialization_token=token_path,
+            password_pepper=None,
             prepare_initialization=None,
+            prepare_pepper=None,
             network_release=release_path,
         )
         return crate, args
@@ -172,6 +176,39 @@ class DeployReleaseConsistencyTests(unittest.TestCase):
                 DEPLOY.deploy(args)
                 verify_release.assert_not_called()
                 self.assertIn("deploy", run.call_args.args[0])
+
+
+class PasswordPepperTests(unittest.TestCase):
+    def test_validates_single_and_rotated_pepper_rings(self):
+        v1 = "v1:" + "W" * 42 + "Q"
+        v2 = "v2:" + "X" * 42 + "Q"
+        self.assertEqual(DEPLOY.validate_password_pepper(f" {v2} , {v1} "), f"{v2},{v1}")
+        for bad in (
+            "",
+            "missing-colon",
+            f"BAD:{'W' * 42}Q",
+            f"{v1},{v1}",
+            "v1:short",
+            f"v1:{'A' * 43}",
+            f"v1:{'W' * 42}B",
+        ):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    DEPLOY.validate_password_pepper(bad)
+
+    def test_prepare_pepper_persists_once_and_refuses_ci(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "pepper.secret"
+            with patch.dict(os.environ, {}, clear=True), patch("builtins.print"):
+                DEPLOY.prepare_pepper(path)
+                first = path.read_text(encoding="utf-8")
+                self.assertTrue(first.startswith("v1:"))
+                self.assertEqual(DEPLOY.validate_password_pepper(first), first)
+                DEPLOY.prepare_pepper(path)
+                self.assertEqual(path.read_text(encoding="utf-8"), first)
+            with patch.dict(os.environ, {"CI": "true"}, clear=True):
+                with self.assertRaisesRegex(ValueError, "operator machine"):
+                    DEPLOY.prepare_pepper(path)
 
 
 if __name__ == "__main__":

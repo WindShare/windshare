@@ -1,9 +1,8 @@
 use crate::{
-    Account, Authority, Credential, Environment, Fault, HashedPassword, PasswordChallenge,
-    PasswordChangePreparation, PasswordRegistrationPreparation, PasswordRegistrationPrepare,
-    Profile, Rate, Registration, RegistrationPolicy, Session, Store,
+    Account, Authority, Credential, Environment, Fault, PASSWORD_SALT_BYTES, PasswordVerifier,
+    Profile, Rate, Registration, RegistrationPolicy, Session, Store, StoredPassword,
     admission::{AdmissionProof, throttle_key},
-    password::{invalid_credentials, valid_password_length},
+    password::invalid_credentials,
     profile::email_owner_key,
     store::{key, load, save},
 };
@@ -40,11 +39,6 @@ const PASSWORD_CHANGE_ACCOUNT_RATE: Rate = Rate {
 const PASSWORD_CHANGE_GLOBAL_RATE: Rate = Rate {
     burst: 60,
     refill_seconds: 1,
-};
-
-const PASSWORD_REGISTER_SOURCE_RATE: Rate = Rate {
-    burst: 10,
-    refill_seconds: 60,
 };
 
 #[derive(Clone, Copy)]
@@ -111,58 +105,6 @@ impl<R: Store, E: Environment> Authority<R, E> {
         Ok(())
     }
 
-    /// Validates admission and password-hashing budgets before the edge Worker runs Argon2.
-    ///
-    /// # Errors
-    /// Refuses malformed input, occupied usernames, rate-limited callers or unverified proofs.
-    pub fn prepare_password_registration(
-        &mut self,
-        source: &str,
-        request: &PasswordRegistrationPrepare,
-    ) -> Result<PasswordRegistrationPreparation> {
-        let attempt = RegistrationAttempt::from_secret(&request.client_secret)?;
-        if load::<Credential>(&self.store, &key("credential", attempt.digest()))?.is_some() {
-            return Ok(PasswordRegistrationPreparation::Existing {
-                session: Box::new(self.refresh(&request.client_secret)?),
-            });
-        }
-        let name = username(&request.username)?;
-        self.ensure_username_available(&name, None)?;
-        ensure!(valid_password_length(request.password_len), Fault::Invalid);
-        let settings = self.settings()?;
-        let account_count = self.account_count()?;
-        // Dropping the returned admission handle preserves valid proofs and creation
-        // quota for commit while still persisting failed proof attempts.
-        let preview = self.creation_admission(
-            source,
-            attempt,
-            AdmissionProof {
-                challenge: request.challenge.as_deref(),
-                solution: request.solution.as_deref(),
-            },
-            &settings,
-            account_count,
-        )?;
-        if let Some((_, canonical)) = preview.verified_email() {
-            self.ensure_email_available(canonical, None)?;
-        }
-        // Charge per-source and global password-hashing limits atomically so aborted
-        // or racing clients cannot trigger edge Argon2 without spending capacity.
-        self.throttle_all([
-            (
-                "account-password-register",
-                throttle_key("account-password-register", source.as_bytes()),
-                PASSWORD_REGISTER_SOURCE_RATE,
-            ),
-            (
-                "account-password-global",
-                throttle_key("account-password-global", b"global"),
-                PASSWORD_CHANGE_GLOBAL_RATE,
-            ),
-        ])?;
-        Ok(PasswordRegistrationPreparation::Ready)
-    }
-
     /// # Errors
     /// Refuses invalid or restricted creation requests; retries preserve existing credentials.
     pub fn register(&mut self, source: &str, request: Registration) -> Result<Session> {
@@ -173,7 +115,10 @@ impl<R: Store, E: Environment> Authority<R, E> {
             return self.refresh(&request.client_secret);
         }
         let name = request.username.as_deref().map(username).transpose()?;
-        ensure!(name.is_some() == request.password.is_some(), Fault::Invalid);
+        ensure!(
+            name.is_some() == request.password_verifier.is_some(),
+            Fault::Invalid
+        );
         if let Some(name) = &name {
             self.ensure_username_available(name, None)?;
         }
@@ -227,11 +172,22 @@ impl<R: Store, E: Environment> Authority<R, E> {
             "reserved account identity"
         );
         anyhow::ensure!(id != [0; 16], "account ID generator returned zero");
+        let password = match request.password_verifier {
+            Some(verifier) => {
+                let salt = self.environment.random::<PASSWORD_SALT_BYTES>()?;
+                Some(StoredPassword::seal(
+                    &verifier,
+                    salt,
+                    self.environment.password_peppers(),
+                ))
+            }
+            None => None,
+        };
         let account = Account {
             id,
             created_at: self.environment.now(),
             username: name.clone(),
-            password: request.password,
+            password,
             profile: Profile {
                 revision: u64::from(verified_email.is_some()),
                 email: verified_email.as_ref().map(|email| email.address.clone()),
@@ -273,12 +229,14 @@ impl<R: Store, E: Environment> Authority<R, E> {
         self.new_credential(id, request.client_secret)
     }
 
-    /// Enforces source, account and global login limits and loads the stored
-    /// verifier so Argon2 runs outside the singleton Durable Object.
-    ///
-    /// # Errors
-    /// Refuses rate-limited sources, malformed usernames, unknown accounts, and accounts without passwords.
-    pub fn begin_account_login(&mut self, source: &str, name: &str) -> Result<PasswordChallenge> {
+    /// Enforces login rate limits, verifies the client-derived password verifier,
+    /// and checks account restrictions only after the verifier matches.
+    pub(crate) fn verify_account_login(
+        &mut self,
+        source: &str,
+        name: &str,
+        verifier: &PasswordVerifier,
+    ) -> Result<Account> {
         self.check_throttle(
             "account-login",
             source.as_bytes(),
@@ -296,10 +254,8 @@ impl<R: Store, E: Environment> Authority<R, E> {
             )?;
             return Err(invalid_credentials().into());
         };
-        // Check account restriction only after edge password verification so
-        // unauthenticated callers cannot probe which usernames are blocked.
         let account = load::<Account>(&self.store, &key("account", &id))?.ok_or(Fault::Invalid)?;
-        let Some(password) = account.password else {
+        let Some(password) = account.password.as_ref() else {
             self.throttle(
                 source,
                 "account-login",
@@ -325,68 +281,52 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 ACCOUNT_LOGIN_GLOBAL_RATE,
             ),
         ])?;
-        Ok(PasswordChallenge {
-            account: id,
-            password,
-        })
+        if !password.verify(verifier, self.environment.password_peppers()) {
+            tracing::debug!(event = "account_login_denied", account = ?id);
+            return Err(invalid_credentials().into());
+        }
+        // Check account restriction only after password verification so
+        // unauthenticated callers cannot probe which usernames are blocked.
+        self.ensure_account(id)
     }
 
-    /// Issues a new credential after edge password verification, re-checking
-    /// that the account stayed unblocked and kept the same password verifier.
+    /// Authenticates an account password verifier and mints a fresh device credential.
     ///
     /// # Errors
-    /// Refuses blocked accounts or verifiers superseded during edge hashing.
-    pub fn complete_account_login(
+    /// Refuses rate-limited sources, malformed usernames, wrong credentials, or blocked accounts.
+    pub fn login(
         &mut self,
-        account_id: AccountId,
-        password_digest: [u8; 32],
+        source: &str,
+        name: &str,
+        verifier: &PasswordVerifier,
     ) -> Result<Session> {
-        let account = self.verified_account(account_id, password_digest)?;
+        let account = self.verify_account_login(source, name, verifier)?;
         let secret = URL_SAFE_NO_PAD.encode(self.environment.random::<32>()?);
         self.new_credential(account.id, secret)
     }
 
-    pub(crate) fn verified_account(
-        &self,
-        account_id: AccountId,
-        password_digest: [u8; 32],
-    ) -> Result<Account> {
-        let account = self.ensure_account(account_id)?;
-        if account
-            .password
-            .as_ref()
-            .is_none_or(|hash| hash.fingerprint() != password_digest)
-        {
-            tracing::warn!(event = "password_login_stale_verifier", account = ?account.id);
-            return Err(invalid_credentials().into());
-        }
-        Ok(account)
-    }
-
-    /// Enforces password-change limits and validates authentication and username
-    /// ownership before the edge Worker runs Argon2.
+    /// Sets or rotates the account username and password verifier atomically.
     ///
     /// # Errors
-    /// Refuses rate-limited callers, revoked credentials, invalid inputs or taken usernames.
-    pub fn prepare_password_change(
+    /// Refuses rate-limited callers, revoked credentials, invalid inputs, or taken usernames.
+    pub fn set_password(
         &mut self,
         source: &str,
         secret: &str,
         name: &str,
-        password_len: usize,
-    ) -> Result<PasswordChangePreparation> {
+        verifier: &PasswordVerifier,
+    ) -> Result<Session> {
         self.check_throttle(
             "account-password-source",
             source.as_bytes(),
             &PASSWORD_CHANGE_SOURCE_RATE,
         )?;
         let name = username(name)?;
-        ensure!(valid_password_length(password_len), Fault::Invalid);
-        let (credential, account) = match self.authenticate(secret) {
-            Ok(verified) => verified,
+        let (credential, mut account) = match self.authenticate(secret) {
+            Ok(authenticated) => authenticated,
             Err(error) => {
                 // Failed credentials spend only the caller's source bucket without
-                // touching account or global Argon2 capacity.
+                // touching account or global password-change capacity.
                 self.throttle(
                     source,
                     "account-password-source",
@@ -414,54 +354,24 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 PASSWORD_CHANGE_GLOBAL_RATE,
             ),
         ])?;
-        tracing::debug!(
-            event = "password_change_prepared",
-            account = ?account.id,
-            credential = ?credential.id
-        );
-        Ok(PasswordChangePreparation {
-            previous_verifier_digest: account.password.as_ref().map(HashedPassword::fingerprint),
-        })
-    }
-
-    /// Commits a pre-hashed password after re-checking credential liveness,
-    /// optimistic verifier version and username uniqueness.
-    ///
-    /// # Errors
-    /// Only a live credential can change its account login, concurrent credential
-    /// updates fail closed, and names remain unique.
-    pub fn commit_password_change(
-        &mut self,
-        secret: &str,
-        name: &str,
-        password: HashedPassword,
-        expected_previous_verifier: Option<[u8; 32]>,
-    ) -> Result<Session> {
-        let (credential, mut account) = self.authenticate(secret)?;
-        let current_digest = account.password.as_ref().map(HashedPassword::fingerprint);
-        if current_digest != expected_previous_verifier {
-            tracing::warn!(
-                event = "password_change_stale_verifier",
-                account = ?account.id,
-                credential = ?credential.id
-            );
-            return Err(Fault::Denied {
-                reason: "credentials_changed".into(),
-            }
-            .into());
-        }
-        let name = username(name)?;
-        self.ensure_username_available(&name, Some(account.id))?;
+        let salt = self.environment.random::<PASSWORD_SALT_BYTES>()?;
+        let sealed = StoredPassword::seal(verifier, salt, self.environment.password_peppers());
         if let Some(previous) = &account.username
             && previous != &name
         {
             self.store.delete(&format!("username/{previous}"))?;
         }
         save(&mut self.store, &format!("username/{name}"), &account.id)?;
+        let pepper_id = sealed.pepper_id().to_owned();
         account.username = Some(name);
-        account.password = Some(password);
+        account.password = Some(sealed);
         save(&mut self.store, &key("account", &account.id), &account)?;
-        tracing::info!(event="account_login_changed",account=?account.id,credential=?credential.id);
+        tracing::info!(
+            event = "account_login_changed",
+            account = ?account.id,
+            credential = ?credential.id,
+            pepper_id,
+        );
         self.refresh(secret)
     }
 

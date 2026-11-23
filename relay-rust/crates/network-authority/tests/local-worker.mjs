@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { createHash, createPublicKey, generateKeyPairSync, sign } from 'node:crypto';
+import { createHash, createPublicKey, generateKeyPairSync, pbkdf2Sync, sign } from 'node:crypto';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -10,6 +10,26 @@ import { fileURLToPath } from 'node:url';
 const crate = fileURLToPath(new URL('../', import.meta.url));
 const { Miniflare, Log, LogLevel, convertV4MiniflareOptions } =
   createRequire(new URL('../../relay-cloudflare/package.json', import.meta.url))('miniflare');
+
+const PASSWORD_DOMAINS = {
+  account: 'windshare-account-password-v1:',
+  admin: 'windshare-admin-password-v1:',
+};
+
+export const TEST_PASSWORD_PEPPER = 'v1:' + Buffer.alloc(32, 0x5a).toString('base64url');
+
+export function derivePasswordVerifier(role, username, password) {
+  const prefix = PASSWORD_DOMAINS[role];
+  if (!prefix) throw new RangeError('Unknown password role: ' + role);
+  const canonical = username.trim().toLowerCase();
+  return pbkdf2Sync(
+    Buffer.from(password, 'utf8'),
+    Buffer.from(prefix + canonical, 'utf8'),
+    600_000,
+    32,
+    'sha256',
+  ).toString('base64url');
+}
 
 export function signedDescriptor(host, nodeKey, node, overrides = {}) {
   const rawNode = Buffer.isBuffer(node) ? node : Buffer.from(node);
@@ -243,6 +263,7 @@ export async function fixture(
         AUTHORITY_CERTIFICATE: trust.certificate,
         AUTHORITY_SIGNING_SEED: (await readFile(join(keys, 'online-1.seed'), 'utf8')).trim(),
         INITIALIZATION_TOKEN: 'local-initialization-token',
+        PASSWORD_PEPPER: TEST_PASSWORD_PEPPER,
         ...extra,
       },
       durableObjects: { AUTHORITY: { className: useWrapper ? 'AuthorityFixture' : 'NetworkAuthority', useSQLite: true } },

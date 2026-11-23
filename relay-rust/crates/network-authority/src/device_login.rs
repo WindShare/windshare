@@ -1,12 +1,11 @@
 use crate::{
-    Account, Authority, Environment, Fault, HashedPassword, Node, PasswordChallenge, Store,
+    Account, Authority, Environment, Fault, Node, PasswordVerifier, Store, StoredPassword,
     store::{key, load},
 };
 use anyhow::{Result, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use windshare_relay_access::{
-    AccountId,
     device_login::{Approval, Invitation},
     trust,
 };
@@ -28,7 +27,7 @@ pub struct DeviceApproval {
     pub session: String,
 }
 
-fn session_domain(password: &HashedPassword) -> Vec<u8> {
+fn session_domain(password: &StoredPassword) -> Vec<u8> {
     // A password change invalidates browser consent without publishing a password verifier in the cookie.
     [SESSION_DOMAIN, password.fingerprint().as_slice()].concat()
 }
@@ -86,34 +85,20 @@ impl<R: Store, E: Environment> Authority<R, E> {
         (session.expires > self.environment.now()).then_some(account)
     }
 
-    /// Validates the device invitation and account login limits before the edge
-    /// Worker runs Argon2.
+    /// Validates the device invitation and account password verifier atomically,
+    /// then issues both the browser consent cookie and one-time device receipt.
     ///
     /// # Errors
-    /// Refuses invalid invitations, disabled nodes, rate-limited callers or unknown accounts.
-    pub fn begin_device_sign_in(
+    /// Refuses invalid invitations, disabled nodes, rate-limited callers, wrong credentials, or blocked accounts.
+    pub fn device_sign_in(
         &mut self,
         source: &str,
         invitation: &str,
         name: &str,
-    ) -> Result<PasswordChallenge> {
-        self.device_invitation(invitation)?;
-        self.begin_account_login(source, name)
-    }
-
-    /// Re-verifies the invitation and account verifier after edge password
-    /// matching, then issues both the browser consent cookie and device receipt.
-    ///
-    /// # Errors
-    /// Refuses expired invitations, disabled nodes, blocked accounts or stale verifiers.
-    pub fn complete_device_sign_in(
-        &mut self,
-        invitation: &str,
-        account_id: AccountId,
-        password_digest: [u8; 32],
+        verifier: &PasswordVerifier,
     ) -> Result<DeviceApproval> {
         let invite = self.device_invitation(invitation)?;
-        let account = self.verified_account(account_id, password_digest)?;
+        let account = self.verify_account_login(source, name, verifier)?;
         let session = self.sign_browser_session(&account)?;
         let approval = self.approve_device(&invite, &account)?;
         Ok(DeviceApproval {

@@ -90,18 +90,12 @@ fn email_requires_delivered_secret_and_password_setup_keeps_account_identity() {
     proof.solution = Some(secret);
     let session = authority.register("source", proof).unwrap();
     assert_eq!(session.profile.email.as_deref(), Some("alice@qq.com"));
+    let verifier = test_verifier("correct horse battery");
     let updated = authority
-        .set_password(
-            "source",
-            &request.client_secret,
-            "Alice",
-            "correct horse battery",
-        )
+        .set_password("source", &request.client_secret, "Alice", &verifier)
         .unwrap();
     assert_eq!(updated.account, session.account);
-    let sibling = authority
-        .login("source", "alice", "correct horse battery")
-        .unwrap();
+    let sibling = authority.login("source", "alice", &verifier).unwrap();
     assert_eq!(sibling.account, session.account);
     assert_ne!(sibling.credential, session.credential);
 }

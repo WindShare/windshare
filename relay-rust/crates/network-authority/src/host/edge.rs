@@ -73,8 +73,6 @@ pub async fn fetch(request: Request, env: Env, _context: Context) -> Result<Resp
         }
         if super::fleet::handles_edge(&request) {
             super::fleet::handle_edge(request, &env).await?
-        } else if super::passwords::handles(&request.method(), &request.path()) {
-            super::passwords::handle(request, &env).await?
         } else {
             forward(request, &env).await?
         }

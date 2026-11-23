@@ -1,7 +1,8 @@
 use crate::{
-    Authority, Environment, Fault, HashedPassword, Rate, Store,
+    Authority, Environment, Fault, PASSWORD_SALT_BYTES, PasswordVerifier, Rate, Store,
+    StoredPassword,
     admission::throttle_key,
-    password::{invalid_credentials, valid_password_length},
+    password::invalid_credentials,
     registration::{digest, username},
     store::{key, load, save},
 };
@@ -31,7 +32,7 @@ const ADMIN_PASSWORD_CHANGE_GLOBAL_RATE: Rate = Rate {
 #[derive(Serialize, Deserialize)]
 struct Administrator {
     username: String,
-    password: HashedPassword,
+    password: StoredPassword,
 }
 
 impl<R: Store, E: Environment> Authority<R, E> {
@@ -47,59 +48,54 @@ impl<R: Store, E: Environment> Authority<R, E> {
         Ok(())
     }
 
-    /// Validates initialization authorization and inputs before edge Argon2 runs.
-    ///
-    /// # Errors
-    /// Refuses a consumed initialization link or invalid administrator credentials.
-    pub fn prepare_initialization(
-        &self,
-        provided: &str,
-        expected: &str,
-        name: &str,
-        password_len: usize,
-    ) -> Result<String> {
-        self.verify_initialization_token(provided, expected)?;
-        let normalized = username(name)?;
-        ensure!(valid_password_length(password_len), Fault::Invalid);
-        Ok(normalized)
+    pub(crate) fn administrator_username(&self) -> Result<Option<String>> {
+        Ok(load::<Administrator>(&self.store, ADMINISTRATOR_KEY)?.map(|admin| admin.username))
     }
 
-    /// Commits administrator credentials hashed outside the Durable Object.
+    /// Initializes the sole administrator credentials using the one-time setup token.
     ///
     /// # Errors
-    /// Refuses a consumed initialization link or invalid administrator username.
-    pub fn complete_initialization(
+    /// Refuses a consumed initialization link, invalid username, or storage failure.
+    pub fn initialize_admin(
         &mut self,
         provided: &str,
         expected: &str,
         name: &str,
-        password: HashedPassword,
+        verifier: &PasswordVerifier,
     ) -> Result<String> {
         self.verify_initialization_token(provided, expected)?;
+        let normalized = username(name)?;
+        let salt = self.environment.random::<PASSWORD_SALT_BYTES>()?;
+        let password = StoredPassword::seal(verifier, salt, self.environment.password_peppers());
         let administrator = Administrator {
-            username: username(name)?,
+            username: normalized,
             password,
         };
         save(&mut self.store, ADMINISTRATOR_KEY, &administrator)?;
         tracing::info!(
             event = "authority_initialized",
-            username = administrator.username
+            username = administrator.username,
+            pepper_id = administrator.password.pepper_id(),
         );
         self.admin_session()
     }
 
-    /// Enforces administrator login limits and returns the stored verifier for
-    /// edge password verification.
+    /// Verifies administrator credentials and issues a new console session atomically.
     ///
     /// # Errors
-    /// Refuses invalid usernames, exhausted attempt limits and storage failures.
-    pub fn begin_admin_login(&mut self, source: &str, name: &str) -> Result<HashedPassword> {
+    /// Refuses invalid usernames, wrong credentials, exhausted limits, or storage failures.
+    pub fn admin_login(
+        &mut self,
+        source: &str,
+        name: &str,
+        verifier: &PasswordVerifier,
+    ) -> Result<String> {
         self.check_throttle("admin-login", source.as_bytes(), &ADMIN_LOGIN_SOURCE_RATE)?;
         let administrator =
             load::<Administrator>(&self.store, ADMINISTRATOR_KEY)?.ok_or(Fault::Invalid)?;
         if username(name)? != administrator.username {
             // Wrong admin usernames spend only the caller's source bucket so
-            // blind probing cannot drain the global admin Argon2 budget.
+            // blind probing cannot drain the global admin login budget.
             self.throttle(
                 source,
                 "admin-login",
@@ -120,23 +116,16 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 ADMIN_LOGIN_GLOBAL_RATE,
             ),
         ])?;
-        Ok(administrator.password)
-    }
-
-    /// Issues an administrator session after edge verification, re-checking that
-    /// the stored verifier did not change in between.
-    ///
-    /// # Errors
-    /// Refuses stale verifiers or missing administrator records.
-    pub fn complete_admin_login(&mut self, password_digest: [u8; 32]) -> Result<String> {
-        let administrator =
-            load::<Administrator>(&self.store, ADMINISTRATOR_KEY)?.ok_or(Fault::Invalid)?;
-        if administrator.password.fingerprint() != password_digest {
-            tracing::warn!(event = "admin_login_stale_verifier");
+        if !administrator
+            .password
+            .verify(verifier, self.environment.password_peppers())
+        {
+            tracing::debug!(event = "admin_login_denied");
             return Err(invalid_credentials().into());
         }
         self.admin_session()
     }
+
     fn admin_session(&mut self) -> Result<String> {
         let session = URL_SAFE_NO_PAD.encode(self.environment.random::<32>()?);
         save(
@@ -146,6 +135,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
         )?;
         Ok(session)
     }
+
     pub(crate) fn require_admin(&self, session: &str) -> Result<()> {
         ensure!(
             session.len() <= 128
@@ -155,25 +145,26 @@ impl<R: Store, E: Environment> Authority<R, E> {
         );
         Ok(())
     }
+
     /// # Errors
     /// Propagates failure to invalidate the persistent administrator session.
     pub fn logout(&mut self, session: &str) -> Result<()> {
         self.store.delete(&key("admin-session", &digest(session)))
     }
 
-    /// Validates administrator session, password-change rate limits and new
-    /// password length before the edge Worker runs Argon2 verification and hashing.
+    /// Verifies the current administrator password, stores a newly salted replacement
+    /// verifier, revokes every existing session, and issues a fresh session.
     ///
     /// # Errors
-    /// Refuses expired sessions, invalid lengths, rate-limited callers or missing records.
-    pub fn prepare_admin_password_change(
+    /// Refuses expired sessions, rate-limited callers, wrong current verifiers, or missing records.
+    pub fn change_admin_password(
         &mut self,
         source: &str,
         session: &str,
-        new_password_len: usize,
-    ) -> Result<HashedPassword> {
+        current: &PasswordVerifier,
+        next: &PasswordVerifier,
+    ) -> Result<String> {
         self.require_admin(session)?;
-        ensure!(valid_password_length(new_password_len), Fault::Invalid);
         self.throttle_all([
             (
                 "admin-password",
@@ -186,33 +177,18 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 ADMIN_PASSWORD_CHANGE_GLOBAL_RATE,
             ),
         ])?;
-        let administrator =
-            load::<Administrator>(&self.store, ADMINISTRATOR_KEY)?.ok_or(Fault::Invalid)?;
-        Ok(administrator.password)
-    }
-
-    /// Commits a pre-hashed administrator password, revokes every existing
-    /// administrator session and issues a replacement session for the caller.
-    ///
-    /// # Errors
-    /// Refuses expired sessions or verifiers superseded by a concurrent password change.
-    pub fn commit_admin_password_change(
-        &mut self,
-        session: &str,
-        password: HashedPassword,
-        previous_verifier_digest: [u8; 32],
-    ) -> Result<String> {
-        self.require_admin(session)?;
         let mut administrator =
             load::<Administrator>(&self.store, ADMINISTRATOR_KEY)?.ok_or(Fault::Invalid)?;
-        if administrator.password.fingerprint() != previous_verifier_digest {
-            tracing::warn!(event = "admin_password_change_stale_verifier");
-            return Err(Fault::Denied {
-                reason: "credentials_changed".into(),
-            }
-            .into());
+        if !administrator
+            .password
+            .verify(current, self.environment.password_peppers())
+        {
+            tracing::debug!(event = "admin_password_change_denied");
+            return Err(invalid_credentials().into());
         }
-        administrator.password = password;
+        let salt = self.environment.random::<PASSWORD_SALT_BYTES>()?;
+        administrator.password =
+            StoredPassword::seal(next, salt, self.environment.password_peppers());
         save(&mut self.store, ADMINISTRATOR_KEY, &administrator)?;
         let sessions = self.store.scan("admin-session/", None)?;
         for (record, _) in &sessions {
@@ -222,6 +198,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
         tracing::info!(
             event = "admin_password_changed",
             username = administrator.username,
+            pepper_id = administrator.password.pepper_id(),
             invalidated_sessions = sessions.len()
         );
         Ok(next_session)

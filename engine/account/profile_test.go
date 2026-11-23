@@ -8,7 +8,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/windshare/windshare/core/serviceauthority"
 )
 
 func accountReply(t *testing.T, status int, body any) *http.Response {
@@ -94,10 +97,14 @@ func TestPasswordEditRejectsAnAccountSwitchBeforeSending(t *testing.T) {
 	store := &MemoryStore{record: cachedRecord(selected)}
 	config.Store = store
 	calls := 0
+	var sentBody map[string]string
 	config.Client = clientFunc(func(request *http.Request) (*http.Response, error) {
 		calls++
 		if request.URL.Path != "/v1/accounts/password" || request.Header.Get("Authorization") != "Bearer "+replacement.Secret {
 			t.Fatalf("unexpected login edit request: %s", request.URL.Path)
+		}
+		if err := json.NewDecoder(request.Body).Decode(&sentBody); err != nil {
+			t.Fatalf("decode password payload: %v", err)
 		}
 		return accountReply(t, http.StatusOK, replacement), nil
 	})
@@ -116,12 +123,28 @@ func TestPasswordEditRejectsAnAccountSwitchBeforeSending(t *testing.T) {
 	}
 
 	current, _ := testService(t, config).Snapshot()
-	if err := service.SetPassword(t.Context(), current.Account, "new-login", "new-password"); err != nil {
+	// Short or malformed password updates fail locally without contacting the authority.
+	if err := service.SetPassword(t.Context(), current.Account, "new-login", "too-short"); CommandErrorCode(err) != "invalid_account_input" || calls != 0 {
+		t.Fatalf("short password should fail locally: err = %v, calls = %d", err, calls)
+	}
+	if err := service.SetPassword(t.Context(), current.Account, "bad user", "new-password"); CommandErrorCode(err) != "invalid_account_input" || calls != 0 {
+		t.Fatalf("invalid username should fail locally: err = %v, calls = %d", err, calls)
+	}
+	if err := service.Login(t.Context(), "new-login", strings.Repeat("a", serviceauthority.PasswordMaxBytes+1)); CommandErrorCode(err) != "invalid_credentials" || calls != 0 {
+		t.Fatalf("oversized login password should fail locally: err = %v, calls = %d", err, calls)
+	}
+	if err := service.SetPassword(t.Context(), current.Account, "  New-Login ", "new-password"); err != nil {
 		t.Fatal(err)
 	}
 	updated, _ := service.Snapshot()
 	if calls != 1 || updated.Account != current.Account || updated.Username != "new-login" {
 		t.Fatalf("login edit did not update the selected account: requests = %d, account = %s, username = %s", calls, updated.Account, updated.Username)
+	}
+	if _, hasPlaintext := sentBody["password"]; hasPlaintext {
+		t.Fatalf("plaintext password crossed the wire: %+v", sentBody)
+	}
+	if sentBody["username"] != "new-login" || len(sentBody["password_verifier"]) != 43 {
+		t.Fatalf("unexpected password verifier payload: %+v", sentBody)
 	}
 }
 

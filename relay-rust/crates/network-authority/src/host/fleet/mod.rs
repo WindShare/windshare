@@ -6,7 +6,6 @@ mod reconcile;
 mod route;
 use super::{
     NetworkAuthority, WorkerEnvironment, failure,
-    passwords::{ForwardHeaders, call_do_json_with_headers},
     routes::{self, Context},
     storage::Database,
 };
@@ -28,7 +27,8 @@ pub(super) use route::Route;
 use route::{AdminRoute, InternalRoute, PostCommitReconcile, VantageRoute};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use worker::{Env, Method, Request, Response, ScheduleContext, ScheduledEvent, event};
+use worker::{Env, Method, Request, RequestInit, Response, ScheduleContext, ScheduledEvent, event};
+const AUTHORITY_OBJECT: &str = "network-authority-v1";
 const DIRECTORY_PATH: &str = "/.well-known/windshare-network";
 const MIRRORS: &str = "directory/mirrors";
 const MIRROR_DEFER_HEADER: &str = "X-Directory-Mirror-Defer";
@@ -145,18 +145,29 @@ async fn internal(
     auth: (Option<&str>, Option<&str>),
     body: &impl Serialize,
 ) -> worker::Result<Response> {
-    call_do_json_with_headers(
-        env,
-        route.path(),
-        "fleet",
-        &ForwardHeaders {
-            cookie: auth.0,
-            csrf: auth.1,
-            ..ForwardHeaders::default()
-        },
-        body,
-    )
-    .await
+    let payload = serde_json::to_vec(body).map_err(failure)?;
+    let url = format!("https://internal{}", route.path());
+    let body = js_sys::Uint8Array::from(payload.as_slice());
+    let mut request = Request::new_with_init(
+        &url,
+        RequestInit::new()
+            .with_method(Method::Post)
+            .with_body(Some(body.into())),
+    )?;
+    let headers = request.headers_mut()?;
+    headers.set("Content-Type", "application/json")?;
+    headers.set("X-Authority-Source", "fleet")?;
+    if let Some(cookie) = auth.0 {
+        headers.set("Cookie", cookie)?;
+    }
+    if let Some(csrf) = auth.1 {
+        headers.set("X-CSRF-Token", csrf)?;
+    }
+    env.durable_object("AUTHORITY")?
+        .id_from_name(AUTHORITY_OBJECT)?
+        .get_stub()?
+        .fetch_with_request(request)
+        .await
 }
 
 #[event(scheduled)]
@@ -219,12 +230,9 @@ impl NetworkAuthority {
         let bytes = bytes.to_vec();
         // A rejected fleet command rolls back the whole transaction, including
         // bootstrap and lease writes. Network reads and KV writes run outside it.
-        let result = self.transact(
-            WorkerEnvironment {
-                registration_email_configured: false,
-            },
-            move |service, env| dispatch(service, env, route, &ctx, &bytes),
-        );
+        let result = self.transact(false, move |service, env| {
+            dispatch(service, env, route, &ctx, &bytes)
+        });
         // A failed renewal transaction cannot strand the last committed head in SQLite.
         let reconcile_mode = match route.reconcile_policy() {
             PostCommitReconcile::AlwaysAudit => Some(ReconcileMode::AuditKv),

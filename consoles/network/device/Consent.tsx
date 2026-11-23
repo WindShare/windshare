@@ -4,10 +4,12 @@ import { Frame, Notice, SessionWait } from '../../ui/layout'
 import { ValidatedForm } from '../../ui/ValidatedForm'
 import { useAction, useResource } from '../../ui/activity'
 import { useCopy } from '../../ui/use-locale'
+import { message, MessageError } from '../../ui/locale'
 import { request } from '../../ui/request'
 import { sharedCopy } from '../../ui/locales'
 import { deviceCopy, deviceErrors } from '../../ui/locales/device'
 import { takeFragment } from '../../ui/location'
+import { derivePasswordVerifier, isValidLoginPassword, normalizeUsername } from '../auth/password'
 
 const invitation = takeFragment('invite') ?? ''
 interface Preview { origin: string; device: string; code: string; username: string | null }
@@ -24,8 +26,20 @@ function Consent({ device }: { device: Preview }) {
     <ValidatedForm className="stack" method="post" onSubmit={event => {
       event.preventDefault()
       const data = new FormData(event.currentTarget)
-      const login = enterLogin ? { username: data.get('username'), password: data.get('password') } : undefined
+      const enteredUsername = String(data.get('username') ?? '')
+      const enteredPassword = String(data.get('password') ?? '')
       void action.run(async () => {
+        let login: { username: string; password_verifier: string } | undefined
+        if (enterLogin) {
+          const canonical = normalizeUsername(enteredUsername)
+          if (!canonical || !isValidLoginPassword(enteredPassword)) {
+            throw new MessageError(message(deviceCopy, 'denied'))
+          }
+          login = {
+            username: canonical,
+            password_verifier: await derivePasswordVerifier('account', canonical, enteredPassword),
+          }
+        }
         const { approval } = await request<{ approval: string }>('/v1/device/approve', { data: { invitation, login, username: enterLogin ? undefined : device.username }, messages: deviceErrors })
         const destination = new URL('/device/complete', device.origin)
         destination.hash = new URLSearchParams({ approval }).toString()

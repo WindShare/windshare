@@ -28,11 +28,7 @@ pub use device_login::DeviceApproval;
 pub use governance::{Block, MilestoneReview, Report, ReportPage, ReportPosition};
 pub use model::*;
 pub use nodes::{Node, NodeDetails, NodeLoadReport, NodePage, NodePolicyChange, Zone};
-pub use password::{
-    HashedPassword, PASSWORD_SALT_BYTES, PasswordChallenge, PasswordChangePreparation,
-    PasswordRegistrationPreparation, PasswordRegistrationPrepare, valid_login_password_length,
-    valid_password_length,
-};
+pub use password::{PASSWORD_SALT_BYTES, PasswordVerifier, PepperRing, StoredPassword};
 pub use profile::{EmailVerification, Mailbox};
 pub use signing::Signing;
 pub use store::{Environment, Store};

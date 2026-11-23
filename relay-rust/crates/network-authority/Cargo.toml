@@ -17,7 +17,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11.1"
 ed25519-dalek = { version = "3.0.0", default-features = false, features = ["alloc"] }
-argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
 tracing = "0.1"
 
 chrono = { version = "0.4", default-features = false, features = ["serde", "std"] }

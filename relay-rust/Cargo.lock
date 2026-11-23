@@ -2209,7 +2209,6 @@ name = "windshare-network-authority"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "argon2",
  "base64",
  "chrono",
  "ed25519-dalek",

@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { TEST_PASSWORD_PEPPER } from './local-worker.mjs';
 
 const crate = fileURLToPath(new URL('../', import.meta.url));
 const { Miniflare, Log, LogLevel, convertV4MiniflareOptions } =
@@ -29,7 +30,8 @@ test('the Worker changes email only after the provider accepts delivery and the 
       bindings: { AUTHORITY_ROOT: trust.root, AUTHORITY_CERTIFICATE: trust.certificate,
         AUTHORITY_SIGNING_SEED: (await readFile(join(keys, 'online-1.seed'), 'utf8')).trim(),
         EMAIL_WEBHOOK_URL: 'https://mail.test/send', EMAIL_WEBHOOK_TOKEN: 'local-mail-token',
-        EXTRA_EMAIL_DOMAINS: 'partner.edu' },
+        EXTRA_EMAIL_DOMAINS: 'partner.edu',
+        PASSWORD_PEPPER: TEST_PASSWORD_PEPPER },
       durableObjects: { AUTHORITY: { className: 'NetworkAuthority', useSQLite: true } },
       outboundService: async request => {
         assert.equal(request.url, 'https://mail.test/send');

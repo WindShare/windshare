@@ -1,7 +1,8 @@
-import { message, type Message } from '../ui/locale'
+import { message, MessageError, type Message } from '../ui/locale'
 import { networkCopy } from './locales'
 import { request, RequestError, type FaultMessage } from '../ui/request'
 import { decode, encode } from './identity'
+import { derivePasswordVerifier, isValidLoginPassword, isValidNewPassword, normalizeUsername } from './auth/password'
 import type { AccountDetails, AccountPage, AccountSummary, Discovery, Enrollment, TrafficStatus, MilestoneReview, NodeDetails, NodePage, FleetAction, PolicyChange, PolicySnapshot, Report, ReportPage, Restrictions, SettingsChanges, Snapshot, Target } from './model'
 
 function nodeHttpStatus(fault: Readonly<Record<string, unknown>>): Message {
@@ -43,21 +44,34 @@ const messages: Readonly<Record<string, FaultMessage>> = {
 
 export class AuthorityClient {
   private csrf = ''
+  private username: string | null = null
   constructor(private readonly expired: () => void) {}
 
   snapshot = async (signal: AbortSignal) => {
     try {
       const snapshot = await request<Snapshot>('/v1/admin/console', { signal, messages })
-      if (!signal.aborted) this.csrf = snapshot.csrf
+      if (!signal.aborted) {
+        this.csrf = snapshot.csrf
+        this.username = snapshot.username
+      }
       return snapshot
     } catch (error) {
       if (error instanceof RequestError && error.code === 'administrator_session') return null
       throw error
     }
   }
-  signIn(username: string, password: string, token: string | null) {
+  async signIn(username: string, password: string, token: string | null) {
+    const canonical = normalizeUsername(username)
+    if (!canonical) throw new MessageError(message(networkCopy, 'invalidValues'))
+    if (token) {
+      if (!isValidNewPassword(password)) throw new MessageError(message(networkCopy, 'invalidValues'))
+    } else if (!isValidLoginPassword(password)) {
+      throw new MessageError(message(networkCopy, 'invalidCredentials'))
+    }
+    const password_verifier = await derivePasswordVerifier('admin', canonical, password)
     return request('/v1/admin/' + (token ? 'initialize' : 'login'), {
-      data: token ? { username, password, token } : { username, password }, messages,
+      data: token ? { username: canonical, password_verifier, token } : { username: canonical, password_verifier },
+      messages,
     })
   }
   private async read<T>(route: string, signal: AbortSignal) {
@@ -123,9 +137,17 @@ export class AuthorityClient {
   }
   signOut = () => this.write('logout', {})
   changePassword = async (currentPassword: string, newPassword: string) => {
+    const username = this.username
+    if (!username) throw new MessageError(message(networkCopy, 'sessionChanged'))
+    if (!isValidNewPassword(newPassword)) throw new MessageError(message(networkCopy, 'invalidValues'))
+    if (!isValidLoginPassword(currentPassword)) throw new MessageError(message(networkCopy, 'invalidCurrentPassword'))
+    const [current_password_verifier, new_password_verifier] = await Promise.all([
+      derivePasswordVerifier('admin', username, currentPassword),
+      derivePasswordVerifier('admin', username, newPassword),
+    ])
     const result = await this.write<{ csrf: string }>('password', {
-      current_password: currentPassword,
-      new_password: newPassword,
+      current_password_verifier,
+      new_password_verifier,
     }, 'POST', { credentials: message(networkCopy, 'invalidCurrentPassword') })
     this.csrf = result.csrf
   }

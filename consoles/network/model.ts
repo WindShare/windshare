@@ -92,6 +92,7 @@ export type Target = { kind: 'share' | 'account'; id: number[] }
 export interface Restrictions { version: number; shares: number[][]; accounts: number[][] }
 export interface MilestoneReview { count: number; reached_at: number }
 export interface Snapshot extends PolicySnapshot {
+  username: string | null
   csrf: string
   node_page: NodePage
   directory: Publication | null
