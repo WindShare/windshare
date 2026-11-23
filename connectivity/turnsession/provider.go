@@ -4,34 +4,14 @@ package turnsession
 import (
 	"context"
 	"sync"
-	"time"
+
+	"github.com/windshare/windshare/core/session/turngrant"
 
 	p "github.com/windshare/windshare/core/session/protocolsession"
 )
 
-type Credential struct {
-	ServiceID          string
-	URLs               []string
-	Username, Password string
-	ValidFor           time.Duration
-}
-
-// Reusable contains only live grants already owned by the requesting session.
-type IssueRequest struct {
-	Trace      Trace
-	Mode       p.TURNMode
-	ServiceIDs []string
-	Reusable   map[string]bool
-}
-type IssueResult struct {
-	Retained    []string
-	Status      p.TURNStatus
-	HasFallback bool
-	Credentials []Credential
-}
-
 type Provider interface {
-	Issue(context.Context, IssueRequest) IssueResult
+	Issue(context.Context, turngrant.IssueRequest) turngrant.IssueResult
 }
 
 // Capacity covers negotiation through authenticated attachment. An established

@@ -18,7 +18,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/windshare/windshare/connectivity/turnsession"
+	"github.com/windshare/windshare/core/session/turngrant"
+
 	p "github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/engine/relayconfig"
 )
@@ -90,8 +91,8 @@ func (r *Resolver) request(ctx context.Context, method, address, token string, b
 	return nil
 }
 
-func (r *Resolver) issue(ctx context.Context, s source, trace turnsession.Trace) (turnsession.Credential, error) {
-	c := turnsession.Credential{ServiceID: s.ID, URLs: slices.Clone(s.URLs), ValidFor: time.Duration(s.TTL()) * time.Second}
+func (r *Resolver) issue(ctx context.Context, s source, trace turngrant.Trace) (turngrant.Credential, error) {
+	c := turngrant.Credential{ServiceID: s.ID, URLs: slices.Clone(s.URLs), ValidFor: time.Duration(s.TTL()) * time.Second}
 	switch s.Kind {
 	case relayconfig.TURNStatic:
 		c.Username, c.Password, c.ValidFor = s.Username, s.Password, 0
@@ -147,7 +148,7 @@ func (r *Resolver) issue(ctx context.Context, s source, trace turnsession.Trace)
 	return c, nil
 }
 
-func selectCloudflareServers(c *turnsession.Credential, response json.RawMessage, filters []string) error {
+func selectCloudflareServers(c *turngrant.Credential, response json.RawMessage, filters []string) error {
 	type server struct {
 		URLs                 []string
 		Username, Credential string

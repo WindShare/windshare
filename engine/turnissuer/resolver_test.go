@@ -11,7 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/connectivity/turnsession"
+	"github.com/windshare/windshare/core/session/turngrant"
+
 	p "github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relayprofile"
@@ -42,7 +43,7 @@ func TestManualIssuersAndRoleBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	specs[0].URLs[0] = "turn:changed"
-	result := r.Issue(t.Context(), turnsession.IssueRequest{Mode: p.TURNParallel})
+	result := r.Issue(t.Context(), turngrant.IssueRequest{Mode: p.TURNParallel})
 	if calls.Load() != 0 || result.Status != p.TURNOK || !result.HasFallback || len(result.Credentials) != 2 {
 		t.Fatal("parallel role selection")
 	}
@@ -50,7 +51,7 @@ func TestManualIssuersAndRoleBudget(t *testing.T) {
 	if a.URLs[0] != "turn:one" || a.ValidFor != 0 || b.Username != "160:"+strings.Repeat("0", 32) || b.ValidFor != time.Minute || b.Password != "ftAC/mcvKxRdSoEbctcvfTo8UtQ=" {
 		t.Fatalf("manual grant mismatch, coturn proof %s", b.Password)
 	}
-	result = r.Issue(t.Context(), turnsession.IssueRequest{Mode: p.TURNAll, Reusable: map[string]bool{"static": true, "rest": true}})
+	result = r.Issue(t.Context(), turngrant.IssueRequest{Mode: p.TURNAll, Reusable: map[string]bool{"static": true, "rest": true}})
 	if calls.Load() != 1 || len(result.Retained) != 2 || len(result.Credentials) != 1 || result.Credentials[0].URLs[0] != "turn:one?transport=udp" || len(result.Credentials[0].URLs) != 1 {
 		t.Fatal("escalation did not preserve existing grants and select the cloud filter")
 	}
@@ -91,15 +92,15 @@ func TestManagedDiscoveryFailureAndRevocation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	issue := func(mode p.TURNMode) turnsession.IssueResult {
-		return r.Issue(context.Background(), turnsession.IssueRequest{Mode: mode})
+	issue := func(mode p.TURNMode) turngrant.IssueResult {
+		return r.Issue(context.Background(), turngrant.IssueRequest{Mode: mode})
 	}
 	if issue(p.TURNParallel).Status != p.TURNRetryLater {
 		t.Fatal("unknown capability is retryable")
 	}
-	<-r.Discover(t.Context(), turnsession.Trace{})
+	<-r.Discover(t.Context(), turngrant.Trace{})
 	state.Store(1)
-	<-r.Discover(t.Context(), turnsession.Trace{})
+	<-r.Discover(t.Context(), turngrant.Trace{})
 	if g := issue(p.TURNParallel); g.Status != p.TURNOK || !g.HasFallback || len(g.Credentials) != 0 || issued.Load() != 0 {
 		t.Fatal("fallback charged during parallel demand")
 	}
@@ -142,7 +143,7 @@ func TestUnknownCapabilityDoesNotDelayKnownIssuer(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
-	result := r.Issue(ctx, turnsession.IssueRequest{Mode: p.TURNAll})
+	result := r.Issue(ctx, turngrant.IssueRequest{Mode: p.TURNAll})
 	if ctx.Err() != nil || len(result.Credentials) != 1 || result.Credentials[0].ServiceID != "known" {
 		t.Fatal("independent issuer blocked by discovery")
 	}

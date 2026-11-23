@@ -4,12 +4,13 @@ import (
 	"context"
 	"slices"
 
+	"github.com/windshare/windshare/core/session/turngrant"
+
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/turnissuer"
 
 	"github.com/windshare/windshare/connectivity/networkstate"
 	"github.com/windshare/windshare/connectivity/relayset"
-	"github.com/windshare/windshare/connectivity/turnsession"
 	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/liveshare"
@@ -99,7 +100,7 @@ func (engine *Engine) StartShare(ctx context.Context, request ShareRequest) (*Sh
 	current, err := startWorkflow(engine, ctx, "share", request.Diagnostics, func(ctx context.Context, control task.Control) task.Completion[share.Result] {
 		defer selection.ReleaseAuthorization()
 		probe, cancel := context.WithCancel(ctx)
-		discovered := issuer.Discover(probe, turnsession.Trace{Sink: control.Diagnostics})
+		discovered := issuer.Discover(probe, turngrant.Trace{Sink: control.Diagnostics})
 		defer func() { cancel(); <-discovered }()
 		control.Diagnostics.Record(selection)
 		dependencies.ObserveAttempt = engine.network.Observer(selection, control.Diagnostics)

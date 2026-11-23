@@ -1,4 +1,4 @@
-package turnsession
+package turngrant
 
 import (
 	d "github.com/windshare/windshare/core/diagnostics"

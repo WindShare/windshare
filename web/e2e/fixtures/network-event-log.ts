@@ -21,6 +21,8 @@ const PAGE_EVENT_KINDS: ReadonlySet<unknown> = new Set<HotSwitchPageEvent['kind'
 type MatchingEvent<T extends HotSwitchPageEvent['kind']> = Extract<HotSwitchPageEvent, { kind: T }>
 
 export class NetworkEventLog {
+  readonly #timeout: number
+  constructor(timeout = EVENT_TIMEOUT_MILLISECONDS) { this.#timeout = timeout }
   readonly #events: HotSwitchPageEvent[] = []
   readonly #waiters = new Set<(event: HotSwitchPageEvent) => void>()
   #runtimeFailure: Error | undefined
@@ -73,7 +75,7 @@ export class NetworkEventLog {
       const timer = setTimeout(() => {
         cleanup()
         reject(new Error(`Timed out waiting for ${label}`))
-      }, EVENT_TIMEOUT_MILLISECONDS)
+      }, this.#timeout)
       this.#waiters.add(inspect)
     })
   }

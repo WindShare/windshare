@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/windshare/windshare/core/session/turngrant"
+
 	"github.com/windshare/windshare/connectivity/turnsession"
 	"github.com/windshare/windshare/core/diagnostics"
 
@@ -253,7 +255,7 @@ func (factory *Factory) NewSenderPeerHandler(
 	}
 	capacity := SenderMaxActivePeerAttemptsPerSession*(factory.maxCandidates+3) + handlerEventReserve
 	return &senderHandler{
-		turn:    turnsession.NewSender(turnsession.Trace{Sink: factory.trace, Session: session.ProtocolSessionID()}, factory.turnProvider, factory.now),
+		turn:    turnsession.NewSender(turngrant.Trace{Sink: factory.trace, Session: session.ProtocolSessionID()}, factory.turnProvider, factory.now),
 		factory: factory, session: session, events: make(chan handlerEvent, capacity),
 		attempts:          make(map[protocolsession.OperationID]*peerAttempt),
 		bindings:          make(map[v2signal.Binding]protocolsession.OperationID),
