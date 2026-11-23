@@ -108,12 +108,17 @@ function planSingleFileOffers(
   const choices: ArtifactChoice[] = []
   const fitsPortable = caps.portable && shape.exactBytes <= PORTABLE_MAX_BYTES
   const fitsOpfs = caps.opfs && (caps.availableStorageBytes === null || shape.exactBytes <= caps.availableStorageBytes)
+  const preferPortable = fitsPortable && shape.exactBytes <= SMALL_FILE_PORTABLE_THRESHOLD_BYTES
 
-  if (fitsOpfs) {
-    choices.push(makeChoice('opfs:file', 'opfs', artifact, true, true, shape.exactBytes))
-  }
-  if (fitsPortable) {
-    choices.push(makeChoice('portable:file', 'portable', artifact, false, choices.length === 0, shape.exactBytes))
+  const primaryCandidates: readonly ('portable' | 'opfs')[] = preferPortable
+    ? ['portable', 'opfs']
+    : ['opfs', 'portable']
+  for (const backend of primaryCandidates) {
+    if (backend === 'portable' && fitsPortable) {
+      choices.push(makeChoice('portable:file', 'portable', artifact, false, choices.length === 0, shape.exactBytes))
+    } else if (backend === 'opfs' && fitsOpfs) {
+      choices.push(makeChoice('opfs:file', 'opfs', artifact, true, choices.length === 0, shape.exactBytes))
+    }
   }
   if (caps.fsa) {
     choices.push(makeChoice('fsa:file', 'fsa', fsaArtifact, true, choices.length === 0, shape.exactBytes))

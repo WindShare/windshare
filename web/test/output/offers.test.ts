@@ -20,7 +20,7 @@ function singleShape(bytes: bigint): SelectionShape {
 }
 
 describe('artifact offer planning', () => {
-  it('prefers OPFS for single files when available and falls back to portable without OPFS', () => {
+  it('prefers direct portable download for small single files and OPFS for larger single files', () => {
     const fullCaps = {
       indexedDb: true,
       fsa: true,
@@ -28,26 +28,44 @@ describe('artifact offer planning', () => {
       portable: true,
       availableStorageBytes: 10n * 1024n * 1024n * 1024n,
     }
-    const withOpfs = planArtifactOffers({
+    const smallWithOpfs = planArtifactOffers({
       epoch: 1n,
       selectionKey: 'k1',
       shape: singleShape(SMALL_FILE_PORTABLE_THRESHOLD_BYTES),
       capabilities: fullCaps,
     })
-    expect(withOpfs.kind).toBe('ready')
-    if (withOpfs.kind === 'ready') {
-      expect(withOpfs.primary.backend).toBe('opfs')
-      expect(withOpfs.alternatives.some(choice => choice.backend === 'portable')).toBe(true)
+    expect(smallWithOpfs.kind).toBe('ready')
+    if (smallWithOpfs.kind === 'ready') {
+      expect(smallWithOpfs.primary.backend).toBe('portable')
+      expect(smallWithOpfs.primary.recommended).toBe(true)
+      expect(smallWithOpfs.alternatives.map(choice => choice.backend)).toEqual(['opfs', 'fsa'])
+      expect(smallWithOpfs.alternatives.every(choice => !choice.recommended)).toBe(true)
+    }
+
+    const largeWithOpfs = planArtifactOffers({
+      epoch: 2n,
+      selectionKey: 'k2',
+      shape: singleShape(SMALL_FILE_PORTABLE_THRESHOLD_BYTES + 1n),
+      capabilities: fullCaps,
+    })
+    expect(largeWithOpfs.kind).toBe('ready')
+    if (largeWithOpfs.kind === 'ready') {
+      expect(largeWithOpfs.primary.backend).toBe('opfs')
+      expect(largeWithOpfs.primary.recommended).toBe(true)
+      expect(largeWithOpfs.alternatives.map(choice => choice.backend)).toEqual(['portable', 'fsa'])
     }
 
     const portableOnly = planArtifactOffers({
-      epoch: 2n,
-      selectionKey: 'k2',
-      shape: singleShape(SMALL_FILE_PORTABLE_THRESHOLD_BYTES),
+      epoch: 3n,
+      selectionKey: 'k2b',
+      shape: singleShape(SMALL_FILE_PORTABLE_THRESHOLD_BYTES + 1n),
       capabilities: { ...fullCaps, opfs: false, fsa: false },
     })
     expect(portableOnly.kind).toBe('ready')
-    if (portableOnly.kind === 'ready') expect(portableOnly.primary.backend).toBe('portable')
+    if (portableOnly.kind === 'ready') {
+      expect(portableOnly.primary.backend).toBe('portable')
+      expect(portableOnly.primary.recommended).toBe(true)
+    }
   })
 
   it('reports portable-limit-exceeded when oversized file has no OPFS or FSA', () => {

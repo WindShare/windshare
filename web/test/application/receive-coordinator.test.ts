@@ -308,7 +308,8 @@ describe('receive admission and coordinator', () => {
 
     const offers = coordinator.getSnapshot().offers
     if (offers?.kind !== 'ready') throw new Error('expected ready offers')
-    expect(offers.primary.backend).toBe('opfs')
+    expect(offers.primary.backend).toBe('portable')
+    expect(offers.alternatives.some(choice => choice.backend === 'opfs')).toBe(true)
     expect(offers.primary.suggestedName).toBe('b.pdf')
     expect(workers[0]!.terminated).toBe(true)
     expect(onActionError).not.toHaveBeenCalled()

@@ -42,8 +42,13 @@ export async function assertSourceInvalidationRecovery(page: Page, stack: Direct
   const replacement = await stack.share(source)
   await page.goto(capabilityUrl(replacement))
   await expect(downloadFile).toBeEnabled()
+  // Small single files default to direct browser download without retaining an OPFS copy;
+  // select the resumable OPFS route explicitly to verify offline Save again on a tiny fixture.
+  await page.getByRole('button', { name: 'Other ways to save', exact: true }).click()
+  const savingWays = page.getByRole('dialog', { name: 'Other ways to save', exact: true })
+  await savingWays.getByText('More options', { exact: true }).click()
   const downloadStarted = page.waitForEvent('download', { timeout: DOWNLOAD_TIMEOUT_MILLISECONDS })
-  await downloadFile.click()
+  await savingWays.getByRole('button', { name: /Resumable download/u }).click()
   await assertReplacementDownload(await downloadStarted)
   await expect(task).not.toHaveAttribute('data-operation-id', invalidatedOperation!)
   const completedOperation = await task.getAttribute('data-operation-id')
