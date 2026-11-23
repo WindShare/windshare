@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"runtime"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -232,5 +233,95 @@ func TestSenderRelayInstallCanceledDuringRegistrationCallbackRetiresConnection(t
 	}
 	if len(observed) != 3 || observed[0] != RegistrationPending || observed[1] != RegistrationAvailable || observed[2] != RegistrationPending {
 		t.Fatalf("registration transitions = %v, want [Pending Available Pending]", observed)
+	}
+}
+
+type releaseFailedHookPermit struct {
+	onReleaseFailed func()
+}
+
+func (releaseFailedHookPermit) Admit() bool { return true }
+func (releaseFailedHookPermit) Release()    {}
+func (p releaseFailedHookPermit) ReleaseFailed() {
+	if p.onReleaseFailed != nil {
+		p.onReleaseFailed()
+	}
+}
+
+func TestSenderRelayStopAfterFailedAttemptPreservesPendingRegistration(t *testing.T) {
+	var attempts atomic.Int32
+	clock := newSenderRelayTestClock()
+	dialer := &senderRelayTestDialer{
+		dial: func(context.Context, relayv2.SenderConfig) (SenderConnection, error) {
+			attempts.Add(1)
+			return SenderConnection{}, errors.New("transient startup failure")
+		},
+	}
+	config := newSenderRelayTestConfig(t, nil, dialer, clock)
+	var lifecycle *SenderLifecycle
+	var observedAttempts []Attempt
+	config.ObserveAttempt = func(attempt Attempt) {
+		observedAttempts = append(observedAttempts, attempt)
+	}
+	config.Attempts = attemptControlFunc(func(context.Context) (AttemptPermit, error) {
+		return releaseFailedHookPermit{
+			onReleaseFailed: func() {
+				if attempts.Load() != 2 {
+					return
+				}
+				// StopRecovery races after recoveryCause succeeds and before the retry state transition.
+				stopped := make(chan struct{})
+				go func() {
+					defer close(stopped)
+					lifecycle.StopRecovery()
+				}()
+				<-stopped
+			},
+		}, nil
+	})
+	var err error
+	lifecycle, err = NewSenderLifecycle(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var observed []RegistrationState
+	lifecycle.ObserveRegistration(func(state RegistrationState) {
+		mu.Lock()
+		observed = append(observed, state)
+		mu.Unlock()
+	})
+
+	if err := lifecycle.WaitReady(t.Context()); !errors.Is(err, ErrStopped) {
+		t.Fatalf("WaitReady = %v, want ErrStopped", err)
+	}
+	lifecycle.mu.Lock()
+	stopping, reg := lifecycle.stopping, lifecycle.registration
+	for _, state := range []RegistrationState{
+		RegistrationRetrying,
+		RegistrationNeedsUserAuthorization,
+		RegistrationAvailable,
+	} {
+		lifecycle.setRegistrationLocked(state)
+	}
+	regAfterInvariantCheck := lifecycle.registration
+	lifecycle.mu.Unlock()
+	if !stopping || reg != RegistrationPending || regAfterInvariantCheck != RegistrationPending {
+		t.Fatalf("stopped lifecycle state: stopping=%v registration=%v afterCheck=%v", stopping, reg, regAfterInvariantCheck)
+	}
+	mu.Lock()
+	gotStates := slices.Clone(observed)
+	mu.Unlock()
+	wantStates := []RegistrationState{RegistrationPending, RegistrationRetrying, RegistrationPending}
+	if !slices.Equal(gotStates, wantStates) {
+		t.Fatalf("registration transitions = %v, want %v", gotStates, wantStates)
+	}
+	if waits := clock.Waits(); len(waits) != 1 {
+		t.Fatalf("recovery waits = %v, want only attempt 1 backoff before stop", waits)
+	}
+	for _, event := range observedAttempts {
+		if event.Number == 2 && (event.State == AttemptFailed || event.State == AttemptWaiting) {
+			t.Fatalf("emitted post-stop retry diagnostic for attempt 2: %+v", event)
+		}
 	}
 }

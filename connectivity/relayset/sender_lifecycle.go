@@ -235,7 +235,8 @@ func (lifecycle *SenderLifecycle) ObserveRegistration(observer func(Registration
 }
 
 func (lifecycle *SenderLifecycle) setRegistrationLocked(state RegistrationState) {
-	if lifecycle.registration == state {
+	// Once stopped, recovery must never move registration out of Pending again.
+	if (lifecycle.stopping && state != RegistrationPending) || lifecycle.registration == state {
 		return
 	}
 	lifecycle.registration = state

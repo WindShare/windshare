@@ -113,6 +113,10 @@ func (lifecycle *SenderLifecycle) recoverRegistration(callerContext, recoveryCon
 			return dialErr
 		}
 		lifecycle.mu.Lock()
+		if lifecycle.stopping {
+			lifecycle.mu.Unlock()
+			return ErrStopped
+		}
 		if lifecycle.generation == 0 {
 			lifecycle.setRegistrationLocked(RegistrationRetrying)
 		}
