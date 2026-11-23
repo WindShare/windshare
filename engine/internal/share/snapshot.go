@@ -27,6 +27,9 @@ func (c *Controller) Startup() (Ready, error, bool) {
 func (c *Controller) bindRelayStatus(read func() relayset.SenderStatus) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.finished {
+		return
+	}
 	c.relayStatus, c.hasRelayStatus = read, true
 }
 
@@ -48,6 +51,9 @@ func (c *Controller) RecordSourceOmissions(summary catalog.SourceOmissions) bool
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.finished {
+		return false
+	}
 	if !summary.Directory.IsZero() {
 		if c.omittedDirs == nil {
 			c.omittedDirs = make(map[catalog.DirectoryID]struct{})

@@ -16,6 +16,7 @@ type Controller struct {
 	relayStatus      func() relayset.SenderStatus
 	finalRelayStatus relayset.SenderStatus
 	hasRelayStatus   bool
+	finished         bool
 	omittedDirs      map[catalog.DirectoryID]struct{}
 	omittedCount     uint64
 	omittedSamples   []catalog.SourceOmission
@@ -75,10 +76,14 @@ func (c *Controller) CancelBeforeReady(cancel func()) bool {
 
 func (c *Controller) finish(err error) {
 	c.mu.Lock()
+	c.finished = true
 	if c.relayStatus != nil {
 		c.finalRelayStatus = c.relayStatus()
 		c.relayStatus = nil
 	}
+	// Release the per-directory deduplication map once scans have joined;
+	// terminal snapshots retain only the bounded aggregate count and samples.
+	c.omittedDirs = nil
 	c.mu.Unlock()
 	c.readyOnce.Do(func() {
 		c.readyErr = err

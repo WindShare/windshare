@@ -95,3 +95,57 @@ func TestControllerAggregatesSourceOmissionsByDirectoryIDAndNotifiesOnChange(t *
 		t.Fatalf("first sample = %+v", summary.Samples[0])
 	}
 }
+
+func TestControllerFinishReleasesOmittedDirIndexAndFreezesSummary(t *testing.T) {
+	controller := NewController()
+	notifications := 0
+	obs := newObservations(task.Control{
+		StateChanged: func() { notifications++ },
+	}, Request{})
+	obs.bindController(controller)
+	defer obs.complete()
+
+	dirA, _ := catalog.DirectoryIDFromBytes([]byte{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1})
+	dirB, _ := catalog.DirectoryIDFromBytes([]byte{2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2})
+
+	obs.ObserveSourceOmissions(catalog.SourceOmissions{
+		Directory: dirA,
+		Count:     2,
+		Samples:   []catalog.SourceOmission{{Name: "a.docx", Reason: catalog.SourceOmissionCloudPlaceholder}},
+	})
+	if len(controller.omittedDirs) != 1 || notifications != 1 {
+		t.Fatalf("omittedDirs=%d notifications=%d", len(controller.omittedDirs), notifications)
+	}
+
+	controller.finish(nil)
+	if !controller.finished || controller.omittedDirs != nil {
+		t.Fatalf("finish did not freeze and release omittedDirs: finished=%v omittedDirs=%v", controller.finished, controller.omittedDirs)
+	}
+
+	// Late reports after finish must not reallocate omittedDirs, double-count,
+	// or emit spurious state-change notifications.
+	obs.ObserveSourceOmissions(catalog.SourceOmissions{
+		Directory: dirA,
+		Count:     2,
+		Samples:   []catalog.SourceOmission{{Name: "dup.docx", Reason: catalog.SourceOmissionCloudPlaceholder}},
+	})
+	obs.ObserveSourceOmissions(catalog.SourceOmissions{
+		Directory: dirB,
+		Count:     3,
+		Samples:   []catalog.SourceOmission{{Name: "late.docx", Reason: catalog.SourceOmissionSymbolicLink}},
+	})
+	obs.ObserveSourceOmissions(catalog.SourceOmissions{
+		Count:   4,
+		Samples: []catalog.SourceOmission{{Name: "zero-dir.docx", Reason: catalog.SourceOmissionSpecialFile}},
+	})
+	if controller.omittedDirs != nil {
+		t.Fatalf("late omission reallocated omittedDirs: %v", controller.omittedDirs)
+	}
+	if notifications != 1 {
+		t.Fatalf("late omissions triggered notifications: got %d, want 1", notifications)
+	}
+	summary, ok := controller.SourceOmissions()
+	if !ok || summary.Count != 2 || len(summary.Samples) != 1 || summary.Samples[0].Name != "a.docx" {
+		t.Fatalf("terminal omission summary mutated: %+v (ok=%v)", summary, ok)
+	}
+}

@@ -37,6 +37,37 @@ type ShareSnapshot struct {
 }
 
 func (current *ShareTask) Snapshot() ShareSnapshot {
+	select {
+	case <-current.Done():
+		return current.terminalSnapshot()
+	default:
+	}
+	snapshot := current.controllerSnapshot()
+	// Read lifecycle after controller state so cancellation cannot pair a newer
+	// readiness result with a lifecycle sampled before the stop.
+	snapshot.State = current.State()
+	select {
+	case <-current.Done():
+		return current.terminalSnapshot()
+	default:
+	}
+	return snapshot
+}
+
+// terminalSnapshot reads controller state only after Done has closed so every
+// field happens-after background scans, shutdown joins, and controller.finish.
+func (current *ShareTask) terminalSnapshot() ShareSnapshot {
+	snapshot := current.controllerSnapshot()
+	result, _ := current.Wait(context.Background())
+	snapshot.Result = &result
+	snapshot.State = TaskFinished
+	if result.Outcome == OutcomeFailed && snapshot.Startup == ShareStartupFailed {
+		snapshot.Authorization = shareAuthorization(snapshot.StartupError, current.selection)
+	}
+	return snapshot
+}
+
+func (current *ShareTask) controllerSnapshot() ShareSnapshot {
 	var snapshot ShareSnapshot
 	status, hasStatus := current.controller.RelayStatus()
 	_, err, settled := current.controller.Startup()
@@ -69,19 +100,6 @@ func (current *ShareTask) Snapshot() ShareSnapshot {
 			Count:   omissions.Count,
 			Samples: omissions.Samples,
 		}
-	}
-	// Read lifecycle after startup and availability so cancellation cannot pair
-	// a newer readiness result with a lifecycle sampled before the stop.
-	snapshot.State = current.State()
-	select {
-	case <-current.Done():
-		result, _ := current.Wait(context.Background())
-		snapshot.Result = &result
-		snapshot.State = TaskFinished
-		if result.Outcome == OutcomeFailed && snapshot.Startup == ShareStartupFailed {
-			snapshot.Authorization = shareAuthorization(snapshot.StartupError, current.selection)
-		}
-	default:
 	}
 	return snapshot
 }

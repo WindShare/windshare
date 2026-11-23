@@ -33,4 +33,8 @@ func TestSnapshotQueriesDoNotDependOnObservationDelivery(t *testing.T) {
 	if frozen.Availability.Available != 0 {
 		t.Fatal("terminal snapshot retained live relay owner")
 	}
+	controller.bindRelayStatus(func() relayset.SenderStatus { return current })
+	if stillFrozen, _ := controller.RelayStatus(); stillFrozen.Availability.Available != 0 {
+		t.Fatal("finished controller accepted a late relay status binding")
+	}
 }
