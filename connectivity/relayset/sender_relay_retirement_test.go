@@ -195,3 +195,42 @@ func TestSenderRelayCanceledLateDialRetiresDiagnostics(t *testing.T) {
 		t.Fatal("canceled dial left installed authority")
 	}
 }
+
+func TestSenderRelayInstallCanceledDuringRegistrationCallbackRetiresConnection(t *testing.T) {
+	var completionCalls atomic.Int32
+	late := newRetiringSenderRelayEndpoint(&completionCalls)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	lifecycle := newSenderRelayTestLifecycle(t, nil, &senderRelayTestDialer{
+		dial: func(context.Context, relayv2.SenderConfig) (SenderConnection, error) {
+			return NewSenderConnection(late), nil
+		},
+	}, newSenderRelayTestClock())
+	var retiredReaders atomic.Int32
+	lifecycle.config.ObserveConnection = func(SenderConnection) func() {
+		return func() { retiredReaders.Add(1) }
+	}
+	var observed []RegistrationState
+	lifecycle.ObserveRegistration(func(state RegistrationState) {
+		observed = append(observed, state)
+		if state == RegistrationAvailable {
+			cancel()
+		}
+	})
+	if err := lifecycle.WaitReady(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("WaitReady = %v, want context.Canceled", err)
+	}
+	got := lifecycle.CompleteObservations()
+	if got.Enqueued != 1 || got.Loss.CapacityDropped != 2 || completionCalls.Load() != 1 || retiredReaders.Load() != 1 {
+		t.Fatalf("canceled install did not retire diagnostics: %+v calls=%d readers=%d", got, completionCalls.Load(), retiredReaders.Load())
+	}
+	lifecycle.mu.Lock()
+	installed, generation, reg := lifecycle.connection.valid(), lifecycle.generation, lifecycle.registration
+	lifecycle.mu.Unlock()
+	if installed || generation != 0 || reg != RegistrationPending {
+		t.Fatalf("canceled install left state: installed=%v generation=%d registration=%v", installed, generation, reg)
+	}
+	if len(observed) != 3 || observed[0] != RegistrationPending || observed[1] != RegistrationAvailable || observed[2] != RegistrationPending {
+		t.Fatalf("registration transitions = %v, want [Pending Available Pending]", observed)
+	}
+}

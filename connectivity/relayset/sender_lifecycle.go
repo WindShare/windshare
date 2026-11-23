@@ -286,6 +286,19 @@ func (lifecycle *SenderLifecycle) detachForRecovery() (SenderConnection, error) 
 	return old, nil
 }
 
+func (lifecycle *SenderLifecycle) installCauseLocked(
+	callerContext context.Context,
+	recoveryContext context.Context,
+) error {
+	if lifecycle.stopping {
+		return ErrStopped
+	}
+	if err := callerContext.Err(); err != nil {
+		return err
+	}
+	return recoveryContext.Err()
+}
+
 func (lifecycle *SenderLifecycle) installRecovered(
 	connection SenderConnection,
 	callerContext context.Context,
@@ -293,18 +306,19 @@ func (lifecycle *SenderLifecycle) installRecovered(
 ) error {
 	lifecycle.mu.Lock()
 	defer lifecycle.mu.Unlock()
-	if lifecycle.stopping {
-		return ErrStopped
-	}
-	if err := callerContext.Err(); err != nil {
+	if err := lifecycle.installCauseLocked(callerContext, recoveryContext); err != nil {
 		return err
 	}
-	if err := recoveryContext.Err(); err != nil {
+	lifecycle.setRegistrationLocked(RegistrationAvailable)
+	// Route retirement cancels callerContext before releasing Sender.mu, so
+	// rechecking after the callback closes the retirement race and lets
+	// connectAttempt retire the unserved connection immediately.
+	if err := lifecycle.installCauseLocked(callerContext, recoveryContext); err != nil {
+		lifecycle.setRegistrationLocked(RegistrationPending)
 		return err
 	}
 	lifecycle.connection = connection
 	lifecycle.generation++
-	lifecycle.setRegistrationLocked(RegistrationAvailable)
 	return nil
 }
 

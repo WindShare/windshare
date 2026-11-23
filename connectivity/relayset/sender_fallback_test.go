@@ -5,9 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/windshare/windshare/connectivity/relayplan"
+	"github.com/windshare/windshare/transport/relayv2"
 )
 
 func TestCanaryStartsAfterEveryActiveFailsAndKeepsPendingRoutes(t *testing.T) {
@@ -103,5 +106,163 @@ func TestCanaryReusesLastLinkSlotWithoutExceedingLimit(t *testing.T) {
 	got := set.Registrations().Candidates
 	if len(got) != MaximumEndpoints || slices.Contains(got, "active") || !slices.Contains(got, "canary") {
 		t.Fatal(got)
+	}
+}
+
+type racedRegistrationEndpoint struct {
+	*SenderLifecycle
+	onAvailable func()
+	waitDone    chan struct{}
+}
+
+func (e *racedRegistrationEndpoint) ObserveRegistration(observer func(RegistrationState)) {
+	e.SenderLifecycle.ObserveRegistration(func(state RegistrationState) {
+		if state == RegistrationAvailable && e.onAvailable != nil {
+			e.onAvailable()
+		}
+		observer(state)
+	})
+}
+
+func (e *racedRegistrationEndpoint) WaitReady(ctx context.Context) error {
+	defer close(e.waitDone)
+	return e.SenderLifecycle.WaitReady(ctx)
+}
+
+func TestCanaryRetirementClosesActiveConnectionRacingRegistrationCallback(t *testing.T) {
+	const (
+		urlA1 = "https://a1.example"
+		urlA2 = "https://a2.example"
+		urlA3 = "https://a3.example"
+		urlA4 = "https://a4.example"
+		urlC1 = "https://c1.example"
+		urlC2 = "https://c2.example"
+	)
+	plan := relayplan.Plan{
+		Network: []relayplan.Candidate{
+			{URL: urlA1, Identity: urlA1},
+			{URL: urlA2, Identity: urlA2},
+			{URL: urlA3, Identity: urlA3},
+			{URL: urlA4, Identity: urlA4},
+		},
+		Standby: []relayplan.Candidate{
+			{URL: urlC1, Identity: urlC1, Canary: true},
+			{URL: urlC2, Identity: urlC2, Canary: true},
+		},
+	}
+	clock := newSenderRelayTestClock()
+	admissions := NewNetworkAdmissions(plan, clock, nil)
+
+	a1 := &waitingRegistration{endpoint: newEndpoint(), ready: make(chan struct{}), observed: make(chan struct{})}
+	a2 := &waitingRegistration{endpoint: newEndpoint(), ready: make(chan struct{}), observed: make(chan struct{})}
+	a4 := &waitingRegistration{endpoint: newEndpoint(), ready: make(chan struct{}), observed: make(chan struct{})}
+
+	a3Retrying := make(chan struct{})
+	startA3Retry := make(chan struct{})
+	clock.wait = func(ctx context.Context, _ time.Duration, _ <-chan struct{}) error {
+		close(a3Retrying)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-startA3Retry:
+			return nil
+		}
+	}
+
+	connA3 := &senderRelayTestEndpoint{
+		accept: func(context.Context) (*relayv2.Channel, error) {
+			return nil, errors.New("retired connection served accept")
+		},
+	}
+	var a3Attempts int
+	configA3 := newSenderRelayTestConfig(t, nil, &senderRelayTestDialer{
+		dial: func(context.Context, relayv2.SenderConfig) (SenderConnection, error) {
+			a3Attempts++
+			if a3Attempts == 1 {
+				return SenderConnection{}, errors.New("transient startup failure")
+			}
+			return NewSenderConnection(connA3), nil
+		},
+	}, clock)
+	configA3.Candidate.PublicURL = urlA3
+	configA3.Attempts = admissions.Control(urlA3)
+	lifecycleA3, err := NewSenderLifecycle(configA3)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var retireOnce sync.Once
+	racedA3 := &racedRegistrationEndpoint{
+		SenderLifecycle: lifecycleA3,
+		waitDone:        make(chan struct{}),
+		onAvailable: func() {
+			// Simulate A4 acquiring Sender.mu and retiring A3 right before A3's
+			// RegistrationAvailable callback enters Sender.setRegistration.
+			retireOnce.Do(func() { a4.publish(RegistrationRetrying) })
+		},
+	}
+
+	canaryStarted := make(chan struct{})
+	var canaryOnce sync.Once
+	set, err := NewPlannedSender(t.Context(), plan, func(_ context.Context, url string) (SenderEndpoint, error) {
+		switch url {
+		case urlA1:
+			return a1, nil
+		case urlA2:
+			return a2, nil
+		case urlA3:
+			return racedA3, nil
+		case urlA4:
+			return a4, nil
+		case urlC1, urlC2:
+			canaryOnce.Do(func() { close(canaryStarted) })
+			return newEndpoint(), nil
+		default:
+			return nil, fmt.Errorf("unexpected relay %s", url)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		set.StopRecovery()
+		set.workers.Wait()
+	}()
+
+	waitValue(t, a1.observed)
+	waitValue(t, a2.observed)
+	waitValue(t, a4.observed)
+	waitValue(t, a3Retrying)
+
+	a1.publish(RegistrationRetrying)
+	a2.publish(RegistrationRetrying)
+	close(startA3Retry)
+
+	waitValue(t, canaryStarted)
+	waitValue(t, racedA3.waitDone)
+	if err := set.WaitReady(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := connA3.closeCalls.Load(); got != 1 {
+		t.Fatalf("retired active connection close calls = %d, want 1", got)
+	}
+	if got := connA3.acceptCalls.Load(); got != 0 {
+		t.Fatalf("retired active connection accept calls = %d, want 0", got)
+	}
+	lifecycleA3.mu.Lock()
+	installed, generation, reg := lifecycleA3.connection.valid(), lifecycleA3.generation, lifecycleA3.registration
+	lifecycleA3.mu.Unlock()
+	if installed || generation != 0 || reg != RegistrationPending {
+		t.Fatalf("retired lifecycle retained state: installed=%v generation=%d registration=%v", installed, generation, reg)
+	}
+	admissions.mu.Lock()
+	active, primary := admissions.active, admissions.primary
+	admissions.mu.Unlock()
+	if active != 0 || primary != -1 {
+		t.Fatalf("retired lifecycle retained admission slot: active=%d primary=%d", active, primary)
+	}
+	got := set.Registrations().Candidates
+	if slices.Contains(got, urlA3) || slices.Contains(got, urlA4) || !slices.Contains(got, urlC1) || !slices.Contains(got, urlC2) {
+		t.Fatalf("unexpected surviving candidates: %v", got)
 	}
 }
