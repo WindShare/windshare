@@ -32,8 +32,6 @@ import type { BrowserOutputWindow, OutputSessionHandle, StartBackendTaskInput } 
 import { SafeNameRegistry, decideCollisionName, deterministicSafeComponent } from './safe-name'
 
 const FSA_MAX_CONCURRENT_FILES = 4
-const FSA_CHECKPOINT_INTERVAL_BYTES = 16n * 1024n * 1024n
-const FSA_CHECKPOINT_INTERVAL_MS = 10_000
 const MAX_COLLISION_ATTEMPTS = 1_000
 
 /**
@@ -250,10 +248,10 @@ class FSASessionHandle implements OutputSessionHandle {
     this.transferOutput = Object.freeze({
       sessionId: record.taskId,
       capabilities: Object.freeze({
+        // FileSystemWritableFileStream has no in-place flush; reopening with
+        // keepExistingData copies the full file prefix on non-CoW filesystems,
+        // so FSA commits on pause, lease retry, and completion instead.
         maxConcurrentFiles: FSA_MAX_CONCURRENT_FILES,
-        supportsResume: true,
-        checkpointIntervalBytes: FSA_CHECKPOINT_INTERVAL_BYTES,
-        checkpointIntervalMilliseconds: FSA_CHECKPOINT_INTERVAL_MS,
       }),
       ensureDirectory: (request: TransferDirectoryRequest, signal: AbortSignal) => this.#ensureDirectory(request, signal),
       openFile: (request: TransferFileRequest, signal: AbortSignal) => this.#openFile(request, signal),
@@ -373,6 +371,8 @@ class FSAOutputFile implements TransferOutputFile {
   readonly #store: ReceiveStore
   readonly #diagnostics: OutputDiagnosticsPorts | undefined
   #writer: FileSystemWritableFileStream | undefined
+  #writerDirty = false
+  #hasCommittedData: boolean
 
   constructor(input: Readonly<{
     taskId: string
@@ -393,6 +393,7 @@ class FSAOutputFile implements TransferOutputFile {
     this.#store = input.store
     this.#diagnostics = input.diagnostics
     this.completedRanges = input.initialRanges
+    this.#hasCommittedData = input.initialRanges.length > 0
     if (input.savedRevision !== undefined) this.savedRevision = input.savedRevision
     if (input.savedSourceMetadata !== undefined) this.savedSourceMetadata = input.savedSourceMetadata
     if (input.savedSize !== undefined) this.savedSize = input.savedSize
@@ -405,6 +406,7 @@ class FSAOutputFile implements TransferOutputFile {
       position: bigintToSafeNumber(offset, 'FSA write offset'),
       data: data.slice(),
     })
+    this.#writerDirty = true
   }
 
   async checkpoint(ranges: readonly ByteRange[]): Promise<void> {
@@ -430,6 +432,7 @@ class FSAOutputFile implements TransferOutputFile {
   async abort(reason?: unknown): Promise<void> {
     const writer = this.#writer
     this.#writer = undefined
+    this.#writerDirty = false
     if (writer !== undefined) {
       await writer.abort(reason).catch(() => undefined)
     }
@@ -437,15 +440,19 @@ class FSAOutputFile implements TransferOutputFile {
 
   async #ensureWriter(): Promise<FileSystemWritableFileStream> {
     if (this.#writer !== undefined) return this.#writer
-    const keepExistingData = this.completedRanges.length > 0
-    this.#writer = await this.#handle.createWritable({ keepExistingData })
+    this.#writer = await this.#handle.createWritable({ keepExistingData: this.#hasCommittedData })
     return this.#writer
   }
 
   async #closeWriter(): Promise<void> {
     const writer = this.#writer
+    const wroteBytes = this.#writerDirty
     this.#writer = undefined
-    if (writer !== undefined) await writer.close()
+    this.#writerDirty = false
+    if (writer !== undefined) {
+      await writer.close()
+      if (wroteBytes) this.#hasCommittedData = true
+    }
   }
 
   async #persist(status: 'receiving' | 'completed', ranges: readonly ByteRange[]): Promise<void> {

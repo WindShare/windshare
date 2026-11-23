@@ -103,9 +103,6 @@ export class DeliveryBuffer {
       sessionId,
       capabilities: Object.freeze({
         maxConcurrentFiles: 1,
-        supportsResume: false,
-        checkpointIntervalBytes: 64n * 1024n * 1024n,
-        checkpointIntervalMilliseconds: 60_000,
       }),
       openFile: async (request: TransferFileRequest, signal: AbortSignal): Promise<TransferOutputFile> => {
         signal.throwIfAborted()

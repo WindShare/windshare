@@ -225,11 +225,11 @@ async function maybeCheckpoint(
   writtenBytes: bigint,
   clock: CheckpointClock,
 ): Promise<void> {
-  const { checkpointIntervalBytes, checkpointIntervalMilliseconds, supportsResume } = ctx.output.capabilities
-  if (!supportsResume) return
+  const policy = ctx.output.capabilities.periodicCheckpoint
+  if (policy === undefined) return
   clock.pendingBytes += writtenBytes
   const now = Date.now()
-  if (clock.pendingBytes < checkpointIntervalBytes && now - clock.lastCheckpointAt < checkpointIntervalMilliseconds) {
+  if (clock.pendingBytes < policy.intervalBytes && now - clock.lastCheckpointAt < policy.intervalMilliseconds) {
     return
   }
   await writer.checkpoint(current.ranges)

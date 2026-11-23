@@ -314,9 +314,10 @@ class OPFSSessionHandle implements OutputSessionHandle {
       sessionId: input.record.taskId,
       capabilities: Object.freeze({
         maxConcurrentFiles: OPFS_MAX_CONCURRENT_FILES,
-        supportsResume: true,
-        checkpointIntervalBytes: OPFS_CHECKPOINT_INTERVAL_BYTES,
-        checkpointIntervalMilliseconds: OPFS_CHECKPOINT_INTERVAL_MS,
+        periodicCheckpoint: Object.freeze({
+          intervalBytes: OPFS_CHECKPOINT_INTERVAL_BYTES,
+          intervalMilliseconds: OPFS_CHECKPOINT_INTERVAL_MS,
+        }),
       }),
       ...(input.zip === undefined ? {} : {
         ensureDirectory: (request: TransferDirectoryRequest) =>

@@ -41,11 +41,20 @@ export interface TransferOutputFile {
   abort(reason?: unknown): Promise<void>
 }
 
+export interface PeriodicCheckpointPolicy {
+  readonly intervalBytes: bigint
+  readonly intervalMilliseconds: number
+}
+
 export interface TransferOutputCapabilities {
   readonly maxConcurrentFiles: number
-  readonly supportsResume: boolean
-  readonly checkpointIntervalBytes: bigint
-  readonly checkpointIntervalMilliseconds: number
+  /**
+   * Optional mid-file periodic checkpoint schedule.
+   * Only backends with cheap in-place flushing (e.g. OPFS SyncAccessHandle)
+   * should advertise this; copy-on-reopen streams like FSA commit on `pause()`,
+   * `commit()`, and explicit lease-replacement `checkpoint()` calls instead.
+   */
+  readonly periodicCheckpoint?: PeriodicCheckpointPolicy
 }
 
 export interface TransferOutputSession {

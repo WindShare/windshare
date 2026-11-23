@@ -118,16 +118,20 @@ describe('transfer discovery and job execution', () => {
     const target = new Uint8Array(payload.byteLength)
     target.set(payload.subarray(0, 4), 0)
 
+    let checkpointCalls = 0
     const output: TransferOutputSession = {
       sessionId: 'sess-1',
-      capabilities: { maxConcurrentFiles: 2, supportsResume: true, checkpointIntervalBytes: 4n, checkpointIntervalMilliseconds: 60_000 },
+      capabilities: {
+        maxConcurrentFiles: 2,
+        periodicCheckpoint: { intervalBytes: 4n, intervalMilliseconds: 60_000 },
+      },
       openFile: async (req: TransferFileRequest): Promise<TransferOutputFile> => ({
         completedRanges: [byteRange(0n, 4n)],
         alreadyCompleted: false,
         savedRevision: req.revision,
         savedSize: req.exactSize,
         writeAt: async (offset, data) => { target.set(data, Number(offset)) },
-        checkpoint: async () => undefined,
+        checkpoint: async () => { checkpointCalls += 1 },
         commit: async () => undefined,
         pause: async () => undefined,
         abort: async () => undefined,
@@ -145,6 +149,7 @@ describe('transfer discovery and job execution', () => {
 
     expect(result.status).toBe('completed')
     expect(result.completedFiles).toBe(1n)
+    expect(checkpointCalls).toBe(1)
     expect(fixture.readRanges).toEqual([byteRange(4n, 8n)])
     expect([...target]).toEqual([...payload])
 
@@ -181,14 +186,15 @@ describe('transfer discovery and job execution', () => {
     let pausedRanges: readonly ByteRange[] = []
     const jobRef: { current?: TransferJob } = {}
 
+    let checkpointCalls = 0
     const output: TransferOutputSession = {
       sessionId: 'sess-pause',
-      capabilities: { maxConcurrentFiles: 1, supportsResume: true, checkpointIntervalBytes: 100n, checkpointIntervalMilliseconds: 60_000 },
+      capabilities: { maxConcurrentFiles: 1 },
       openFile: async (): Promise<TransferOutputFile> => ({
         completedRanges: [],
         alreadyCompleted: false,
         writeAt: async () => { jobRef.current?.pause('user') },
-        checkpoint: async () => undefined,
+        checkpoint: async () => { checkpointCalls += 1 },
         commit: async () => undefined,
         pause: async ranges => { pausedRanges = ranges },
         abort: async () => undefined,
@@ -208,6 +214,7 @@ describe('transfer discovery and job execution', () => {
     const result = await job.run()
     expect(result.status).toBe('paused')
     expect(result.pauseReason).toBe('user')
+    expect(checkpointCalls).toBe(0)
     expect(pausedRanges).toEqual([byteRange(0n, 4n)])
 
     const discovered: string[] = []
@@ -215,5 +222,41 @@ describe('transfer discovery and job execution', () => {
       if (item.kind === 'file') discovered.push(item.entry.name)
     }
     expect(discovered).toEqual(['movie.bin'])
+  })
+
+  it('skips periodic checkpoints during normal transfer when periodicCheckpoint is omitted', async () => {
+    const payload = new Uint8Array([0x53, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
+    const fixture = makeShareFixture([{ seed: 30, name: 'stream.bin', bytes: payload }])
+    const target = new Uint8Array(payload.byteLength)
+    let checkpointCalls = 0
+    let commitCalls = 0
+
+    const output: TransferOutputSession = {
+      sessionId: 'sess-no-periodic',
+      capabilities: { maxConcurrentFiles: 1 },
+      openFile: async (): Promise<TransferOutputFile> => ({
+        completedRanges: [],
+        alreadyCompleted: false,
+        writeAt: async (offset, data) => { target.set(data, Number(offset)) },
+        checkpoint: async () => { checkpointCalls += 1 },
+        commit: async () => { commitCalls += 1 },
+        pause: async () => undefined,
+        abort: async () => undefined,
+      }),
+    }
+
+    const result = await new TransferJob({
+      descriptor: fixture.descriptor,
+      catalog: fixture.catalog,
+      selection: new SelectionPolicy(true).snapshot(),
+      revisions: fixture.revisions,
+      broker: fixture.broker,
+      output,
+    }).run()
+
+    expect(result.status).toBe('completed')
+    expect(checkpointCalls).toBe(0)
+    expect(commitCalls).toBe(1)
+    expect([...target]).toEqual([...payload])
   })
 })

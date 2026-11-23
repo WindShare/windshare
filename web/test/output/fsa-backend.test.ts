@@ -48,6 +48,7 @@ class FakeFileHandle {
   readonly kind = 'file' as const
   readonly name: string
   bytes = new Uint8Array(0)
+  readonly writableCalls: boolean[] = []
   readonly #events: string[]
 
   constructor(name: string, events: string[]) {
@@ -60,7 +61,9 @@ class FakeFileHandle {
   }
 
   async createWritable(options?: { keepExistingData?: boolean }) {
-    let buffer = options?.keepExistingData ? this.bytes.slice() : new Uint8Array(0)
+    const keepExistingData = Boolean(options?.keepExistingData)
+    this.writableCalls.push(keepExistingData)
+    let buffer = keepExistingData ? this.bytes.slice() : new Uint8Array(0)
     return {
       write: async (chunk: { type: 'write'; position: number; data: Uint8Array }) => {
         const end = chunk.position + chunk.data.byteLength
@@ -195,5 +198,37 @@ describe('FSA backend safety boundaries', () => {
     expect(reserved.children.has('big.bin')).toBe(false)
     expect(reserved.children.size).toBe(1)
     expect(await store.getTask('fsa-task-1')).toBeUndefined()
+  })
+
+  it('preserves committed bytes when reopening a new file writer after checkpoint and disables periodic mid-file cuts', async () => {
+    const store = new MemoryReceiveStore()
+    const parent = new FakeDirectoryHandle('Downloads', store.events)
+    const session = await openNewFSASession({
+      task: {
+        taskId: 'fsa-task-2',
+        selection: { shareInstance: 's1', syntheticRoot: 'r1', defaultSelected: true, rules: [] },
+        selectionKey: 'sel-2',
+        artifact: { kind: 'directory-tree', name: 'archive.bin', singleFileId: 'f1' },
+        lifecycle: initialReceiveState('fsa-task-2'),
+      },
+      parentHandle: parent as unknown as FileSystemDirectoryHandle,
+      store: store as unknown as ReceiveStore,
+    })
+
+    // FSA must not opt into periodic mid-file checkpoints that trigger O(N^2) prefix copies.
+    expect(session.transferOutput.capabilities.periodicCheckpoint).toBeUndefined()
+
+    const file = await session.transferOutput.openFile({
+      fileId: 'f1', path: ['archive.bin'], sourcePath: ['archive.bin'], revision: 'rev1', exactSize: 8n,
+    }, new AbortController().signal)
+    await file.writeAt(0n, new Uint8Array([0x53, 0x54, 0x55, 0x56]))
+    await file.checkpoint([byteRange(0n, 4n)])
+    await file.writeAt(4n, new Uint8Array([0x57, 0x58, 0x59, 0x5a]))
+    await file.commit([byteRange(0n, 8n)])
+
+    const physical = parent.children.get('archive.bin') as FakeFileHandle
+    expect(physical.writableCalls).toEqual([false, true])
+    expect([...physical.bytes]).toEqual([0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a])
+    await session.close()
   })
 })
