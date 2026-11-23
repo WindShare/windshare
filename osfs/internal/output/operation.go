@@ -7,7 +7,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"path/filepath"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/transfer"
@@ -209,13 +208,13 @@ func (a *Authority) initializeOperationDirLocked(
 	}
 	opDir, err := openChildDir(ctrlDir, opDirName)
 	if err != nil {
-		_ = removeOperationDirectory(a.root, opDirName)
+		_ = removeOperationDirectory(ctrlDir, opDirName)
 		return nil, wrapOutputFault(ctx, transferfault.OutputOwnership, "open operation directory", err)
 	}
 	taskLock, _, err := acquireLockFile(opDir, taskLockFileName, false, false)
 	if err != nil {
 		_ = opDir.Close()
-		_ = removeOperationDirectory(a.root, opDirName)
+		_ = removeOperationDirectory(ctrlDir, opDirName)
 		return nil, wrapOutputFault(ctx, transferfault.OutputOwnership, "lock new operation", err)
 	}
 	meta := taskMeta{
@@ -229,7 +228,7 @@ func (a *Authority) initializeOperationDirLocked(
 	journal, err := createTaskJournal(opDir, meta, a.now)
 	if err != nil {
 		_ = errors.Join(taskLock.Close(), opDir.Close())
-		_ = removeOperationDirectory(a.root, opDirName)
+		_ = removeOperationDirectory(ctrlDir, opDirName)
 		return nil, wrapOutputFault(ctx, transferfault.OutputOwnership, "create task journal", err)
 	}
 	_ = ctrlDir.Sync()
@@ -546,7 +545,7 @@ func retireControlDir(root *Dir, opDirName string, beforeRemove func() error) er
 // removes .windshare-tmp when no other operations remain, and always closes
 // dirLock and ctrlDir.
 func removeOperationLocked(root, ctrlDir *Dir, dirLock *FileLock, opDirName string) (removeErr, closeErr error) {
-	removeErr = removeOperationDirectory(root, opDirName)
+	removeErr = removeOperationDirectory(ctrlDir, opDirName)
 	names, listErr := readDirNames(ctrlDir)
 	empty := listErr == nil
 	for _, name := range names {
@@ -557,10 +556,11 @@ func removeOperationLocked(root, ctrlDir *Dir, dirLock *FileLock, opDirName stri
 	}
 	if empty && removeErr == nil {
 		// Release the directory lock before unlinking .lock and .windshare-tmp.
-		closeErr = errors.Join(dirLock.Close(), ctrlDir.Close())
-		_ = os.Remove(filepath.Join(root.path, ControlDirName, dirLockFileName))
-		_ = os.Remove(filepath.Join(root.path, ControlDirName, authorityIDFile))
-		_ = os.Remove(filepath.Join(root.path, ControlDirName))
+		closeErr = dirLock.Close()
+		_ = removeChild(ctrlDir, dirLockFileName, false)
+		_ = removeChild(ctrlDir, authorityIDFile, false)
+		closeErr = errors.Join(closeErr, ctrlDir.Close())
+		_ = removeChild(root, ControlDirName, true)
 		return nil, closeErr
 	}
 	return removeErr, errors.Join(dirLock.Close(), ctrlDir.Close())

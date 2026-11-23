@@ -7,7 +7,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -390,11 +389,52 @@ func partFileName(fileID catalog.FileID, locatorDigest transfer.MaterializationL
 	return hex.EncodeToString(fileID.Bytes()) + "-" + hex.EncodeToString(locatorDigest[:8]) + ".part"
 }
 
-func removeOperationDirectory(root *Dir, opDirName string) error {
-	ctrlPath := filepath.Join(root.path, ControlDirName)
-	opPath := filepath.Join(ctrlPath, opDirName)
-	if err := os.RemoveAll(opPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+func removeOperationDirectory(ctrlDir *Dir, opDirName string) error {
+	return removeChildTree(ctrlDir, opDirName)
+}
+
+func removeChildTree(parent *Dir, name string) error {
+	dir, err := openChildDir(parent, name)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
 		return err
 	}
-	return nil
+	names, err := readDirNames(dir)
+	if err != nil {
+		return errors.Join(err, dir.Close())
+	}
+	var removeErr error
+	for _, child := range names {
+		kind, _, statErr := lstatChild(dir, child)
+		if statErr != nil {
+			removeErr = errors.Join(removeErr, statErr)
+			continue
+		}
+		switch kind {
+		case EntryAbsent:
+		case EntryDirectory:
+			removeErr = errors.Join(removeErr, removeChildTree(dir, child))
+		case EntryOther:
+			// On Windows a directory junction reports EntryOther but requires
+			// FILE_DIRECTORY_FILE deletion; try non-directory first, then directory.
+			if err := removeChild(dir, child, false); err != nil {
+				if errors.Is(err, ErrUnsafeNamespace) {
+					removeErr = errors.Join(removeErr, removeChild(dir, child, true))
+				} else {
+					removeErr = errors.Join(removeErr, err)
+				}
+			}
+		default:
+			removeErr = errors.Join(removeErr, removeChild(dir, child, false))
+		}
+	}
+	if closeErr := dir.Close(); closeErr != nil {
+		removeErr = errors.Join(removeErr, closeErr)
+	}
+	if removeErr != nil {
+		return removeErr
+	}
+	return removeChild(parent, name, true)
 }

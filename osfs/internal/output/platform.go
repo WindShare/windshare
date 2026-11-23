@@ -180,8 +180,11 @@ func ProbeDestination(root *Dir) (caps DestinationCapabilities, resultErr error)
 		return DestinationCapabilities{}, err
 	}
 	defer func() {
+		_ = removeChild(probeDir, "src", false)
+		_ = removeChild(probeDir, "existing", false)
+		_ = removeChild(probeDir, "published", false)
 		closeErr := probeDir.Close()
-		removeErr := os.RemoveAll(filepath.Join(root.path, probeName))
+		removeErr := removeChild(root, probeName, true)
 		resultErr = errors.Join(resultErr, closeErr, removeErr)
 		if resultErr != nil {
 			caps = DestinationCapabilities{}

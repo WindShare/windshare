@@ -22,22 +22,30 @@ const (
 	windowsExtendedUNCPrefix   = `\\?\UNC\`
 	windowsShortFinalPathLimit = 240
 	initialResolvedPathUnits   = 512
+
+	windowsShareAll      = windows.FILE_SHARE_READ | windows.FILE_SHARE_WRITE | windows.FILE_SHARE_DELETE
+	windowsDirReadAccess = windows.FILE_LIST_DIRECTORY | windows.FILE_READ_ATTRIBUTES | windows.SYNCHRONIZE
+	windowsSyncDirOpts   = windows.FILE_DIRECTORY_FILE | windows.FILE_SYNCHRONOUS_IO_NONALERT
+	windowsSyncFileOpts  = windows.FILE_NON_DIRECTORY_FILE | windows.FILE_SYNCHRONOUS_IO_NONALERT
 )
 
 type fileAttributeTagInfo struct {
-	FileAttributes uint32
-	ReparseTag     uint32
+	FileAttributes, ReparseTag uint32
+}
+
+type fileDispositionInfoEx struct{ Flags uint32 }
+type fileDispositionInfo struct{ DeleteFile byte }
+
+type fileBasicInfo struct {
+	CreationTime, LastAccessTime, LastWriteTime, ChangedTime int64
+	FileAttributes, _                                        uint32
 }
 
 // A caller-named container whose final component is a Windows directory symlink
 // (mklink /D) or directory junction / mount point (mklink /J) is resolved once
 // through the kernel, while other reparse points such as cloud placeholders
 // stay rejected. Every entry inside the container stays no-follow.
-func resolveContainerTarget(
-	path string,
-	info os.FileInfo,
-	follow func(string) (os.FileInfo, error),
-) (string, os.FileInfo, error) {
+func resolveContainerTarget(path string, info os.FileInfo, follow func(string) (os.FileInfo, error)) (string, os.FileInfo, error) {
 	link, err := isWindowsContainerLink(path, info)
 	if err != nil {
 		return "", nil, errors.Join(ErrUnsafeNamespace, err)
@@ -90,26 +98,15 @@ func windowsReparseTag(path string) (uint32, error) {
 	if err != nil {
 		return 0, err
 	}
-	handle, err := windows.CreateFile(
-		encoded,
-		0,
-		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
-		nil,
-		windows.OPEN_EXISTING,
-		windows.FILE_FLAG_OPEN_REPARSE_POINT|windows.FILE_FLAG_BACKUP_SEMANTICS,
-		0,
-	)
+	handle, err := windows.CreateFile(encoded, 0, windowsShareAll, nil, windows.OPEN_EXISTING,
+		windows.FILE_FLAG_OPEN_REPARSE_POINT|windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
 	if err != nil {
 		return 0, err
 	}
 	defer windows.CloseHandle(handle)
 	var tagInfo fileAttributeTagInfo
-	err = windows.GetFileInformationByHandleEx(
-		handle,
-		windows.FileAttributeTagInfo,
-		(*byte)(unsafe.Pointer(&tagInfo)),
-		uint32(unsafe.Sizeof(tagInfo)),
-	)
+	err = windows.GetFileInformationByHandleEx(handle, windows.FileAttributeTagInfo,
+		(*byte)(unsafe.Pointer(&tagInfo)), uint32(unsafe.Sizeof(tagInfo)))
 	if err != nil {
 		return 0, err
 	}
@@ -124,15 +121,8 @@ func windowsResolvedContainerPath(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	handle, err := windows.CreateFile(
-		encoded,
-		windows.FILE_READ_ATTRIBUTES,
-		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
-		nil,
-		windows.OPEN_EXISTING,
-		windows.FILE_FLAG_BACKUP_SEMANTICS,
-		0,
-	)
+	handle, err := windows.CreateFile(encoded, windows.FILE_READ_ATTRIBUTES, windowsShareAll, nil,
+		windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
 	if err != nil {
 		return "", err
 	}
@@ -145,6 +135,14 @@ func windowsResolvedContainerPath(path string) (string, error) {
 		info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
 		return "", ErrUnsafeNamespace
 	}
+	resolved, err := finalPathByHandle(handle)
+	if err != nil {
+		return "", err
+	}
+	return normalizeWindowsFinalPath(resolved), nil
+}
+
+func finalPathByHandle(handle windows.Handle) (string, error) {
 	buffer := make([]uint16, initialResolvedPathUnits)
 	for {
 		length, err := windows.GetFinalPathNameByHandle(handle, &buffer[0], uint32(len(buffer)), 0)
@@ -152,7 +150,7 @@ func windowsResolvedContainerPath(path string) (string, error) {
 			return "", err
 		}
 		if length < uint32(len(buffer)) {
-			return normalizeWindowsFinalPath(windows.UTF16ToString(buffer[:length])), nil
+			return windows.UTF16ToString(buffer[:length]), nil
 		}
 		buffer = make([]uint16, length+1)
 	}
@@ -174,170 +172,324 @@ func normalizeWindowsFinalPath(path string) string {
 }
 
 func openDirHandle(path string) (*Dir, error) {
-	info, err := os.Lstat(path)
+	encoded, err := windows.UTF16PtrFromString(path)
 	if err != nil {
 		return nil, err
 	}
-	if !info.IsDir() || isWindowsReparsePoint(info) {
-		return nil, ErrUnsafeNamespace
+	h, err := windows.CreateFile(encoded, windowsDirReadAccess, windowsShareAll, nil, windows.OPEN_EXISTING,
+		windows.FILE_FLAG_OPEN_REPARSE_POINT|windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+	if err != nil {
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
 	}
-	return openVerifiedDirHandle(path, info)
+	if _, err := verifyOpenHandle(h, true); err != nil {
+		return nil, err
+	}
+	handle := os.NewFile(uintptr(h), path)
+	info, err := handle.Stat()
+	if err != nil || !info.IsDir() {
+		return nil, errors.Join(ErrUnsafeNamespace, err, handle.Close())
+	}
+	return &Dir{path: path, handle: handle, info: info}, nil
 }
 
 func openVerifiedDirHandle(path string, expected os.FileInfo) (*Dir, error) {
-	handle, err := openWindowsPath(path, os.O_RDONLY, true)
+	dir, err := openDirHandle(path)
 	if err != nil {
 		return nil, err
 	}
-	current, err := handle.Stat()
-	if err != nil || !current.IsDir() || !os.SameFile(expected, current) {
-		return nil, errors.Join(ErrUnsafeNamespace, err, handle.Close())
+	if !os.SameFile(expected, dir.info) {
+		return nil, errors.Join(ErrUnsafeNamespace, dir.Close())
 	}
-	return &Dir{path: path, handle: handle, info: current}, nil
+	return dir, nil
+}
+
+// ntCreateAt opens or creates a single component relative to an open directory
+// handle so child operations stay anchored across directory renames and bypass
+// intermediate path re-resolution and Win32 MAX_PATH limits.
+func ntCreateAt(dir *Dir, name string, access, disposition, options uint32) (windows.Handle, error) {
+	if dir == nil || dir.handle == nil {
+		return windows.InvalidHandle, fs.ErrClosed
+	}
+	h, err := ntCreateRelative(windows.Handle(dir.handle.Fd()), name, access, disposition, options)
+	runtime.KeepAlive(dir.handle)
+	return h, err
+}
+
+func ntCreateRelative(root windows.Handle, name string, access, disposition, options uint32) (windows.Handle, error) {
+	objName := &windows.NTUnicodeString{}
+	if name != "" {
+		var err error
+		objName, err = windows.NewNTUnicodeString(name)
+		if err != nil {
+			return windows.InvalidHandle, err
+		}
+	}
+	attrs := windows.OBJECT_ATTRIBUTES{
+		Length:        uint32(unsafe.Sizeof(windows.OBJECT_ATTRIBUTES{})),
+		RootDirectory: root,
+		ObjectName:    objName,
+		Attributes:    windows.OBJ_CASE_INSENSITIVE,
+	}
+	var handle windows.Handle
+	var iosb windows.IO_STATUS_BLOCK
+	err := windows.NtCreateFile(&handle, access, &attrs, &iosb, nil, windows.FILE_ATTRIBUTE_NORMAL,
+		windowsShareAll, disposition, options|windows.FILE_OPEN_FOR_BACKUP_INTENT|windows.FILE_OPEN_REPARSE_POINT, 0, 0)
+	if err != nil {
+		return windows.InvalidHandle, ntStatusToError(err, options)
+	}
+	return handle, nil
+}
+
+func ntStatusToError(err error, options uint32) error {
+	nt, ok := errors.AsType[windows.NTStatus](err)
+	if !ok {
+		return err
+	}
+	errno := nt.Errno()
+	switch nt {
+	case windows.STATUS_REPARSE_POINT_ENCOUNTERED:
+		return errors.Join(ErrUnsafeNamespace, errno)
+	case windows.STATUS_FILE_IS_A_DIRECTORY:
+		if options&windows.FILE_NON_DIRECTORY_FILE != 0 {
+			return errors.Join(ErrUnsafeNamespace, errno)
+		}
+	case windows.STATUS_NOT_A_DIRECTORY:
+		if options&windows.FILE_DIRECTORY_FILE != 0 {
+			return errors.Join(ErrUnsafeNamespace, errno)
+		}
+	}
+	return errno
+}
+
+func verifyOpenHandle(h windows.Handle, wantDir bool) (windows.ByHandleFileInformation, error) {
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(h, &info); err != nil ||
+		info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+		_ = windows.CloseHandle(h)
+		return windows.ByHandleFileInformation{}, errors.Join(ErrUnsafeNamespace, err)
+	}
+	isDir := info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0
+	if wantDir != isDir {
+		_ = windows.CloseHandle(h)
+		return windows.ByHandleFileInformation{}, ErrUnsafeNamespace
+	}
+	if !wantDir {
+		if fileType, err := windows.GetFileType(h); err != nil || fileType != windows.FILE_TYPE_DISK {
+			_ = windows.CloseHandle(h)
+			return windows.ByHandleFileInformation{}, errors.Join(ErrUnsafeNamespace, err)
+		}
+	}
+	return info, nil
+}
+
+func wrapAtError(op string, parent *Dir, name string, err error, mapNameRefusal bool) error {
+	if mapNameRefusal && isNativeNameRefusal(err) {
+		return errors.Join(ErrNameRejected, err)
+	}
+	if errors.Is(err, ErrUnsafeNamespace) {
+		return err
+	}
+	path := parent.Path()
+	if name != "" {
+		path = filepath.Join(path, name)
+	}
+	return &os.PathError{Op: op, Path: path, Err: err}
+}
+
+func ntFileAccessAndDisposition(flags int) (access, disposition uint32) {
+	access = windows.FILE_GENERIC_READ | windows.FILE_READ_ATTRIBUTES | windows.SYNCHRONIZE
+	if flags&os.O_WRONLY != 0 {
+		access = windows.FILE_GENERIC_WRITE | windows.FILE_READ_ATTRIBUTES | windows.SYNCHRONIZE
+	} else if flags&(os.O_RDWR|os.O_CREATE) != 0 {
+		access |= windows.FILE_GENERIC_WRITE
+	}
+	if flags&os.O_APPEND != 0 {
+		access |= windows.FILE_APPEND_DATA
+		if flags&os.O_TRUNC == 0 {
+			access &^= windows.FILE_WRITE_DATA
+		}
+	}
+
+	// Never pass FILE_OVERWRITE/FILE_OVERWRITE_IF directly so an existing
+	// reparse point cannot be clobbered before verifyOpenHandle rejects it.
+	switch {
+	case flags&os.O_CREATE != 0 && flags&os.O_EXCL != 0:
+		disposition = windows.FILE_CREATE
+	case flags&os.O_CREATE != 0:
+		disposition = windows.FILE_OPEN_IF
+	default:
+		disposition = windows.FILE_OPEN
+	}
+	return access, disposition
 }
 
 func openChildDir(parent *Dir, name string) (*Dir, error) {
 	if err := validName(name); err != nil {
 		return nil, err
 	}
-	return openDirHandle(filepath.Join(parent.path, name))
+	h, err := ntCreateAt(parent, name, windowsDirReadAccess, windows.FILE_OPEN, windowsSyncDirOpts)
+	if err != nil {
+		return nil, wrapAtError("openat", parent, name, err, true)
+	}
+	if _, err := verifyOpenHandle(h, true); err != nil {
+		return nil, err
+	}
+	childPath := filepath.Join(parent.Path(), name)
+	handle := os.NewFile(uintptr(h), childPath)
+	info, err := handle.Stat()
+	if err != nil || !info.IsDir() {
+		return nil, errors.Join(ErrUnsafeNamespace, err, handle.Close())
+	}
+	return &Dir{path: childPath, handle: handle, info: info}, nil
 }
 
 func openChildFile(parent *Dir, name string, flags int, _ fs.FileMode) (*os.File, error) {
 	if err := validName(name); err != nil {
 		return nil, err
 	}
-	f, err := openWindowsPath(filepath.Join(parent.path, name), flags, false)
+	access, disposition := ntFileAccessAndDisposition(flags)
+	h, err := ntCreateAt(parent, name, access, disposition, windowsSyncFileOpts)
 	if err != nil {
-		if isNativeNameRefusal(err) {
-			return nil, errors.Join(ErrNameRejected, err)
-		}
+		return nil, wrapAtError("openat", parent, name, err, true)
+	}
+	if _, err := verifyOpenHandle(h, false); err != nil {
 		return nil, err
+	}
+	f := os.NewFile(uintptr(h), filepath.Join(parent.Path(), name))
+	if flags&os.O_TRUNC != 0 {
+		if err := f.Truncate(0); err != nil {
+			return nil, errors.Join(err, f.Close())
+		}
 	}
 	return f, nil
-}
-
-func openWindowsPath(path string, flags int, directory bool) (*os.File, error) {
-	name, err := windows.UTF16PtrFromString(path)
-	if err != nil {
-		return nil, err
-	}
-	access := uint32(windows.GENERIC_READ)
-	if directory {
-		access = windows.FILE_LIST_DIRECTORY | windows.FILE_READ_ATTRIBUTES | windows.SYNCHRONIZE
-		if flags&os.O_RDWR != 0 {
-			access |= windows.DELETE
-		}
-	} else {
-		if flags&os.O_APPEND != 0 {
-			access |= windows.FILE_APPEND_DATA | windows.SYNCHRONIZE
-		} else if flags&(os.O_RDWR|os.O_WRONLY) != 0 {
-			access |= windows.GENERIC_WRITE | windows.DELETE
-		}
-	}
-	disposition := uint32(windows.OPEN_EXISTING)
-	switch {
-	case flags&os.O_CREATE != 0 && flags&os.O_EXCL != 0:
-		disposition = windows.CREATE_NEW
-	case flags&os.O_CREATE != 0 && flags&os.O_TRUNC != 0:
-		disposition = windows.CREATE_ALWAYS
-	case flags&os.O_CREATE != 0:
-		disposition = windows.OPEN_ALWAYS
-	case flags&os.O_TRUNC != 0:
-		disposition = windows.TRUNCATE_EXISTING
-	}
-	attributes := uint32(windows.FILE_FLAG_OPEN_REPARSE_POINT | windows.FILE_FLAG_BACKUP_SEMANTICS)
-	h, err := windows.CreateFile(
-		name,
-		access,
-		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
-		nil,
-		disposition,
-		attributes,
-		0,
-	)
-	if err != nil {
-		return nil, &os.PathError{Op: "open", Path: path, Err: err}
-	}
-	var info windows.ByHandleFileInformation
-	if err := windows.GetFileInformationByHandle(h, &info); err != nil ||
-		info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-		_ = windows.CloseHandle(h)
-		return nil, errors.Join(ErrUnsafeNamespace, err)
-	}
-	isDir := info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0
-	if directory != isDir {
-		_ = windows.CloseHandle(h)
-		return nil, ErrUnsafeNamespace
-	}
-	return os.NewFile(uintptr(h), path), nil
 }
 
 func lstatChild(parent *Dir, name string) (EntryKind, uint64, error) {
 	if err := validName(name); err != nil {
 		return 0, 0, err
 	}
-	info, err := os.Lstat(filepath.Join(parent.path, name))
+	h, err := ntCreateAt(parent, name, windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE, windows.FILE_OPEN, 0)
 	if errors.Is(err, fs.ErrNotExist) {
 		return EntryAbsent, 0, nil
 	}
 	if err != nil {
-		if isNativeNameRefusal(err) {
-			return 0, 0, errors.Join(ErrNameRejected, err)
-		}
+		return 0, 0, wrapAtError("fstatat", parent, name, err, true)
+	}
+	defer windows.CloseHandle(h)
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(h, &info); err != nil {
 		return 0, 0, err
 	}
-	if isWindowsReparsePoint(info) {
+	if info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
 		return EntryOther, 0, nil
 	}
-	if info.IsDir() {
+	if info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0 {
 		return EntryDirectory, 0, nil
 	}
-	if info.Mode().IsRegular() {
-		return EntryRegularFile, uint64(max(info.Size(), 0)), nil
+	if fileType, err := windows.GetFileType(h); err != nil || fileType != windows.FILE_TYPE_DISK {
+		return EntryOther, 0, nil
 	}
-	return EntryOther, 0, nil
+	return EntryRegularFile, uint64(info.FileSizeHigh)<<32 | uint64(info.FileSizeLow), nil
 }
 
-func mkdirChild(parent *Dir, name string, mode fs.FileMode) error {
+func mkdirChild(parent *Dir, name string, _ fs.FileMode) error {
 	if err := validName(name); err != nil {
 		return err
 	}
-	err := os.Mkdir(filepath.Join(parent.path, name), mode)
+	h, err := ntCreateAt(parent, name, windowsDirReadAccess, windows.FILE_CREATE, windows.FILE_DIRECTORY_FILE)
 	if err != nil {
 		if isNativeNameRefusal(err) {
 			return errors.Join(ErrNameRejected, err)
 		}
-		return mapCollision(err)
+		if mapped := mapCollision(err); errors.Is(mapped, ErrNamespaceCollision) {
+			return mapped
+		}
+		return wrapAtError("mkdirat", parent, name, err, false)
+	}
+	return windows.CloseHandle(h)
+}
+
+func removeChild(parent *Dir, name string, isDir bool) error {
+	if err := ValidComponent(name); err != nil {
+		return err
+	}
+	options := uint32(windows.FILE_NON_DIRECTORY_FILE)
+	if isDir {
+		options = windows.FILE_DIRECTORY_FILE
+	}
+	h, err := ntCreateAt(parent, name, windows.DELETE|windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE, windows.FILE_OPEN, options)
+	if errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+		h, err = ntCreateAt(parent, name, windows.DELETE|windows.SYNCHRONIZE, windows.FILE_OPEN, options)
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return wrapAtError("unlinkat", parent, name, err, false)
+	}
+	defer windows.CloseHandle(h)
+	if err := deleteOpenHandle(h); err != nil {
+		return wrapAtError("unlinkat", parent, name, err, false)
 	}
 	return nil
 }
 
-func removeChild(parent *Dir, name string, _ bool) error {
-	if err := ValidComponent(name); err != nil {
-		return err
+func deleteOpenHandle(h windows.Handle) error {
+	var iosb windows.IO_STATUS_BLOCK
+	ex := fileDispositionInfoEx{
+		Flags: windows.FILE_DISPOSITION_DELETE | windows.FILE_DISPOSITION_POSIX_SEMANTICS | windows.FILE_DISPOSITION_IGNORE_READONLY_ATTRIBUTE,
 	}
-	err := os.Remove(filepath.Join(parent.path, name))
-	if errors.Is(err, fs.ErrNotExist) {
+	err := windows.NtSetInformationFile(h, &iosb, (*byte)(unsafe.Pointer(&ex)),
+		uint32(unsafe.Sizeof(ex)), windows.FileDispositionInformationEx)
+	if err == nil {
 		return nil
+	}
+	if nt, ok := errors.AsType[windows.NTStatus](err); ok {
+		if nt == windows.STATUS_INVALID_INFO_CLASS || nt == windows.STATUS_INVALID_PARAMETER || nt == windows.STATUS_NOT_SUPPORTED {
+			return deleteOpenHandleFallback(h)
+		}
+		return nt.Errno()
 	}
 	return err
 }
 
+func deleteOpenHandleFallback(h windows.Handle) error {
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(h, &info); err == nil &&
+		info.FileAttributes&windows.FILE_ATTRIBUTE_READONLY != 0 {
+		wh, err := ntCreateRelative(h, "", windows.FILE_WRITE_ATTRIBUTES|windows.SYNCHRONIZE, windows.FILE_OPEN, 0)
+		if err != nil {
+			return err
+		}
+		attrs := info.FileAttributes &^ windows.FILE_ATTRIBUTE_READONLY
+		if attrs == 0 {
+			attrs = windows.FILE_ATTRIBUTE_NORMAL
+		}
+		basic := fileBasicInfo{FileAttributes: attrs}
+		setErr := windows.SetFileInformationByHandle(wh, windows.FileBasicInfo,
+			(*byte)(unsafe.Pointer(&basic)), uint32(unsafe.Sizeof(basic)))
+		_ = windows.CloseHandle(wh)
+		if setErr != nil {
+			return setErr
+		}
+	}
+	disp := fileDispositionInfo{DeleteFile: 1}
+	return windows.SetFileInformationByHandle(h, windows.FileDispositionInfo,
+		(*byte)(unsafe.Pointer(&disp)), uint32(unsafe.Sizeof(disp)))
+}
+
 func readDirNames(dir *Dir) ([]string, error) {
-	entries, err := os.ReadDir(dir.path)
+	h, err := ntCreateAt(dir, "", windowsDirReadAccess, windows.FILE_OPEN, windowsSyncDirOpts)
 	if err != nil {
-		return nil, err
+		return nil, wrapAtError("openat", dir, "", err, false)
 	}
-	names := make([]string, len(entries))
-	for i, entry := range entries {
-		names[i] = entry.Name()
-	}
-	return names, nil
+	f := os.NewFile(uintptr(h), dir.Path())
+	defer f.Close()
+	return f.Readdirnames(-1)
 }
 
 func validateNativeName(name string) error {
-	if !filepath.IsLocal(name) || strings.ContainsAny(name, `<>"|?*`) ||
+	if !filepath.IsLocal(name) || strings.ContainsAny(name, `<>:"|?*`) ||
 		strings.HasSuffix(name, ".") || strings.HasSuffix(name, " ") {
 		return ErrNameRejected
 	}
@@ -349,19 +501,10 @@ func isNativeNameRefusal(err error) bool {
 }
 
 func entryMatchesSpelling(parent *Dir, name string) (exact bool, resultErr error) {
-	encoded, err := windows.UTF16PtrFromString(filepath.Join(parent.path, name))
-	if err != nil {
+	if err := validName(name); err != nil {
 		return false, err
 	}
-	handle, err := windows.CreateFile(
-		encoded,
-		windows.FILE_READ_ATTRIBUTES,
-		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
-		nil,
-		windows.OPEN_EXISTING,
-		windows.FILE_FLAG_OPEN_REPARSE_POINT|windows.FILE_FLAG_BACKUP_SEMANTICS,
-		0,
-	)
+	handle, err := ntCreateAt(parent, name, windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE, windows.FILE_OPEN, 0)
 	if err != nil {
 		return false, err
 	}
@@ -373,17 +516,11 @@ func entryMatchesSpelling(parent *Dir, name string) (exact bool, resultErr error
 	if info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
 		return false, ErrUnsafeNamespace
 	}
-	buffer := make([]uint16, initialResolvedPathUnits)
-	for {
-		length, err := windows.GetFinalPathNameByHandle(handle, &buffer[0], uint32(len(buffer)), 0)
-		if err != nil {
-			return false, err
-		}
-		if length < uint32(len(buffer)) {
-			return name == filepath.Base(windows.UTF16ToString(buffer[:length])), nil
-		}
-		buffer = make([]uint16, length+1)
+	actual, err := finalPathByHandle(handle)
+	if err != nil {
+		return false, err
 	}
+	return name == filepath.Base(actual), nil
 }
 
 // Windows does not promise a directory fsync barrier; flushed files and atomic
@@ -398,29 +535,13 @@ func setFileModifiedTime(handle *os.File, t time.Time) error {
 }
 
 func setDirModifiedTime(d *Dir, t time.Time) error {
-	encoded, err := windows.UTF16PtrFromString(d.path)
+	h, err := ntCreateAt(d, "", windows.FILE_WRITE_ATTRIBUTES|windows.SYNCHRONIZE, windows.FILE_OPEN, windowsSyncDirOpts)
 	if err != nil {
 		return err
 	}
-	h, err := windows.CreateFile(
-		encoded,
-		windows.FILE_WRITE_ATTRIBUTES|windows.FILE_READ_ATTRIBUTES,
-		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
-		nil,
-		windows.OPEN_EXISTING,
-		windows.FILE_FLAG_OPEN_REPARSE_POINT|windows.FILE_FLAG_BACKUP_SEMANTICS,
-		0,
-	)
-	if err != nil {
-		return err
-	}
-	f := os.NewFile(uintptr(h), d.path)
-	defer f.Close()
-	cur, err := f.Stat()
-	if err != nil || !cur.IsDir() || !os.SameFile(d.info, cur) {
-		return errors.Join(ErrUnsafeNamespace, err)
-	}
-	return setFileModifiedTime(f, t)
+	defer windows.CloseHandle(h)
+	stamp := windows.NsecToFiletime(t.UnixNano())
+	return windows.SetFileTime(h, nil, nil, &stamp)
 }
 
 func lockFile(f *os.File, blocking bool) (func() error, error) {
@@ -452,6 +573,9 @@ type renameInformation struct {
 }
 
 func renameHandle(handle windows.Handle, parent *Dir, name string, replace bool) error {
+	if parent == nil || parent.handle == nil {
+		return fs.ErrClosed
+	}
 	encoded, err := windows.UTF16FromString(name)
 	if err != nil {
 		return err
@@ -467,8 +591,7 @@ func renameHandle(handle windows.Handle, parent *Dir, name string, replace bool)
 	value.Length = uint32(2 * len(encoded))
 	copy(unsafe.Slice(&value.Name[0], len(encoded)), encoded)
 	var status windows.IO_STATUS_BLOCK
-	const fileRenameInformation = 10
-	err = windows.NtSetInformationFile(handle, &status, &buffer[0], uint32(len(buffer)), fileRenameInformation)
+	err = windows.NtSetInformationFile(handle, &status, &buffer[0], uint32(len(buffer)), windows.FileRenameInformation)
 	runtime.KeepAlive(parent.handle)
 	if nt, ok := errors.AsType[windows.NTStatus](err); ok {
 		err = nt.Errno()
@@ -495,12 +618,8 @@ func noReplaceError(err error) error {
 // freshly written files for 10-200ms, causing rename handle opens or
 // NtSetInformationFile calls to return ACCESS_DENIED or SHARING_VIOLATION.
 var windowsRenameBackoff = [...]time.Duration{
-	5 * time.Millisecond,
-	10 * time.Millisecond,
-	20 * time.Millisecond,
-	40 * time.Millisecond,
-	80 * time.Millisecond,
-	160 * time.Millisecond,
+	5 * time.Millisecond, 10 * time.Millisecond, 20 * time.Millisecond,
+	40 * time.Millisecond, 80 * time.Millisecond, 160 * time.Millisecond,
 }
 
 func retryWindowsRename(attempt func() error, wait func(time.Duration)) error {
@@ -534,12 +653,16 @@ func renameFileNoReplace(srcDir *Dir, srcName string, dstDir *Dir, dstName strin
 		return err
 	}
 	return retryWindowsRename(func() error {
-		opened, err := openWindowsPath(filepath.Join(srcDir.path, srcName), os.O_RDWR, false)
+		h, err := ntCreateAt(srcDir, srcName, windows.DELETE|windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE,
+			windows.FILE_OPEN, windowsSyncFileOpts)
 		if err != nil {
+			return wrapAtError("openat", srcDir, srcName, err, false)
+		}
+		if _, err := verifyOpenHandle(h, false); err != nil {
 			return err
 		}
-		defer opened.Close()
-		return renameHandle(windows.Handle(opened.Fd()), dstDir, dstName, replace)
+		defer windows.CloseHandle(h)
+		return renameHandle(h, dstDir, dstName, replace)
 	}, time.Sleep)
 }
 
