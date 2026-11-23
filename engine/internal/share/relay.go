@@ -14,9 +14,9 @@ import (
 	"github.com/windshare/windshare/transport/relayv2"
 )
 
-func PlannedRelays(plan relayplan.Plan) func(context.Context, []string, relayset.SenderFactory) (Relays, error) {
+func PlannedRelays(plan relayplan.Plan, observeFallback func(relayset.Fallback)) func(context.Context, []string, relayset.SenderFactory) (Relays, error) {
 	return func(ctx context.Context, _ []string, create relayset.SenderFactory) (Relays, error) {
-		value, err := relayset.NewPlannedSender(ctx, plan, create)
+		value, err := relayset.NewPlannedSender(ctx, plan, create, observeFallback)
 		if err != nil {
 			return nil, err
 		}

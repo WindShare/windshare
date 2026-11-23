@@ -60,7 +60,7 @@ func TestCanaryRegistersTheSamePreparedShareUsingItsOwnCredential(t *testing.T) 
 	canary := relayprofile.Registration{PublicURL: "https://canary.example", Authorization: relayset.StaticKey("canary-token")}
 	dependencies := nativeDependencies(t)
 	dependencies.Relays = PlannedRelays(relayplan.Plan{Network: []relayplan.Candidate{{URL: active.PublicURL}},
-		Standby: []relayplan.Candidate{{URL: canary.PublicURL, Canary: true}}})
+		Standby: []relayplan.Candidate{{URL: canary.PublicURL, Canary: true}}}, nil)
 	attempts := make(chan relayset.SenderLifecycleConfig, 2)
 	dependencies.Relay = func(config relayset.SenderLifecycleConfig) (Relay, error) {
 		attempts <- config

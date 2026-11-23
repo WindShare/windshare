@@ -2,10 +2,16 @@ package relayset
 
 import (
 	"context"
-	"log/slog"
 
 	"github.com/windshare/windshare/connectivity/relayplan"
 )
+
+// Fallback records the one-shot startup transition to standby canary relays
+// after every initial active network candidate fails its first attempt.
+type Fallback struct {
+	Active   []string
+	Canaries []string
+}
 
 // A standby wave belongs only to startup. Once any route is ready the link's
 // candidates keep their independent retry and resume lifetimes.
@@ -15,9 +21,10 @@ type startupFallback struct {
 	untried  map[string]struct{}
 	limit    int
 	dial     SenderFactory
+	observe  func(Fallback)
 }
 
-func NewPlannedSender(ctx context.Context, plan relayplan.Plan, dial SenderFactory) (*Sender, error) {
+func NewPlannedSender(ctx context.Context, plan relayplan.Plan, dial SenderFactory, observeFallback func(Fallback)) (*Sender, error) {
 	urls := make([]string, 0, len(plan.Configured)+len(plan.Network))
 	for _, c := range plan.Configured {
 		urls = append(urls, c.URL)
@@ -34,7 +41,13 @@ func NewPlannedSender(ctx context.Context, plan relayplan.Plan, dial SenderFacto
 	if len(active) == 0 || len(active) > limit || len(plan.Standby) > limit {
 		return nil, ErrConfig
 	}
-	fallback := &startupFallback{active: active, limit: limit, untried: make(map[string]struct{}, len(active)), dial: dial}
+	fallback := &startupFallback{
+		active:  active,
+		limit:   limit,
+		untried: make(map[string]struct{}, len(active)),
+		dial:    dial,
+		observe: observeFallback,
+	}
 	for _, url := range active {
 		fallback.untried[url] = struct{}{}
 	}
@@ -44,17 +57,17 @@ func NewPlannedSender(ctx context.Context, plan relayplan.Plan, dial SenderFacto
 	return newSender(ctx, urls, fallback, dial)
 }
 
-func (s *Sender) initialFailureLocked(url string) {
+func (s *Sender) initialFailureLocked(url string) func() {
 	f := s.startup
 	if f == nil || s.everReady || s.firstReady != "" || s.stopping || s.ctx.Err() != nil {
-		return
+		return nil
 	}
 	if _, watched := f.untried[url]; !watched {
-		return
+		return nil
 	}
 	delete(f.untried, url)
 	if len(f.untried) != 0 {
-		return
+		return nil
 	}
 	s.startup = nil
 	// Free terminal routes first, then the lowest-ranked failed routes when the
@@ -78,5 +91,12 @@ func (s *Sender) initialFailureLocked(url string) {
 	for _, standby := range f.canaries {
 		s.startLocked(standby, f.dial)
 	}
-	slog.InfoContext(s.ctx, "network_canary_fallback", "active_relays", f.active, "canary_relays", f.canaries)
+	if f.observe == nil {
+		return nil
+	}
+	// Defer notification until after s.mu is released so observers cannot
+	// deadlock by reentering Sender or block relay transitions on I/O.
+	event := Fallback{Active: f.active, Canaries: f.canaries}
+	observe := f.observe
+	return func() { observe(event) }
 }

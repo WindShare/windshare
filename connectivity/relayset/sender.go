@@ -124,18 +124,22 @@ func (s *Sender) run(ctx context.Context, url string, dial SenderFactory) {
 	s.mu.Lock()
 	s.pendingRegistrations--
 	_, selected := s.routes[url]
+	var notifyFallback func()
 	if selected && err == nil {
 		if s.firstReady == "" {
 			s.firstReady = url
 		}
 	} else if selected {
 		s.registrationErrors = append(s.registrationErrors, &RegistrationFailure{URL: url, Cause: err})
-		s.setRegistrationLocked(url, routeRegistration{terminal: true})
+		notifyFallback = s.setRegistrationLocked(url, routeRegistration{terminal: true})
 	}
 	if s.firstReady != "" || s.pendingRegistrations == 0 {
 		s.readyOnce.Do(func() { close(s.ready) })
 	}
 	s.mu.Unlock()
+	if notifyFallback != nil {
+		notifyFallback()
+	}
 	if !selected || endpoint == nil || err != nil {
 		if !selected && endpoint != nil {
 			endpoint.StopRecovery()

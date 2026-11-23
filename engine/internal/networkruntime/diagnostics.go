@@ -56,6 +56,21 @@ func AdmissionRecord(value relayset.Admission) diagnostics.Record {
 		"state": diagnostics.Text(value.State), "reason": diagnostics.Text(value.Reason), "admissions": diagnostics.Int(int64(value.Count))})
 }
 
+func FallbackRecord(value relayset.Fallback) diagnostics.Record {
+	return diagnostics.New("network_canary_fallback", diagnostics.Fields{
+		"active_relays": textArray(value.Active),
+		"canary_relays": textArray(value.Canaries),
+	})
+}
+
+func textArray(values []string) diagnostics.Value {
+	items := make([]diagnostics.Value, 0, len(values))
+	for _, value := range values {
+		items = append(items, diagnostics.Text(value))
+	}
+	return diagnostics.Array(items...)
+}
+
 func (r *Runtime) emitDirectoryInitFailure(network string, err error) {
 	if !r.diagnostics.Enabled() {
 		return

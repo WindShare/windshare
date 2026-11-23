@@ -340,7 +340,7 @@ func startPlannedAdmissionSender(
 		cfg.Attempts = admissions.Control(url)
 		cfg.Jitter = func(delay time.Duration) time.Duration { return delay }
 		return NewSenderLifecycle(cfg)
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -629,7 +629,7 @@ func TestCandidateFailingOrStoppingBeforeBeginDoesNotBlockBackup(t *testing.T) {
 				lifecycle.StopRecovery()
 			}
 			return lifecycle, nil
-		})
+		}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -84,7 +84,7 @@ func (engine *Engine) StartShare(ctx context.Context, request ShareRequest) (*Sh
 	dependencies := share.Dependencies{
 		Controller: controller, RevisionCapacity: engine.revisions,
 		CatalogBudget: engine.catalog, CacheBudget: engine.cache, Connectivity: engine.connectivity,
-		Prepare: injected.Prepare, Relays: share.PlannedRelays(selection.Plan), PollNetwork: pollNetwork,
+		Prepare: injected.Prepare, PollNetwork: pollNetwork,
 		Attempts: admissions.Control, Clock: engine.config.Clock,
 		ICEPool: engine.network.ICEPool, SleepInhibitor: engine.config.SleepInhibitor,
 	}
@@ -109,6 +109,17 @@ func (engine *Engine) StartShare(ctx context.Context, request ShareRequest) (*Sh
 					control.Diagnostics.Emit(networkruntime.AdmissionRecord(value))
 				}
 			})
+		}
+		if injected.Relays == nil {
+			var observeFallback func(relayset.Fallback)
+			if control.Diagnostics.Enabled() {
+				observeFallback = func(value relayset.Fallback) {
+					if control.Diagnostics.Enabled() {
+						control.Diagnostics.Emit(networkruntime.FallbackRecord(value))
+					}
+				}
+			}
+			dependencies.Relays = share.PlannedRelays(selection.Plan, observeFallback)
 		}
 		dependencies.Control = control
 		execution.Diagnostics = control.Diagnostics

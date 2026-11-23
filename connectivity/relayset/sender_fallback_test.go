@@ -1,11 +1,14 @@
 package relayset
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,10 +17,17 @@ import (
 )
 
 func TestCanaryStartsAfterEveryActiveFailsAndKeepsPendingRoutes(t *testing.T) {
+	var slogOutput bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&slogOutput, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
 	primary := &waitingRegistration{endpoint: newEndpoint(), ready: make(chan struct{}), observed: make(chan struct{})}
 	reject := make(chan struct{})
 	plan := relayplan.Plan{Network: []relayplan.Candidate{{URL: "retrying"}, {URL: "rejected"}}, Standby: []relayplan.Candidate{{URL: "standby", Canary: true}}}
 	standby := make(chan struct{})
+	var owner atomic.Pointer[Sender]
+	fallbacks := make(chan Fallback, 2)
 	set, err := NewPlannedSender(t.Context(), plan, func(ctx context.Context, url string) (SenderEndpoint, error) {
 		switch url {
 		case "retrying":
@@ -33,10 +43,18 @@ func TestCanaryStartsAfterEveryActiveFailsAndKeepsPendingRoutes(t *testing.T) {
 			close(standby)
 			return newEndpoint(), nil
 		}
+	}, func(event Fallback) {
+		// Reentering Sender proves s.mu was released before notifying observers.
+		if current := owner.Load(); current != nil {
+			_ = current.Status()
+			_ = current.Registrations()
+		}
+		fallbacks <- event
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	owner.Store(set)
 	defer cleanupSet(t, set)
 	waitValue(t, primary.observed)
 	primary.publish(RegistrationRetrying)
@@ -45,12 +63,19 @@ func TestCanaryStartsAfterEveryActiveFailsAndKeepsPendingRoutes(t *testing.T) {
 	}
 	close(reject)
 	waitValue(t, standby)
+	event := waitValue(t, fallbacks)
+	if !slices.Equal(event.Active, []string{"retrying", "rejected"}) || !slices.Equal(event.Canaries, []string{"standby"}) {
+		t.Fatalf("unexpected fallback event: %+v", event)
+	}
 	if err := set.WaitReady(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	got := set.Registrations()
 	if set.ReadyRelayURL() != "standby" || !slices.Equal(got.Candidates, []string{"retrying", "standby"}) || !slices.Equal(got.Rejected, []string{"rejected"}) {
 		t.Fatal(set.ReadyRelayURL(), got)
+	}
+	if slogOutput.Len() != 0 {
+		t.Fatalf("fallback bypassed observer via slog: %s", slogOutput.String())
 	}
 }
 
@@ -62,6 +87,8 @@ func TestCanaryCannotStartAfterPublication(t *testing.T) {
 			t.Errorf("dialed dormant relay %s", url)
 		}
 		return active, nil
+	}, func(event Fallback) {
+		t.Errorf("unexpected fallback after publication: %+v", event)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -95,7 +122,7 @@ func TestCanaryReusesLastLinkSlotWithoutExceedingLimit(t *testing.T) {
 			<-ctx.Done()
 			return nil, ctx.Err()
 		}
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +247,7 @@ func TestCanaryRetirementClosesActiveConnectionRacingRegistrationCallback(t *tes
 		default:
 			return nil, fmt.Errorf("unexpected relay %s", url)
 		}
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
