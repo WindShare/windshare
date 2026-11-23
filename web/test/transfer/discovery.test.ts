@@ -288,11 +288,11 @@ describe('selection shape probing and progressive discovery', () => {
       kind: 'tree',
       suggestedName: 'docs',
       rootPath: ['project', 'docs'],
-      knownFileCount: 1,
-      knownBytes: 512n,
-      complete: true,
+      knownFileCount: 0,
+      knownBytes: 0n,
+      complete: false,
     })
-    expect(tree.loadedDirectories).toEqual([tree.rootIdText, projectId, docs.idText])
+    expect(tree.loadedDirectories).toEqual([tree.rootIdText, projectId])
 
     tree.loadedDirectories.length = 0
     const failedDirs: string[] = []
@@ -425,5 +425,175 @@ describe('selection shape probing and progressive discovery', () => {
     })
     expect(tree.loadedDirectories).toEqual([tree.rootIdText])
     expect(tree.loadedPages).not.toContain(`${tree.rootIdText}#2`)
+  })
+})
+
+describe('folder offer probing and directory failure tolerance', () => {
+  it('offers folder downloads without probing unreadable or slow selected subtrees', async () => {
+    const tree = makeCatalogTree([[
+      { kind: 'directory', seed: 70, name: 'photos', entries: [{ kind: 'file', seed: 71, name: 'ok.jpg', size: 128n }] },
+      { kind: 'directory', seed: 72, name: 'unreadable', failLoad: true },
+    ]])
+    const wholeShare = new SelectionPolicy(true).snapshot()
+
+    const shape = await inspectSelectionShape(tree.descriptor, tree.catalog, wholeShare, new AbortController().signal)
+    expect(shape).toEqual({
+      kind: 'tree',
+      suggestedName: 'windshare-download',
+      rootPath: [],
+      knownFileCount: 0,
+      knownBytes: 0n,
+      complete: false,
+    })
+    expect(tree.loadedDirectories).toEqual([tree.rootIdText])
+
+    // Transfer discovery still delivers the readable photo and reports the failed subtree.
+    tree.loadedDirectories.length = 0
+    const failedDirs: string[] = []
+    const discovered: string[] = []
+    for await (const item of discoverSelection(
+      tree.descriptor,
+      tree.catalog,
+      wholeShare,
+      shape.kind === 'tree' ? shape.rootPath : [],
+      new AbortController().signal,
+      { onDirectoryFailed: id => failedDirs.push(id) },
+    )) {
+      discovered.push(`${item.kind}:${item.relativePath.join('/')}`)
+    }
+    expect(discovered).toEqual(['directory:photos', 'directory:unreadable', 'file:photos/ok.jpg'])
+    expect(failedDirs).toEqual([tree.entry(72).idText])
+  })
+
+  it('anchors a selected single folder immediately without loading its contents', async () => {
+    const tree = makeCatalogTree([[
+      { kind: 'directory', seed: 80, name: 'Movies', failLoad: true },
+    ]])
+    const movies = tree.entry(80)
+    const policy = new SelectionPolicy(false)
+    policy.set(movies, [tree.rootIdText], true)
+
+    const shape = await inspectSelectionShape(tree.descriptor, tree.catalog, policy.snapshot(), new AbortController().signal)
+    expect(shape).toEqual({
+      kind: 'tree',
+      suggestedName: 'Movies',
+      rootPath: ['Movies'],
+      knownFileCount: 0,
+      knownBytes: 0n,
+      complete: false,
+    })
+    expect(tree.loadedDirectories).toEqual([tree.rootIdText])
+  })
+
+  it('tolerates unreadable unselected siblings during unhinted fallback search and fails when nothing is confirmed', async () => {
+    const tree = makeCatalogTree([[
+      { kind: 'directory', seed: 90, name: 'broken-sibling', failLoad: true },
+      {
+        kind: 'directory',
+        seed: 91,
+        name: 'healthy-dir',
+        entries: [{ kind: 'file', seed: 92, name: 'report.pdf', size: 256n }],
+      },
+    ]])
+    const report = tree.entry(92)
+    const missingId = makeId(99)
+
+    // Found target in healthy sibling: the failed unselected sibling cannot hold any target.
+    const foundPolicy = frozenSelectionPolicy(false, [{ kind: 'file', id: report.id.slice(), selected: true }])
+    const foundShape = await inspectSelectionShape(tree.descriptor, tree.catalog, foundPolicy, new AbortController().signal)
+    expect(foundShape).toEqual({
+      kind: 'single-file',
+      file: report,
+      sourcePath: ['healthy-dir', 'report.pdf'],
+      exactBytes: 256n,
+    })
+
+    // One confirmed target plus one unlocated target when another directory failed: degrade to incomplete tree.
+    const partialPolicy = frozenSelectionPolicy(false, [
+      { kind: 'file', id: report.id.slice(), selected: true },
+      { kind: 'file', id: missingId.slice(), selected: true },
+    ])
+    const partialShape = await inspectSelectionShape(tree.descriptor, tree.catalog, partialPolicy, new AbortController().signal)
+    expect(partialShape).toEqual({
+      kind: 'tree',
+      suggestedName: 'windshare-download',
+      rootPath: [],
+      knownFileCount: 1,
+      knownBytes: 256n,
+      complete: false,
+    })
+
+    // Zero confirmed targets with a directory failure: surface the error instead of claiming empty.
+    const unreachablePolicy = frozenSelectionPolicy(false, [{ kind: 'file', id: missingId.slice(), selected: true }])
+    await expect(
+      inspectSelectionShape(tree.descriptor, tree.catalog, unreachablePolicy, new AbortController().signal),
+    ).rejects.toThrow(`Directory ${tree.entry(90).idText} should not have been loaded`)
+  })
+
+  it('follows hinted re-selected descendants inside a selected folder without touching unrelated siblings', async () => {
+    const tree = makeCatalogTree([[
+      {
+        kind: 'directory',
+        seed: 100,
+        name: 'project',
+        entries: [
+          { kind: 'directory', seed: 101, name: 'unreadable-child', failLoad: true },
+          {
+            kind: 'directory',
+            seed: 102,
+            name: 'excluded-sub',
+            entries: [{ kind: 'file', seed: 103, name: 'keep.pdf', size: 42n }],
+          },
+        ],
+      },
+      { kind: 'directory', seed: 104, name: 'unrelated-sibling', failLoad: true },
+    ]])
+    const project = tree.entry(100)
+    const excludedSub = tree.entry(102)
+    const keep = tree.entry(103)
+    const policy = new SelectionPolicy(false)
+    policy.set(project, [tree.rootIdText], true)
+    policy.set(excludedSub, [tree.rootIdText, project.idText], false)
+    policy.set(keep, [tree.rootIdText, project.idText, excludedSub.idText], true)
+
+    const shape = await inspectSelectionShape(tree.descriptor, tree.catalog, policy.snapshot(), new AbortController().signal)
+    expect(shape).toEqual({
+      kind: 'tree',
+      suggestedName: 'project',
+      rootPath: ['project'],
+      knownFileCount: 1,
+      knownBytes: 42n,
+      complete: false,
+    })
+    expect(tree.loadedDirectories).toEqual([tree.rootIdText, project.idText, excludedSub.idText])
+  })
+
+  it('stops scanning later pages of a selected multi-page directory once the tree root is settled', async () => {
+    const tree = makeCatalogTree([
+      [
+        { kind: 'directory', seed: 110, name: 'dir-a', failLoad: true },
+        { kind: 'directory', seed: 111, name: 'dir-b', failLoad: true },
+      ],
+      [
+        { kind: 'directory', seed: 112, name: 'dir-c', failLoad: true },
+      ],
+    ])
+
+    const shape = await inspectSelectionShape(
+      tree.descriptor,
+      tree.catalog,
+      new SelectionPolicy(true).snapshot(),
+      new AbortController().signal,
+    )
+    expect(shape).toEqual({
+      kind: 'tree',
+      suggestedName: 'windshare-download',
+      rootPath: [],
+      knownFileCount: 0,
+      knownBytes: 0n,
+      complete: false,
+    })
+    expect(tree.loadedDirectories).toEqual([tree.rootIdText])
+    expect(tree.loadedPages).toEqual([`${tree.rootIdText}#0`])
   })
 })
