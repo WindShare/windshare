@@ -216,21 +216,27 @@ func (tx *fileTransaction) persistLocked() error {
 	if err := tx.file.Sync(); err != nil {
 		return err
 	}
-	tx.persistedGen++
-	tx.persisted = tx.accepted
-	tx.unpersistedBytes = 0
-	tx.lastCheckpoint = tx.session.authority.now()
+	nextGen := tx.persistedGen + 1
 	desc := tx.binding.Descriptor()
-	return tx.session.op.journal.recordPartial(partialEntry{
+	if err := tx.session.op.journal.recordPartial(partialEntry{
 		FileID:        desc.FileID(),
 		Path:          tx.canonicalPath,
 		Revision:      desc.FileRevision(),
 		Metadata:      desc.SourceMetadata(),
 		ExactSize:     tx.exactSize,
 		PartName:      tx.partName,
-		Ranges:        tx.persisted.Ranges(),
-		CheckpointGen: tx.persistedGen,
-	}, true)
+		Ranges:        tx.accepted.Ranges(),
+		CheckpointGen: nextGen,
+	}, true); err != nil {
+		return err
+	}
+	// Advance durability state only after the journal append and sync succeed so
+	// a failed checkpoint never reports unpersisted progress or suppresses retry.
+	tx.persistedGen = nextGen
+	tx.persisted = tx.accepted
+	tx.unpersistedBytes = 0
+	tx.lastCheckpoint = tx.session.authority.now()
+	return nil
 }
 
 func (tx *fileTransaction) Commit(ctx context.Context) (transfer.FileSettlement, error) {
@@ -336,19 +342,22 @@ func (tx *fileTransaction) prepareStageForPublishLocked(
 
 func (tx *fileTransaction) settleCommitCollisionLocked() (transfer.FileSettlement, error) {
 	// Preserve .part in .windshare-tmp/<opID>/ so retry or discard stays safe.
-	tx.persistedGen++
-	tx.persisted = tx.accepted
+	nextGen := tx.persistedGen + 1
 	desc := tx.binding.Descriptor()
-	_ = tx.session.op.journal.recordPartial(partialEntry{
+	if err := tx.session.op.journal.recordPartial(partialEntry{
 		FileID:        desc.FileID(),
 		Path:          tx.canonicalPath,
 		Revision:      desc.FileRevision(),
 		Metadata:      desc.SourceMetadata(),
 		ExactSize:     tx.exactSize,
 		PartName:      tx.partName,
-		Ranges:        tx.persisted.Ranges(),
-		CheckpointGen: tx.persistedGen,
-	}, true)
+		Ranges:        tx.accepted.Ranges(),
+		CheckpointGen: nextGen,
+	}, true); err == nil {
+		tx.persistedGen = nextGen
+		tx.persisted = tx.accepted
+		tx.unpersistedBytes = 0
+	}
 	settlement, err := transfer.NewTransactionCollisionFileSettlement(tx.binding)
 	if err != nil {
 		return transfer.FileSettlement{}, err
@@ -406,6 +415,9 @@ func (tx *fileTransaction) Pause(ctx context.Context) (transfer.FileSettlement, 
 	}
 	if persistErr != nil {
 		tx.settled = true
+		// Detach the closed transaction so a subsequent PauseTree does not
+		// re-enter Pause and turn a durability error into an invalid-binding fault.
+		tx.session.releaseActiveFile(tx.canonicalPath, tx)
 		return transfer.FileSettlement{}, DiagnoseFailure(FailureDurability, wrapFileFault(ctx, transferfault.OutputStateIO, "pause staged file", persistErr))
 	}
 	verified, err := transfer.VerifyRestartRanges(tx.binding, transfer.CheckpointGeneration(tx.persistedGen), tx.persisted)

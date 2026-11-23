@@ -625,6 +625,14 @@ func fullRangeSet(size uint64) (content.RangeSet, error) {
 	return content.NewRangeSet([]content.Range{{Offset: 0, End: size}})
 }
 
+func (s *Session) releaseActiveFile(canonicalPath string, tx *fileTransaction) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.activeFiles[canonicalPath] == tx {
+		delete(s.activeFiles, canonicalPath)
+	}
+}
+
 func (s *Session) recordSettledFile(canonicalPath string, settlement transfer.FileSettlement) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
