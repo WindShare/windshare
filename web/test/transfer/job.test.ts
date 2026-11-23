@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { CatalogClient } from '../../src/catalog/client'
 import type { CommittedDirectory } from '../../src/catalog/page-store'
 import type { CatalogEntry, CatalogPage, ShareDescriptor } from '../../src/catalog/records'
@@ -258,5 +258,53 @@ describe('transfer discovery and job execution', () => {
     expect(checkpointCalls).toBe(0)
     expect(commitCalls).toBe(1)
     expect([...target]).toEqual([...payload])
+  })
+
+  it('stamps periodic checkpoint completion time so a slow flush does not trigger back-to-back checkpoints', async () => {
+    const payload = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
+    const fixture = makeShareFixture([{ seed: 31, name: 'slow.bin', bytes: payload }])
+    let nowMs = 1_000
+    let checkpointCalls = 0
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowMs)
+
+    try {
+      const output: TransferOutputSession = {
+        sessionId: 'sess-slow-cp',
+        capabilities: {
+          maxConcurrentFiles: 1,
+          periodicCheckpoint: { intervalBytes: 1_000n, intervalMilliseconds: 10_000 },
+        },
+        openFile: async (): Promise<TransferOutputFile> => ({
+          completedRanges: [],
+          alreadyCompleted: false,
+          writeAt: async offset => {
+            // Slice 1 arrives after the 10 s threshold; subsequent slices arrive 1 s apart.
+            nowMs += offset === 0n ? 11_000 : 1_000
+          },
+          checkpoint: async () => {
+            checkpointCalls += 1
+            // Simulate a slow flush exceeding intervalMilliseconds (15 s > 10 s).
+            nowMs += 15_000
+          },
+          commit: async () => undefined,
+          pause: async () => undefined,
+          abort: async () => undefined,
+        }),
+      }
+
+      const result = await new TransferJob({
+        descriptor: fixture.descriptor,
+        catalog: fixture.catalog,
+        selection: new SelectionPolicy(true).snapshot(),
+        revisions: fixture.revisions,
+        broker: fixture.broker,
+        output,
+      }).run()
+
+      expect(result.status).toBe('completed')
+      expect(checkpointCalls).toBe(1)
+    } finally {
+      nowSpy.mockRestore()
+    }
   })
 })

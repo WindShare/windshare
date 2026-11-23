@@ -228,13 +228,16 @@ async function maybeCheckpoint(
   const policy = ctx.output.capabilities.periodicCheckpoint
   if (policy === undefined) return
   clock.pendingBytes += writtenBytes
-  const now = Date.now()
-  if (clock.pendingBytes < policy.intervalBytes && now - clock.lastCheckpointAt < policy.intervalMilliseconds) {
+  if (
+    clock.pendingBytes < policy.intervalBytes &&
+    Date.now() - clock.lastCheckpointAt < policy.intervalMilliseconds
+  ) {
     return
   }
   await writer.checkpoint(current.ranges)
   clock.pendingBytes = 0n
-  clock.lastCheckpointAt = now
+  // Stamp completion time rather than start time so slow flushes cannot spin into back-to-back checkpoints.
+  clock.lastCheckpointAt = Date.now()
 }
 
 function throwIfInterrupted(ctx: FileTransferContext): void {

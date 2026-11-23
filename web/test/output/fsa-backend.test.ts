@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { byteRange } from '../../src/content/geometry'
+import type { BlockRangeReader } from '../../src/content/broker'
+import { FileGeometry, byteRange } from '../../src/content/geometry'
+import type { FileRevisionDescriptor } from '../../src/content/records'
+import type { RevisionReader } from '../../src/content/session-services'
+import { encodeBase64Url } from '../../src/crypto/bytes'
 import { discardFSATask, openNewFSASession, reopenFSASession } from '../../src/output/backends/fsa'
 import type { ReceiveStore } from '../../src/output/store/database'
 import type { ReceiveFileRecord, ReceiveTaskRecord } from '../../src/output/store/types'
+import { transferSingleFile } from '../../src/transfer/file-transfer'
 import { initialReceiveState } from '../../src/transfer/state'
 
 class MemoryReceiveStore {
@@ -230,5 +235,81 @@ describe('FSA backend safety boundaries', () => {
     expect(physical.writableCalls).toEqual([false, true])
     expect([...physical.bytes]).toEqual([0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a])
     await session.close()
+  })
+
+  it('streams files larger than 16 MiB through FSA without periodic writer reopens', async () => {
+    const store = new MemoryReceiveStore()
+    const parent = new FakeDirectoryHandle('Downloads', store.events)
+    const session = await openNewFSASession({
+      task: {
+        taskId: 'fsa-large-single-pass',
+        selection: { shareInstance: 's2', syntheticRoot: 'r2', defaultSelected: true, rules: [] },
+        selectionKey: 'sel-large',
+        artifact: { kind: 'directory-tree', name: 'Videos' },
+        lifecycle: initialReceiveState('fsa-large-single-pass'),
+      },
+      parentHandle: parent as unknown as FileSystemDirectoryHandle,
+      store: store as unknown as ReceiveStore,
+    })
+
+    const mib = 1024 * 1024
+    const chunkBytes = 6 * mib
+    const totalSize = BigInt(chunkBytes * 3)
+    const fileId = new Uint8Array(16).fill(42)
+    const fileIdText = encodeBase64Url(fileId)
+    const shareInstance = new Uint8Array(16).fill(7)
+    const fileRevision = new Uint8Array(16).fill(9)
+
+    const revisions: RevisionReader = {
+      open: async () => {
+        const descriptor: FileRevisionDescriptor = Object.freeze({
+          shareInstance,
+          shareInstanceId: encodeBase64Url(shareInstance),
+          fileId,
+          fileIdText,
+          fileRevision,
+          fileRevisionText: encodeBase64Url(fileRevision),
+          exactSize: totalSize,
+          geometry: new FileGeometry(totalSize, BigInt(chunkBytes)),
+        })
+        return Object.freeze({ descriptor, leaseId: new Uint8Array(16).fill(1), release: async () => undefined })
+      },
+    }
+    const broker: BlockRangeReader = {
+      readRange: async function* () {
+        for (let part = 0; part < 3; part++) {
+          const data = new Uint8Array(chunkBytes)
+          data[0] = part + 11
+          data[chunkBytes - 1] = part + 21
+          yield Object.freeze({ offset: BigInt(part * chunkBytes), data })
+        }
+      },
+    }
+
+    const outcome = await transferSingleFile({
+      revisions,
+      broker,
+      output: session.transferOutput,
+      signal: new AbortController().signal,
+      isPaused: () => false,
+      isStopped: () => false,
+    }, {
+      kind: 'file',
+      entry: Object.freeze({ kind: 'file', id: fileId, idText: fileIdText, name: 'clip.bin', expectedSize: totalSize }),
+      relativePath: ['clip.bin'],
+      sourcePath: ['Videos', 'clip.bin'],
+    })
+    await session.close()
+
+    expect(outcome).toEqual({ kind: 'completed', size: totalSize })
+    const reserved = parent.children.get('Videos') as FakeDirectoryHandle
+    const physical = reserved.children.get('clip.bin') as FakeFileHandle
+    expect(physical.writableCalls).toEqual([false])
+    expect(physical.bytes.byteLength).toBe(chunkBytes * 3)
+    expect(physical.bytes[0]).toBe(11)
+    expect(physical.bytes[chunkBytes - 1]).toBe(21)
+    expect(physical.bytes[chunkBytes]).toBe(12)
+    expect(physical.bytes[chunkBytes * 2]).toBe(13)
+    expect(physical.bytes[chunkBytes * 3 - 1]).toBe(23)
   })
 })
