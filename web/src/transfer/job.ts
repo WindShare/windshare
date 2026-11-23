@@ -4,6 +4,7 @@ import type { FrozenSelectionPolicy } from '../catalog/selection'
 import type { BlockRangeReader, ContentLaneStatus } from '../content/broker'
 import type { RevisionReader } from '../content/session-services'
 import { discoverSelection, type DiscoveredFile } from './discovery'
+import { isRecoverableTransferInterruption } from './fault'
 import { transferSingleFile, type SingleFileTransferOutcome } from './file-transfer'
 import type { TransferOutputSession } from './output-port'
 import { TransferProgressTracker, type TransferProgress } from './progress'
@@ -191,6 +192,10 @@ export class TransferJob {
   }
 
   #recordDirectoryFailure(error: unknown): void {
+    if (this.#options.output.capabilities.resumable && isRecoverableTransferInterruption(error)) {
+      this.pause('interrupted')
+      return
+    }
     this.#discoveryFailed = true
     this.#failedDirectories += 1n
     this.#firstError ??= error
@@ -211,6 +216,10 @@ export class TransferJob {
 
   #handleDiscoveryError(error: unknown): void {
     if (this.#paused || this.#stopped) return
+    if (this.#options.output.capabilities.resumable && isRecoverableTransferInterruption(error)) {
+      this.pause('interrupted')
+      return
+    }
     this.#discoveryFailed = true
     this.#firstError ??= error
     this.#tracker.observeDiscoverySettled('failed')

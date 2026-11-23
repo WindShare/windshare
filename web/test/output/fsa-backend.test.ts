@@ -3,7 +3,8 @@ import type { CatalogClient } from '../../src/catalog/client'
 import type { CommittedDirectory } from '../../src/catalog/page-store'
 import type { CatalogEntry, CatalogPage, ShareDescriptor } from '../../src/catalog/records'
 import { SelectionPolicy } from '../../src/catalog/selection'
-import type { BlockRangeReader } from '../../src/content/broker'
+import { BlockLaneAttemptsError, type BlockRangeReader } from '../../src/content/broker'
+import { BlockInactivityTimeoutError } from '../../src/content/scheduling/block-response-wait'
 import { FileGeometry, byteRange } from '../../src/content/geometry'
 import type { FileRevisionDescriptor } from '../../src/content/records'
 import type { RevisionReader } from '../../src/content/session-services'
@@ -1029,5 +1030,96 @@ describe('FSA resume completion skip', () => {
     expect(repairedResult.status).toBe('completed')
     expect(openedRevisions).toEqual([idBText])
     expect([...physicalB.bytes]).toEqual([...payloadB])
+  })
+
+  it('commits written FSA bytes and settles to paused(interrupted) on transport stall, then resumes cleanly', async () => {
+    const events: string[] = []
+    const store = new MemoryReceiveStore()
+    const parent = new FakeDirectoryHandle('Downloads', events)
+    const shareInstance = new Uint8Array(16).fill(41)
+    const rootId = new Uint8Array(16).fill(42)
+    const fileId = new Uint8Array(16).fill(43)
+    const fileIdText = encodeBase64Url(fileId)
+    const payload = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+    const committed: CommittedDirectory = Object.freeze({
+      directoryId: rootId, directoryIdText: encodeBase64Url(rootId),
+      generation: new Uint8Array(16).fill(44), generationText: encodeBase64Url(new Uint8Array(16).fill(44)),
+      pageCount: 1, entryCount: 1, omittedCount: 0n, terminalCommitment: new Uint8Array(32),
+    })
+    const page: CatalogPage = Object.freeze({
+      shareInstance, directoryId: rootId, directoryIdText: committed.directoryIdText,
+      generation: committed.generation, generationText: committed.generationText,
+      pageIndex: 0, terminal: true, previousCommitment: new Uint8Array(32),
+      entries: Object.freeze([Object.freeze({ kind: 'file', id: fileId, idText: fileIdText, name: 'film.mkv', expectedSize: 10n })]),
+      omittedCount: 0n, objectCommitment: new Uint8Array(32), encodedBytes: 32,
+    })
+    const descriptor = Object.freeze({
+      shareInstance, shareInstanceId: encodeBase64Url(shareInstance),
+      syntheticRoot: rootId, syntheticRootId: committed.directoryIdText,
+    }) as unknown as ShareDescriptor
+    const catalog = Object.freeze({ loadDirectory: async () => committed, page: async () => page }) as unknown as CatalogClient
+    const rev = new Uint8Array(16).fill(45)
+    const fileDesc: FileRevisionDescriptor = Object.freeze({
+      shareInstance, shareInstanceId: descriptor.shareInstanceId,
+      fileId, fileIdText, fileRevision: rev, fileRevisionText: encodeBase64Url(rev),
+      exactSize: 10n, geometry: new FileGeometry(10n, 16n),
+    })
+    const revisions: RevisionReader = {
+      open: async () => Object.freeze({ descriptor: fileDesc, leaseId: new Uint8Array(16).fill(46), release: async () => undefined }),
+    }
+    const readStarts: bigint[] = []
+    let interrupted = false
+    const broker: BlockRangeReader = {
+      readRange: async function* (_desc, _leaseId, span) {
+        readStarts.push(span.start)
+        if (!interrupted) {
+          interrupted = true
+          yield Object.freeze({ offset: 0n, data: payload.subarray(0, 6) })
+          throw new BlockLaneAttemptsError([
+            new BlockInactivityTimeoutError('receiving_fragments', 15_000, 0, { laneId: 1 }),
+          ])
+        }
+        yield Object.freeze({ offset: span.start, data: payload.subarray(Number(span.start), Number(span.end)) })
+      },
+    }
+
+    const first = await openNewFSASession({
+      task: {
+        taskId: 'fsa-interrupted-resume',
+        selection: { shareInstance: descriptor.shareInstanceId, syntheticRoot: committed.directoryIdText, defaultSelected: true, rules: [] },
+        selectionKey: 'sel-fsa-interrupted',
+        artifact: { kind: 'original-file', name: 'film.mkv', singleFileId: fileIdText, singleFilePath: ['film.mkv'], singleFileSize: 10n },
+        lifecycle: initialReceiveState('fsa-interrupted-resume'),
+      },
+      parentHandle: parent as unknown as FileSystemDirectoryHandle,
+      store: store as unknown as ReceiveStore,
+    })
+    const firstResult = await new TransferJob({
+      descriptor, catalog, selection: new SelectionPolicy(true).snapshot(),
+      revisions, broker, output: first.transferOutput,
+    }).run()
+    const pausedRecord = await first.settle(firstResult)
+    await first.close()
+
+    expect(firstResult.status).toBe('paused')
+    expect(firstResult.pauseReason).toBe('interrupted')
+    expect(pausedRecord.lifecycle).toMatchObject({ kind: 'paused', reason: 'interrupted', retainedBytes: 6n })
+    const physical = parent.children.get('film.mkv') as FakeFileHandle
+    expect([...physical.bytes]).toEqual([1, 2, 3, 4, 5, 6])
+
+    const reopened = await reopenFSASession({
+      task: pausedRecord, store: store as unknown as ReceiveStore, allowPermissionPrompt: true,
+    })
+    const resumedResult = await new TransferJob({
+      descriptor, catalog, selection: new SelectionPolicy(true).snapshot(),
+      revisions, broker, output: reopened.transferOutput,
+    }).run()
+    const completedRecord = await reopened.settle(resumedResult)
+    await reopened.close()
+
+    expect(resumedResult.status).toBe('completed')
+    expect(completedRecord.lifecycle.kind).toBe('saved')
+    expect(readStarts).toEqual([0n, 6n])
+    expect([...physical.bytes]).toEqual([...payload])
   })
 })

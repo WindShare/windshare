@@ -3,7 +3,11 @@ import type { CatalogClient } from '../../src/catalog/client'
 import type { CommittedDirectory } from '../../src/catalog/page-store'
 import type { CatalogEntry, CatalogPage, ShareDescriptor } from '../../src/catalog/records'
 import { SelectionPolicy } from '../../src/catalog/selection'
-import type { BlockRangeReader } from '../../src/content/broker'
+import { BlockLaneAttemptsError, type BlockRangeReader } from '../../src/content/broker'
+import { BlockInactivityTimeoutError } from '../../src/content/scheduling/block-response-wait'
+import { SessionRuntimeError } from '../../src/session/runtime-types'
+import { RELAY_ERROR } from '../../src/transport/relay/protocol'
+import { RelayReceiverError } from '../../src/transport/relay/receiver'
 import { FileGeometry, byteRange, type ByteRange } from '../../src/content/geometry'
 import type { FileRevisionDescriptor } from '../../src/content/records'
 import {
@@ -896,5 +900,170 @@ describe('reopened revision readmission', () => {
     expect(result.status).toBe('paused')
     expect(result.pauseReason).toBe('storage-full')
     expect(openCount).toBe(1)
+  })
+})
+
+describe('TransferJob resumable interruption handling', () => {
+  it('pauses resumable transfers with interrupted reason instead of aborting written bytes on transport failure', async () => {
+    const fileId = id(54)
+    const { shareInstance, descriptor, catalog } = makeSingleFileCatalog(fileId, 'movie.mkv', 12n)
+    const rev = makeDescriptor({ shareInstance, fileId, revision: id(83), exactSize: 12n })
+    let pausedRanges: readonly ByteRange[] = []
+    let pauseCalls = 0
+    let abortCalls = 0
+
+    const result = await new TransferJob({
+      descriptor,
+      catalog,
+      selection: new SelectionPolicy(true).snapshot(),
+      revisions: {
+        open: async () => Object.freeze({ descriptor: rev, leaseId: id(1), release: async () => undefined }),
+      },
+      broker: {
+        readRange: async function* () {
+          yield Object.freeze({ offset: 0n, data: new Uint8Array([1, 2, 3, 4]) })
+          throw new BlockLaneAttemptsError([
+            new BlockInactivityTimeoutError('receiving_fragments', 15_000, 0, { laneId: 1 }),
+          ])
+        },
+      },
+      output: {
+        sessionId: 'sess-interrupted',
+        capabilities: { maxConcurrentFiles: 1, resumable: true },
+        openFile: async (): Promise<TransferOutputFile> => ({
+          completedRanges: [],
+          writeAt: async () => undefined,
+          checkpoint: async () => undefined,
+          commit: async () => undefined,
+          pause: async ranges => {
+            pauseCalls += 1
+            pausedRanges = ranges
+          },
+          abort: async () => { abortCalls += 1 },
+        }),
+      },
+    }).run()
+
+    expect(result.status).toBe('paused')
+    expect(result.pauseReason).toBe('interrupted')
+    expect(pauseCalls).toBe(1)
+    expect(abortCalls).toBe(0)
+    expect(pausedRanges).toEqual([byteRange(0n, 4n)])
+  })
+
+  it('aborts 0-byte placeholders on resumable interruption and keeps non-resumable and share-stopped failures terminal', async () => {
+    const fileId = id(55)
+    const { shareInstance, descriptor, catalog } = makeSingleFileCatalog(fileId, 'clip.mkv', 8n)
+    const rev = makeDescriptor({ shareInstance, fileId, revision: id(84), exactSize: 8n })
+
+    // 1. Resumable backend with 0 bytes written cleans up empty placeholder and still pauses cleanly.
+    let zeroPauseCalls = 0
+    let zeroAbortCalls = 0
+    const zeroResult = await new TransferJob({
+      descriptor,
+      catalog,
+      selection: new SelectionPolicy(true).snapshot(),
+      revisions: { open: async () => Object.freeze({ descriptor: rev, leaseId: id(1), release: async () => undefined }) },
+      broker: {
+        readRange: async function* () {
+          yield await Promise.reject(new SessionRuntimeError('lane', 'relay dropped'))
+        },
+      },
+      output: {
+        sessionId: 'sess-zero-interrupted',
+        capabilities: { maxConcurrentFiles: 1, resumable: true },
+        openFile: async (): Promise<TransferOutputFile> => ({
+          completedRanges: [],
+          writeAt: async () => undefined,
+          checkpoint: async () => undefined,
+          commit: async () => undefined,
+          pause: async () => { zeroPauseCalls += 1 },
+          abort: async () => { zeroAbortCalls += 1 },
+        }),
+      },
+    }).run()
+    expect(zeroResult.status).toBe('paused')
+    expect(zeroResult.pauseReason).toBe('interrupted')
+    expect(zeroPauseCalls).toBe(0)
+    expect(zeroAbortCalls).toBe(1)
+
+    // 2. Non-resumable backend still aborts and fails.
+    let portableAborts = 0
+    const portableResult = await new TransferJob({
+      descriptor,
+      catalog,
+      selection: new SelectionPolicy(true).snapshot(),
+      revisions: { open: async () => Object.freeze({ descriptor: rev, leaseId: id(1), release: async () => undefined }) },
+      broker: {
+        readRange: async function* () {
+          yield Object.freeze({ offset: 0n, data: new Uint8Array([1, 2]) })
+          throw new BlockLaneAttemptsError([new SessionRuntimeError('lane', 'lane lost')])
+        },
+      },
+      output: {
+        sessionId: 'sess-portable-interrupted',
+        capabilities: { maxConcurrentFiles: 1, resumable: false },
+        openFile: async (): Promise<TransferOutputFile> => ({
+          completedRanges: [],
+          writeAt: async () => undefined,
+          checkpoint: async () => undefined,
+          commit: async () => undefined,
+          pause: async () => undefined,
+          abort: async () => { portableAborts += 1 },
+        }),
+      },
+    }).run()
+    expect(portableResult.status).toBe('failed')
+    expect(portableAborts).toBe(1)
+
+    // 3. Permanent share stop remains terminal even on resumable backends.
+    let stoppedAborts = 0
+    const stoppedResult = await new TransferJob({
+      descriptor,
+      catalog,
+      selection: new SelectionPolicy(true).snapshot(),
+      revisions: { open: async () => Object.freeze({ descriptor: rev, leaseId: id(1), release: async () => undefined }) },
+      broker: {
+        readRange: async function* () {
+          yield Object.freeze({ offset: 0n, data: new Uint8Array([1, 2]) })
+          throw new RelayReceiverError('stopped', {
+            relayError: { code: RELAY_ERROR.stopped, retryAfterMilliseconds: 0 },
+          })
+        },
+      },
+      output: {
+        sessionId: 'sess-share-stopped',
+        capabilities: { maxConcurrentFiles: 1, resumable: true },
+        openFile: async (): Promise<TransferOutputFile> => ({
+          completedRanges: [],
+          writeAt: async () => undefined,
+          checkpoint: async () => undefined,
+          commit: async () => undefined,
+          pause: async () => undefined,
+          abort: async () => { stoppedAborts += 1 },
+        }),
+      },
+    }).run()
+    expect(stoppedResult.status).toBe('failed')
+    expect(stoppedAborts).toBe(1)
+
+    // 4. Discovery-time transient lane outage pauses resumable backends instead of failing discovery.
+    const discoveryResult = await new TransferJob({
+      descriptor,
+      catalog: {
+        loadDirectory: async () => { throw new SessionRuntimeError('lane', 'catalog lane dropped') },
+        page: async () => { throw new Error('unused') },
+      } as unknown as CatalogClient,
+      selection: new SelectionPolicy(true).snapshot(),
+      revisions: { open: async () => { throw new Error('unused') } },
+      broker: { readRange: async function* () { yield { offset: 0n, data: new Uint8Array(0) } } },
+      output: {
+        sessionId: 'sess-discovery-interrupted',
+        capabilities: { maxConcurrentFiles: 1, resumable: true },
+        openFile: async () => { throw new Error('unused') },
+      },
+    }).run()
+    expect(discoveryResult.status).toBe('paused')
+    expect(discoveryResult.pauseReason).toBe('interrupted')
   })
 })

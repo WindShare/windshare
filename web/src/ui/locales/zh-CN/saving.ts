@@ -22,7 +22,7 @@ export const saving: typeof English = {
   singleZip: '单个 ZIP',
   workspaceZip: '先将所有文件下载到浏览器存储，再保存为一个未压缩的 ZIP。',
   largeFiles: '适合大文件',
-  zipExport: '打包完成后即可使用 ZIP。导出时需要足够空间保存完整副本。',
+  zipExport: '适合网速较慢或耗时较长的下载。打包完成后即可使用，导出时需额外空间保存完整副本。',
   clearingData: '清除网站数据会删除未完成的进度和浏览器中保留的下载。',
   workspaceFile: '下载时在浏览器中保存进度，完成后导出文件。',
   longDownloads: '适合网速较慢或耗时较长的下载。导出时将完整文件复制到目标位置。',

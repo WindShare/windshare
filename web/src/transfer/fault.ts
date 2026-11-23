@@ -1,3 +1,23 @@
+import { BlockLaneAttemptsError } from '../content/broker'
+import { BandwidthWaitError } from '../contracts/capacity'
+import { GenerationRecoveryExhaustedError } from '../receiver/generation-recovery'
+import {
+  AllRelaysRestrictedError,
+  RelayCooldownError,
+  isTerminalRecoveryFailure,
+} from '../receiver/recovery-failure'
+import { RelayEndpointFailure } from '../receiver/relay-selection/race'
+import { LaneAdmissionTransportError } from '../session/lane-admission'
+import { SessionHandshakeTimeoutError, SessionRuntimeError } from '../session/runtime-types'
+import { RelayHeartbeatError } from '../transport/relay/heartbeat'
+import { RelayReceiverError } from '../transport/relay/receiver'
+import {
+  WebRTCChannelClosedError,
+  WebRTCRemoteClosedError,
+  WebRTCTransportError,
+} from '../transport/webrtc/errors'
+import type { ReceivePauseReason } from './state'
+
 export const FaultDomain = Object.freeze({
   Protocol: 'protocol',
   Source: 'source',
@@ -87,9 +107,9 @@ export class TransferFaultError extends Error {
 }
 
 export class TransferPauseError extends Error {
-  readonly reason: 'user' | 'storage-full' | 'permission-needed'
+  readonly reason: ReceivePauseReason
 
-  constructor(reason: 'user' | 'storage-full' | 'permission-needed', message = 'Transfer paused') {
+  constructor(reason: ReceivePauseReason, message = 'Transfer paused') {
     super(message)
     this.name = 'TransferPauseError'
     this.reason = reason
@@ -125,6 +145,42 @@ export function isSourceInvalidatedError(error: unknown): boolean {
     error.fault.code === SourceFaultCode.RevisionChanged ||
     error.fault.code === SourceFaultCode.RevisionInvalidated
   )
+}
+
+const MAX_INTERRUPTION_INSPECTION_DEPTH = 8
+
+/**
+ * Classifies transient transport, lane, and session-recovery interruptions
+ * that should pause resumable backends rather than aborting saved progress.
+ * Permanent share stops, protocol violations, revision drift, and local I/O
+ * faults return false so they keep their terminal semantics.
+ */
+export function isRecoverableTransferInterruption(error: unknown, depth = 0): boolean {
+  if (depth >= MAX_INTERRUPTION_INSPECTION_DEPTH) return false
+  if (error instanceof BlockLaneAttemptsError) return true
+  if (error instanceof RelayEndpointFailure) {
+    return isRecoverableTransferInterruption(error.cause, depth + 1)
+  }
+  if (error instanceof AggregateError) {
+    return error.errors.length > 0 && error.errors.every(cause => isRecoverableTransferInterruption(cause, depth + 1))
+  }
+  if (error instanceof RelayReceiverError) return !isTerminalRecoveryFailure(error)
+  return isTransientLaneOrTransportError(error)
+}
+
+function isTransientLaneOrTransportError(error: unknown): boolean {
+  if (error instanceof SessionRuntimeError) return error.scope === 'lane'
+  if (error instanceof DOMException && error.name === 'TimeoutError') return true
+  return error instanceof BandwidthWaitError ||
+    error instanceof RelayHeartbeatError ||
+    error instanceof SessionHandshakeTimeoutError ||
+    error instanceof LaneAdmissionTransportError ||
+    error instanceof GenerationRecoveryExhaustedError ||
+    error instanceof RelayCooldownError ||
+    error instanceof AllRelaysRestrictedError ||
+    error instanceof WebRTCTransportError ||
+    error instanceof WebRTCRemoteClosedError ||
+    error instanceof WebRTCChannelClosedError
 }
 
 export type NativeErrorClass =

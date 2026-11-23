@@ -20,7 +20,7 @@ export const saving = {
   singleZip: 'Single ZIP',
   workspaceZip: 'Downloads all files reliably in browser storage first, then saves one uncompressed ZIP.',
   largeFiles: 'Best for large files',
-  zipExport: 'The ZIP becomes usable once packaging finishes. Exporting requires space for the finished copy.',
+  zipExport: 'Safer for slow or long downloads. The ZIP becomes usable once packaging finishes, and exporting copies the finished file.',
   clearingData: 'Clearing site data removes unfinished progress and retained downloads.',
   workspaceFile: 'Saves progress in browser storage as it downloads, then exports the finished file.',
   longDownloads: 'Safer for slow or long downloads. Exporting the finished file copies it to your destination.',

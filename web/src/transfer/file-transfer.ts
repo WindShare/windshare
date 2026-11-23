@@ -22,9 +22,11 @@ import {
   isAbortError,
   isPermissionDeniedError,
   isQuotaExceededError,
+  isRecoverableTransferInterruption,
   sourceFault,
 } from './fault'
 import type { CompletedOutputFile, TransferOutputFile, TransferOutputSession } from './output-port'
+import type { ReceivePauseReason } from './state'
 
 const MAX_CAPACITY_WAIT_MS = 60_000
 const MAX_LEASE_RETRIES = 3
@@ -49,7 +51,7 @@ export interface FileTransferContext {
 
 export type SingleFileTransferOutcome =
   | Readonly<{ kind: 'completed'; size: bigint }>
-  | Readonly<{ kind: 'paused'; reason: 'user' | 'storage-full' | 'permission-needed' }>
+  | Readonly<{ kind: 'paused'; reason: ReceivePauseReason }>
   | Readonly<{ kind: 'stopped' }>
   | Readonly<{ kind: 'source-changed' }>
   | Readonly<{ kind: 'source-unavailable'; error: unknown }>
@@ -332,7 +334,7 @@ async function handleFileError(
 ): Promise<AttemptResult> {
   const pauseReason = pauseReasonFor(ctx, error)
   if (pauseReason !== undefined) {
-    await pauseWriterSafely(writer, ranges)
+    await pauseWriterSafely(writer, ranges, error)
     return { kind: 'paused', reason: pauseReason }
   }
   if (error instanceof TransferStopError || ctx.isStopped()) {
@@ -347,6 +349,10 @@ async function handleFileError(
   if (nextRetry !== undefined) {
     const checkpointOutcome = await checkpointForRetry(ctx, writer, ranges)
     return checkpointOutcome ?? { kind: 'retry', next: nextRetry }
+  }
+  if (ctx.output.capabilities.resumable && !ctx.signal.aborted && isRecoverableTransferInterruption(error)) {
+    await pauseWriterSafely(writer, ranges, error)
+    return { kind: 'paused', reason: 'interrupted' }
   }
   await writer?.abort(error).catch(() => undefined)
   if (isAbortError(error) && ctx.signal.aborted) {
@@ -395,7 +401,7 @@ function isReusableReopenedRevisionError(error: unknown): error is RevisionReope
 function pauseReasonFor(
   ctx: FileTransferContext,
   error: unknown,
-): 'user' | 'storage-full' | 'permission-needed' | undefined {
+): ReceivePauseReason | undefined {
   if (error instanceof TransferPauseError) return error.reason
   if (ctx.isPaused()) return 'user'
   if (isQuotaExceededError(error)) return 'storage-full'
@@ -406,10 +412,16 @@ function pauseReasonFor(
 async function pauseWriterSafely(
   writer: TransferOutputFile | undefined,
   ranges: ByteRangeSet | undefined,
+  reason?: unknown,
 ): Promise<void> {
-  if (writer !== undefined && ranges !== undefined) {
+  if (writer === undefined) return
+  if (ranges !== undefined && !ranges.empty) {
     await writer.pause(ranges.ranges).catch(() => undefined)
+    return
   }
+  // No bytes need preservation; aborting clears any empty FSA placeholder
+  // instead of recording a 0-byte resumable checkpoint.
+  await writer.abort(reason).catch(() => undefined)
 }
 
 async function checkpointForRetry(

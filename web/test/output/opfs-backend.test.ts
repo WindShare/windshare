@@ -5,7 +5,9 @@ import type { CatalogClient } from '../../src/catalog/client'
 import type { CommittedDirectory } from '../../src/catalog/page-store'
 import type { CatalogEntry, CatalogPage, ShareDescriptor } from '../../src/catalog/records'
 import { SelectionPolicy } from '../../src/catalog/selection'
-import type { BlockRangeReader } from '../../src/content/broker'
+import { BlockLaneAttemptsError, type BlockRangeReader } from '../../src/content/broker'
+import { BlockInactivityTimeoutError } from '../../src/content/scheduling/block-response-wait'
+import { actionsForState, canSavePartialState } from '../../src/application/receive/admission'
 import { FileGeometry, byteRange } from '../../src/content/geometry'
 import type { FileRevisionDescriptor } from '../../src/content/records'
 import type { RevisionReader } from '../../src/content/session-services'
@@ -718,5 +720,91 @@ describe('OPFS resume completion skip', () => {
 
     expect(singleResult.status).toBe('completed')
     expect(singleFixture.openedFileIds).toEqual([])
+  })
+
+  it('keeps multi-file OPFS ZIP resumable with both continue and save-partial after a network interruption', async () => {
+    const store = new MemoryReceiveStore()
+    const { env } = createMemoryOPFSEnv()
+    const { windowPort, downloads } = createMockDownloadWindow()
+    const smallPayload = new TextEncoder().encode('small-done')
+    const largePayload = new TextEncoder().encode('first-half-second-half')
+    const fixture = makeShareFixture([
+      { seed: 31, name: 'readme.txt', bytes: smallPayload },
+      { seed: 32, name: 'movie.bin', bytes: largePayload },
+    ])
+    const selection = new SelectionPolicy(true).snapshot()
+    const spec = selectionSpecFromPolicy(
+      fixture.descriptor.shareInstanceId,
+      fixture.descriptor.syntheticRootId,
+      selection,
+    )
+
+    let interruptedOnce = false
+    const interruptingBroker: BlockRangeReader = {
+      readRange: async function* (desc, leaseId, span, options) {
+        if (!interruptedOnce && desc.exactSize === BigInt(largePayload.byteLength)) {
+          interruptedOnce = true
+          yield Object.freeze({ offset: 0n, data: largePayload.subarray(0, 10) })
+          throw new BlockLaneAttemptsError([
+            new BlockInactivityTimeoutError('receiving_fragments', 15_000, 0, { laneId: 1 }),
+          ])
+        }
+        yield* fixture.broker.readRange(desc, leaseId, span, options)
+      },
+    }
+
+    const first = await openNewOPFSSession({
+      task: {
+        taskId: 'opfs-zip-interrupted',
+        selection: spec,
+        selectionKey: selectionKey(spec),
+        artifact: Object.freeze({ kind: 'zip-archive', name: 'bundle.zip' }),
+        lifecycle: initialReceiveState('opfs-zip-interrupted'),
+      },
+      store: store as unknown as ReceiveStore,
+      env,
+      windowPort,
+    })
+    const firstResult = await new TransferJob({
+      descriptor: fixture.descriptor,
+      catalog: fixture.catalog,
+      selection,
+      revisions: fixture.revisions,
+      broker: interruptingBroker,
+      output: first.transferOutput,
+    }).run()
+    const pausedRecord = await first.settle(firstResult)
+    await first.close()
+
+    expect(firstResult.status).toBe('paused')
+    expect(firstResult.pauseReason).toBe('interrupted')
+    expect(pausedRecord.lifecycle.kind).toBe('paused')
+    const canSavePartial = canSavePartialState(pausedRecord.lifecycle, 'opfs', true)
+    expect(canSavePartial).toBe(true)
+    expect(actionsForState(pausedRecord.lifecycle, 'opfs', canSavePartial))
+      .toEqual(['continue', 'save-partial', 'discard'])
+
+    const reopened = await reopenOPFSSession({
+      task: pausedRecord,
+      store: store as unknown as ReceiveStore,
+      env,
+      windowPort,
+    })
+    const resumedResult = await new TransferJob({
+      descriptor: fixture.descriptor,
+      catalog: fixture.catalog,
+      selection,
+      revisions: fixture.revisions,
+      broker: fixture.broker,
+      output: reopened.transferOutput,
+    }).run()
+    const settled = await reopened.settle(resumedResult)
+    await reopened.close()
+
+    expect(resumedResult.status).toBe('completed')
+    expect(settled.lifecycle.kind).toBe('download-started')
+    const entries = await readZipFiles(downloads[0]!.blob)
+    expect(entries.get('readme.txt')).toEqual(smallPayload)
+    expect(entries.get('movie.bin')).toEqual(largePayload)
   })
 })
