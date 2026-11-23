@@ -20,6 +20,7 @@ import {
   normalizeZipEntry,
   planZipEntry,
   requiresZip64End,
+  type NormalizedZipEntry,
   type ZipEntryPlanV1,
 } from './policy'
 
@@ -42,6 +43,12 @@ export interface OpenedProgressiveZipFile {
   crcRanges: readonly ZipCrcRange[]
 }
 
+interface ReservedZipSlot {
+  readonly plan: ZipEntryPlanV1
+  readonly coords: ReturnType<typeof zipMemberCoordinates>
+  readonly sequence: number
+}
+
 /**
  * Resumable single-object OPFS ZIP64 writer.
  * Allocates fixed non-overlapping slots per file inside ONE OPFS SyncAccessHandle so
@@ -52,6 +59,8 @@ export class ProgressiveZipWriter {
   readonly #store: ReceiveStore
   readonly #io: ObjectCheckpointCoordinator
   readonly #entries = new Map<string, ReceiveFileRecord>()
+  readonly #pendingDirectories = new Map<string, Promise<void>>()
+  readonly #pendingFiles = new Map<string, Promise<OpenedProgressiveZipFile>>()
   #allocatedLength: bigint
   #nextSequence: number
 
@@ -117,21 +126,72 @@ export class ProgressiveZipWriter {
   async ensureDirectory(directoryId: string, path: readonly string[], modifiedTimeMilliseconds?: bigint): Promise<void> {
     const key = `${DIR_ENTRY_PREFIX}${directoryId}`
     if (this.#entries.has(key)) return
+    const pending = this.#pendingDirectories.get(key)
+    if (pending !== undefined) return pending
+
+    const operation = this.#allocateDirectory(key, path, modifiedTimeMilliseconds)
+    this.#pendingDirectories.set(key, operation)
+    try {
+      await operation
+    } finally {
+      if (this.#pendingDirectories.get(key) === operation) {
+        this.#pendingDirectories.delete(key)
+      }
+    }
+  }
+
+  async openFile(input: ProgressiveZipEntryInput): Promise<OpenedProgressiveZipFile> {
+    const existing = this.#entries.get(input.fileId)
+    if (existing?.zipEntry !== undefined) {
+      return this.#reopenFile(existing)
+    }
+    const pending = this.#pendingFiles.get(input.fileId)
+    if (pending !== undefined) return pending
+
+    const operation = this.#allocateFile(input)
+    this.#pendingFiles.set(input.fileId, operation)
+    try {
+      return await operation
+    } finally {
+      if (this.#pendingFiles.get(input.fileId) === operation) {
+        this.#pendingFiles.delete(input.fileId)
+      }
+    }
+  }
+
+  // Advance layout offsets and sequence synchronously before any async I/O so
+  // concurrent directory/file allocations never claim overlapping byte slots or
+  // rewind `#allocatedLength`.
+  #reserveSlot(normalized: NormalizedZipEntry): ReservedZipSlot {
+    const plan = planZipEntry(normalized, this.#allocatedLength)
+    const coords = zipMemberCoordinates(plan)
+    const sequence = this.#nextSequence++
+    this.#allocatedLength = coords.endOffset
+    return { plan, coords, sequence }
+  }
+
+  async #allocateDirectory(
+    key: string,
+    path: readonly string[],
+    modifiedTimeMilliseconds?: bigint,
+  ): Promise<void> {
     const normalized = normalizeZipEntry({
       kind: 'directory',
       path,
       ...(modifiedTimeMilliseconds === undefined ? {} : { modifiedTimeMilliseconds }),
     })
-    const plan = planZipEntry(normalized, this.#allocatedLength)
-    const coords = zipMemberCoordinates(plan)
+    const { plan, coords, sequence } = this.#reserveSlot(normalized)
     const header = encodeZipLocalHeader(plan)
     const done = completeZipMember(plan, 0n, 0)
+    // Directory entries carry zero payload bytes, so local header and descriptor are contiguous.
+    const recordBytes = new Uint8Array(header.byteLength + done.descriptor.byteLength)
+    recordBytes.set(header, 0)
+    recordBytes.set(done.descriptor, header.byteLength)
 
-    await this.#io.writeAt(plan.localHeaderOffset, header)
-    await this.#io.writeAt(coords.descriptorOffset, done.descriptor)
+    await this.#io.writeAt(plan.localHeaderOffset, recordBytes)
 
     const zipEntry: ZipEntryLayoutRecord = Object.freeze({
-      sequence: this.#nextSequence++,
+      sequence,
       kind: 'directory',
       localHeaderOffset: plan.localHeaderOffset,
       payloadOffset: coords.payloadOffset,
@@ -152,32 +212,31 @@ export class ProgressiveZipWriter {
       status: 'completed',
       zipEntry,
     })
-    this.#allocatedLength = coords.endOffset
-    this.#entries.set(key, row)
     await this.#io.checkpoint('zip-directory', () => this.#store.putFile(row))
+    this.#entries.set(key, row)
   }
 
-  async openFile(input: ProgressiveZipEntryInput): Promise<OpenedProgressiveZipFile> {
-    const existing = this.#entries.get(input.fileId)
-    if (existing?.zipEntry !== undefined) {
-      const normalized = normalizeZipEntry({
-        kind: 'file',
-        path: existing.path,
-        exactSize: existing.size,
-        ...(existing.zipEntry.modifiedTimeMilliseconds === undefined
-          ? {}
-          : { modifiedTimeMilliseconds: existing.zipEntry.modifiedTimeMilliseconds }),
-      })
-      const plan = planZipEntry(normalized, existing.zipEntry.localHeaderOffset)
-      return {
-        record: existing,
-        plan,
-        completedRanges: fromRangeTuples(existing.completedRanges),
-        alreadyCompleted: existing.status === 'completed',
-        crcRanges: existing.zipEntry.crcRanges,
-      }
+  #reopenFile(existing: ReceiveFileRecord): OpenedProgressiveZipFile {
+    const zip = existing.zipEntry!
+    const normalized = normalizeZipEntry({
+      kind: 'file',
+      path: existing.path,
+      exactSize: existing.size,
+      ...(zip.modifiedTimeMilliseconds === undefined
+        ? {}
+        : { modifiedTimeMilliseconds: zip.modifiedTimeMilliseconds }),
+    })
+    const plan = planZipEntry(normalized, zip.localHeaderOffset)
+    return {
+      record: existing,
+      plan,
+      completedRanges: fromRangeTuples(existing.completedRanges),
+      alreadyCompleted: existing.status === 'completed',
+      crcRanges: zip.crcRanges,
     }
+  }
 
+  async #allocateFile(input: ProgressiveZipEntryInput): Promise<OpenedProgressiveZipFile> {
     const normalized = normalizeZipEntry({
       kind: 'file',
       path: input.path,
@@ -186,13 +245,11 @@ export class ProgressiveZipWriter {
         ? {}
         : { modifiedTimeMilliseconds: input.modifiedTimeMilliseconds }),
     })
-    const plan = planZipEntry(normalized, this.#allocatedLength)
-    const coords = zipMemberCoordinates(plan)
-    this.#allocatedLength = coords.endOffset
+    const { plan, coords, sequence } = this.#reserveSlot(normalized)
 
     await this.#io.writeAt(plan.localHeaderOffset, encodeZipLocalHeader(plan))
     const zipEntry: ZipEntryLayoutRecord = Object.freeze({
-      sequence: this.#nextSequence++,
+      sequence,
       kind: 'file',
       localHeaderOffset: plan.localHeaderOffset,
       payloadOffset: coords.payloadOffset,
@@ -215,8 +272,8 @@ export class ProgressiveZipWriter {
       status: 'receiving',
       zipEntry,
     })
-    this.#entries.set(input.fileId, row)
     await this.#io.checkpoint('zip-file-allocate', () => this.#store.putFile(row))
+    this.#entries.set(input.fileId, row)
     return {
       record: row,
       plan,
