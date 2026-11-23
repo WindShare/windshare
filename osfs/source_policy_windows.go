@@ -6,10 +6,16 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"path/filepath"
+	"runtime"
+	"slices"
+	"strings"
 	"syscall"
 	"unsafe"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/osfs/internal/pathfailure"
 	"golang.org/x/sys/windows"
 )
 
@@ -22,6 +28,7 @@ const (
 	// It denotes recall semantics only in directory enumeration records, never in
 	// GetFileAttributesW or handle-based FileAttributeTagInfo / ByHandleFileInformation.
 	windowsAttrRecallOnOpen       uint32 = 0x00040000
+	windowsAttrEA                 uint32 = windowsAttrRecallOnOpen
 	windowsAttrRecallOnDataAccess uint32 = 0x00400000
 	windowsAttrOffline            uint32 = 0x00001000
 
@@ -35,12 +42,102 @@ const (
 		cfPlaceholderStateSyncRoot | cfPlaceholderStateEssentialProp |
 		cfPlaceholderStateInSync | cfPlaceholderStatePartial | cfPlaceholderStatePartiallyOnDisk
 	cfPlaceholderStateInvalid uint32 = 0xFFFFFFFF
+
+	windowsShareAll = windows.FILE_SHARE_READ | windows.FILE_SHARE_WRITE | windows.FILE_SHARE_DELETE
 )
 
 var (
 	modCldAPI                                 = windows.NewLazySystemDLL("cldapi.dll")
 	procCfGetPlaceholderStateFromAttributeTag = modCldAPI.NewProc("CfGetPlaceholderStateFromAttributeTag")
 )
+
+type sourceObjectIdentity struct {
+	volumeSerial  uint32
+	fileIndexHigh uint32
+	fileIndexLow  uint32
+	isDir         bool
+}
+
+func (identity sourceObjectIdentity) sameObject(other sourceObjectIdentity) bool {
+	return identity == other
+}
+
+// rootInspector retains no-recall root handles for metadata-only relative
+// preflight because Go 1.27's Windows os.Root.Lstat opens with FILE_GENERIC_READ
+// and without FILE_OPEN_NO_RECALL.
+type rootInspector struct {
+	handles []windows.Handle
+}
+
+func newRootInspector(roots []*os.Root) (rootInspector, error) {
+	handles := make([]windows.Handle, 0, len(roots))
+	for _, root := range roots {
+		handle, err := duplicateRootHandleNoRecall(root)
+		if err != nil {
+			return rootInspector{}, errors.Join(err, closeWindowsHandles(handles))
+		}
+		handles = append(handles, handle)
+	}
+	return rootInspector{handles: handles}, nil
+}
+
+func (inspector rootInspector) Close() error {
+	return closeWindowsHandles(inspector.handles)
+}
+
+func (inspector rootInspector) inspectRelativeRegularFile(
+	_ *os.Root,
+	slot int,
+	relative string,
+) (sourceObjectIdentity, bool, error) {
+	if slot < 0 || slot >= len(inspector.handles) {
+		return sourceObjectIdentity{}, false, content.ErrRevisionStale
+	}
+	identity, kind, _, err := inspectWindowsRelativeNoRecall(inspector.handles[slot], relative, false)
+	if err != nil {
+		return sourceObjectIdentity{}, false, err
+	}
+	return identity, kind == sourceEntryRegularFile, nil
+}
+
+func duplicateRootHandleNoRecall(authority *os.Root) (windows.Handle, error) {
+	file, err := openRootObjectNoRecall(authority, ".")
+	if err != nil {
+		return windows.InvalidHandle, err
+	}
+	var handle windows.Handle
+	process := windows.CurrentProcess()
+	duplicateErr := windows.DuplicateHandle(
+		process,
+		windows.Handle(file.Fd()),
+		process,
+		&handle,
+		0,
+		false,
+		windows.DUPLICATE_SAME_ACCESS,
+	)
+	runtime.KeepAlive(file)
+	closeErr := file.Close()
+	if err := errors.Join(duplicateErr, closeErr); err != nil {
+		if duplicateErr == nil {
+			err = errors.Join(err, windows.CloseHandle(handle))
+		}
+		return windows.InvalidHandle, err
+	}
+	return handle, nil
+}
+
+func closeWindowsHandles(handles []windows.Handle) error {
+	var result error
+	for index := range slices.Backward(handles) {
+		handle := handles[index]
+		if handle == 0 || handle == windows.InvalidHandle {
+			continue
+		}
+		result = errors.Join(result, windows.CloseHandle(handle))
+	}
+	return result
+}
 
 type windowsAttributeSource uint8
 
@@ -70,11 +167,18 @@ func isCloudReparseTag(tag uint32) bool {
 	return tag&reparseTagNameSurrogateBit == 0 && (tag&^ioReparseTagCloudMask) == ioReparseTagCloud
 }
 
-func queryWindowsPlaceholderState(attributes, reparseTag uint32) uint32 {
+// queryWindowsHandlePlaceholderState decodes Cloud Files state from handle-based
+// FileAttributeTagInfo. cldapi.dll unconditionally treats bit 0x00040000 as
+// FILE_ATTRIBUTE_RECALL_ON_OPEN (reporting CF_PLACEHOLDER_STATE_PARTIAL), whereas
+// handle queries use that bit for NTFS FILE_ATTRIBUTE_EA.
+func queryWindowsHandlePlaceholderState(attributes, reparseTag uint32) uint32 {
 	if procCfGetPlaceholderStateFromAttributeTag.Find() != nil {
 		return cfPlaceholderStateInvalid
 	}
-	state, _, _ := procCfGetPlaceholderStateFromAttributeTag.Call(uintptr(attributes), uintptr(reparseTag))
+	state, _, _ := procCfGetPlaceholderStateFromAttributeTag.Call(
+		uintptr(attributes&^windowsAttrEA),
+		uintptr(reparseTag),
+	)
 	return uint32(state)
 }
 
@@ -106,7 +210,14 @@ func classifyWindowsEntry(facts windowsEntryFacts) (sourceEntryKind, sourceEntry
 	if facts.hasFileType && facts.fileType != windows.FILE_TYPE_DISK {
 		return sourceEntrySpecialFile, sourceEntryAudit{}
 	}
-	if facts.mode != 0 && !facts.mode.IsRegular() {
+	// Strip Go's ModeIrregular when authoritative handle fileType is present so
+	// a cloud file that converted to an ordinary local file between queries is
+	// not misclassified as a special file.
+	mode := facts.mode
+	if facts.hasFileType {
+		mode &^= fs.ModeIrregular
+	}
+	if mode != 0 && !mode.IsRegular() {
 		return sourceEntrySpecialFile, sourceEntryAudit{}
 	}
 	return sourceEntryRegularFile, sourceEntryAudit{}
@@ -159,6 +270,26 @@ func windowsFileInfoAttributes(info fs.FileInfo) (uint32, bool) {
 	return native.FileAttributes, true
 }
 
+func windowsExtendedPath(path string) string {
+	if path == "" {
+		return ""
+	}
+	if strings.HasPrefix(path, `\\?\`) || strings.HasPrefix(path, `\??\`) || strings.HasPrefix(path, `\\.\`) {
+		return path
+	}
+	clean := filepath.Clean(path)
+	if strings.HasPrefix(clean, `\\?\`) || strings.HasPrefix(clean, `\??\`) || strings.HasPrefix(clean, `\\.\`) {
+		return clean
+	}
+	if strings.HasPrefix(clean, `\\`) {
+		return `\\?\UNC\` + strings.TrimPrefix(clean, `\\`)
+	}
+	if len(clean) >= 3 && clean[1] == ':' && clean[2] == '\\' {
+		return `\\?\` + clean
+	}
+	return path
+}
+
 func queryWindowsHandleAttributeTag(handle windows.Handle) (windowsAttributeTagInfo, error) {
 	var info windowsAttributeTagInfo
 	err := windows.GetFileInformationByHandleEx(
@@ -170,42 +301,105 @@ func queryWindowsHandleAttributeTag(handle windows.Handle) (windowsAttributeTagI
 	return info, err
 }
 
-func queryWindowsPathAttributeTagNoRecall(absolute string) (windowsAttributeTagInfo, uint32, error) {
-	path16, err := windows.UTF16PtrFromString(absolute)
-	if err != nil {
-		return windowsAttributeTagInfo{}, 0, err
+func classifyWindowsOpenHandle(
+	handle windows.Handle,
+	dirRecallOnOpen bool,
+	queryFileTypeUpfront bool,
+) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, windows.ByHandleFileInformation, error) {
+	var fileType uint32
+	hasFileType := false
+	if queryFileTypeUpfront {
+		ft, err := windows.GetFileType(handle)
+		if err != nil {
+			return sourceObjectIdentity{}, 0, sourceEntryAudit{}, windows.ByHandleFileInformation{}, err
+		}
+		if ft == windows.FILE_TYPE_PIPE || ft == windows.FILE_TYPE_CHAR {
+			return sourceObjectIdentity{}, sourceEntrySpecialFile, sourceEntryAudit{}, windows.ByHandleFileInformation{}, nil
+		}
+		fileType = ft
+		hasFileType = true
 	}
-	// Open only the leaf object's metadata without following leaf reparse points
-	// or recalling cloud data; ancestor junctions remain traversable for selected roots.
-	flags := uint32(windows.FILE_FLAG_BACKUP_SEMANTICS | windows.FILE_FLAG_OPEN_REPARSE_POINT | windows.FILE_FLAG_OPEN_NO_RECALL)
-	handle, err := windows.CreateFile(
-		path16, 0,
-		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
-		nil, windows.OPEN_EXISTING, flags, 0,
-	)
-	if err != nil {
-		return windowsAttributeTagInfo{}, 0, err
+	var byHandle windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(handle, &byHandle); err != nil {
+		return sourceObjectIdentity{}, 0, sourceEntryAudit{}, windows.ByHandleFileInformation{}, err
 	}
-	defer windows.CloseHandle(handle)
+	identity := sourceObjectIdentity{
+		volumeSerial:  byHandle.VolumeSerialNumber,
+		fileIndexHigh: byHandle.FileIndexHigh,
+		fileIndexLow:  byHandle.FileIndexLow,
+		isDir:         byHandle.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0,
+	}
+	if byHandle.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT == 0 {
+		kind, audit := classifyWindowsEntry(windowsEntryFacts{
+			source:        windowsAttributesFromHandle,
+			attributes:    byHandle.FileAttributes,
+			hasAttributes: true,
+			hasFileType:   hasFileType,
+			fileType:      fileType,
+		})
+		if dirRecallOnOpen && omissionForEntryKind(kind) == catalog.SourceOmissionNone {
+			return identity, sourceEntryCloudPlaceholder, sourceEntryAudit{
+				attributes: byHandle.FileAttributes | windowsAttrRecallOnOpen,
+			}, byHandle, nil
+		}
+		return identity, kind, audit, byHandle, nil
+	}
 	tagInfo, err := queryWindowsHandleAttributeTag(handle)
 	if err != nil {
-		return windowsAttributeTagInfo{}, 0, err
+		return sourceObjectIdentity{}, 0, sourceEntryAudit{}, windows.ByHandleFileInformation{}, err
 	}
-	fileType, err := windows.GetFileType(handle)
-	if err != nil {
-		return windowsAttributeTagInfo{}, 0, err
+	hasReparseTag := tagInfo.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0
+	var state uint32
+	if hasReparseTag && isCloudReparseTag(tagInfo.ReparseTag) {
+		state = queryWindowsHandlePlaceholderState(tagInfo.FileAttributes, tagInfo.ReparseTag)
 	}
-	return tagInfo, fileType, nil
+	kind, audit := classifyWindowsEntry(windowsEntryFacts{
+		source:           windowsAttributesFromHandle,
+		attributes:       tagInfo.FileAttributes,
+		hasAttributes:    true,
+		hasReparseTag:    hasReparseTag,
+		reparseTag:       tagInfo.ReparseTag,
+		placeholderState: state,
+		hasFileType:      hasFileType,
+		fileType:         fileType,
+	})
+	if kind == sourceEntryRegularFile && audit.hydratedCloud && !hasFileType {
+		ft, ftErr := windows.GetFileType(handle)
+		if ftErr != nil {
+			return sourceObjectIdentity{}, 0, sourceEntryAudit{}, windows.ByHandleFileInformation{}, ftErr
+		}
+		if ft != windows.FILE_TYPE_DISK {
+			audit.hydratedCloud = false
+			return identity, sourceEntrySpecialFile, audit, byHandle, nil
+		}
+	}
+	if dirRecallOnOpen && omissionForEntryKind(kind) == catalog.SourceOmissionNone {
+		audit.attributes = tagInfo.FileAttributes | windowsAttrRecallOnOpen
+		audit.hydratedCloud = false
+		return identity, sourceEntryCloudPlaceholder, audit, byHandle, nil
+	}
+	return identity, kind, audit, byHandle, nil
 }
 
-func queryWindowsRelativeAttributeTagNoRecall(parent *os.File, name string) (windowsAttributeTagInfo, uint32, error) {
-	objectName, err := windows.NewNTUnicodeString(name)
+func inspectWindowsRelativeNoRecall(
+	parent windows.Handle,
+	relative string,
+	dirRecallOnOpen bool,
+) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, error) {
+	if parent == 0 || parent == windows.InvalidHandle {
+		return sourceObjectIdentity{}, 0, sourceEntryAudit{}, os.ErrInvalid
+	}
+	normalized := filepath.FromSlash(relative)
+	if !filepath.IsLocal(normalized) || filepath.IsAbs(normalized) {
+		return sourceObjectIdentity{}, 0, sourceEntryAudit{}, content.ErrRevisionStale
+	}
+	objectName, err := windows.NewNTUnicodeString(normalized)
 	if err != nil {
-		return windowsAttributeTagInfo{}, 0, err
+		return sourceObjectIdentity{}, 0, sourceEntryAudit{}, err
 	}
 	attributes := &windows.OBJECT_ATTRIBUTES{
 		Length:        uint32(unsafe.Sizeof(windows.OBJECT_ATTRIBUTES{})),
-		RootDirectory: windows.Handle(parent.Fd()),
+		RootDirectory: parent,
 		ObjectName:    objectName,
 		Attributes:    windows.OBJ_CASE_INSENSITIVE | windows.OBJ_DONT_REPARSE,
 	}
@@ -215,24 +409,29 @@ func queryWindowsRelativeAttributeTagNoRecall(parent *os.File, name string) (win
 		&handle,
 		windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE,
 		attributes, &status, nil, 0,
-		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		windowsShareAll,
 		windows.FILE_OPEN,
 		windows.FILE_OPEN_FOR_BACKUP_INTENT|windows.FILE_OPEN_REPARSE_POINT|windows.FILE_OPEN_NO_RECALL|windows.FILE_SYNCHRONOUS_IO_NONALERT,
 		0, 0,
 	)
 	if err != nil {
-		return windowsAttributeTagInfo{}, 0, normalizeWindowsNTError(err)
+		return sourceObjectIdentity{}, 0, sourceEntryAudit{}, normalizeWindowsNTError(err)
 	}
 	defer windows.CloseHandle(handle)
-	tagInfo, err := queryWindowsHandleAttributeTag(handle)
-	if err != nil {
-		return windowsAttributeTagInfo{}, 0, err
+	identity, kind, audit, _, err := classifyWindowsOpenHandle(handle, dirRecallOnOpen, false)
+	return identity, kind, audit, err
+}
+
+func inspectWindowsChildNoRecall(
+	dirHandle *os.File,
+	name string,
+	dirRecallOnOpen bool,
+) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, error) {
+	if dirHandle == nil {
+		return sourceObjectIdentity{}, 0, sourceEntryAudit{}, os.ErrInvalid
 	}
-	fileType, err := windows.GetFileType(handle)
-	if err != nil {
-		return windowsAttributeTagInfo{}, 0, err
-	}
-	return tagInfo, fileType, nil
+	defer runtime.KeepAlive(dirHandle)
+	return inspectWindowsRelativeNoRecall(windows.Handle(dirHandle.Fd()), name, dirRecallOnOpen)
 }
 
 func openRootObjectNoRecall(root *os.Root, name string) (*os.File, error) {
@@ -242,60 +441,47 @@ func openRootObjectNoRecall(root *os.Root, name string) (*os.File, error) {
 	return root.OpenFile(name, os.O_RDONLY|windows.FILE_FLAG_OPEN_NO_RECALL, 0)
 }
 
-func inspectSelectedRootKind(absolute string) (fs.FileInfo, sourceEntryKind, sourceEntryAudit, error) {
-	before, err := os.Lstat(absolute)
+func inspectSelectedRootKind(absolute string) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, error) {
+	path16, err := windows.UTF16PtrFromString(windowsExtendedPath(absolute))
 	if err != nil {
-		return nil, 0, sourceEntryAudit{}, err
+		return sourceObjectIdentity{}, 0, sourceEntryAudit{}, err
 	}
-	attrs, hasAttrs := windowsFileInfoAttributes(before)
-	if !hasAttrs || attrs&windows.FILE_ATTRIBUTE_REPARSE_POINT == 0 {
-		kind, audit := classifyWindowsEntry(windowsEntryFacts{
-			source:        windowsAttributesFromHandle,
-			mode:          before.Mode(),
-			attributes:    attrs,
-			hasAttributes: hasAttrs,
-		})
-		return before, kind, audit, nil
-	}
-	if before.Mode()&fs.ModeSymlink != 0 {
-		return before, sourceEntrySymbolicLink, sourceEntryAudit{attributes: attrs, reparseTag: windows.IO_REPARSE_TAG_SYMLINK}, nil
-	}
-	tagInfo, fileType, err := queryWindowsPathAttributeTagNoRecall(absolute)
+	// Open only the leaf object's metadata without following leaf reparse points
+	// or recalling cloud data; ancestor junctions remain traversable for selected roots.
+	flags := uint32(windows.FILE_FLAG_BACKUP_SEMANTICS | windows.FILE_FLAG_OPEN_REPARSE_POINT | windows.FILE_FLAG_OPEN_NO_RECALL)
+	handle, err := windows.CreateFile(
+		path16, 0,
+		windowsShareAll,
+		nil, windows.OPEN_EXISTING, flags, 0,
+	)
 	if err != nil {
-		return nil, 0, sourceEntryAudit{}, err
+		return sourceObjectIdentity{}, 0, sourceEntryAudit{}, err
 	}
-	var state uint32
-	if isCloudReparseTag(tagInfo.ReparseTag) {
-		state = queryWindowsPlaceholderState(tagInfo.FileAttributes, tagInfo.ReparseTag)
-	}
-	kind, audit := classifyWindowsEntry(windowsEntryFacts{
-		source:           windowsAttributesFromHandle,
-		mode:             before.Mode(),
-		attributes:       tagInfo.FileAttributes,
-		hasAttributes:    true,
-		hasReparseTag:    true,
-		reparseTag:       tagInfo.ReparseTag,
-		placeholderState: state,
-		hasFileType:      true,
-		fileType:         fileType,
-	})
-	return before, kind, audit, nil
+	defer windows.CloseHandle(handle)
+	identity, kind, audit, _, err := classifyWindowsOpenHandle(handle, false, true)
+	return identity, kind, audit, err
 }
 
-func inspectDirEntryPreflight(entry fs.DirEntry) (fs.FileInfo, sourceEntryKind, sourceEntryAudit, bool, bool) {
+func inspectDirEntryPreflight(entry fs.DirEntry) (sourceEntryKind, sourceEntryAudit, bool, bool) {
 	enumInfo, err := entry.Info()
 	if err != nil {
-		return nil, 0, sourceEntryAudit{}, false, false
+		return 0, sourceEntryAudit{}, false, false
 	}
 	enumAttrs, ok := windowsFileInfoAttributes(enumInfo)
 	if !ok {
-		return nil, 0, sourceEntryAudit{}, false, false
+		return 0, sourceEntryAudit{}, false, false
 	}
 	recallOnOpen := enumAttrs&windowsAttrRecallOnOpen != 0
+	if enumInfo.Mode()&fs.ModeSymlink != 0 {
+		return sourceEntrySymbolicLink, sourceEntryAudit{
+			attributes: enumAttrs,
+			reparseTag: windows.IO_REPARSE_TAG_SYMLINK,
+		}, true, recallOnOpen
+	}
 	// Catch non-reparse cloud placeholders (including disguise mode and
 	// directory-only RECALL_ON_OPEN) before opening any child handle.
 	if enumAttrs&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-		return nil, 0, sourceEntryAudit{}, false, recallOnOpen
+		return 0, sourceEntryAudit{}, false, recallOnOpen
 	}
 	kind, audit := classifyWindowsEntry(windowsEntryFacts{
 		source:        windowsAttributesFromDirectoryEnum,
@@ -304,131 +490,68 @@ func inspectDirEntryPreflight(entry fs.DirEntry) (fs.FileInfo, sourceEntryKind, 
 		hasAttributes: true,
 	})
 	if omissionForEntryKind(kind) != catalog.SourceOmissionNone {
-		return enumInfo, kind, audit, true, recallOnOpen
+		return kind, audit, true, recallOnOpen
 	}
-	return nil, 0, sourceEntryAudit{}, false, recallOnOpen
+	return 0, sourceEntryAudit{}, false, recallOnOpen
 }
 
 func inspectRootChildKind(
-	directory *os.Root,
+	_ *os.Root,
 	dirHandle *os.File,
 	entry fs.DirEntry,
-) (fs.FileInfo, sourceEntryKind, sourceEntryAudit, error) {
-	enumInfo, enumKind, enumAudit, omitted, dirRecallOnOpen := inspectDirEntryPreflight(entry)
+) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, error) {
+	kind, audit, omitted, dirRecallOnOpen := inspectDirEntryPreflight(entry)
 	if omitted {
-		return enumInfo, enumKind, enumAudit, nil
+		return sourceObjectIdentity{}, kind, audit, nil
 	}
-	name := entry.Name()
-	before, err := directory.Lstat(name)
-	if err != nil {
-		return nil, 0, sourceEntryAudit{}, err
-	}
-	attrs, hasAttrs := windowsFileInfoAttributes(before)
-	if !hasAttrs || attrs&windows.FILE_ATTRIBUTE_REPARSE_POINT == 0 {
-		kind, audit := classifyWindowsEntry(windowsEntryFacts{
-			source:        windowsAttributesFromHandle,
-			mode:          before.Mode(),
-			attributes:    attrs,
-			hasAttributes: hasAttrs,
-		})
-		if dirRecallOnOpen && omissionForEntryKind(kind) == catalog.SourceOmissionNone {
-			return before, sourceEntryCloudPlaceholder, sourceEntryAudit{attributes: attrs | windowsAttrRecallOnOpen}, nil
-		}
-		return before, kind, audit, nil
-	}
-	if before.Mode()&fs.ModeSymlink != 0 {
-		return before, sourceEntrySymbolicLink, sourceEntryAudit{attributes: attrs, reparseTag: windows.IO_REPARSE_TAG_SYMLINK}, nil
-	}
-	tagInfo, fileType, err := queryWindowsRelativeAttributeTagNoRecall(dirHandle, name)
-	if err != nil {
-		return nil, 0, sourceEntryAudit{}, err
-	}
-	var state uint32
-	if isCloudReparseTag(tagInfo.ReparseTag) {
-		state = queryWindowsPlaceholderState(tagInfo.FileAttributes, tagInfo.ReparseTag)
-	}
-	kind, audit := classifyWindowsEntry(windowsEntryFacts{
-		source:           windowsAttributesFromHandle,
-		mode:             before.Mode(),
-		attributes:       tagInfo.FileAttributes,
-		hasAttributes:    true,
-		hasReparseTag:    true,
-		reparseTag:       tagInfo.ReparseTag,
-		placeholderState: state,
-		hasFileType:      true,
-		fileType:         fileType,
-	})
-	if dirRecallOnOpen && audit.hydratedCloud {
-		audit.hydratedCloud = false
-		return before, sourceEntryCloudPlaceholder, audit, nil
-	}
-	return before, kind, audit, nil
+	return inspectWindowsChildNoRecall(dirHandle, entry.Name(), dirRecallOnOpen)
 }
 
-func inspectHandleKind(handle *os.File, info fs.FileInfo) (sourceEntryKind, sourceEntryAudit, error) {
-	attrs, hasAttrs := windowsFileInfoAttributes(info)
-	if !hasAttrs || attrs&windows.FILE_ATTRIBUTE_REPARSE_POINT == 0 {
-		kind, audit := classifyWindowsEntry(windowsEntryFacts{
-			source:        windowsAttributesFromHandle,
-			mode:          info.Mode(),
-			attributes:    attrs,
-			hasAttributes: hasAttrs,
-		})
-		return kind, audit, nil
+func inspectOpenedSourceHandle(handle *os.File) (openedSourceHandle, error) {
+	if handle == nil {
+		return openedSourceHandle{}, os.ErrInvalid
 	}
-	if info.Mode()&fs.ModeSymlink != 0 {
-		return sourceEntrySymbolicLink, sourceEntryAudit{attributes: attrs, reparseTag: windows.IO_REPARSE_TAG_SYMLINK}, nil
-	}
+	defer runtime.KeepAlive(handle)
 	raw := windows.Handle(handle.Fd())
-	tagInfo, err := queryWindowsHandleAttributeTag(raw)
+	identity, kind, audit, byHandle, err := classifyWindowsOpenHandle(raw, false, true)
 	if err != nil {
-		return 0, sourceEntryAudit{}, err
+		return openedSourceHandle{}, err
 	}
-	var state uint32
-	if isCloudReparseTag(tagInfo.ReparseTag) {
-		state = queryWindowsPlaceholderState(tagInfo.FileAttributes, tagInfo.ReparseTag)
+	var size uint64
+	if kind == sourceEntryRegularFile {
+		size = uint64(byHandle.FileSizeHigh)<<32 | uint64(byHandle.FileSizeLow)
 	}
-	facts := windowsEntryFacts{
-		source:           windowsAttributesFromHandle,
-		mode:             info.Mode(),
-		attributes:       tagInfo.FileAttributes,
-		hasAttributes:    true,
-		hasReparseTag:    true,
-		reparseTag:       tagInfo.ReparseTag,
-		placeholderState: state,
+	ticks := int64(uint64(byHandle.LastWriteTime.HighDateTime)<<32 | uint64(byHandle.LastWriteTime.LowDateTime))
+	modified, err := (windowsMutationToken{lastWrite: ticks}).modifiedTime()
+	if err != nil {
+		return openedSourceHandle{}, err
 	}
-	kind, audit := classifyWindowsEntry(facts)
-	if kind == sourceEntryRegularFile && audit.hydratedCloud {
-		fileType, ftErr := windows.GetFileType(raw)
-		if ftErr != nil {
-			return 0, sourceEntryAudit{}, ftErr
-		}
-		if fileType != windows.FILE_TYPE_DISK {
-			audit.hydratedCloud = false
-			return sourceEntrySpecialFile, audit, nil
-		}
-	}
-	return kind, audit, nil
+	return openedSourceHandle{
+		identity: identity,
+		kind:     kind,
+		audit:    audit,
+		size:     size,
+		modified: modified,
+	}, nil
 }
 
-// canOpenRootRelativeRegularFile performs a zero-recall preflight check on
-// Root.Lstat metadata before OpenStable opens the handle. Reparse points that
-// are non-directory, non-symlink, and non-offline proceed to the no-recall open
-// where inspectHandleKind verifies the exact tag, placeholder state, and file type.
-func canOpenRootRelativeRegularFile(info fs.FileInfo) bool {
-	if info == nil || info.IsDir() || info.Mode()&fs.ModeSymlink != 0 {
-		return false
-	}
-	attrs, hasAttrs := windowsFileInfoAttributes(info)
-	if hasAttrs {
-		if attrs&(windows.FILE_ATTRIBUTE_DIRECTORY|windowsAttrOffline|windowsAttrRecallOnDataAccess) != 0 {
-			return false
+func classifyRootRelativeOpenError(operation, relative string, err error) error {
+	switch {
+	case errors.Is(err, content.ErrRevisionStale):
+		if content.RevisionComparisonOf(err) != content.RevisionComparisonUnavailable {
+			return err
 		}
-		if attrs&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-			return info.Mode()&(fs.ModeDevice|fs.ModeCharDevice|fs.ModeNamedPipe|fs.ModeSocket) == 0
-		}
+		return content.WithRevisionComparison(err, content.RevisionComparisonMismatch)
+	case errors.Is(err, os.ErrNotExist), errors.Is(err, windows.ERROR_CANT_ACCESS_FILE):
+		return content.WithRevisionComparison(errors.Join(content.ErrRevisionStale, err), content.RevisionComparisonUnavailable)
+	case errors.Is(err, windows.ERROR_REPARSE), errors.Is(err, windows.ERROR_REPARSE_OBJECT),
+		errors.Is(err, windows.ERROR_REPARSE_POINT_ENCOUNTERED):
+		return content.WithRevisionComparison(errors.Join(content.ErrRevisionStale, err), content.RevisionComparisonMismatch)
+	default:
+		return content.WithRevisionComparison(
+			pathfailure.Filesystem(operation, relative, err), content.RevisionComparisonUnavailable,
+		)
 	}
-	return info.Mode().IsRegular()
 }
 
 func isWindowsPlaceholderError(err error) bool {

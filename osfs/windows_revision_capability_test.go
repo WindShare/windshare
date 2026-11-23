@@ -26,10 +26,11 @@ type fakeWindowsRevisionMetadata struct {
 	basicErr         error
 	attributeTag     windowsAttributeTagInfo
 	attributeTagErr  error
-	fileType         uint32
-	fileTypeErr      error
-	placeholderState uint32
-	filesystem       string
+	fileType             uint32
+	fileTypeErr          error
+	placeholderState     uint32
+	lastPlaceholderAttrs uint32
+	filesystem           string
 	filesystemErr    error
 	path             string
 	pathErr          error
@@ -68,7 +69,8 @@ func (api *fakeWindowsRevisionMetadata) FileType(windows.Handle) (uint32, error)
 	}
 	return api.fileType, nil
 }
-func (api *fakeWindowsRevisionMetadata) PlaceholderState(uint32, uint32) uint32 {
+func (api *fakeWindowsRevisionMetadata) PlaceholderState(attributes uint32, _ uint32) uint32 {
+	api.lastPlaceholderAttrs = attributes
 	return api.placeholderState
 }
 func (api *fakeWindowsRevisionMetadata) Filesystem(windows.Handle) (string, error) {
@@ -508,5 +510,29 @@ func TestWindowsCloudMetadataAdmitsHydratedAndDetectsMidShareDehydrationDrift(t 
 				t.Fatalf("inspectWindowsFileToken() = %v, want %v", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestVerifyWindowsHandleMetadataMasksEAAndGuardsNilFiles(t *testing.T) {
+	api := windowsMetadataFixture()
+	api.information.FileAttributes = windows.FILE_ATTRIBUTE_ARCHIVE | windows.FILE_ATTRIBUTE_REPARSE_POINT | testAttrEA
+	api.attributeTag = windowsAttributeTagInfo{
+		FileAttributes: api.information.FileAttributes,
+		ReparseTag:     testReparseTagCloudPinned,
+	}
+	api.placeholderState = cfPlaceholderStatePlaceholder | cfPlaceholderStateInSync
+	api.fileType = windows.FILE_TYPE_DISK
+
+	if _, err := inspectWindowsFileToken(1, &api); err != nil {
+		t.Fatalf("inspectWindowsFileToken with EA = %v", err)
+	}
+	if api.lastPlaceholderAttrs&windowsAttrEA != 0 {
+		t.Fatalf("PlaceholderState received unmasked EA bit: %#08x", api.lastPlaceholderAttrs)
+	}
+	if _, err := (nativeWindowsRevisionPlatform{}).Token(nil); !errors.Is(err, content.ErrUnsupportedStability) {
+		t.Fatalf("Token(nil) = %v, want ErrUnsupportedStability", err)
+	}
+	if _, err := (&nativeWindowsRevisionFile{}).Token(); !errors.Is(err, content.ErrUnsupportedStability) {
+		t.Fatalf("nil file Token() = %v, want ErrUnsupportedStability", err)
 	}
 }

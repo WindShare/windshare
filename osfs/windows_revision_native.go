@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -96,6 +97,8 @@ type windowsRevisionMetadata interface {
 	BasicInformation(windows.Handle) (windowsFileBasicInfo, error)
 	AttributeTag(windows.Handle) (windowsAttributeTagInfo, error)
 	FileType(windows.Handle) (uint32, error)
+	// PlaceholderState decodes Cloud Files state for handle-sourced attributes
+	// with FILE_ATTRIBUTE_EA (0x00040000) already cleared.
 	PlaceholderState(attributes, reparseTag uint32) uint32
 	Filesystem(windows.Handle) (string, error)
 	FinalPath(windows.Handle) (string, error)
@@ -130,7 +133,7 @@ func (nativeWindowsRevisionMetadata) FileType(handle windows.Handle) (uint32, er
 }
 
 func (nativeWindowsRevisionMetadata) PlaceholderState(attributes, reparseTag uint32) uint32 {
-	return queryWindowsPlaceholderState(attributes, reparseTag)
+	return queryWindowsHandlePlaceholderState(attributes, reparseTag)
 }
 
 func (nativeWindowsRevisionMetadata) Filesystem(handle windows.Handle) (string, error) {
@@ -256,6 +259,10 @@ func (p nativeWindowsRevisionPlatform) OpenRoot(path string) (windowsRevisionRoo
 }
 
 func (p nativeWindowsRevisionPlatform) Token(file *os.File) (windowsMutationToken, error) {
+	if file == nil {
+		return windowsMutationToken{}, content.ErrUnsupportedStability
+	}
+	defer runtime.KeepAlive(file)
 	token, err := inspectWindowsFileToken(windows.Handle(file.Fd()), p.metadataAPI())
 	return token, classifyWindowsIdentityError(err)
 }
@@ -273,18 +280,8 @@ func (metadata windowsRootRevisionMetadata) Filesystem(windows.Handle) (string, 
 // A retained selection can move while sharing. Duplicating its handle keeps
 // native write exclusion bound to that original directory instead of its name.
 func retainWindowsRevisionRoot(authority *os.Root) (windowsRevisionRoot, error) {
-	file, err := openRootObjectNoRecall(authority, ".")
+	handle, err := duplicateRootHandleNoRecall(authority)
 	if err != nil {
-		return nil, err
-	}
-	var handle windows.Handle
-	process := windows.CurrentProcess()
-	duplicateErr := windows.DuplicateHandle(process, windows.Handle(file.Fd()), process, &handle, 0, false, windows.DUPLICATE_SAME_ACCESS)
-	closeErr := file.Close()
-	if err := errors.Join(duplicateErr, closeErr); err != nil {
-		if duplicateErr == nil {
-			err = errors.Join(err, windows.CloseHandle(handle))
-		}
 		return nil, err
 	}
 	return adoptNativeWindowsRevisionRoot(handle, nativeWindowsRevisionMetadata{})
@@ -351,6 +348,10 @@ type nativeWindowsRevisionFile struct {
 }
 
 func (f *nativeWindowsRevisionFile) Token() (windowsMutationToken, error) {
+	if f == nil || f.file == nil {
+		return windowsMutationToken{}, content.ErrUnsupportedStability
+	}
+	defer runtime.KeepAlive(f.file)
 	knownDisk := f.verifiedDiskFile.Load()
 	token, directory, err := inspectWindowsObjectMetadataWith(windows.Handle(f.file.Fd()), f.metadata, knownDisk)
 	if err == nil && directory {
@@ -469,15 +470,16 @@ func verifyWindowsHandleMetadata(
 	if err != nil {
 		return 0, err
 	}
+	hasReparseTag := tagInfo.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0
 	var state uint32
-	if isCloudReparseTag(tagInfo.ReparseTag) {
-		state = api.PlaceholderState(tagInfo.FileAttributes, tagInfo.ReparseTag)
+	if hasReparseTag && isCloudReparseTag(tagInfo.ReparseTag) {
+		state = api.PlaceholderState(tagInfo.FileAttributes&^windowsAttrEA, tagInfo.ReparseTag)
 	}
 	kind, audit := classifyWindowsEntry(windowsEntryFacts{
 		source:           windowsAttributesFromHandle,
 		attributes:       tagInfo.FileAttributes,
 		hasAttributes:    true,
-		hasReparseTag:    true,
+		hasReparseTag:    hasReparseTag,
 		reparseTag:       tagInfo.ReparseTag,
 		placeholderState: state,
 	})

@@ -4,14 +4,15 @@ package osfs
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"syscall"
+	"strings"
 	"testing"
-	"time"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/content"
 	diag "github.com/windshare/windshare/core/diagnostics"
 	"golang.org/x/sys/windows"
 )
@@ -243,22 +244,190 @@ func TestClassifyWindowsEntryCoversCloudStatesRecallSourcesAndFailClosedTags(t *
 	}
 }
 
-func TestCanOpenRootRelativeRegularFilePreflight(t *testing.T) {
-	if !canOpenRootRelativeRegularFile(windowsPathFactFileInfo{mode: 0o666, attributes: windows.FILE_ATTRIBUTE_ARCHIVE}) {
-		t.Fatal("ordinary regular file rejected")
+func TestQueryWindowsHandlePlaceholderStateMasksExtendedAttributes(t *testing.T) {
+	if procCfGetPlaceholderStateFromAttributeTag.Find() != nil {
+		t.Skip("cldapi.dll CfGetPlaceholderStateFromAttributeTag unavailable on this host")
 	}
-	if !canOpenRootRelativeRegularFile(windowsPathFactFileInfo{mode: fs.ModeIrregular | 0o666, attributes: windows.FILE_ATTRIBUTE_REPARSE_POINT}) {
-		t.Fatal("hydrated cloud candidate rejected at preflight")
+	fileAttrs := uint32(windows.FILE_ATTRIBUTE_ARCHIVE | windows.FILE_ATTRIBUTE_REPARSE_POINT | testAttrEA)
+	fileState := queryWindowsHandlePlaceholderState(fileAttrs, testReparseTagCloudPinned)
+	if fileState == cfPlaceholderStateInvalid || fileState&cfPlaceholderStatePlaceholder == 0 ||
+		fileState&(cfPlaceholderStatePartial|cfPlaceholderStatePartiallyOnDisk) != 0 {
+		t.Fatalf("handle placeholder state with EA on hydrated file = %#08x", fileState)
 	}
-	for _, rejected := range []windowsPathFactFileInfo{
-		{mode: fs.ModeSymlink},
-		{mode: fs.ModeDir | fs.ModeIrregular, attributes: windows.FILE_ATTRIBUTE_DIRECTORY | windows.FILE_ATTRIBUTE_REPARSE_POINT},
-		{mode: fs.ModeIrregular | 0o666, attributes: windows.FILE_ATTRIBUTE_REPARSE_POINT | windowsAttrRecallOnDataAccess},
-		{mode: 0o666, attributes: windowsAttrOffline},
-		{mode: fs.ModeNamedPipe},
-	} {
-		if canOpenRootRelativeRegularFile(rejected) {
-			t.Fatalf("expected %+v to fail preflight", rejected)
+	kind, audit := classifyWindowsEntry(windowsEntryFacts{
+		source: windowsAttributesFromHandle, hasAttributes: true, attributes: fileAttrs,
+		hasReparseTag: true, reparseTag: testReparseTagCloudPinned,
+		placeholderState: fileState, hasFileType: true, fileType: windows.FILE_TYPE_DISK,
+	})
+	if kind != sourceEntryRegularFile || !audit.hydratedCloud {
+		t.Fatalf("hydrated cloud file with EA = (kind=%d, hydrated=%v)", kind, audit.hydratedCloud)
+	}
+
+	dirAttrs := uint32(windows.FILE_ATTRIBUTE_DIRECTORY | windows.FILE_ATTRIBUTE_REPARSE_POINT | testAttrEA)
+	dirState := queryWindowsHandlePlaceholderState(dirAttrs, testReparseTagCloudRoot)
+	if dirState == cfPlaceholderStateInvalid || dirState&cfPlaceholderStatePlaceholder == 0 ||
+		dirState&(cfPlaceholderStatePartial|cfPlaceholderStatePartiallyOnDisk) != 0 {
+		t.Fatalf("handle placeholder state with EA on hydrated dir = %#08x", dirState)
+	}
+	dirKind, dirAudit := classifyWindowsEntry(windowsEntryFacts{
+		source: windowsAttributesFromHandle, hasAttributes: true, attributes: dirAttrs,
+		hasReparseTag: true, reparseTag: testReparseTagCloudRoot,
+		placeholderState: dirState, hasFileType: true, fileType: windows.FILE_TYPE_DISK,
+	})
+	if dirKind != sourceEntryDirectory || !dirAudit.hydratedCloud {
+		t.Fatalf("hydrated cloud dir with EA = (kind=%d, hydrated=%v)", dirKind, dirAudit.hydratedCloud)
+	}
+
+	recallAttrs := uint32(windows.FILE_ATTRIBUTE_ARCHIVE | windows.FILE_ATTRIBUTE_REPARSE_POINT | windowsAttrRecallOnDataAccess)
+	recallState := queryWindowsHandlePlaceholderState(recallAttrs, testReparseTagCloudPinned)
+	if recallState&cfPlaceholderStatePartial == 0 {
+		t.Fatalf("RECALL_ON_DATA_ACCESS state = %#08x, want PARTIAL", recallState)
+	}
+}
+
+func TestWindowsExtendedPathHandlesDriveUNCAndExistingPrefixes(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"", ""},
+		{`C:\dir\file.txt`, `\\?\C:\dir\file.txt`},
+		{`C:\`, `\\?\C:\`},
+		{`\\server\share\dir\file.txt`, `\\?\UNC\server\share\dir\file.txt`},
+		{`//server/share/dir/file.txt`, `\\?\UNC\server\share\dir\file.txt`},
+		{`\\?\C:\already\extended`, `\\?\C:\already\extended`},
+		{`\\?\UNC\server\share\file`, `\\?\UNC\server\share\file`},
+		{`\??\C:\nt\path`, `\??\C:\nt\path`},
+		{`\\.\NUL`, `\\.\NUL`},
+		{`relative\file.txt`, `relative\file.txt`},
+	}
+	for _, tc := range cases {
+		if got := windowsExtendedPath(tc.in); got != tc.want {
+			t.Fatalf("windowsExtendedPath(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestInspectSelectedRootKindSupportsLongPathBeyondMaxPath(t *testing.T) {
+	base := t.TempDir()
+	segment := strings.Repeat("a", 60)
+	deepDir := filepath.Join(base, segment, segment, segment, segment, segment)
+	if err := os.MkdirAll(deepDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	longFile := filepath.Join(deepDir, "payload.txt")
+	if len(longFile) <= 260 {
+		t.Fatalf("expected path > 260 chars, got len=%d", len(longFile))
+	}
+	if err := os.WriteFile(longFile, []byte("ok"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, kind, _, err := inspectSelectedRootKind(longFile)
+	if err != nil || kind != sourceEntryRegularFile {
+		t.Fatalf("inspectSelectedRootKind(longFile) = (kind=%d, err=%v)", kind, err)
+	}
+}
+
+func TestClassifyWindowsEntryStripsStaleModeIrregularWhenHandleFileTypeKnown(t *testing.T) {
+	kind, _ := classifyWindowsEntry(windowsEntryFacts{
+		source: windowsAttributesFromHandle, mode: fs.ModeIrregular | 0o666,
+		hasAttributes: true, attributes: windows.FILE_ATTRIBUTE_ARCHIVE,
+		hasFileType: true, fileType: windows.FILE_TYPE_DISK,
+	})
+	if kind != sourceEntryRegularFile {
+		t.Fatalf("non-reparse file with stale ModeIrregular = %d, want regular", kind)
+	}
+	pipeKind, _ := classifyWindowsEntry(windowsEntryFacts{
+		source: windowsAttributesFromHandle, mode: fs.ModeNamedPipe,
+		hasAttributes: true, attributes: windows.FILE_ATTRIBUTE_ARCHIVE,
+		hasFileType: true, fileType: windows.FILE_TYPE_DISK,
+	})
+	if pipeKind != sourceEntrySpecialFile {
+		t.Fatalf("non-reparse file with ModeNamedPipe = %d, want special", pipeKind)
+	}
+}
+
+func TestInspectWindowsRelativeNoRecallPathsAuditAndNilDefenses(t *testing.T) {
+	if _, err := inspectOpenedSourceHandle(nil); err == nil {
+		t.Fatal("inspectOpenedSourceHandle(nil) succeeded")
+	}
+	if _, _, _, err := inspectWindowsChildNoRecall(nil, "file.txt", false); err == nil {
+		t.Fatal("inspectWindowsChildNoRecall(nil) succeeded")
+	}
+	if _, _, _, err := inspectWindowsRelativeNoRecall(0, "file.txt", false); err == nil {
+		t.Fatal("inspectWindowsRelativeNoRecall(0) succeeded")
+	}
+
+	rootDir := t.TempDir()
+	nestedDir := filepath.Join(rootDir, "sub")
+	if err := os.Mkdir(nestedDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	nestedFile := filepath.Join(nestedDir, "nested.txt")
+	if err := os.WriteFile(nestedFile, []byte("nested"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	deniedFile := filepath.Join(rootDir, "denied.txt")
+	if err := os.WriteFile(deniedFile, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	denyCatalogRead(t, deniedFile)
+
+	root, err := os.OpenRoot(rootDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	dirHandle, err := openRootObjectNoRecall(root, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dirHandle.Close()
+
+	// Forward-slash nested relative paths must resolve and match opened identity.
+	beforeID, kind, _, err := inspectWindowsChildNoRecall(dirHandle, "sub/nested.txt", false)
+	if err != nil || kind != sourceEntryRegularFile {
+		t.Fatalf("inspect sub/nested.txt = (kind=%d, err=%v)", kind, err)
+	}
+	openedFile, err := openRootObjectNoRecall(root, "sub/nested.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := inspectOpenedSourceHandle(openedFile)
+	_ = openedFile.Close()
+	if err != nil || !beforeID.sameObject(opened.identity) || opened.size != 6 {
+		t.Fatalf("opened nested = (%+v, err=%v) same=%v", opened, err, beforeID.sameObject(opened.identity))
+	}
+
+	// Escaping or absolute paths must be rejected before NtCreateFile.
+	for _, invalid := range []string{"../escape.txt", rootDir, `C:\Windows`} {
+		if _, _, _, err := inspectWindowsChildNoRecall(dirHandle, invalid, false); !errors.Is(err, content.ErrRevisionStale) {
+			t.Fatalf("inspect invalid %q err = %v, want ErrRevisionStale", invalid, err)
+		}
+	}
+
+	// Metadata-only relative inspection must succeed even when FILE_READ_DATA is denied.
+	if _, deniedKind, _, err := inspectWindowsChildNoRecall(dirHandle, "denied.txt", false); err != nil || deniedKind != sourceEntryRegularFile {
+		t.Fatalf("metadata-only inspect on read-denied file = (kind=%d, err=%v)", deniedKind, err)
+	}
+
+	// dirRecallOnOpen interception must set windowsAttrRecallOnOpen in audit (#13).
+	_, recallKind, recallAudit, err := inspectWindowsChildNoRecall(dirHandle, "sub/nested.txt", true)
+	if err != nil || recallKind != sourceEntryCloudPlaceholder ||
+		recallAudit.attributes&windowsAttrRecallOnOpen == 0 || recallAudit.hydratedCloud {
+		t.Fatalf("dirRecallOnOpen = (kind=%d, audit=%+v, err=%v)", recallKind, recallAudit, err)
+	}
+}
+
+func TestClassifyRootRelativeOpenErrorMapsUnhandledReparseToStale(t *testing.T) {
+	cantAccess := classifyRootRelativeOpenError("open stable revision", "app.exe", windows.ERROR_CANT_ACCESS_FILE)
+	if !errors.Is(cantAccess, content.ErrRevisionStale) || content.RevisionComparisonOf(cantAccess) != content.RevisionComparisonUnavailable {
+		t.Fatalf("ERROR_CANT_ACCESS_FILE = (%v, comparison=%v)", cantAccess, content.RevisionComparisonOf(cantAccess))
+	}
+	for _, reparseErr := range []error{windows.ERROR_REPARSE, windows.ERROR_REPARSE_OBJECT, windows.ERROR_REPARSE_POINT_ENCOUNTERED} {
+		classified := classifyRootRelativeOpenError("inspect stable revision", "alias/file.bin", reparseErr)
+		if !errors.Is(classified, content.ErrRevisionStale) || content.RevisionComparisonOf(classified) != content.RevisionComparisonMismatch {
+			t.Fatalf("reparse error %v = (%v, comparison=%v)", reparseErr, classified, content.RevisionComparisonOf(classified))
 		}
 	}
 }
@@ -291,16 +460,21 @@ func TestSelectedCatalogSourceOmitsChildDehydratedBeforeOpenAndCommitsSiblings(t
 	t.Cleanup(func() { _ = source.Close() })
 
 	// Simulate the child dehydrating between preflight and handle inspection.
-	source.inspectChildHandleFn = func(handle *os.File, info fs.FileInfo) (sourceEntryKind, sourceEntryAudit, error) {
-		if info.Name() == "a-dehydrating.txt" {
-			return sourceEntryCloudPlaceholder, sourceEntryAudit{
+	source.inspectChildHandleFn = func(name string, handle *os.File) (openedSourceHandle, error) {
+		opened, err := inspectOpenedSourceHandle(handle)
+		if err != nil {
+			return openedSourceHandle{}, err
+		}
+		if name == "a-dehydrating.txt" {
+			opened.kind = sourceEntryCloudPlaceholder
+			opened.audit = sourceEntryAudit{
 				attributes:       windows.FILE_ATTRIBUTE_REPARSE_POINT | windowsAttrRecallOnDataAccess,
 				reparseTag:       0x9000401A,
 				placeholderState: cfPlaceholderStatePlaceholder | cfPlaceholderStatePartial,
 				hasCloudState:    true,
-			}, nil
+			}
 		}
-		return inspectHandleKind(handle, info)
+		return opened, nil
 	}
 
 	children := &collectingScanChildren{}
@@ -337,18 +511,4 @@ func TestSelectedCatalogSourceOmitsChildDehydratedBeforeOpenAndCommitsSiblings(t
 	if !foundTrace {
 		t.Fatal("missing structured cloud_placeholder omission diagnostic trace")
 	}
-}
-
-type windowsPathFactFileInfo struct {
-	mode       fs.FileMode
-	attributes uint32
-}
-
-func (information windowsPathFactFileInfo) Name() string       { return "entry" }
-func (information windowsPathFactFileInfo) Size() int64        { return 0 }
-func (information windowsPathFactFileInfo) Mode() fs.FileMode  { return information.mode }
-func (information windowsPathFactFileInfo) ModTime() time.Time { return time.Time{} }
-func (information windowsPathFactFileInfo) IsDir() bool        { return information.mode.IsDir() }
-func (information windowsPathFactFileInfo) Sys() any {
-	return &syscall.Win32FileAttributeData{FileAttributes: information.attributes}
 }

@@ -8,6 +8,17 @@ import (
 
 var errSourceCloudPlaceholder = errors.New("osfs: source item is not fully available on this device")
 
+// openedSourceHandle captures the classified kind, audit metadata, object
+// identity, size, and modification time from one already-open handle so callers
+// do not repeat redundant stat/handle syscalls.
+type openedSourceHandle struct {
+	identity sourceObjectIdentity
+	kind     sourceEntryKind
+	audit    sourceEntryAudit
+	size     uint64
+	modified catalog.ModifiedTime
+}
+
 type sourceEntryKind uint8
 
 const (

@@ -56,7 +56,7 @@ type SelectedCatalogSource struct {
 	omissions            catalog.SourceOmissionObserver
 	used                 map[catalog.NodeID]struct{}
 	closed               bool
-	inspectChildHandleFn func(*os.File, fs.FileInfo) (sourceEntryKind, sourceEntryAudit, error)
+	inspectChildHandleFn func(string, *os.File) (openedSourceHandle, error)
 }
 
 func NewSelectedCatalogSource(config SelectedCatalogSourceConfig) (*SelectedCatalogSource, error) {
@@ -169,48 +169,41 @@ func (source *SelectedCatalogSource) openSelectedRootBaseline(
 	absolute string,
 	relative string,
 	slot RootSlot,
-	before fs.FileInfo,
+	before sourceObjectIdentity,
 	kind sourceEntryKind,
-) (fs.FileInfo, catalog.SourceIdentity, catalog.VersionCandidate, error) {
+) (openedSourceHandle, catalog.SourceIdentity, catalog.VersionCandidate, error) {
 	openName := relative
 	if openName == "" {
 		openName = "."
 	}
 	handle, err := openRootObjectNoRecall(root, openName)
 	if err != nil {
-		return nil, catalog.SourceIdentity{}, catalog.VersionCandidate{}, pathfailure.Filesystem("open selected root object", absolute, err)
+		return openedSourceHandle{}, catalog.SourceIdentity{}, catalog.VersionCandidate{}, pathfailure.Filesystem("open selected root object", absolute, err)
 	}
-	opened, statErr := handle.Stat()
-	var openedKind sourceEntryKind
-	var openedAudit sourceEntryAudit
-	var kindErr error
-	if statErr == nil {
-		openedKind, openedAudit, kindErr = inspectHandleKind(handle, opened)
+	opened, inspectErr := inspectOpenedSourceHandle(handle)
+	if inspectErr != nil {
+		return openedSourceHandle{}, catalog.SourceIdentity{}, catalog.VersionCandidate{}, errors.Join(fmt.Errorf("inspect selected root object: %w", inspectErr), handle.Close())
 	}
-	if err := errors.Join(statErr, kindErr); err != nil {
-		return nil, catalog.SourceIdentity{}, catalog.VersionCandidate{}, errors.Join(fmt.Errorf("inspect selected root object: %w", err), handle.Close())
-	}
-	sameObject := opened.IsDir() == before.IsDir() && os.SameFile(before, opened)
-	if sameObject && openedKind == sourceEntryCloudPlaceholder {
-		source.traceSelectedRootPolicy(slot, "cloud_placeholder", openedAudit)
-		return nil, catalog.SourceIdentity{}, catalog.VersionCandidate{}, errors.Join(
+	sameObject := before.sameObject(opened.identity)
+	if sameObject && opened.kind == sourceEntryCloudPlaceholder {
+		source.traceSelectedRootPolicy(slot, "cloud_placeholder", opened.audit)
+		return openedSourceHandle{}, catalog.SourceIdentity{}, catalog.VersionCandidate{}, errors.Join(
 			fmt.Errorf("osfs: selected root %q is not fully available on this device: %w", absolute, errSourceCloudPlaceholder),
 			handle.Close(),
 		)
 	}
-	if !sameObject || openedKind != kind {
-		return nil, catalog.SourceIdentity{}, catalog.VersionCandidate{}, errors.Join(catalog.ErrDirectoryStale, handle.Close())
+	if !sameObject || opened.kind != kind {
+		return openedSourceHandle{}, catalog.SourceIdentity{}, catalog.VersionCandidate{}, errors.Join(catalog.ErrDirectoryStale, handle.Close())
 	}
 	identity, candidate, baselineErr := platformCatalogBaseline(handle)
 	closeErr := handle.Close()
 	if err := errors.Join(baselineErr, closeErr); err != nil {
-		if errors.Is(baselineErr, errSourceCloudPlaceholder) {
-			source.traceSelectedRootPolicy(slot, "cloud_placeholder", openedAudit)
-		}
-		return nil, catalog.SourceIdentity{}, catalog.VersionCandidate{}, fmt.Errorf("inspect selected root object: %w", err)
+		// Delayed dehydration invalidates the pre-baseline hydrated audit; avoid
+		// emitting stale hydrated attributes under decision="cloud_placeholder".
+		return openedSourceHandle{}, catalog.SourceIdentity{}, catalog.VersionCandidate{}, fmt.Errorf("inspect selected root object: %w", err)
 	}
-	if openedAudit.hydratedCloud {
-		source.traceSelectedRootPolicy(slot, "hydrated_cloud", openedAudit)
+	if opened.audit.hydratedCloud {
+		source.traceSelectedRootPolicy(slot, "hydrated_cloud", opened.audit)
 	}
 	return opened, identity, candidate, nil
 }
@@ -221,14 +214,10 @@ func (source *SelectedCatalogSource) buildSelectedRootRecord(
 	slot RootSlot,
 	parent catalog.DirectoryID,
 	kind sourceEntryKind,
-	opened fs.FileInfo,
+	opened openedSourceHandle,
 	identity catalog.SourceIdentity,
 	candidate catalog.VersionCandidate,
 ) (catalog.NodeRecord, error) {
-	modified, err := catalogModifiedTime(opened)
-	if err != nil {
-		return catalog.NodeRecord{}, err
-	}
 	locator, err := NewSourceReference(slot, filepath.ToSlash(relative))
 	if err != nil {
 		return catalog.NodeRecord{}, err
@@ -239,13 +228,13 @@ func (source *SelectedCatalogSource) buildSelectedRootRecord(
 		if idErr != nil {
 			return catalog.NodeRecord{}, idErr
 		}
-		return catalog.NewDirectoryNodeRecord(directory, parent, name, locator, identity, modified)
+		return catalog.NewDirectoryNodeRecord(directory, parent, name, locator, identity, opened.modified)
 	}
 	file, err := source.newFileID()
 	if err != nil {
 		return catalog.NodeRecord{}, err
 	}
-	return catalog.NewFileNodeRecord(file, parent, name, locator, identity, candidate, uint64(opened.Size()), modified)
+	return catalog.NewFileNodeRecord(file, parent, name, locator, identity, candidate, opened.size, opened.modified)
 }
 
 func (source *SelectedCatalogSource) SelectedRoots() []catalog.NodeRecord {
@@ -417,11 +406,11 @@ func catalogDirectoryFingerprint(ctx context.Context, handle *os.File) ([sha256.
 	}
 }
 
-func (source *SelectedCatalogSource) inspectChildHandle(handle *os.File, info fs.FileInfo) (sourceEntryKind, sourceEntryAudit, error) {
+func (source *SelectedCatalogSource) inspectChildHandle(name string, handle *os.File) (openedSourceHandle, error) {
 	if source.inspectChildHandleFn != nil {
-		return source.inspectChildHandleFn(handle, info)
+		return source.inspectChildHandleFn(name, handle)
 	}
-	return inspectHandleKind(handle, info)
+	return inspectOpenedSourceHandle(handle)
 }
 
 func (source *SelectedCatalogSource) scanChild(
@@ -460,26 +449,20 @@ func (source *SelectedCatalogSource) scanChild(
 		omission, scanErr := classifyChildAccessError(name, err)
 		return catalog.ScannedChild{}, omission, sourceEntryAudit{}, scanErr
 	}
-	opened, statErr := handle.Stat()
-	var openedKind sourceEntryKind
-	var openedAudit sourceEntryAudit
-	var kindErr error
-	if statErr == nil {
-		openedKind, openedAudit, kindErr = source.inspectChildHandle(handle, opened)
-	}
-	if err := errors.Join(statErr, kindErr); err != nil {
+	opened, inspectErr := source.inspectChildHandle(name, handle)
+	if inspectErr != nil {
 		_ = handle.Close()
-		return catalog.ScannedChild{}, catalog.SourceOmission{}, sourceEntryAudit{}, catalog.NewTransientScanError(err, 0)
+		return catalog.ScannedChild{}, catalog.SourceOmission{}, sourceEntryAudit{}, catalog.NewTransientScanError(inspectErr, 0)
 	}
-	sameObject := opened.IsDir() == before.IsDir() && os.SameFile(before, opened)
-	if sameObject && openedKind == sourceEntryCloudPlaceholder {
+	sameObject := before.sameObject(opened.identity)
+	if sameObject && opened.kind == sourceEntryCloudPlaceholder {
 		// Only this child dehydrated before open; omit it while keeping readable siblings.
 		if closeErr := handle.Close(); closeErr != nil {
 			return catalog.ScannedChild{}, catalog.SourceOmission{}, sourceEntryAudit{}, catalog.NewTransientScanError(closeErr, 0)
 		}
-		return catalog.ScannedChild{}, catalog.SourceOmission{Name: name, Reason: catalog.SourceOmissionCloudPlaceholder}, openedAudit, nil
+		return catalog.ScannedChild{}, catalog.SourceOmission{Name: name, Reason: catalog.SourceOmissionCloudPlaceholder}, opened.audit, nil
 	}
-	if !sameObject || openedKind != kind {
+	if !sameObject || opened.kind != kind {
 		_ = handle.Close()
 		return catalog.ScannedChild{}, catalog.SourceOmission{}, sourceEntryAudit{}, catalog.NewPermanentScanError(catalog.ErrDirectoryStale)
 	}
@@ -489,22 +472,19 @@ func (source *SelectedCatalogSource) scanChild(
 		if closeErr != nil {
 			return catalog.ScannedChild{}, catalog.SourceOmission{}, sourceEntryAudit{}, catalog.NewTransientScanError(closeErr, 0)
 		}
-		return catalog.ScannedChild{}, catalog.SourceOmission{Name: name, Reason: catalog.SourceOmissionCloudPlaceholder}, openedAudit, nil
+		// Do not reuse stale pre-dehydration hydrated audit fields.
+		return catalog.ScannedChild{}, catalog.SourceOmission{Name: name, Reason: catalog.SourceOmissionCloudPlaceholder}, sourceEntryAudit{}, nil
 	}
 	if err := errors.Join(baselineErr, closeErr); err != nil {
 		return catalog.ScannedChild{}, catalog.SourceOmission{}, sourceEntryAudit{}, catalog.NewTransientScanError(err, 0)
 	}
-	modified, err := catalogModifiedTime(opened)
-	if err != nil {
-		return catalog.ScannedChild{}, catalog.SourceOmission{}, sourceEntryAudit{}, catalog.NewPermanentScanError(err)
-	}
-	child := catalog.ScannedChild{Name: name, SourceReference: locator, SourceIdentity: identity, ModifiedTime: modified}
-	if openedKind == sourceEntryDirectory {
+	child := catalog.ScannedChild{Name: name, SourceReference: locator, SourceIdentity: identity, ModifiedTime: opened.modified}
+	if opened.kind == sourceEntryDirectory {
 		child.DirectoryID, err = source.newDirectoryID()
 	} else {
 		child.FileID, err = source.newFileID()
 		child.VersionCandidate = candidate
-		child.ExpectedSize = uint64(opened.Size())
+		child.ExpectedSize = opened.size
 	}
 	if err != nil {
 		return catalog.ScannedChild{}, catalog.SourceOmission{}, sourceEntryAudit{}, err
