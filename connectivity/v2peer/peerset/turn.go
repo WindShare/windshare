@@ -2,6 +2,7 @@ package peerset
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/windshare/windshare/connectivity/turnsession"
@@ -17,6 +18,10 @@ import (
 const (
 	grantResponseTimeout = 8 * time.Second
 	turnSettlingPeriod   = 2 * time.Second
+
+	turnReasonContentStalled    = "content_stalled"
+	turnReasonCredentialRefresh = "credential_refresh"
+	turnReasonLaneLost          = "lane_lost"
 )
 
 var turnBackoff = [...]time.Duration{2 * time.Second, 10 * time.Second, 30 * time.Second}
@@ -47,8 +52,9 @@ func (r turnRetry) exhausted() bool          { return r.failures > len(turnBacko
 func (r turnRetry) ready(now time.Time) bool { return !r.exhausted() && !now.Before(r.due) }
 
 type turnService struct {
-	current, next *turnLeg
-	retry         turnRetry
+	current, next    *turnLeg
+	retry            turnRetry
+	awaitingDelivery bool
 }
 
 type fullTURNDemand struct {
@@ -72,6 +78,7 @@ type turnManager struct {
 	owner     *ReceiverSession
 	trace     turngrant.Trace
 	negotiate func(context.Context, v2signal.Binding, p.TURNGrant) (Attempt, error)
+	delivered func(session.LaneIdentity) bool
 	runtime   turnRuntime
 	pool      *peerslot.Pool
 	paths     [peerslot.Count]v2signal.PeerPathID
@@ -92,9 +99,17 @@ func newTURNManager(s *ReceiverSession, r turnRuntime) *turnManager {
 	pool := s.owner.slotPoolLocked(id)
 	s.owner.mu.Unlock()
 	config := s.config
+	var delivered func(session.LaneIdentity) bool
+	if owner, ok := config.Lanes.(interface{ LaneSet() *lanes.Set }); ok && owner.LaneSet() != nil {
+		laneSet := owner.LaneSet()
+		delivered = func(lane session.LaneIdentity) bool {
+			return laneSet.HasDelivered(lanes.Identity(lane))
+		}
+	}
 	m := &turnManager{
 		owner: s, trace: turngrant.Trace{Sink: config.Trace, Session: id}, runtime: r, pool: pool,
-		in: make(chan p.TURNGrants, 16), wait: make(map[uint64]requestState),
+		delivered: delivered,
+		in:        make(chan p.TURNGrants, 16), wait: make(map[uint64]requestState),
 		services: make(map[string]*turnService), exhausted: make(map[string]struct{}),
 		negotiate: func(ctx context.Context, binding v2signal.Binding, grant p.TURNGrant) (Attempt, error) {
 			return config.Factory.StartTURNBinding(ctx, config.Signaling, config.Lanes, binding, grant)
@@ -132,7 +147,7 @@ func (m *turnManager) reset() {
 	m.settling = time.Time{}
 }
 
-func (m *turnManager) step(now time.Time, active bool, d lanes.SchedulingDemand) {
+func (m *turnManager) step(now time.Time, active bool, d lanes.SchedulingDemand, failedLanes []lanes.Identity) {
 	if !active || m.owner.ctx.Err() != nil {
 		m.reset()
 		return
@@ -155,12 +170,31 @@ drained:
 	if !m.disabled {
 		mode := m.policy.Observe(now, d)
 		if len(m.services) < p.MaxGrantsPerMessage && !m.pending("") && m.full.needed(now, mode) {
-			m.request(now, mode, "")
+			m.request(now, mode, "", "")
 		}
 	}
+	// Route-blocked reads (CapacityRoute) stay out of NetworkWaitingBytes so
+	// suspended lanes do not trigger escalation, yet active TURN services must
+	// still recover whenever queued work is not blocked on consumer backpressure.
+	networkDemand := d.UnfinishedBytes > 0 || d.NetworkWaitingBytes > 0 || d.QueuedBytes > d.CapacityWaitingBytes
 	for id, service := range m.services {
-		m.maintainService(now, id, service, d.UnfinishedBytes > 0 || d.NetworkWaitingBytes > 0)
+		m.maintainService(now, id, service, networkDemand, failedLanes)
 	}
+}
+
+func (m *turnManager) laneDelivered(id session.LaneIdentity) bool {
+	return m.delivered != nil && m.delivered(id)
+}
+
+func (m *turnManager) retireIfCovered(l *turnLeg, successor *session.LaneIdentity) bool {
+	if l.stalled {
+		l.stalledClose.Store(true)
+	}
+	if m.runtime.RetireLaneIfCovered(l.lane, successor) {
+		return true
+	}
+	l.stalledClose.Store(false)
+	return false
 }
 
 func (m *turnManager) settleReplacement(now time.Time, s *turnService) {
@@ -174,7 +208,7 @@ func (m *turnManager) settleReplacement(now time.Time, s *turnService) {
 	}
 	s.next = nil
 	// A successor can start closing between admission and this handoff.
-	if !ended && m.runtime.RetireLaneIfCovered(s.current.lane, &next.lane) {
+	if !ended && m.retireIfCovered(s.current, &next.lane) {
 		s.current.close()
 		s.current = next
 		return
@@ -183,19 +217,88 @@ func (m *turnManager) settleReplacement(now time.Time, s *turnService) {
 	s.retry.failed(now)
 }
 
-func (m *turnManager) maintainService(now time.Time, id string, s *turnService, networkDemand bool) {
-	m.settleReplacement(now, s)
+func (m *turnManager) observeLegLifecycle(now time.Time, s *turnService) {
 	l := s.current
-	if l.stop != nil && signalled(l.done) {
+	if l.stop == nil {
+		return
+	}
+	if signalled(l.done) {
+		wasStalled := l.stalled
 		l.retire()
 		m.settling = now.Add(turnSettlingPeriod)
-		s.retry.failed(now)
-	} else if l.stop != nil && !l.counted && signalled(l.ready) {
+		if !wasStalled {
+			s.retry.failed(now)
+		}
+		return
+	}
+	if !signalled(l.ready) {
+		return
+	}
+	if !l.counted {
 		l.counted = true
-		s.retry = turnRetry{}
+		if !s.awaitingDelivery {
+			s.retry = turnRetry{}
+		}
 		m.settling = now.Add(turnSettlingPeriod)
 	}
-	if l.stop == nil && s.next == nil && s.retry.exhausted() && !m.pending(id) {
+	// A stall-recovered leg must prove real block delivery before regaining a
+	// fresh retry budget; otherwise a persistent blackhole churns indefinitely.
+	if s.awaitingDelivery && !l.stalled && m.laneDelivered(l.lane) {
+		s.awaitingDelivery = false
+		s.retry = turnRetry{}
+	}
+}
+
+func (m *turnManager) observeStalledLeg(now time.Time, s *turnService, failedLanes []lanes.Identity) bool {
+	l := s.current
+	if l.stop == nil || !signalled(l.ready) || signalled(l.done) {
+		return false
+	}
+	stalledNow := slices.Contains(failedLanes, lanes.Identity(l.lane))
+	if stalledNow && !l.stalled {
+		l.stalled = true
+		s.awaitingDelivery = true
+		s.retry.failed(now)
+	}
+	if l.stalled && s.next == nil && m.retireIfCovered(l, nil) {
+		l.retire()
+		m.settling = now.Add(turnSettlingPeriod)
+	}
+	return stalledNow
+}
+
+func (m *turnManager) refreshReason(now time.Time, s *turnService) string {
+	l := s.current
+	switch {
+	case l.stalled:
+		return turnReasonContentStalled
+	case l.stop == nil:
+		if s.awaitingDelivery {
+			return turnReasonContentStalled
+		}
+		return turnReasonLaneLost
+	case !l.refresh.IsZero() && !now.Before(l.refresh):
+		return turnReasonCredentialRefresh
+	default:
+		return ""
+	}
+}
+
+func (m *turnManager) maintainService(
+	now time.Time,
+	id string,
+	s *turnService,
+	networkDemand bool,
+	failedLanes []lanes.Identity,
+) {
+	m.settleReplacement(now, s)
+	m.observeLegLifecycle(now, s)
+	stalledNow := m.observeStalledLeg(now, s, failedLanes)
+	l := s.current
+	if (l.stop == nil || l.stalled) && s.next == nil && (s.retry.exhausted() || m.disabled) && !m.pending(id) {
+		if l.stalled && l.stop != nil {
+			l.stalledClose.Store(true)
+		}
 		l.close()
 		// New service IDs can appear after discovery. Remember exhausted IDs
 		// across the bounded full requests without charging them a service place.
@@ -206,9 +309,8 @@ func (m *turnManager) maintainService(now time.Time, id string, s *turnService, 
 	if s.next != nil || (l.stop != nil && !signalled(l.ready)) {
 		return
 	}
-	due := l.stop == nil || (!l.refresh.IsZero() && !now.Before(l.refresh))
-	if due && networkDemand && !m.disabled && s.retry.ready(now) && !m.pending(id) {
-		m.request(now, p.TURNAll, id)
+	if reason := m.refreshReason(now, s); reason != "" && (networkDemand || stalledNow) && !m.disabled && s.retry.ready(now) && !m.pending(id) {
+		m.request(now, p.TURNAll, id, reason)
 	}
 }
 
@@ -228,15 +330,19 @@ func (m *turnManager) failed(now time.Time, r requestState) {
 	}
 }
 
-func (m *turnManager) request(now time.Time, mode p.TURNMode, service string) {
+func (m *turnManager) request(now time.Time, mode p.TURNMode, service, reason string) {
 	if service == "" && mode > m.full.mode {
 		m.full = fullTURNDemand{mode: mode}
 	}
 	m.serial++
 	d := p.TURNDemand{RequestID: m.serial, Mode: mode}
 	if service != "" {
+		fields := diag.Fields{"request_id": diag.Uint(d.RequestID)}
+		if reason != "" {
+			fields["reason"] = diag.Text(reason)
+		}
 		d.ServiceIDs = []string{service}
-		m.trace.Event("turn_refresh_requested", service, diag.Fields{"request_id": diag.Uint(d.RequestID)})
+		m.trace.Event("turn_refresh_requested", service, fields)
 	}
 	body, _ := p.EncodeTURNDemand(d)
 	m.wait[d.RequestID] = requestState{mode, service, now.Add(grantResponseTimeout)}
@@ -297,7 +403,7 @@ func (m *turnManager) acceptService(now time.Time, grant p.TURNGrant, refresh bo
 	}
 	target := s.current
 	protect := target.stop != nil && signalled(target.ready) && !signalled(target.done) &&
-		!m.runtime.RetireLaneIfCovered(target.lane, nil)
+		!m.retireIfCovered(target, nil)
 	if protect {
 		target = &turnLeg{}
 	} else {

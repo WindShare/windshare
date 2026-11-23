@@ -95,3 +95,16 @@ func (s *Set) EstimateQueuedContent(identity Identity) time.Duration {
 	}
 	return state.receive.EstimateQueue(s.now())
 }
+
+// HasDelivered reports whether this exact live lane incarnation has completed
+// at least one authenticated block read. Connectivity uses it to confirm that a
+// stall-recovered transport actually delivers content before resetting retries.
+func (s *Set) HasDelivered(identity Identity) bool {
+	if s == nil || identity.ID == 0 {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state := s.lanes[identity.ID]
+	return state != nil && state.identity == identity && !state.retired && state.performance.HasSuccessfulSample
+}

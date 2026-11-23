@@ -120,9 +120,13 @@ func TestRouteSupplyOwnsReplacementWait(t *testing.T) {
 				}
 				if replace {
 					record := transferRecord(t, descriptor, 0)
-					if err := lanes.Add(Identity{ID: initial.ID, Epoch: initial.Epoch + 1}, RouteDirect,
+					replacement := Identity{ID: initial.ID, Epoch: initial.Epoch + 1}
+					if err := lanes.Add(replacement, RouteDirect,
 						laneFunction(func(context.Context, Demand) (records.BlockRecord, error) { return record, nil })); err != nil {
 						t.Fatal(err)
+					}
+					if lanes.HasDelivered(initial) || lanes.HasDelivered(replacement) {
+						t.Fatal("undelivered lane reported successful block delivery")
 					}
 				} else {
 					supply.Close()
@@ -136,6 +140,16 @@ func TestRouteSupplyOwnsReplacementWait(t *testing.T) {
 					}
 				default:
 					t.Fatal("route ownership transition did not wake queued demand")
+				}
+				if replace {
+					replacement := Identity{ID: initial.ID, Epoch: initial.Epoch + 1}
+					if !lanes.HasDelivered(replacement) || lanes.HasDelivered(initial) {
+						t.Fatal("HasDelivered did not track exact delivered lane generation")
+					}
+					lanes.Remove(replacement)
+					if lanes.HasDelivered(replacement) {
+						t.Fatal("removed lane still reported delivered")
+					}
 				}
 				if got := lanes.RecoveryDemand(); len(got) != 0 {
 					t.Fatalf("settled demand retained recovery authority: %v", got)

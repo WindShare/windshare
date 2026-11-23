@@ -3,6 +3,7 @@ package peerset
 import (
 	"context"
 	"io"
+	"sync/atomic"
 	"time"
 
 	"github.com/windshare/windshare/connectivity/v2signal"
@@ -16,12 +17,14 @@ import (
 const maximumGrantLifetime = 24 * time.Hour
 
 type turnLeg struct {
-	counted     bool
-	slot        *peerslot.Lease
-	stop        context.CancelFunc
-	done, ready chan struct{}
-	lane        session.LaneIdentity
-	refresh     time.Time
+	counted      bool
+	stalled      bool
+	stalledClose atomic.Bool
+	slot         *peerslot.Lease
+	stop         context.CancelFunc
+	done, ready  chan struct{}
+	lane         session.LaneIdentity
+	refresh      time.Time
 }
 
 func (l *turnLeg) retire() {
@@ -30,6 +33,8 @@ func (l *turnLeg) retire() {
 		<-l.done
 		l.stop = nil
 	}
+	l.stalled = false
+	l.stalledClose.Store(false)
 }
 func (l *turnLeg) close() {
 	if l != nil {
@@ -52,6 +57,8 @@ func (m *turnManager) start(now time.Time, l *turnLeg, g p.TURNGrant) {
 	l.stop, l.ready, l.done = cancel, make(chan struct{}), make(chan struct{})
 	l.lane = session.LaneIdentity{}
 	l.counted = false
+	l.stalled = false
+	l.stalledClose.Store(false)
 	l.refresh = time.Time{}
 	if g.ValidForMS > 0 {
 		ttl := time.Duration(min(g.ValidForMS, uint64(maximumGrantLifetime.Milliseconds()))) * time.Millisecond
@@ -81,6 +88,9 @@ func (m *turnManager) start(now time.Time, l *turnLeg, g p.TURNGrant) {
 		defer close(l.done)
 		reason := "negotiation_failed"
 		defer func() {
+			if l.stalledClose.Load() {
+				reason = turnReasonContentStalled
+			}
 			m.tracePath("turn_path_closed", g, binding, l.lane, reason)
 		}()
 		a, err := m.negotiate(ctx, binding, g)
@@ -110,7 +120,7 @@ func (m *turnManager) start(now time.Time, l *turnLeg, g p.TURNGrant) {
 		}
 		done, usable := m.runtime.UsableLaneDone(lane)
 		if !usable || signalled(done) {
-			reason = "lane_lost"
+			reason = turnReasonLaneLost
 			return
 		}
 		if ctx.Err() != nil {
@@ -124,7 +134,7 @@ func (m *turnManager) start(now time.Time, l *turnLeg, g p.TURNGrant) {
 		case <-ctx.Done():
 			reason = "owner_closed"
 		case <-done:
-			reason = "lane_lost"
+			reason = turnReasonLaneLost
 		}
 	}()
 }

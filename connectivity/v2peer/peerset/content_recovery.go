@@ -12,10 +12,10 @@ var errContentRouteExhausted = errors.New("queued content exhausted its admitted
 
 // Recovery is driven by failed content demand, independently of throughput
 // growth. The existing path loop still owns closure, retry budget and admission.
-func (s *ReceiverSession) recoverContentDemand(lanes *transferlanes.Set) {
+func (s *ReceiverSession) recoverContentDemand(lanes *transferlanes.Set) []transferlanes.Identity {
 	demand := lanes.RecoveryDemand()
 	if len(demand) == 0 {
-		return
+		return nil
 	}
 	s.owner.mu.Lock()
 	paths := make([]*Path, 0, len(s.owner.paths))
@@ -28,6 +28,7 @@ func (s *ReceiverSession) recoverContentDemand(lanes *transferlanes.Set) {
 			path.recoverContentGeneration(identity)
 		}
 	}
+	return demand
 }
 
 func (p *Path) recoverContentGeneration(identity transferlanes.Identity) bool {

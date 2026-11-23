@@ -5,8 +5,10 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/catalog"
@@ -187,6 +189,175 @@ func TestExhaustedContentRecoversWithoutThroughputGrowth(t *testing.T) {
 		case binding := <-bindings:
 			t.Fatalf("completed recovery started an extra attempt: %+v", binding)
 		default:
+		}
+	})
+}
+
+func TestExhaustedTURNContentRecoversAcrossRouteBlockedFetch(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		sessionID := protocolsession.ProtocolSessionID{9}
+		laneSet, err := transferlanes.New(transferlanes.Config{
+			ProtocolSessionID:  sessionID,
+			ContentRoutePolicy: transferlanes.ContentRouteAll,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer laneSet.Close()
+		// An active direct path holds RouteSupply even while direct P2P cannot connect,
+		// parking exhausted reads in CapacityRoute with zero NetworkWaitingBytes.
+		supply, err := laneSet.ExpectRoute(transferlanes.RouteDirect)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer supply.Close()
+
+		geometry, err := content.NewFileGeometry(uint64(catalog.MinChunkSize), catalog.MinChunkSize)
+		if err != nil {
+			t.Fatal(err)
+		}
+		descriptor, err := content.NewFileRevisionDescriptor(catalog.ShareInstance{1}, catalog.FileID{2},
+			content.FileRevision{3}, geometry, catalog.ModifiedTime{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		record, err := records.NewBlockRecord(descriptor, 0, bytes.Repeat([]byte{9}, int(catalog.MinChunkSize)))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		owner, err := newTestPeerSet(t, Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		runtime := &turnTestRuntime{
+			lanes:    make(map[session.LaneIdentity]*turnTestLane),
+			requests: make(chan protocolsession.TURNDemand, 8),
+		}
+		receiver := &ReceiverSession{owner: owner, ctx: ctx, config: ReceiverConfig{Demand: ContentDemand}}
+		manager := newTURNManager(receiver, runtime)
+		manager.delivered = func(id session.LaneIdentity) bool {
+			return laneSet.HasDelivered(transferlanes.Identity(id))
+		}
+		receiver.turn = manager
+		defer func() { cancel(); manager.close(); receiver.work.Wait() }()
+
+		attempts := make(chan *testTURNAttempt, 4)
+		var nextLaneID atomic.Uint32
+		manager.negotiate = func(_ context.Context, binding v2signal.Binding, grant protocolsession.TURNGrant) (Attempt, error) {
+			id := session.LaneIdentity{ID: nextLaneID.Add(1), Epoch: 1}
+			attempt := &testTURNAttempt{fakeAttempt: newAttempt(), binding: binding, grant: grant, lane: id}
+			attempts <- attempt
+			return attempt, nil
+		}
+
+		admitTURN := func(a *testTURNAttempt, stall bool) {
+			runtime.attach(a.lane)
+			source := recoveryBlockSource(func(context.Context, transferlanes.Demand) (records.BlockRecord, error) {
+				if stall {
+					value, _ := fault.NewSession(fault.ScopeOutputPause, fault.SessionTransport)
+					return records.BlockRecord{}, transferlanes.NewDemandReassignableAfterRetirement(
+						fault.Wrap(value, errors.New("fragment inactivity")))
+				}
+				return record, nil
+			})
+			if err := laneSet.Add(transferlanes.Identity(a.lane), transferlanes.RouteTURN, source); err != nil {
+				t.Fatal(err)
+			}
+			close(a.ready)
+			synctest.Wait()
+		}
+
+		origin := owner.config.Clock.Now()
+		manager.acceptService(origin, turnGrant("home"), false)
+		synctest.Wait()
+		first := receive(t, attempts)
+		admitTURN(first, true)
+		manager.step(origin, true, laneSet.SchedulingDemand(), nil)
+		synctest.Wait()
+
+		done := make(chan error, 1)
+		go func() {
+			block, fetchErr := laneSet.Fetch(t.Context(), transferlanes.Request{
+				Demand: transferlanes.Demand{LeaseID: content.LeaseID{4}, Descriptor: descriptor},
+				Validate: func(actual records.BlockRecord) error {
+					if actual.Descriptor() != descriptor || actual.LocalBlockIndex() != 0 {
+						return errors.New("incorrect immutable content")
+					}
+					return nil
+				},
+			})
+			if fetchErr == nil && !bytes.Equal(block.Data(), record.Data()) {
+				t.Error("TURN recovery changed delivered content")
+			}
+			done <- fetchErr
+		}()
+		synctest.Wait()
+
+		sched := laneSet.SchedulingDemand()
+		if sched.NetworkWaitingBytes != 0 || sched.UnfinishedBytes != 0 || sched.QueuedBytes == 0 {
+			t.Fatalf("expected CapacityRoute demand shape, got %+v", sched)
+		}
+
+		// Step 1: ReceiverSession forwards RecoveryDemand from the stalled TURN lane.
+		failed := receiver.recoverContentDemand(laneSet)
+		receiver.observeTURNDemand(sched, failed)
+		synctest.Wait()
+
+		// Step 2: Advance past turnBackoff[0]; TURN manager requests a replacement grant.
+		time.Sleep(turnBackoff[0])
+		failed = receiver.recoverContentDemand(laneSet)
+		receiver.observeTURNDemand(laneSet.SchedulingDemand(), failed)
+		synctest.Wait()
+
+		req := receive(t, runtime.requests)
+		if req.Mode != protocolsession.TURNAll || len(req.ServiceIDs) != 1 || req.ServiceIDs[0] != "home" {
+			t.Fatalf("unexpected TURN recovery request: %+v", req)
+		}
+		replyBody, err := protocolsession.EncodeTURNGrants(protocolsession.TURNGrants{
+			RequestID: req.RequestID, HasFallback: true, Status: protocolsession.TURNOK,
+			Grants: []protocolsession.TURNGrant{turnGrant("home")},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := runtime.handler(t.Context(), replyBody); err != nil {
+			t.Fatal(err)
+		}
+
+		failed = receiver.recoverContentDemand(laneSet)
+		receiver.observeTURNDemand(laneSet.SchedulingDemand(), failed)
+		synctest.Wait()
+		second := receive(t, attempts)
+		admitTURN(second, false)
+
+		// Step 3: Replacement attaches, retires stalled predecessor, and completes the queued Fetch.
+		failed = receiver.recoverContentDemand(laneSet)
+		receiver.observeTURNDemand(laneSet.SchedulingDemand(), failed)
+		synctest.Wait()
+
+		select {
+		case fetchErr := <-done:
+			if fetchErr != nil {
+				t.Fatal(fetchErr)
+			}
+		default:
+			t.Fatal("route-blocked fetch did not resume on replacement TURN lane")
+		}
+		if _, usable := runtime.UsableLaneDone(first.lane); usable {
+			t.Fatal("stalled TURN predecessor was not retired after handoff")
+		}
+		if !laneSet.HasDelivered(transferlanes.Identity(second.lane)) {
+			t.Fatal("replacement TURN lane did not record authenticated delivery")
+		}
+
+		// Step 4: Next maintenance tick observes delivery and resets retry budget.
+		receiver.observeTURNDemand(laneSet.SchedulingDemand(), receiver.recoverContentDemand(laneSet))
+		synctest.Wait()
+		if svc := manager.services["home"]; svc == nil || svc.retry.failures != 0 || svc.awaitingDelivery {
+			t.Fatalf("healthy replacement did not clear stall retry debt: %+v", svc)
 		}
 	})
 }

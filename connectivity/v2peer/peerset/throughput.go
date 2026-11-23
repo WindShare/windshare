@@ -29,9 +29,9 @@ func (s *ReceiverSession) runContentControl(lanes *transferlanes.Set) {
 			return
 		case <-timer.C():
 		}
-		s.recoverContentDemand(lanes)
+		failed := s.recoverContentDemand(lanes)
 		demand := lanes.SchedulingDemand()
-		s.observeTURNDemand(demand)
+		s.observeTURNDemand(demand, failed)
 		s.mu.Lock()
 		if s.closed || s.ctx.Err() != nil {
 			s.mu.Unlock()
@@ -82,12 +82,12 @@ func (s *ReceiverSession) runContentControl(lanes *transferlanes.Set) {
 	}
 }
 
-func (s *ReceiverSession) observeTURNDemand(demand transferlanes.SchedulingDemand) {
+func (s *ReceiverSession) observeTURNDemand(demand transferlanes.SchedulingDemand, failed []transferlanes.Identity) {
 	if s.turn != nil {
 		s.mu.Lock()
 		active := s.config.Demand == ContentDemand
 		s.mu.Unlock()
-		s.turn.step(s.owner.config.Clock.Now(), active, demand)
+		s.turn.step(s.owner.config.Clock.Now(), active, demand, failed)
 	}
 }
 
