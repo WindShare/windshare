@@ -2,6 +2,8 @@ import { bigintToSafeNumber, type ByteRange } from '../../content/geometry'
 import { FaultScope, SourceFaultCode, TransferFaultError, sourceFault } from '../../transfer/fault'
 import type { OutputTraceSource } from '../diagnostics'
 import type { CompletedOutputFile } from '../../transfer/output-port'
+import { NATIVE_WRITE_CHUNK_BYTES } from '../native-object/client'
+import type { NativeObjectIO } from '../native-object/contracts'
 import type { ObjectCheckpointCoordinator } from '../native-object/coordinator'
 import type { ReceiveStore } from '../store/database'
 import {
@@ -28,6 +30,8 @@ import {
 } from './policy'
 
 const DIR_ENTRY_PREFIX = '__dir__:'
+// Match the worker client's chunk ceiling so each finalization batch maps to one worker write.
+const FINALIZE_WRITE_BATCH_BYTES = NATIVE_WRITE_CHUNK_BYTES
 
 export interface ProgressiveZipEntryInput {
   readonly fileId: string
@@ -320,18 +324,16 @@ export class ProgressiveZipWriter {
   async finalize(): Promise<bigint> {
     const ordered = completedZipMembers(this.#entries.values())
 
-    let offset = this.#allocatedLength
-    const centralStart = offset
+    const tail = new BatchedTailWriter(this.#io, this.#allocatedLength, FINALIZE_WRITE_BATCH_BYTES)
+    const centralStart = tail.offset
     let centralBytes = 0n
 
     for (const entry of ordered) {
       const zip = entry.zipEntry
       const plan = planStoredZipMember(entry, zip.localHeaderOffset)
       const record = encodeZipCentralDirectoryRecord(plan, zip.crc32!)
-      await this.#io.writeAt(offset, record)
-      const len = BigInt(record.byteLength)
-      offset = checkedZipAdd(offset, len)
-      centralBytes = checkedZipAdd(centralBytes, len)
+      await tail.append(record)
+      centralBytes = checkedZipAdd(centralBytes, BigInt(record.byteLength))
     }
 
     const endBase = {
@@ -341,14 +343,73 @@ export class ProgressiveZipWriter {
     }
     const ends = encodeZipEndRecords({ ...endBase, zip64EndRequired: requiresZip64End(endBase) })
     for (const part of [ends.zip64End, ends.zip64Locator, ends.classicEnd]) {
-      if (part === undefined) continue
-      await this.#io.writeAt(offset, part)
-      offset = checkedZipAdd(offset, BigInt(part.byteLength))
+      if (part !== undefined) await tail.append(part)
     }
-    await this.#io.truncate(offset)
+    await tail.flush()
+    await this.#io.truncate(tail.offset)
     await this.#io.flush()
-    return offset
+    return tail.offset
   }
+}
+
+class BatchedTailWriter {
+  readonly #io: Pick<NativeObjectIO, 'writeAt'>
+  readonly #maxBatchBytes: number
+  readonly #pending: Uint8Array[] = []
+  #pendingBytes = 0
+  #writeOffset: bigint
+  #logicalOffset: bigint
+
+  constructor(io: Pick<NativeObjectIO, 'writeAt'>, startOffset: bigint, maxBatchBytes: number) {
+    this.#io = io
+    this.#writeOffset = startOffset
+    this.#logicalOffset = startOffset
+    this.#maxBatchBytes = maxBatchBytes
+  }
+
+  get offset(): bigint {
+    return this.#logicalOffset
+  }
+
+  async append(chunk: Uint8Array): Promise<void> {
+    if (chunk.byteLength === 0) return
+    const nextOffset = checkedZipAdd(this.#logicalOffset, BigInt(chunk.byteLength))
+    // Flush before crossing the ceiling so the batch never splits into a trailing remainder RPC.
+    if (this.#pendingBytes > 0 && this.#pendingBytes + chunk.byteLength > this.#maxBatchBytes) {
+      await this.flush()
+    }
+    if (chunk.byteLength >= this.#maxBatchBytes) {
+      await this.#io.writeAt(this.#writeOffset, chunk)
+      this.#writeOffset = nextOffset
+      this.#logicalOffset = nextOffset
+      return
+    }
+    this.#pending.push(chunk)
+    this.#pendingBytes += chunk.byteLength
+    this.#logicalOffset = nextOffset
+  }
+
+  async flush(): Promise<void> {
+    if (this.#pending.length === 0) return
+    const bytes = this.#pending.length === 1
+      ? this.#pending[0]!
+      : mergeUint8Arrays(this.#pending, this.#pendingBytes)
+    const batchLength = BigInt(this.#pendingBytes)
+    this.#pending.length = 0
+    this.#pendingBytes = 0
+    await this.#io.writeAt(this.#writeOffset, bytes)
+    this.#writeOffset = checkedZipAdd(this.#writeOffset, batchLength)
+  }
+}
+
+function mergeUint8Arrays(parts: readonly Uint8Array[], totalBytes: number): Uint8Array {
+  const merged = new Uint8Array(totalBytes)
+  let cursor = 0
+  for (const part of parts) {
+    merged.set(part, cursor)
+    cursor += part.byteLength
+  }
+  return merged
 }
 
 function buildUpdatedZipFileRecord(

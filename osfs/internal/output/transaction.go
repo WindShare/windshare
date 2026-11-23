@@ -24,21 +24,24 @@ const (
 	LargeCheckpointBytes         uint64 = 8 << 20 // 8 MiB
 	LargeCheckpointInterval             = 2 * time.Second
 	publicationFingerprintDomain        = "windshare/publication-samples/v1\x00"
-	publicationSampleBytes       uint64 = 4096
+	stageRangeFingerprintDomain         = "windshare/stage-range-samples/v1\x00"
+	stageSampleBytes             uint64 = 4096
 )
+
+var errStageSizeMismatch = errors.New("osfs: staged file size does not match expected length")
 
 // samplePublicationFingerprint hashes the file size together with up to three
 // 4 KiB slices (head, middle, tail). It provides bounded O(1) reconciliation
 // evidence for an interrupted publish, never authority to overwrite or delete
 // an existing destination file.
-func samplePublicationFingerprint(reader io.ReaderAt, size uint64) ([publicationFingerprintBytes]byte, error) {
+func samplePublicationFingerprint(reader io.ReaderAt, size uint64) ([stageFingerprintBytes]byte, error) {
 	h := sha256.New()
 	_, _ = h.Write([]byte(publicationFingerprintDomain))
 	var encoded [8]byte
 	binary.BigEndian.PutUint64(encoded[:], size)
 	_, _ = h.Write(encoded[:])
 
-	length := min(size, publicationSampleBytes)
+	length := min(size, stageSampleBytes)
 	if length > 0 {
 		offsets := [3]uint64{0, (size - length) / 2, size - length}
 		prev := ^uint64(0)
@@ -49,20 +52,136 @@ func samplePublicationFingerprint(reader io.ReaderAt, size uint64) ([publication
 			}
 			prev = off
 			n, err := reader.ReadAt(buf, int64(off))
-			if err != nil || n != len(buf) {
+			if n != len(buf) || (err != nil && !errors.Is(err, io.EOF)) {
 				if err == nil {
 					err = io.ErrUnexpectedEOF
 				}
-				return [publicationFingerprintBytes]byte{}, err
+				return [stageFingerprintBytes]byte{}, err
 			}
 			binary.BigEndian.PutUint64(encoded[:], off)
 			_, _ = h.Write(encoded[:])
 			_, _ = h.Write(buf)
 		}
 	}
-	var sum [publicationFingerprintBytes]byte
+	var sum [stageFingerprintBytes]byte
 	copy(sum[:], h.Sum(nil))
 	return sum, nil
+}
+
+// stageRangeSampleWindows chooses up to three deduplicated <=4 KiB slices
+// strictly inside ranges (head, covered midpoint, tail) so sampling never reads
+// unwritten holes between non-contiguous ranges.
+func stageRangeSampleWindows(ranges []content.Range) []content.Range {
+	total := rangeTotalBytes(ranges)
+	if total == 0 {
+		return nil
+	}
+	var windows []content.Range
+	appendUnique := func(candidate content.Range) {
+		if candidate.End <= candidate.Offset {
+			return
+		}
+		for _, existing := range windows {
+			if existing == candidate {
+				return
+			}
+		}
+		windows = append(windows, candidate)
+	}
+
+	first := ranges[0]
+	appendUnique(content.Range{
+		Offset: first.Offset,
+		End:    first.Offset + min(first.End-first.Offset, stageSampleBytes),
+	})
+
+	midPos := total / 2
+	var acc uint64
+	for _, r := range ranges {
+		span := r.End - r.Offset
+		if midPos < acc+span {
+			length := min(span, stageSampleBytes)
+			anchor := r.Offset + (midPos - acc)
+			half := length / 2
+			var start uint64
+			switch {
+			case anchor <= r.Offset+half:
+				start = r.Offset
+			case r.End-(anchor-half) < length:
+				start = r.End - length
+			default:
+				start = anchor - half
+			}
+			appendUnique(content.Range{Offset: start, End: start + length})
+			break
+		}
+		acc += span
+	}
+
+	last := ranges[len(ranges)-1]
+	tailLen := min(last.End-last.Offset, stageSampleBytes)
+	appendUnique(content.Range{
+		Offset: last.End - tailLen,
+		End:    last.End,
+	})
+	return windows
+}
+
+// sampleStageRangesFingerprint binds covered range geometry to up to three
+// 4 KiB slices sampled strictly inside ranges. Omitting total file length and
+// mtime preserves crash recovery after later in-place writes while catching
+// restored, sync-replaced, or zeroed staging files in bounded O(1) I/O.
+func sampleStageRangesFingerprint(reader io.ReaderAt, ranges []content.Range) ([stageFingerprintBytes]byte, error) {
+	for _, r := range ranges {
+		if r.Offset >= r.End {
+			return [stageFingerprintBytes]byte{}, content.ErrNonCanonicalRange
+		}
+	}
+	windows := stageRangeSampleWindows(ranges)
+	if len(windows) == 0 {
+		return [stageFingerprintBytes]byte{}, nil
+	}
+	h := sha256.New()
+	_, _ = h.Write([]byte(stageRangeFingerprintDomain))
+	var encoded [8]byte
+	binary.BigEndian.PutUint64(encoded[:], uint64(len(ranges)))
+	_, _ = h.Write(encoded[:])
+	for _, r := range ranges {
+		binary.BigEndian.PutUint64(encoded[:], r.Offset)
+		_, _ = h.Write(encoded[:])
+		binary.BigEndian.PutUint64(encoded[:], r.End)
+		_, _ = h.Write(encoded[:])
+	}
+	buf := make([]byte, stageSampleBytes)
+	for _, w := range windows {
+		slice := buf[:w.End-w.Offset]
+		n, err := reader.ReadAt(slice, int64(w.Offset))
+		if n != len(slice) || (err != nil && !errors.Is(err, io.EOF)) {
+			if err == nil {
+				err = io.ErrUnexpectedEOF
+			}
+			return [stageFingerprintBytes]byte{}, err
+		}
+		binary.BigEndian.PutUint64(encoded[:], w.Offset)
+		_, _ = h.Write(encoded[:])
+		binary.BigEndian.PutUint64(encoded[:], uint64(len(slice)))
+		_, _ = h.Write(encoded[:])
+		_, _ = h.Write(slice)
+	}
+	var sum [stageFingerprintBytes]byte
+	copy(sum[:], h.Sum(nil))
+	return sum, nil
+}
+
+func verifyStagedFileSize(f *os.File, expected uint64) error {
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Size() < 0 || uint64(info.Size()) != expected {
+		return errStageSizeMismatch
+	}
+	return nil
 }
 
 type fileTransaction struct {
@@ -216,6 +335,19 @@ func (tx *fileTransaction) persistLocked() error {
 	if err := tx.file.Sync(); err != nil {
 		return err
 	}
+	ranges := tx.accepted.Ranges()
+	info, err := tx.file.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Size() < 0 ||
+		uint64(info.Size()) < maxRangeEnd(ranges) || uint64(info.Size()) > tx.exactSize {
+		return errStageSizeMismatch
+	}
+	fp, err := sampleStageRangesFingerprint(tx.file, ranges)
+	if err != nil {
+		return err
+	}
 	nextGen := tx.persistedGen + 1
 	desc := tx.binding.Descriptor()
 	if err := tx.session.op.journal.recordPartial(partialEntry{
@@ -225,8 +357,9 @@ func (tx *fileTransaction) persistLocked() error {
 		Metadata:      desc.SourceMetadata(),
 		ExactSize:     tx.exactSize,
 		PartName:      tx.partName,
-		Ranges:        tx.accepted.Ranges(),
+		Ranges:        ranges,
 		CheckpointGen: nextGen,
+		Fingerprint:   fp,
 	}, true); err != nil {
 		return err
 	}
@@ -299,6 +432,15 @@ func (tx *fileTransaction) prepareStageForPublishLocked(
 	ctx context.Context,
 	durablePublish bool,
 ) (publishingEntry, []transfer.FileMetadataWarning, error) {
+	if err := verifyStagedFileSize(tx.file, tx.exactSize); err != nil {
+		// Detach the corrupted stage so PauseTree does not checkpoint an
+		// externally resized .part after Commit refuses to publish it.
+		_ = tx.file.Close()
+		tx.file = nil
+		tx.settled = true
+		tx.session.releaseActiveFile(tx.canonicalPath, tx)
+		return publishingEntry{}, nil, DiagnoseFailure(FailureDurability, wrapFileFault(ctx, transferfault.OutputStateIO, "verify staged file size", err))
+	}
 	var pubEntry publishingEntry
 	if durablePublish {
 		fp, err := samplePublicationFingerprint(tx.file, tx.exactSize)
@@ -340,8 +482,34 @@ func (tx *fileTransaction) prepareStageForPublishLocked(
 	return pubEntry, warnings, nil
 }
 
+func sampleCollisionStageFingerprint(
+	opDir *Dir,
+	partName string,
+	exactSize uint64,
+	ranges []content.Range,
+) [stageFingerprintBytes]byte {
+	if len(ranges) == 0 {
+		return [stageFingerprintBytes]byte{}
+	}
+	f, err := openChildFile(opDir, partName, os.O_RDONLY, 0)
+	if err != nil {
+		return [stageFingerprintBytes]byte{}
+	}
+	defer f.Close()
+	if verifyStagedFileSize(f, exactSize) != nil {
+		return [stageFingerprintBytes]byte{}
+	}
+	fp, err := sampleStageRangesFingerprint(f, ranges)
+	if err != nil {
+		return [stageFingerprintBytes]byte{}
+	}
+	return fp
+}
+
 func (tx *fileTransaction) settleCommitCollisionLocked() (transfer.FileSettlement, error) {
 	// Preserve .part in .windshare-tmp/<opID>/ so retry or discard stays safe.
+	ranges := tx.accepted.Ranges()
+	fp := sampleCollisionStageFingerprint(tx.session.op.opDir, tx.partName, tx.exactSize, ranges)
 	nextGen := tx.persistedGen + 1
 	desc := tx.binding.Descriptor()
 	if err := tx.session.op.journal.recordPartial(partialEntry{
@@ -351,8 +519,9 @@ func (tx *fileTransaction) settleCommitCollisionLocked() (transfer.FileSettlemen
 		Metadata:      desc.SourceMetadata(),
 		ExactSize:     tx.exactSize,
 		PartName:      tx.partName,
-		Ranges:        tx.accepted.Ranges(),
+		Ranges:        ranges,
 		CheckpointGen: nextGen,
+		Fingerprint:   fp,
 	}, true); err == nil {
 		tx.persistedGen = nextGen
 		tx.persisted = tx.accepted

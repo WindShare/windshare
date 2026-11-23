@@ -113,4 +113,57 @@ describe('artifact offer planning', () => {
       expect(withFsa.zip?.artifact.rootPath).toEqual(['Album'])
     }
   })
+
+  it('applies the portable cap to knownBytes even when tree discovery is incomplete', () => {
+    const partialTree = (knownBytes: bigint): SelectionShape => ({
+      kind: 'tree',
+      suggestedName: 'Album',
+      rootPath: ['Album'],
+      knownFileCount: knownBytes > 0n ? 1 : 0,
+      knownBytes,
+      complete: false,
+    })
+    const portableOnly = { indexedDb: false, fsa: false, opfs: false, portable: true, availableStorageBytes: null }
+
+    const oversized = planArtifactOffers({
+      epoch: 1n,
+      selectionKey: 'k6',
+      shape: partialTree(PORTABLE_MAX_BYTES + 1n),
+      capabilities: portableOnly,
+    })
+    expect(oversized).toMatchObject({ kind: 'unavailable', reason: 'portable-limit-exceeded' })
+
+    const stillWithinCap = planArtifactOffers({
+      epoch: 2n,
+      selectionKey: 'k7',
+      shape: partialTree(PORTABLE_MAX_BYTES),
+      capabilities: portableOnly,
+    })
+    expect(stillWithinCap.kind).toBe('ready')
+    if (stillWithinCap.kind === 'ready') {
+      expect(stillWithinCap.primary.backend).toBe('portable')
+      expect(stillWithinCap.zip?.backend).toBe('portable')
+    }
+
+    const opfsFullNoFsa = planArtifactOffers({
+      epoch: 3n,
+      selectionKey: 'k8',
+      shape: partialTree(PORTABLE_MAX_BYTES + 1n),
+      capabilities: { indexedDb: true, fsa: false, opfs: true, portable: true, availableStorageBytes: 1024n },
+    })
+    expect(opfsFullNoFsa).toMatchObject({ kind: 'unavailable', reason: 'storage-full' })
+
+    const opfsFullWithFsa = planArtifactOffers({
+      epoch: 4n,
+      selectionKey: 'k9',
+      shape: partialTree(PORTABLE_MAX_BYTES + 1n),
+      capabilities: { indexedDb: true, fsa: true, opfs: true, portable: true, availableStorageBytes: 1024n },
+    })
+    expect(opfsFullWithFsa.kind).toBe('ready')
+    if (opfsFullWithFsa.kind === 'ready') {
+      expect(opfsFullWithFsa.primary.backend).toBe('fsa')
+      expect(opfsFullWithFsa.alternatives).toEqual([])
+      expect(opfsFullWithFsa.zip).toBeNull()
+    }
+  })
 })

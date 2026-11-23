@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io/fs"
 	"os"
-	"slices"
 	"strings"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -454,49 +453,75 @@ func (s *Session) reconcilePublishedWithoutStage(
 	return s.beginFreshFile(ctx, file, binding, parentDir, physLeaf)
 }
 
-func (s *Session) openOrRecreatePartialStage(
+func validatePartialStage(partFile *os.File, exactSize uint64, ranges []content.Range, fingerprint [stageFingerprintBytes]byte) bool {
+	info, statErr := partFile.Stat()
+	if statErr != nil || !info.Mode().IsRegular() || info.Size() < 0 {
+		return false
+	}
+	size := uint64(info.Size())
+	if size > exactSize || size < maxRangeEnd(ranges) {
+		return false
+	}
+	if len(ranges) == 0 {
+		return size == 0
+	}
+	if fingerprint == ([stageFingerprintBytes]byte{}) {
+		return false
+	}
+	actualFP, fpErr := sampleStageRangesFingerprint(partFile, ranges)
+	return fpErr == nil && actualFP == fingerprint
+}
+
+func (s *Session) restartInvalidPartialStage(
 	ctx context.Context,
 	file transfer.MaterializationFile,
+	binding transfer.MaterializedFileBinding,
 	parentDir *Dir,
 	physLeaf string,
 	partial partialEntry,
-) (*os.File, []content.Range, transfer.FileStart, bool, error) {
-	partFile, openErr := openChildFile(s.op.opDir, partial.PartName, os.O_RDWR, publicFileMode)
-	if openErr == nil {
-		persistedSlice := slices.Clone(partial.Ranges)
-		if info, statErr := partFile.Stat(); statErr != nil || !info.Mode().IsRegular() || uint64(max(info.Size(), 0)) < maxRangeEnd(persistedSlice) {
-			persistedSlice = nil
-		}
-		return partFile, persistedSlice, transfer.FileStart{}, false, nil
-	}
-	if !errors.Is(openErr, fs.ErrNotExist) {
-		return nil, nil, transfer.FileStart{}, false, wrapFileFault(ctx, transferfault.OutputStateIO, "open staged file", openErr)
-	}
-	// Staged part vanished: preflight destination collision before starting
-	// from zero so an already-occupied path never triggers a wasted download.
-	kind, _, statErr := lstatChild(parentDir, physLeaf)
-	if statErr != nil {
-		return nil, nil, transfer.FileStart{}, false, wrapFileFault(ctx, transferfault.OutputStateIO, "inspect destination file", statErr)
-	}
-	if kind != EntryAbsent {
+	stageMissing bool,
+) (transfer.FileStart, error) {
+	canonicalPath := file.MaterializationRelativePath().String()
+	if !stageMissing {
 		emitTrace(s.authority.diagnostics, traceEvent{
 			component:          "file",
 			operation:          "recover_file",
-			decision:           "collision",
-			checkpointDecision: "missing_stage_collision",
+			decision:           "rejected",
+			checkpointDecision: "invalid",
 			operationID:        s.intent.OperationID(),
 			intentDigest:       s.intent.Digest(),
 			sessionID:          s.sessionID,
 			fileID:             file.Descriptor().FileID(),
 		})
-		start, err := s.settleCollision(file.MaterializationRelativePath().String(), file.Target())
-		return nil, nil, start, err == nil, err
 	}
-	partFile, openErr = openChildFile(s.op.opDir, partial.PartName, os.O_RDWR|os.O_CREATE|os.O_EXCL, publicFileMode)
-	if openErr != nil {
-		return nil, nil, transfer.FileStart{}, false, wrapFileFault(ctx, transferfault.OutputStateIO, "recreate staged file", openErr)
+	// Preflight destination collision before discarding or recreating .part so
+	// an already-occupied destination path never triggers a wasted download.
+	kind, _, statErr := lstatChild(parentDir, physLeaf)
+	if statErr != nil {
+		return transfer.FileStart{}, wrapFileFault(ctx, transferfault.OutputStateIO, "inspect destination file", statErr)
 	}
-	return partFile, nil, transfer.FileStart{}, false, nil
+	if kind != EntryAbsent {
+		if stageMissing {
+			emitTrace(s.authority.diagnostics, traceEvent{
+				component:          "file",
+				operation:          "recover_file",
+				decision:           "collision",
+				checkpointDecision: "missing_stage_collision",
+				operationID:        s.intent.OperationID(),
+				intentDigest:       s.intent.Digest(),
+				sessionID:          s.sessionID,
+				fileID:             file.Descriptor().FileID(),
+			})
+		}
+		return s.settleCollision(canonicalPath, file.Target())
+	}
+	if !stageMissing {
+		if err := removeChild(s.op.opDir, partial.PartName, false); err != nil {
+			return transfer.FileStart{}, wrapFileFault(ctx, transferfault.OutputStateIO, "remove invalid staged file", err)
+		}
+	}
+	_ = s.op.journal.recordRetired(partial.FileID, canonicalPath)
+	return s.beginFreshFile(ctx, file, binding, parentDir, physLeaf)
 }
 
 func (s *Session) resumePartialFile(
@@ -510,6 +535,12 @@ func (s *Session) resumePartialFile(
 	desc := file.Descriptor()
 	canonicalPath := file.MaterializationRelativePath().String()
 
+	if partial.FileID != desc.FileID() {
+		_ = removeChild(s.op.opDir, partial.PartName, false)
+		_ = s.op.journal.recordRetired(partial.FileID, canonicalPath)
+		return s.beginFreshFile(ctx, file, binding, parentDir, physLeaf)
+	}
+
 	prevEvidence := content.RevisionSourceEvidence{
 		FileRevision:   partial.Revision,
 		ExactSize:      partial.ExactSize,
@@ -520,18 +551,19 @@ func (s *Session) resumePartialFile(
 		return s.handleRevisionMismatch(file, partial, prevEvidence, comparison)
 	}
 
-	partFile, persistedSlice, immediateStart, hasImmediate, err := s.openOrRecreatePartialStage(ctx, file, parentDir, physLeaf, partial)
-	if err != nil {
-		return transfer.FileStart{}, err
+	persistedSet, rangeErr := content.NewRangeSet(partial.Ranges)
+	partFile, openErr := openChildFile(s.op.opDir, partial.PartName, os.O_RDWR, publicFileMode)
+	if openErr != nil && !errors.Is(openErr, fs.ErrNotExist) {
+		return transfer.FileStart{}, wrapFileFault(ctx, transferfault.OutputStateIO, "open staged file", openErr)
 	}
-	if hasImmediate {
-		return immediateStart, nil
+	if openErr != nil || rangeErr != nil || !validatePartialStage(partFile, desc.ExactSize(), persistedSet.Ranges(), partial.Fingerprint) {
+		stageMissing := errors.Is(openErr, fs.ErrNotExist)
+		if partFile != nil {
+			_ = partFile.Close()
+		}
+		return s.restartInvalidPartialStage(ctx, file, binding, parentDir, physLeaf, partial, stageMissing)
 	}
 
-	persistedSet, err := content.NewRangeSet(persistedSlice)
-	if err != nil {
-		persistedSet, _ = content.NewRangeSet(nil)
-	}
 	reusedBytes := rangeTotalBytes(persistedSet.Ranges())
 
 	// If metadata agreement bridged across a reopened revision, bind the new
