@@ -7,11 +7,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
-	"log/slog"
 	"net/http"
 	"slices"
 	"sync"
 	"time"
+
+	d "github.com/windshare/windshare/core/diagnostics"
 
 	"github.com/windshare/windshare/connectivity/turnsession"
 	p "github.com/windshare/windshare/core/session/protocolsession"
@@ -96,7 +97,7 @@ func New(manual []relayconfig.TURNService, selected []relayprofile.Registration,
 
 // Discovery never delays publication. Concurrent sessions share just the
 // capability result, while issued credentials stay scoped to their own session.
-func (r *Resolver) Discover(ctx context.Context) <-chan struct{} {
+func (r *Resolver) Discover(ctx context.Context, trace turnsession.Trace) <-chan struct{} {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.discovering != nil {
@@ -127,7 +128,7 @@ func (r *Resolver) Discover(ctx context.Context) <-chan struct{} {
 					r.mu.Lock()
 					r.known[s.ID] = capability.Managed
 					r.mu.Unlock()
-					slog.Debug("turn_capability_discovered", "service_id", s.ID, "enabled", capability.Managed)
+					trace.Event("turn_capability_discovered", s.ID, d.Fields{"enabled": d.Bool(capability.Managed)})
 				}
 			})
 		}
@@ -143,21 +144,15 @@ func (r *Resolver) Discover(ctx context.Context) <-chan struct{} {
 func (r *Resolver) Issue(ctx context.Context, request turnsession.IssueRequest) turnsession.IssueResult {
 	ctx, cancel := context.WithTimeout(ctx, issueTimeout)
 	defer cancel()
-	if request.Mode == p.TURNAll {
-		select {
-		case <-r.Discover(ctx):
-		case <-ctx.Done():
-		}
-	}
 	available, unknown := r.availability()
-	result := turnsession.IssueResult{Status: p.TURNOK, HasFallback: slices.ContainsFunc(available, func(s source) bool { return !unknown[s.ID] && s.EffectiveRole() == relayconfig.RoleFallback })}
-	if len(available) == 0 {
-		result.Status = p.TURNUnconfigured
-		return result
+	var discovered <-chan struct{}
+	if request.Mode == p.TURNAll && len(unknown) > 0 {
+		discovered = r.Discover(ctx, request.Trace)
 	}
+	var result turnsession.IssueResult
 	var targets []source
 	for _, s := range activeServices(available, request.ServiceIDs) {
-		if unknown[s.ID] || (s.EffectiveRole() == relayconfig.RoleFallback && request.Mode == p.TURNParallel) {
+		if s.EffectiveRole() == relayconfig.RoleFallback && request.Mode == p.TURNParallel {
 			continue
 		}
 		if request.Reusable[s.ID] {
@@ -170,9 +165,14 @@ func (r *Resolver) Issue(ctx context.Context, request turnsession.IssueRequest) 
 	var wg sync.WaitGroup
 	for i, s := range targets {
 		wg.Go(func() {
-			credential, err := r.issue(ctx, s)
+			// A missing capability may use the same bounded request window, but
+			// must not shorten another service's opportunity to issue a credential.
+			if unknown[s.ID] && !r.awaitDiscovery(ctx, s.ID, discovered) {
+				return
+			}
+			credential, err := r.issue(ctx, s, request.Trace)
 			if err != nil {
-				slog.Debug("turn_grant_failed", "service_id", s.ID, "kind", s.Kind, "role", s.EffectiveRole(), "reason", "issuer_unavailable")
+				request.Trace.Event("turn_grant_failed", s.ID, d.Fields{"kind": d.Text(s.Kind), "role": d.Text(s.EffectiveRole()), "reason": d.Text("issuer_unavailable")})
 				return
 			}
 			issued[i] = credential
@@ -184,10 +184,30 @@ func (r *Resolver) Issue(ctx context.Context, request turnsession.IssueRequest) 
 			result.Credentials = append(result.Credentials, c)
 		}
 	}
-	if len(result.Credentials)+len(result.Retained) == 0 && (len(unknown) > 0 || len(targets) > 0) {
+	available, unknown = r.availability()
+	result.HasFallback = slices.ContainsFunc(available, func(s source) bool { return !unknown[s.ID] && s.EffectiveRole() == relayconfig.RoleFallback })
+	switch {
+	case len(result.Credentials)+len(result.Retained) > 0:
+		result.Status = p.TURNOK
+	case len(available) == 0:
+		result.Status = p.TURNUnconfigured
+	case len(unknown) > 0 || len(targets) > 0:
 		result.Status = p.TURNRetryLater
+	default:
+		result.Status = p.TURNOK
 	}
 	return result
+}
+
+func (r *Resolver) awaitDiscovery(ctx context.Context, id string, discovered <-chan struct{}) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-discovered:
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		return r.known[id]
+	}
 }
 
 func (r *Resolver) availability() ([]source, map[string]bool) {

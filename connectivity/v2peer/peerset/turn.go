@@ -2,13 +2,12 @@ package peerset
 
 import (
 	"context"
-	"fmt"
 	"io"
-	"log/slog"
 	"time"
 
 	"github.com/windshare/windshare/connectivity/turnsession"
 	"github.com/windshare/windshare/connectivity/v2signal"
+	diag "github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/peerslot"
 	p "github.com/windshare/windshare/core/session/protocolsession"
@@ -70,7 +69,7 @@ type requestState struct {
 }
 type turnManager struct {
 	owner         *ReceiverSession
-	sessionID     p.ProtocolSessionID
+	trace         turnsession.Trace
 	negotiate     func(context.Context, v2signal.Binding, p.TURNGrant) (Attempt, error)
 	runtime       turnRuntime
 	pool          *peerslot.Pool
@@ -93,7 +92,7 @@ func newTURNManager(s *ReceiverSession, r turnRuntime) *turnManager {
 	s.owner.mu.Unlock()
 	config := s.config
 	m := &turnManager{
-		owner: s, sessionID: id, runtime: r, pool: pool,
+		owner: s, trace: turnsession.Trace{Sink: config.Trace, Session: id}, runtime: r, pool: pool,
 		in: make(chan p.TURNGrants, 16), wait: make(map[uint64]requestState), services: make(map[string]*turnService),
 		negotiate: func(ctx context.Context, binding v2signal.Binding, grant p.TURNGrant) (Attempt, error) {
 			return config.Factory.StartTURNBinding(ctx, config.Signaling, config.Lanes, binding, grant)
@@ -128,12 +127,6 @@ func (m *turnManager) reset() {
 	m.retries = 0
 	m.due = time.Time{}
 	m.policy = turnsession.Demand{}
-}
-func (m *turnManager) note(name, id string, fields ...any) {
-	logger := slog.Default()
-	if logger.Enabled(m.owner.ctx, slog.LevelDebug) {
-		logger.With("session_id", fmt.Sprintf("%x", m.sessionID), "service_id", id).Debug(name, fields...)
-	}
 }
 func (m *turnManager) step(now time.Time, active bool, d lanes.SchedulingDemand) {
 	if !active {
@@ -229,11 +222,11 @@ func (m *turnManager) request(now time.Time, mode p.TURNMode, service string) {
 	d := p.TURNDemand{RequestID: m.serial, Mode: mode}
 	if service != "" {
 		d.ServiceIDs = []string{service}
-		m.note("turn_refresh_requested", service)
+		m.trace.Event("turn_refresh_requested", service, diag.Fields{"request_id": diag.Uint(d.RequestID)})
 	}
 	body, _ := p.EncodeTURNDemand(d)
 	m.wait[d.RequestID] = requestState{mode, service, now.Add(grantResponseTimeout)}
-	m.note("turn_demand_sent", service, "request_id", d.RequestID, "mode", mode)
+	m.trace.Event("turn_demand_sent", service, diag.Fields{"request_id": diag.Uint(d.RequestID), "mode": diag.Uint(uint64(mode))})
 	m.owner.work.Go(func() {
 		ctx, cancel := context.WithTimeout(m.owner.ctx, grantResponseTimeout)
 		defer cancel()
@@ -246,7 +239,7 @@ func (m *turnManager) accept(now time.Time, g p.TURNGrants) {
 		return
 	}
 	delete(m.wait, g.RequestID)
-	m.note("turn_grants_received", r.service, "request_id", g.RequestID, "status", g.Status, "has_fallback", g.HasFallback)
+	m.trace.Event("turn_grants_received", r.service, diag.Fields{"request_id": diag.Uint(g.RequestID), "status": diag.Uint(uint64(g.Status)), "has_fallback": diag.Bool(g.HasFallback)})
 	if g.Status == p.TURNUnconfigured {
 		m.disabled = true
 		return
@@ -333,7 +326,7 @@ func (m *turnManager) start(now time.Time, l *turnLeg, g p.TURNGrant) {
 		defer close(l.done)
 		reason := "negotiation_failed"
 		defer func() {
-			m.note("turn_path_closed", g.ServiceID, "grant_id", fmt.Sprintf("%x", g.GrantID), "peer_path_id", fmt.Sprintf("%x", binding.PeerPathID), "lane_id", l.lane.ID, "lane_epoch", l.lane.Epoch, "reason", reason)
+			m.tracePath("turn_path_closed", g, binding, l.lane, reason)
 		}()
 		a, err := m.negotiate(ctx, binding, g)
 		if err != nil {
@@ -360,7 +353,7 @@ func (m *turnManager) start(now time.Time, l *turnLeg, g p.TURNGrant) {
 		}
 		l.lane = lane
 		close(l.ready)
-		m.note("turn_path_admitted", g.ServiceID, "grant_id", fmt.Sprintf("%x", g.GrantID), "peer_path_id", fmt.Sprintf("%x", binding.PeerPathID), "lane_id", lane.ID, "lane_epoch", lane.Epoch)
+		m.tracePath("turn_path_admitted", g, binding, lane, "")
 		select {
 		case <-ctx.Done():
 			reason = "owner_closed"
@@ -368,4 +361,19 @@ func (m *turnManager) start(now time.Time, l *turnLeg, g p.TURNGrant) {
 			reason = "lane_lost"
 		}
 	}()
+}
+
+func (m *turnManager) tracePath(event string, grant p.TURNGrant, binding v2signal.Binding, lane session.LaneIdentity, reason string) {
+	if !m.trace.Sink.Enabled() {
+		return
+	}
+	fields := diag.Fields{"grant_id": diag.Identity(grant.GrantID[:]), "peer_path_id": diag.Identity(binding.PeerPathID[:]), "attempt_sequence": diag.Uint(binding.AttemptSequence)}
+	if lane.ID != 0 {
+		fields["lane_id"] = diag.Uint(uint64(lane.ID))
+		fields["lane_epoch"] = diag.Uint(uint64(lane.Epoch))
+	}
+	if reason != "" {
+		fields["reason"] = diag.Text(reason)
+	}
+	m.trace.Event(event, grant.ServiceID, fields)
 }

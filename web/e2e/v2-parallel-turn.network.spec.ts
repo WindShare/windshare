@@ -51,6 +51,7 @@ test('Go and Chromium download over two TURN servers and the application relay',
     const source = await stack.createFile(name, bytes)
     const share = await stack.share(source, {
       turnServices: services,
+      senderTrace: true,
       blockSizeBytes: 256 * 1024,
     })
     const proxy = await stack.createRelayCutProxy(undefined, 3 * 1024 * 1024)
@@ -102,6 +103,10 @@ test('Go and Chromium download over two TURN servers and the application relay',
     const after = await counters()
     expect(after.every((s, i) => s.bytes - before[i]!.bytes > 256 * 1024)).toBe(true)
     await expect.poll(async () => (await counters()).map((s) => s.allocations)).toEqual([0, 0])
+
+    const trace = await stack.senderTraceRecords(share) as ReadonlyArray<{event: string}>
+    expect(trace.some(record => record.event === 'turn_demand_received')).toBe(true)
+    expect(trace.filter(record => record.event === 'turn_grant_issued').length).toBeGreaterThanOrEqual(4)
 
     const resumeDir = join(dir, 'recovery')
     await mkdir(resumeDir)

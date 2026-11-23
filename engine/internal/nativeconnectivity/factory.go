@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/connectivity/turnsession"
+	"github.com/windshare/windshare/core/diagnostics"
 
 	pion "github.com/pion/webrtc/v4"
 
@@ -18,6 +19,7 @@ import (
 )
 
 type SenderConfig struct {
+	Trace          diagnostics.Sink
 	TURNProvider   turnsession.Provider
 	Capacity       *Capacity
 	Now            func() time.Time
@@ -44,7 +46,7 @@ func senderConfig(config SenderConfig) (v2peer.Config, error) {
 		return v2peer.Config{}, err
 	}
 	result := v2peer.Config{
-		TURNCapacity: config.Capacity.TURN(), TURNProvider: config.TURNProvider,
+		Trace: config.Trace, TURNCapacity: config.Capacity.TURN(), TURNProvider: config.TURNProvider,
 		Configuration: v2peer.DefaultConfiguration(),
 		Native:        native,
 		Now:           config.Now,

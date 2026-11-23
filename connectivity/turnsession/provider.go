@@ -18,6 +18,7 @@ type Credential struct {
 
 // Reusable contains only live grants already owned by the requesting session.
 type IssueRequest struct {
+	Trace      Trace
 	Mode       p.TURNMode
 	ServiceIDs []string
 	Reusable   map[string]bool

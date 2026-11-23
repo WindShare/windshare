@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/connectivity/turnsession"
+	"github.com/windshare/windshare/core/diagnostics"
 
 	pion "github.com/pion/webrtc/v4"
 
@@ -103,6 +104,7 @@ func (function DataChannelAdapterFunc) WrapDataChannel(
 }
 
 type Config struct {
+	Trace              diagnostics.Sink
 	TURNCapacity       *turnsession.Capacity
 	TURNProvider       turnsession.Provider
 	Native             *nativepeer.NativePeerConnectivity
@@ -123,6 +125,7 @@ type Config struct {
 }
 
 type Factory struct {
+	trace                 diagnostics.Sink
 	turnCapacity          *turnsession.Capacity
 	turnProvider          turnsession.Provider
 	native                *nativepeer.NativePeerConnectivity
@@ -213,7 +216,7 @@ func NewFactory(config Config) (*Factory, error) {
 		config.TURNCapacity = turnsession.NewCapacity()
 	}
 	factory := &Factory{
-		turnCapacity: config.TURNCapacity, turnProvider: config.TURNProvider,
+		trace: config.Trace, turnCapacity: config.TURNCapacity, turnProvider: config.TURNProvider,
 		native:        config.Native,
 		configuration: config.Configuration, peerConnections: config.PeerConnections,
 		dataChannels:      config.DataChannels,
@@ -250,7 +253,7 @@ func (factory *Factory) NewSenderPeerHandler(
 	}
 	capacity := SenderMaxActivePeerAttemptsPerSession*(factory.maxCandidates+3) + handlerEventReserve
 	return &senderHandler{
-		turn:    turnsession.NewSender(session.ProtocolSessionID(), factory.turnProvider, factory.now),
+		turn:    turnsession.NewSender(turnsession.Trace{Sink: factory.trace, Session: session.ProtocolSessionID()}, factory.turnProvider, factory.now),
 		factory: factory, session: session, events: make(chan handlerEvent, capacity),
 		attempts:          make(map[protocolsession.OperationID]*peerAttempt),
 		bindings:          make(map[v2signal.Binding]protocolsession.OperationID),
