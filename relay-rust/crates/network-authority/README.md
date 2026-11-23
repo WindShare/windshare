@@ -48,7 +48,7 @@ response confirms acceptance. Its timeout is 15 seconds.
 
 ## Enroll and publish
 
-1. In **Nodes ? Add node**, enter the public HTTPS origin. The setup command configures a freshly provisioned host with the authority URL, issuer and certificate. Existing nodes can set `node.authority` and `node.access.trusted_issuers` directly.
+1. In **Nodes → Add node**, enter the public HTTPS origin. The setup command configures a freshly provisioned host with the authority URL, issuer and certificate. Existing nodes can set `node.authority` and `node.access.trusted_issuers` directly.
 2. Inspect the signed descriptor, confirm the alias, location, roles and capacity, and enroll. The authority verifies the issuer and authority origin, binds the alias permanently and signs the directory with the new node listed as **Canary**. Submitting the same settings again preserves its state and directory revision.
 3. Wait for a heartbeat confirming the policy, [test the advertised services](../../../deploy/network/operations.md#test-a-new-node), then choose **Activate**. A Canary can fill a vacant registration slot or take over when all initial Active candidates fail before link publication.
 
