@@ -40,13 +40,13 @@ func TestSenderFailureSummaryDistinguishesOwnDeadline(t *testing.T) {
 	recorder := newSenderAttemptRecorder(factory, newTestPeerSession(125).sessionID, binding)
 	recorder.begin()
 	recorder.negotiationDeadlineArmed()
-	now = now.Add(65 * time.Second)
+	now = now.Add(factory.negotiationBudget)
 	recorder.phaseDeadlineExpired(PeerAttemptPhaseNegotiation)
 	recorder.fail(attemptFailure(ErrPeerNegotiationTimeout, ErrPeerNegotiationTimeout, false))
 	events := collector.forAttempt(binding.AttemptID)
 	failure := events[len(events)-1].Failure
 	if !failure.DeadlineExpired || failure.Termination.Cause != "negotiation_timeout" ||
-		failure.LastCompletedStage != SenderAttemptOfferReceived || failure.StageElapsedMillis != 65000 {
+		failure.LastCompletedStage != SenderAttemptOfferReceived || failure.StageElapsedMillis != uint64(factory.negotiationBudget.Milliseconds()) {
 		t.Fatalf("deadline summary=%+v", failure)
 	}
 }

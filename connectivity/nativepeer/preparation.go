@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/windshare/windshare/connectivity/iceconfig"
 	"github.com/windshare/windshare/connectivity/icepolicy"
@@ -37,8 +38,16 @@ func (p *PreparedAttempt) Matches(session [16]byte, binding v2signal.Binding) bo
 }
 
 func (n *NativePeerConnectivity) PrepareAttempt(ctx context.Context, request AttemptRequest) (*PreparedAttempt, error) {
-	if ctx == nil || request.ProtocolSessionID == ([16]byte{}) || request.Binding.Validate() != nil {
+	return n.PrepareAttemptWithin(ctx, request, QueueBudget)
+}
+
+// PrepareAttemptWithin admits immediately available resources even when no queue time remains.
+func (n *NativePeerConnectivity) PrepareAttemptWithin(ctx context.Context, request AttemptRequest, queueWait time.Duration) (*PreparedAttempt, error) {
+	if ctx == nil || queueWait < 0 || request.ProtocolSessionID == ([16]byte{}) || request.Binding.Validate() != nil {
 		return nil, errors.New("invalid native peer attempt")
+	}
+	if cause := context.Cause(ctx); cause != nil {
+		return nil, cause
 	}
 	n.mu.Lock()
 	if n.closed {
@@ -48,11 +57,28 @@ func (n *NativePeerConnectivity) PrepareAttempt(ctx context.Context, request Att
 	n.operations.Add(1)
 	n.mu.Unlock()
 	defer n.operations.Done()
-	snapshot, err := n.snapshot(ctx)
-	if err != nil {
-		return nil, err
+	wait, cancelWait := context.WithCancelCause(ctx)
+	defer cancelWait(context.Canceled)
+	if queueWait > 0 {
+		stopQueue := n.config.Admission.clock.AfterFunc(min(queueWait, QueueBudget), func() { cancelWait(context.DeadlineExceeded) })
+		defer stopQueue()
+		_, err := n.snapshot(wait)
+		if cause := context.Cause(wait); cause != nil {
+			return nil, cause
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
 	n.mu.Lock()
+	// A network change can supersede a poll before this lock is acquired.
+	// Selecting from the latest generation also lets an immediate retry reuse
+	// its sampled network without waiting for a cold OS lookup.
+	snapshot := n.snapshotState
+	if snapshot.GenerationID() == 0 {
+		n.mu.Unlock()
+		return nil, ErrAdmission
+	}
 	key := pathKey{request.ProtocolSessionID, request.Binding.PeerPathID}
 	path, err := n.pathLocked(key)
 	if err != nil {
@@ -84,11 +110,10 @@ func (n *NativePeerConnectivity) PrepareAttempt(ctx context.Context, request Att
 	}
 	context.AfterFunc(lifetime, prepared.Close)
 	n.mu.Unlock()
-	wait, cancelWait := context.WithTimeout(ctx, QueueBudget)
-	stop := context.AfterFunc(lifetime, cancelWait)
-	defer func() { stop(); cancelWait() }()
+	stop := context.AfterFunc(lifetime, func() { cancelWait(context.Canceled) })
+	defer stop()
 	subject := Subject{ProtocolSessionID: key.session, PeerPathID: [16]byte(key.path), AttemptID: [16]byte(request.Binding.AttemptID), AttemptSequence: request.Binding.AttemptSequence, NetworkGenerationID: snapshot.GenerationID(), ICEProfileID: profile.ID(), Side: n.config.Side}
-	permit, err := n.config.Admission.acquirePurpose(wait, n, len(profile.URLs()), sockets, func(facts AdmissionFacts) { n.producer.TryPublish(Observation{Subject: subject, Admission: &facts}) }, request.Binding.Purpose)
+	permit, err := n.config.Admission.acquirePurpose(wait, n, len(profile.URLs()), sockets, func(facts AdmissionFacts) { n.producer.TryPublish(Observation{Subject: subject, Admission: &facts}) }, request.Binding.Purpose, queueWait)
 	if err != nil {
 		prepared.Close()
 		return nil, err
@@ -96,7 +121,7 @@ func (n *NativePeerConnectivity) PrepareAttempt(ctx context.Context, request Att
 	prepared.mu.Lock()
 	prepared.permit = permit
 	if !prepared.released {
-		prepared.stop = n.config.Admission.clock.AfterFunc(AttemptBudget, func() { prepared.cancel(); prepared.Close() })
+		prepared.stop = n.config.Admission.clock.AfterFunc(PermitLifetime, func() { prepared.cancel(); prepared.Close() })
 	}
 	if prepared.released {
 		permit.release()

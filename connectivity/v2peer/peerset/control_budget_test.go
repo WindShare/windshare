@@ -42,7 +42,7 @@ func TestRepeatedMappingAndRemoteNetworkNoticesSpendOnlyCurrentWave(t *testing.T
 		}
 		clock.advance(time.Second)
 	}
-	if !wave.exhausted(clock.Now()) {
+	if !wave.exhausted(clock.Now(), path.minimumOpportunity()) {
 		t.Fatal("notices enlarged attempt allowance")
 	}
 	if stop := path.nextWave(&wave); stop == nil || stop.Cause != ErrWaveExhausted {
@@ -69,7 +69,7 @@ func TestExpiredPrewarmDormantOwnerTakesContentWithoutAnotherSpeculativeAttempt(
 	}
 	defer path.Close()
 	first := receive(t, attempts)
-	nextTimer(t, clock, AttemptBudget)
+	nextTimer(t, clock, DefaultAttemptBudget)
 	close(first.ready)
 	receive(t, path.Ready())
 	retention := nextTimer(t, clock, PrewarmRetention)
@@ -88,7 +88,7 @@ func TestExpiredPrewarmDormantOwnerTakesContentWithoutAnotherSpeculativeAttempt(
 	if second == first {
 		t.Fatal("expired provider reused")
 	}
-	nextTimer(t, clock, AttemptBudget)
+	nextTimer(t, clock, DefaultAttemptBudget)
 	owner.config.Budget.mu.Lock()
 	remaining := owner.config.Budget.attempts
 	owner.config.Budget.mu.Unlock()

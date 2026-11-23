@@ -246,7 +246,7 @@ func TestProcessQueueCloseAndActiveDeadlineReleaseRealProvider(t *testing.T) {
 	if actualResult(t, waiting).err == nil {
 		t.Fatal("closed session reached provider")
 	}
-	clock.advance(AttemptBudget)
+	clock.advance(PermitLifetime)
 	released := make(map[[16]byte]bool)
 	for len(released) < 4 {
 		select {

@@ -7,6 +7,7 @@ import (
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
@@ -255,8 +256,17 @@ func (attempt *ReceiverAttempt) preOperationCompletionDecision(
 	)
 }
 
+// AttemptBudget bounds recovery reservations by the phases this provider runs.
+func (factory *ReceiverFactory) AttemptBudget(limit time.Duration) time.Duration {
+	negotiation := factory.negotiationBudget
+	if factory.peerConnections == nil {
+		negotiation = DefaultPeerNegotiationBudget
+	}
+	return min(negotiation, max(limit, 0)-factory.admissionBudget) + factory.admissionBudget
+}
+
 // PrepareBinding waits for process resources without arming signaling/ICE timers.
-func (factory *ReceiverFactory) PrepareBinding(parent context.Context, lanes ReceiverLaneSession, binding v2signal.Binding) (*nativepeer.PreparedAttempt, error) {
+func (factory *ReceiverFactory) PrepareBinding(parent context.Context, lanes ReceiverLaneSession, binding v2signal.Binding, queueWait time.Duration) (*nativepeer.PreparedAttempt, error) {
 	if factory == nil || parent == nil || lanes == nil || binding.Validate() != nil {
 		return nil, ErrConfig
 	}
@@ -269,7 +279,7 @@ func (factory *ReceiverFactory) PrepareBinding(parent context.Context, lanes Rec
 	}); ok {
 		sessionID = session.ProtocolSessionID()
 	}
-	return factory.native.PrepareAttempt(parent, nativepeer.AttemptRequest{Configuration: factory.configuration, ProtocolSessionID: [16]byte(sessionID), Binding: binding})
+	return factory.native.PrepareAttemptWithin(parent, nativepeer.AttemptRequest{Configuration: factory.configuration, ProtocolSessionID: [16]byte(sessionID), Binding: binding}, queueWait)
 }
 
 // StartBinding executes exactly one immutable attempt. PeerSet supplies the
@@ -278,7 +288,7 @@ func (factory *ReceiverFactory) StartBinding(parent context.Context, signaling R
 	if signaling == nil {
 		return nil, ErrConfig
 	}
-	prepared, err := factory.PrepareBinding(parent, lanes, binding)
+	prepared, err := factory.PrepareBinding(parent, lanes, binding, nativepeer.QueueBudget)
 	if err != nil {
 		return nil, err
 	}
