@@ -8,6 +8,7 @@ import {
 } from '../../src/application/receive/unload-guard'
 import { SelectionPolicy } from '../../src/catalog/selection'
 import { encodeBase64Url } from '../../src/crypto/bytes'
+import type { TransferJobResult } from '../../src/transfer/job'
 
 function createFakeTarget() {
   const listeners = new Set<(event: BeforeUnloadEventLike) => void>()
@@ -100,16 +101,7 @@ describe('BeforeUnloadGuard', () => {
       removeEventListener: target.removeEventListener,
     }
 
-    let resolveJob!: (value: {
-      status: 'completed' | 'stopped'
-      completedFiles: bigint
-      completedBytes: bigint
-      discoveredFiles: bigint
-      discoveredBytes: bigint
-      discoveryComplete: boolean
-      failedFiles: bigint
-      failedDirectories: bigint
-    }) => void
+    let resolveJob!: (value: TransferJobResult) => void
     let rejectJob!: (error: unknown) => void
     let jobCalls = 0
     const joined = {
@@ -127,6 +119,7 @@ describe('BeforeUnloadGuard', () => {
         return {
           pause: vi.fn(),
           stop: vi.fn(),
+          detach: vi.fn(),
           run: () => new Promise((resolve, reject) => {
             resolveJob = resolve
             rejectJob = reject
@@ -223,7 +216,12 @@ describe('BeforeUnloadGuard', () => {
     expect(coordinator.startDownload(portableChoice!.choiceId)).toBe(true)
     await vi.waitFor(() => expect(jobCalls).toBe(4))
     expect(listeners.size).toBe(1)
-    await coordinator.dispose()
+    const disposed = coordinator.dispose()
     expect(listeners.size).toBe(0)
+    resolveJob({
+      status: 'detached', completedFiles: 0n, completedBytes: 0n, discoveredFiles: 1n, discoveredBytes: 32n,
+      discoveryComplete: true, failedFiles: 0n, failedDirectories: 0n,
+    })
+    await disposed
   })
 })

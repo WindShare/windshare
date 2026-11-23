@@ -118,7 +118,7 @@ export class DeliveryBuffer {
             this.#buffer.set(data, start)
             this.#writtenBytes = Math.max(this.#writtenBytes, start + data.byteLength)
           },
-          checkpoint: () => Promise.resolve(),
+          checkpoint: () => Promise.resolve('skipped' as const),
           commit: () => Promise.resolve(),
           pause: () => Promise.resolve(),
           abort: () => Promise.resolve(),

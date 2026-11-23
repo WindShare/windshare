@@ -19,10 +19,9 @@ export interface ReceiveTiming {
   readonly finishedAtMilliseconds?: number
 }
 
-export interface MissingFileWarning {
-  readonly path: readonly string[]
-  readonly reason: 'source-changed' | 'source-unavailable' | 'file-failed'
-}
+export type MissingFileWarning =
+  | Readonly<{ path: readonly string[]; reason: 'source-changed' | 'source-unavailable' | 'file-failed' }>
+  | Readonly<{ path: readonly string[]; reason: 'destination-conflict'; destinationPath: string }>
 
 export interface ReceiveContentWarning {
   readonly selectedFileCount: bigint

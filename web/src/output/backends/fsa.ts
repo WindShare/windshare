@@ -1,13 +1,10 @@
-import type { ByteRange } from '../../content/geometry'
-import { bigintToSafeNumber } from '../../content/geometry'
 import {
   FaultScope,
   OutputFaultCode,
   TransferFaultError,
-  isPermissionDeniedError,
   outputFault,
 } from '../../transfer/fault'
-import type { TransferJobResult } from '../../transfer/job'
+import type { SettledTransferJobResult } from '../../transfer/job'
 import type {
   CompletedOutputFile,
   TransferDirectoryRequest,
@@ -20,23 +17,17 @@ import { emitOutputTrace, type OutputDiagnosticsPorts } from '../diagnostics'
 import type { ReceiveStore } from '../store/database'
 import { acquireTaskLock, type TaskLock } from '../store/tab-lock'
 import {
-  completedTuplesBytes,
-  fileRecordId,
-  fromRangeTuples,
-  maxRangeEnd,
-  toRangeTuples,
+  completedTuplesBytes, fileRecordId,
   type FSATargetRecord,
   type ReceiveFileRecord,
   type ReceiveTaskRecord,
 } from '../store/types'
 import type { BrowserOutputWindow, OutputSessionHandle, StartBackendTaskInput } from './contract'
-import {
-  cleanupFSATaskEntries,
-  pruneEmptySubdirectories,
-  readFSADiskFingerprint,
-  removeUncommittedEmptyPlaceholder,
-} from './fsa-cleanup'
+import { cleanupFSATaskEntries, isMissingFSAEntry, sameFSAEntry } from './fsa-cleanup'
+import { destinationChanged, FSAOutputFile, verifyExistingFSAFile } from './fsa-file'
 import { SafeNameRegistry, decideCollisionName, deterministicSafeComponent } from './safe-name'
+
+type FSATaskRecord = ReceiveTaskRecord & { readonly target: FSATargetRecord }
 
 const FSA_MAX_CONCURRENT_FILES = 4
 const MAX_COLLISION_ATTEMPTS = 1_000
@@ -62,10 +53,13 @@ type PermissionHandle = FileSystemDirectoryHandle & {
 export async function ensureFSAPermission(
   handle: FileSystemDirectoryHandle,
   allowPrompt: boolean,
+  signal?: AbortSignal,
 ): Promise<'granted' | 'prompt' | 'denied'> {
+  signal?.throwIfAborted()
   const permHandle = handle as PermissionHandle
   if (typeof permHandle.queryPermission !== 'function') return 'granted'
   const current = await permHandle.queryPermission({ mode: 'readwrite' })
+  signal?.throwIfAborted()
   if (current === 'granted') return 'granted'
   if (!allowPrompt || typeof permHandle.requestPermission !== 'function') return current
   return permHandle.requestPermission({ mode: 'readwrite' })
@@ -102,7 +96,7 @@ export async function openNewFSASession(input: Readonly<{
       kind: 'downloading',
       phase: 'receiving',
     })
-    const record: ReceiveTaskRecord = Object.freeze({
+    const record: FSATaskRecord = Object.freeze({
       taskId: input.task.taskId,
       shareInstance: input.task.selection.shareInstance,
       selectionKey: input.task.selectionKey,
@@ -132,6 +126,7 @@ export async function reopenFSASession(input: Readonly<{
   store: ReceiveStore
   locks?: LockManager
   allowPermissionPrompt: boolean
+  signal?: AbortSignal
   diagnostics?: OutputDiagnosticsPorts
 }>): Promise<OutputSessionHandle> {
   if (input.task.target.kind !== 'fsa') {
@@ -148,7 +143,8 @@ export async function reopenFSASession(input: Readonly<{
     throw error
   }
   try {
-    const perm = await ensureFSAPermission(input.task.target.parentHandle, input.allowPermissionPrompt)
+    const perm = await ensureFSAPermission(input.task.target.parentHandle, input.allowPermissionPrompt, input.signal)
+    input.signal?.throwIfAborted()
     if (perm !== 'granted') {
       throw new TransferFaultError(
         outputFault(FaultScope.Job, OutputFaultCode.PermissionDenied),
@@ -163,13 +159,14 @@ export async function reopenFSASession(input: Readonly<{
       kind: 'downloading',
       phase: 'receiving',
     })
-    const updated: ReceiveTaskRecord = Object.freeze({
-      ...input.task,
+    const updated: FSATaskRecord = Object.freeze({
+      ...input.task, target,
       lifecycle: downloading,
       updatedAt: Date.now(),
     })
+    const priorFiles = await input.store.listTaskFiles(updated.taskId)
+    input.signal?.throwIfAborted()
     await input.store.putTask(updated)
-    const priorCompleted = await loadCompletedFSARecords(input.store, updated.taskId)
     emitOutputTrace(input.diagnostics?.trace, 'reopen', {
       backend: 'file_system_access',
       transition: 'authorized',
@@ -181,7 +178,7 @@ export async function reopenFSASession(input: Readonly<{
       lock,
       new SafeNameRegistry(),
       input.diagnostics,
-      priorCompleted,
+      priorFiles,
     )
   } catch (error) {
     emitOutputTrace(input.diagnostics?.trace, 'reopen', {
@@ -198,21 +195,72 @@ export async function discardFSATask(
   store: ReceiveStore,
   locks?: LockManager,
   diagnostics?: OutputDiagnosticsPorts,
+  signal?: AbortSignal,
 ): Promise<void> {
-  if (task.target.kind !== 'fsa') {
-    await store.deleteTask(task.taskId)
-    return
-  }
   const lock = await acquireTaskLock(task.taskId, locks)
+  let removing = false
+  const beginRemoval = () => {
+    if (!removing) signal?.throwIfAborted()
+    removing = true
+  }
   try {
-    const files = await store.listTaskFiles(task.taskId)
-    const perm = await ensureFSAPermission(task.target.parentHandle, true).catch(() => 'denied' as const)
-    if (perm === 'granted') {
-      await cleanupFSATaskEntries(task.taskId, task.target, files, diagnostics)
+    signal?.throwIfAborted()
+    const current = await store.getTask(task.taskId)
+    if (current === undefined) return
+    if (current.target.kind === 'fsa') {
+      const files = await store.listTaskFiles(task.taskId)
+      const unfinished = files.some(file => file.status !== 'completed')
+      if (unfinished || (current.lifecycle.kind === 'paused' && !current.target.singleFile && files.length === 0)) {
+        const permission = await ensureFSAPermission(current.target.parentHandle, unfinished, signal)
+        signal?.throwIfAborted()
+        if (permission === 'granted') {
+          await cleanupFSATaskEntries(task.taskId, current.target, files, { store, diagnostics, beginRemoval })
+        } else if (unfinished) {
+          throw new TransferFaultError(outputFault(FaultScope.Job, OutputFaultCode.PermissionDenied),
+            'Allow folder access to discard the unfinished files.')
+        }
+      }
     }
+    beginRemoval()
     await store.deleteTask(task.taskId)
   } finally {
     await lock.release()
+  }
+}
+
+interface FSADirectory {
+  readonly handle: FileSystemDirectoryHandle
+  readonly physicalPath: readonly string[]
+  readonly created: boolean
+}
+
+/** While the task lock is held, unfinished rows can be reused directly after each successful IndexedDB transaction. */
+class FSAFileRecords {
+  readonly completedAtOpen = new Map<string, ReceiveFileRecord>()
+  readonly #unfinished = new Map<string, ReceiveFileRecord>()
+  readonly #store: ReceiveStore
+
+  constructor(store: ReceiveStore, prior: readonly ReceiveFileRecord[]) {
+    this.#store = store
+    for (const file of prior) {
+      if (file.status === 'completed') this.completedAtOpen.set(file.fileId, file)
+      else this.#unfinished.set(file.id, file)
+    }
+  }
+
+  find(taskId: string, fileId: string): ReceiveFileRecord | undefined {
+    return this.#unfinished.get(fileRecordId(taskId, fileId)) ?? this.completedAtOpen.get(fileId)
+  }
+
+  async putFile(record: ReceiveFileRecord): Promise<void> {
+    await this.#store.putFile(record)
+    if (record.status === 'completed') this.#unfinished.delete(record.id)
+    else this.#unfinished.set(record.id, record)
+  }
+
+  async deleteFiles(ids: readonly string[]): Promise<void> {
+    await this.#store.deleteFiles(ids)
+    for (const id of ids) this.#unfinished.delete(id)
   }
 }
 
@@ -220,23 +268,25 @@ class FSASessionHandle implements OutputSessionHandle {
   readonly taskId: string
   readonly backend = 'fsa' as const
   readonly transferOutput: TransferOutputSession
-  #record: ReceiveTaskRecord
+  #record: FSATaskRecord
   readonly #rootHandle: FileSystemDirectoryHandle
   readonly #store: ReceiveStore
   readonly #lock: TaskLock
   readonly #safeNames: SafeNameRegistry
   readonly #diagnostics: OutputDiagnosticsPorts | undefined
-  readonly #priorCompleted: ReadonlyMap<string, ReceiveFileRecord>
-  readonly #dirCache = new Map<string, FileSystemDirectoryHandle>()
+  readonly #files: FSAFileRecords
+  readonly #dirCache = new Map<string, Promise<FSADirectory>>()
+  readonly #createdDirectories = new Set<FileSystemDirectoryHandle>()
+  readonly #fileDirectories = new Set<FileSystemDirectoryHandle>()
 
   constructor(
-    record: ReceiveTaskRecord,
+    record: FSATaskRecord,
     rootHandle: FileSystemDirectoryHandle,
     store: ReceiveStore,
     lock: TaskLock,
     safeNames: SafeNameRegistry,
     diagnostics?: OutputDiagnosticsPorts,
-    priorCompleted: ReadonlyMap<string, ReceiveFileRecord> = new Map(),
+    priorFiles: readonly ReceiveFileRecord[] = [],
   ) {
     this.taskId = record.taskId
     this.#record = record
@@ -245,40 +295,38 @@ class FSASessionHandle implements OutputSessionHandle {
     this.#lock = lock
     this.#safeNames = safeNames
     this.#diagnostics = diagnostics
-    this.#priorCompleted = priorCompleted
+    this.#files = new FSAFileRecords(store, priorFiles)
     this.transferOutput = Object.freeze({
       sessionId: record.taskId,
       capabilities: Object.freeze({
         // FileSystemWritableFileStream has no in-place flush; reopening with
         // keepExistingData copies the full file prefix on non-CoW filesystems,
-        // so FSA commits on pause, lease/reopen retry, and completion instead.
+        // so only explicit cuts and sufficiently large outage checkpoints justify reopening.
         maxConcurrentFiles: FSA_MAX_CONCURRENT_FILES,
         resumable: true,
       }),
       ensureDirectory: (request: TransferDirectoryRequest, signal: AbortSignal) => this.#ensureDirectory(request, signal),
-      ...(priorCompleted.size > 0
+      ...(this.#files.completedAtOpen.size > 0
         ? { checkCompleted: (fileId: string, signal: AbortSignal) => this.#checkCompleted(fileId, signal) }
         : {}),
       openFile: (request: TransferFileRequest, signal: AbortSignal) => this.#openFile(request, signal),
       markDiscoveryComplete: async () => {
-        this.#record = Object.freeze({ ...this.#record, discoveryComplete: true, updatedAt: Date.now() })
-        await this.#store.putTask(this.#record)
+        const record = Object.freeze({ ...this.#record, discoveryComplete: true, updatedAt: Date.now() })
+        await this.#store.putTask(record)
+        this.#record = record
       },
       safeRenamedSummary: () => this.#safeNames.summary(),
     })
   }
 
-  async settle(result: TransferJobResult): Promise<ReceiveTaskRecord> {
-    if (result.status === 'stopped' && this.#record.target.kind === 'fsa' && !this.#record.target.singleFile) {
-      await pruneEmptySubdirectories(this.#rootHandle, [...this.#dirCache.values()]).catch(() => undefined)
-    }
+  async settle(result: SettledTransferJobResult): Promise<ReceiveTaskRecord> {
     const files = await this.#store.listTaskFiles(this.taskId)
     let retainedBytes = 0n
     for (const file of files) retainedBytes += completedTuplesBytes(file.completedRanges)
 
     const nextLifecycle = nextFSALifecycle(this.#record.lifecycle, result, retainedBytes)
     const safeRenamed = this.#safeNames.summary() ?? this.#record.safeRenamed
-    const nextRecord: ReceiveTaskRecord = Object.freeze({
+    const nextRecord: FSATaskRecord = Object.freeze({
       ...this.#record,
       lifecycle: nextLifecycle,
       discoveryComplete: result.discoveryComplete || this.#record.discoveryComplete,
@@ -288,8 +336,17 @@ class FSASessionHandle implements OutputSessionHandle {
         : { sourceRevisionFailures: result.sourceRevisionFailures }),
       updatedAt: Date.now(),
     })
-    this.#record = nextRecord
     await this.#store.putTask(nextRecord)
+    this.#record = nextRecord
+    if (nextLifecycle.kind === 'failed' || nextLifecycle.kind === 'partial') {
+      // An explicitly selected empty folder is part of a partial result. During cancellation, remove task-created scaffolding.
+      const directories = result.status === 'stopped' ? [...this.#createdDirectories] : [...this.#fileDirectories]
+      await cleanupFSATaskEntries(this.taskId, nextRecord.target, files, {
+        store: this.#files, diagnostics: this.#diagnostics, directories,
+      }).catch(() => emitOutputTrace(this.#diagnostics?.trace, 'cleanup', {
+        backend: 'file_system_access', task_id: this.taskId, transition: 'deferred',
+      }))
+    }
     return nextRecord
   }
 
@@ -304,265 +361,142 @@ class FSASessionHandle implements OutputSessionHandle {
 
   async #checkCompleted(fileId: string, signal: AbortSignal): Promise<CompletedOutputFile | undefined> {
     signal.throwIfAborted()
-    const existing = this.#priorCompleted.get(fileId)
+    const existing = this.#files.completedAtOpen.get(fileId)
     if (existing === undefined) return undefined
-    const verified = await verifyExistingFSAFile(existing)
-    if (verified === undefined || verified.status !== 'completed') return undefined
-    return Object.freeze({ size: verified.size })
+    const path = this.#displayPath(existing.fsaPath ?? existing.path)
+    if (existing.handle === undefined) throw destinationChanged(path)
+    await verifyExistingFSAFile(existing, existing.handle, path)
+    return Object.freeze({ size: existing.size })
   }
 
   async #openFile(request: TransferFileRequest, signal: AbortSignal): Promise<TransferOutputFile> {
     signal.throwIfAborted()
-    const existing = await this.#store.getFile(this.taskId, request.fileId)
-    const verified = existing === undefined ? undefined : await verifyExistingFSAFile(existing)
-
-    const parentPath = request.path.slice(0, -1)
-    const leafName = this.#record.target.kind === 'fsa' && this.#record.target.singleFile
-      ? this.#record.target.reservedName
-      : request.path.at(-1)!
-    const parentDir = parentPath.length === 0
-      ? this.#rootHandle
-      : await this.#resolveDirectory(parentPath, signal)
-
+    let record = this.#files.find(this.taskId, request.fileId)
+    const parent = await this.#resolveDirectory(request.path.slice(0, -1), signal, record?.fsaPath)
+    const target = this.#record.target
+    const leaf = record?.fsaPath?.at(-1) ?? record?.handle?.name ??
+      (target.singleFile ? target.reservedName : request.path.at(-1)!)
+    let handle: FileSystemFileHandle | undefined
+    if (record !== undefined) {
+      handle = await this.#locateRecordedFile(parent, leaf, record)
+      if (handle === undefined) record = undefined
+    }
+    signal.throwIfAborted()
     const openedAtMs = Date.now()
-    const { handle, physicalName } = verified?.handle !== undefined
-      ? { handle: verified.handle, physicalName: verified.physicalName ?? verified.handle.name }
-      : await createOrOpenFSAFile(parentDir, request.path, leafName, this.#safeNames)
-
-    const initialRanges = verified === undefined ? [] : fromRangeTuples(verified.completedRanges)
+    if (handle === undefined) {
+      const entry = await openFSAFile(parent.handle, request.path, leaf, this.#safeNames)
+      handle = entry.handle
+      if (!entry.created) {
+        // A repeated discovery can hit a completed file; a crash or a user edit can occupy the same name.
+        // Resolve that rare case from IndexedDB without retaining a file ID for every ordinary success.
+        record = await this.#store.getFile(this.taskId, request.fileId)
+        if (record === undefined) throw destinationChanged(this.#displayPath([...parent.physicalPath, handle.name]))
+      }
+    }
+    const physicalPath = [...parent.physicalPath, handle.name]
+    const displayPath = this.#displayPath(physicalPath)
+    const existing = record === undefined ? undefined : await this.#verifyFile(record, handle, displayPath)
+    if (parent.created) this.#fileDirectories.add(parent.handle)
     return new FSAOutputFile({
-      taskId: this.taskId,
-      request,
-      parentDir,
-      handle,
-      physicalName,
-      openedAtMs,
-      freshUnpersisted: existing === undefined,
-      store: this.#store,
-      initialRanges,
-      ...(verified?.revision === undefined ? {} : { savedRevision: verified.revision }),
-      ...(verified?.sourceMetadata === undefined ? {} : { savedSourceMetadata: verified.sourceMetadata }),
-      ...(verified?.size === undefined ? {} : { savedSize: verified.size }),
-      ...(this.#diagnostics === undefined ? {} : { diagnostics: this.#diagnostics }),
+      taskId: this.taskId, request, parentDir: parent.handle, handle, physicalPath,
+      displayPath, openedAtMs, signal, store: this.#files, existing, diagnostics: this.#diagnostics,
     })
   }
 
-  async #resolveDirectory(path: readonly string[], signal: AbortSignal): Promise<FileSystemDirectoryHandle> {
-    let current = this.#rootHandle
+  async #locateRecordedFile(parent: FSADirectory, leaf: string, record: ReceiveFileRecord): Promise<FileSystemFileHandle | undefined> {
+    try {
+      return await parent.handle.getFileHandle(leaf)
+    } catch (error) {
+      if (!isMissingFSAEntry(error) || record.status === 'completed') {
+        throw destinationChanged(this.#displayPath([...parent.physicalPath, leaf]), error)
+      }
+      // Moving an unverified file aside lets the user restart at byte zero.
+      await this.#files.deleteFiles([record.id])
+      return undefined
+    }
+  }
+
+  async #verifyFile(record: ReceiveFileRecord, handle: FileSystemFileHandle, path: string): Promise<ReceiveFileRecord> {
+    if (record.handle === undefined || !await sameFSAEntry(handle, record.handle)) throw destinationChanged(path)
+    const existing = await verifyExistingFSAFile(record, handle, path)
+    if (record.fsaPendingPublish !== undefined) await this.#files.putFile(existing)
+    return existing
+  }
+
+  #displayPath(path: readonly string[]): string {
+    const target = this.#record.target
+    return [target.parentHandle.name, ...(target.singleFile ? [] : [target.reservedName]), ...path].join('/')
+  }
+
+  async #resolveDirectory(path: readonly string[], signal: AbortSignal, storedPath?: readonly string[]): Promise<FSADirectory> {
+    let current: FSADirectory = { handle: this.#rootHandle, physicalPath: [], created: false }
     const prefix: string[] = []
     for (const segment of path) {
       signal.throwIfAborted()
       prefix.push(segment)
       const cacheKey = JSON.stringify(prefix)
-      const cached = this.#dirCache.get(cacheKey)
-      if (cached !== undefined) {
-        current = cached
-        continue
+      let next = this.#dirCache.get(cacheKey)
+      if (next === undefined) {
+        const name = storedPath?.[prefix.length - 1] ?? this.#safeNames.physicalComponent(prefix, 'directory') ?? segment
+        next = this.#openSubdirectory(current, prefix, name)
+        this.#dirCache.set(cacheKey, next)
       }
-      const existingName = this.#safeNames.physicalComponent(prefix, 'directory')
-      let next: FileSystemDirectoryHandle
       try {
-        next = await current.getDirectoryHandle(existingName ?? segment, { create: true })
+        current = await next
       } catch (error) {
-        if (isPermissionDeniedError(error)) throw error
-        const safeName = await deterministicSafeComponent({ logicalPath: prefix, entryKind: 'directory' })
-        this.#safeNames.record(prefix, 'directory', safeName)
-        next = await current.getDirectoryHandle(safeName, { create: true })
+        if (this.#dirCache.get(cacheKey) === next) this.#dirCache.delete(cacheKey)
+        throw error
       }
-      this.#dirCache.set(cacheKey, next)
-      current = next
     }
     return current
   }
-}
 
-class FSAOutputFile implements TransferOutputFile {
-  readonly completedRanges: readonly ByteRange[]
-  readonly savedRevision?: string
-  readonly savedSourceMetadata?: string
-  readonly savedSize?: bigint
-  readonly #taskId: string
-  readonly #request: TransferFileRequest
-  readonly #parentDir: FileSystemDirectoryHandle
-  readonly #handle: FileSystemFileHandle
-  readonly #physicalName: string
-  readonly #openedAtMs: number
-  readonly #store: ReceiveStore
-  readonly #diagnostics: OutputDiagnosticsPorts | undefined
-  #freshUnpersisted: boolean
-  #writer: FileSystemWritableFileStream | undefined
-  #writerDirty = false
-  #hasCommittedData: boolean
-
-  constructor(input: Readonly<{
-    taskId: string
-    request: TransferFileRequest
-    parentDir: FileSystemDirectoryHandle
-    handle: FileSystemFileHandle
-    physicalName: string
-    openedAtMs: number
-    freshUnpersisted: boolean
-    store: ReceiveStore
-    initialRanges: readonly ByteRange[]
-    savedRevision?: string
-    savedSourceMetadata?: string
-    savedSize?: bigint
-    diagnostics?: OutputDiagnosticsPorts
-  }>) {
-    this.#taskId = input.taskId
-    this.#request = input.request
-    this.#parentDir = input.parentDir
-    this.#handle = input.handle
-    this.#physicalName = input.physicalName
-    this.#openedAtMs = input.openedAtMs
-    this.#freshUnpersisted = input.freshUnpersisted
-    this.#store = input.store
-    this.#diagnostics = input.diagnostics
-    this.completedRanges = input.initialRanges
-    this.#hasCommittedData = input.initialRanges.length > 0
-    if (input.savedRevision !== undefined) this.savedRevision = input.savedRevision
-    if (input.savedSourceMetadata !== undefined) this.savedSourceMetadata = input.savedSourceMetadata
-    if (input.savedSize !== undefined) this.savedSize = input.savedSize
-  }
-
-  async writeAt(offset: bigint, data: Uint8Array): Promise<void> {
-    const writer = await this.#ensureWriter()
-    await writer.write({
-      type: 'write',
-      position: bigintToSafeNumber(offset, 'FSA write offset'),
-      data: data.slice(),
-    })
-    this.#writerDirty = true
-  }
-
-  async checkpoint(ranges: readonly ByteRange[]): Promise<void> {
-    // Flush physical bytes to disk BEFORE recording ranges in IndexedDB.
-    await this.#closeWriter()
-    this.#freshUnpersisted = false
-    await this.#persist('receiving', ranges)
-  }
-
-  async commit(ranges: readonly ByteRange[]): Promise<void> {
-    await this.#closeWriter()
-    this.#freshUnpersisted = false
-    await this.#persist('completed', ranges)
-    emitOutputTrace(this.#diagnostics?.trace, 'output_write', {
-      backend: 'file_system_access',
-      transition: 'transaction_committed',
-    })
-  }
-
-  async pause(ranges: readonly ByteRange[]): Promise<void> {
-    return this.checkpoint(ranges)
-  }
-
-  async abort(reason?: unknown): Promise<void> {
-    const writer = this.#writer
-    this.#writer = undefined
-    this.#writerDirty = false
-    if (writer !== undefined) {
-      await writer.abort(reason).catch(() => undefined)
+  async #openSubdirectory(parent: FSADirectory, prefix: readonly string[], name: string): Promise<FSADirectory> {
+    let next: FSADirectory
+    try {
+      next = await openDirectory(parent, name)
+    } catch (error) {
+      if (!requiresSafeComponent(error)) throw error
+      const safe = await deterministicSafeComponent({ logicalPath: prefix, entryKind: 'directory' })
+      next = await openDirectory(parent, safe)
+      this.#safeNames.record(prefix, 'directory', safe)
     }
-    if (this.#freshUnpersisted) {
-      this.#freshUnpersisted = false
-      await removeUncommittedEmptyPlaceholder(
-        this.#parentDir,
-        this.#physicalName,
-        this.#handle,
-        this.#openedAtMs,
-      )
-    }
-  }
-
-  async #ensureWriter(): Promise<FileSystemWritableFileStream> {
-    if (this.#writer !== undefined) return this.#writer
-    this.#writer = await this.#handle.createWritable({ keepExistingData: this.#hasCommittedData })
-    return this.#writer
-  }
-
-  async #closeWriter(): Promise<void> {
-    const writer = this.#writer
-    const wroteBytes = this.#writerDirty
-    this.#writer = undefined
-    this.#writerDirty = false
-    if (writer !== undefined) {
-      await writer.close()
-      if (wroteBytes) this.#hasCommittedData = true
-    }
-  }
-
-  async #persist(status: 'receiving' | 'completed', ranges: readonly ByteRange[]): Promise<void> {
-    // Capture local disk identity only for unfinished writes so discard can reject
-    // user-edited or swapped entries without adding stat calls to completed files.
-    const fsaDiskFingerprint = status === 'receiving'
-      ? await readFSADiskFingerprint(this.#handle)
-      : undefined
-    const row: ReceiveFileRecord = Object.freeze({
-      id: fileRecordId(this.#taskId, this.#request.fileId),
-      taskId: this.#taskId,
-      fileId: this.#request.fileId,
-      revision: this.#request.revision,
-      ...(this.#request.sourceMetadata === undefined ? {} : { sourceMetadata: this.#request.sourceMetadata }),
-      path: this.#request.path,
-      physicalName: this.#physicalName,
-      size: this.#request.exactSize,
-      completedRanges: toRangeTuples(ranges),
-      status,
-      handle: this.#handle,
-      ...(fsaDiskFingerprint === undefined ? {} : { fsaDiskFingerprint }),
-    })
-    await this.#store.putFile(row)
+    if (next.created) this.#createdDirectories.add(next.handle)
+    return next
   }
 }
 
-async function loadCompletedFSARecords(
-  store: ReceiveStore,
-  taskId: string,
-): Promise<ReadonlyMap<string, ReceiveFileRecord>> {
-  const files = await store.listTaskFiles(taskId)
-  const completed = new Map<string, ReceiveFileRecord>()
-  for (const file of files) {
-    if (file.status === 'completed') completed.set(file.fileId, file)
-  }
-  return completed
+function requiresSafeComponent(error: unknown): boolean {
+  return error instanceof TypeError || (error instanceof DOMException && error.name === 'TypeMismatchError')
 }
 
-/**
- * Lightweight physical verification on resume: ensures the FSA file handle still resolves
- * and its physical size covers every claimed completed range. Never relies on unverified IDB state.
- */
-async function verifyExistingFSAFile(record: ReceiveFileRecord): Promise<ReceiveFileRecord | undefined> {
-  if (record.handle === undefined) return undefined
+async function openDirectory(parent: FSADirectory, name: string): Promise<FSADirectory> {
+  const existing = await parent.handle.getDirectoryHandle(name).catch((error: unknown) => {
+    if (!isMissingFSAEntry(error)) throw error
+  })
+  const handle = existing ?? await parent.handle.getDirectoryHandle(name, { create: true })
+  return { handle, physicalPath: [...parent.physicalPath, handle.name], created: existing === undefined }
+}
+
+async function openFSAFile(
+  parent: FileSystemDirectoryHandle, logicalPath: readonly string[], leaf: string, safeNames: SafeNameRegistry,
+): Promise<{ handle: FileSystemFileHandle; created: boolean }> {
+  const open = async (name: string) => {
+    try {
+      return { handle: await parent.getFileHandle(name), created: false }
+    } catch (error) {
+      if (!isMissingFSAEntry(error)) throw error
+    }
+    return { handle: await parent.getFileHandle(name, { create: true }), created: true }
+  }
   try {
-    const file = await record.handle.getFile()
-    const physicalSize = BigInt(file.size)
-    if (record.status === 'completed') {
-      return physicalSize === record.size ? record : undefined
-    }
-    const needed = maxRangeEnd(record.completedRanges)
-    if (physicalSize < needed) return undefined
-    return record
+    return await open(leaf)
   } catch (error) {
-    if (isPermissionDeniedError(error)) throw error
-    return undefined
-  }
-}
-
-async function createOrOpenFSAFile(
-  parentDir: FileSystemDirectoryHandle,
-  logicalPath: readonly string[],
-  leafName: string,
-  safeNames: SafeNameRegistry,
-): Promise<{ readonly handle: FileSystemFileHandle; readonly physicalName: string }> {
-  try {
-    const handle = await parentDir.getFileHandle(leafName, { create: true })
-    return { handle, physicalName: leafName }
-  } catch (error) {
-    if (isPermissionDeniedError(error)) throw error
-    const safeName = await deterministicSafeComponent({ logicalPath, entryKind: 'file' })
-    safeNames.record(logicalPath, 'file', safeName)
-    const handle = await parentDir.getFileHandle(safeName, { create: true })
-    return { handle, physicalName: safeName }
+    if (!requiresSafeComponent(error)) throw error
+    const name = await deterministicSafeComponent({ logicalPath, entryKind: 'file' })
+    const entry = await open(name)
+    safeNames.record(logicalPath, 'file', name)
+    return entry
   }
 }
 
@@ -577,17 +511,15 @@ async function reserveFSATarget(
   readonly rootHandle: FileSystemDirectoryHandle
 }> {
   const kind = singleFile ? 'file' : 'directory'
-  for (let index = 0; index < MAX_COLLISION_ATTEMPTS; index++) {
-    const candidate = decideCollisionName(requestedName, kind, index)
-    const exists = await entryExists(parentHandle, candidate)
-    if (exists === 'exists') continue
-    if (exists === 'invalid-name') {
-      const safe = await tryReserveSafeName(parentHandle, requestedName, kind, singleFile, index, safeNames)
-      if (safe !== undefined) return safe
-      continue
+  for (let collisionIndex = 0; collisionIndex < MAX_COLLISION_ATTEMPTS; collisionIndex++) {
+    let reservedName = decideCollisionName(requestedName, kind, collisionIndex)
+    let rootHandle = await reserveRootName(parentHandle, reservedName, singleFile)
+    if (rootHandle === 'invalid-name') {
+      reservedName = await deterministicSafeComponent({ logicalPath: [requestedName], entryKind: kind, collisionIndex })
+      rootHandle = await reserveRootName(parentHandle, reservedName, singleFile)
+      if (typeof rootHandle !== 'string') safeNames.record([requestedName], kind, reservedName)
     }
-    const created = await tryCreateTargetRoot(parentHandle, requestedName, candidate, kind, singleFile, index, safeNames)
-    return created
+    if (typeof rootHandle !== 'string') return { reservedName, collisionIndex, rootHandle }
   }
   throw new TransferFaultError(
     outputFault(FaultScope.Job, OutputFaultCode.TargetCollision),
@@ -595,53 +527,17 @@ async function reserveFSATarget(
   )
 }
 
-async function tryReserveSafeName(
-  parentHandle: FileSystemDirectoryHandle,
-  requestedName: string,
-  kind: 'file' | 'directory',
-  singleFile: boolean,
-  collisionIndex: number,
-  safeNames: SafeNameRegistry,
-) {
-  const safeName = await deterministicSafeComponent({
-    logicalPath: [requestedName],
-    entryKind: kind,
-    collisionIndex,
-  })
-  if (await entryExists(parentHandle, safeName) === 'exists') return undefined
-  safeNames.record([requestedName], kind, safeName)
-  const rootHandle = singleFile
-    ? parentHandle
-    : await parentHandle.getDirectoryHandle(safeName, { create: true })
-  return { reservedName: safeName, collisionIndex, rootHandle }
-}
-
-async function tryCreateTargetRoot(
-  parentHandle: FileSystemDirectoryHandle,
-  requestedName: string,
-  candidate: string,
-  kind: 'file' | 'directory',
-  singleFile: boolean,
-  collisionIndex: number,
-  safeNames: SafeNameRegistry,
-) {
+async function reserveRootName(
+  parent: FileSystemDirectoryHandle, name: string, singleFile: boolean,
+): Promise<FileSystemDirectoryHandle | 'exists' | 'invalid-name'> {
+  const state = await entryExists(parent, name)
+  if (state !== 'missing') return state
   try {
-    const rootHandle = singleFile
-      ? parentHandle
-      : await parentHandle.getDirectoryHandle(candidate, { create: true })
-    return { reservedName: candidate, collisionIndex, rootHandle }
+    return singleFile ? parent : await parent.getDirectoryHandle(name, { create: true })
   } catch (error) {
-    if (isPermissionDeniedError(error)) throw error
-    const safeName = await deterministicSafeComponent({
-      logicalPath: [requestedName],
-      entryKind: kind,
-      collisionIndex,
-    })
-    safeNames.record([requestedName], kind, safeName)
-    const rootHandle = singleFile
-      ? parentHandle
-      : await parentHandle.getDirectoryHandle(safeName, { create: true })
-    return { reservedName: safeName, collisionIndex, rootHandle }
+    if (error instanceof TypeError) return 'invalid-name'
+    if (error instanceof DOMException && error.name === 'TypeMismatchError') return 'exists'
+    throw error
   }
 }
 
@@ -661,14 +557,14 @@ async function probeHandle(open: () => Promise<unknown>): Promise<'missing' | 'e
   } catch (error) {
     if (error instanceof DOMException && error.name === 'TypeMismatchError') return 'exists'
     if (error instanceof TypeError) return 'invalid-name'
-    if (isPermissionDeniedError(error)) throw error
-    return 'missing'
+    if (isMissingFSAEntry(error)) return 'missing'
+    throw error
   }
 }
 
 function nextFSALifecycle(
   current: ReceiveTaskRecord['lifecycle'],
-  result: TransferJobResult,
+  result: SettledTransferJobResult,
   retainedBytes: bigint,
 ): ReceiveTaskRecord['lifecycle'] {
   const warning = result.contentWarning ?? null

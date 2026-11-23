@@ -29,6 +29,10 @@ export function byteRange(start: bigint, end: bigint): ByteRange {
   return Object.freeze({ start, end })
 }
 
+export function coveredBytes(ranges: readonly ByteRange[]): bigint {
+  return ranges.reduce((total, range) => total + range.end - range.start, 0n)
+}
+
 /** Canonical sparse ranges for exactly one file identity. */
 export class ByteRangeSet {
   readonly fileSize: bigint

@@ -3,9 +3,10 @@ import type { ShareDescriptor } from '../catalog/records'
 import type { FrozenSelectionPolicy } from '../catalog/selection'
 import type { BlockRangeReader, ContentLaneStatus } from '../content/broker'
 import type { RevisionReader } from '../content/session-services'
-import { discoverSelection, type DiscoveredFile } from './discovery'
-import { isRecoverableTransferInterruption } from './fault'
-import { transferSingleFile, type SingleFileTransferOutcome } from './file-transfer'
+import { discoverSelection, type DiscoveredDirectory, type DiscoveredFile } from './discovery'
+import type { ActiveFileWrite } from './active-file-write'
+import { FaultScope, FileDestinationConflictError, TransferFaultError, isRecoverableTransferInterruption, storagePauseReason } from './fault'
+import { transferSingleFile, type FileTransferContext, type SingleFileTransferOutcome, type TransferExit, type TransferPause } from './file-transfer'
 import type { TransferOutputSession } from './output-port'
 import { TransferProgressTracker, type TransferProgress } from './progress'
 import { createTaskId } from './selection'
@@ -32,10 +33,11 @@ export interface TransferJobOptions {
   readonly lanes?: ContentLaneStatus
   readonly output: TransferOutputSession
   readonly rootPath?: readonly string[]
+  readonly onUncheckpointedWrite?: () => void
   readonly onProgress?: (progress: TransferProgress) => void
 }
 
-export type TransferJobStatus =
+type SettledJobStatus =
   | 'completed'
   | 'paused'
   | 'stopped'
@@ -43,8 +45,7 @@ export type TransferJobStatus =
   | 'source-changed'
   | 'failed'
 
-export interface TransferJobResult {
-  readonly status: TransferJobStatus
+interface TransferJobFacts {
   readonly pauseReason?: ReceivePauseReason
   readonly completedFiles: bigint
   readonly completedBytes: bigint
@@ -59,6 +60,17 @@ export interface TransferJobResult {
   readonly error?: unknown
 }
 
+export type SettledTransferJobResult = TransferJobFacts & Readonly<{ status: SettledJobStatus }>
+export type TransferJobResult = SettledTransferJobResult | (TransferJobFacts & Readonly<{ status: 'detached' }>)
+
+export interface ActiveCheckpointSummary {
+  readonly allReceivedSaved: boolean
+  readonly savedFiles: number
+  readonly skippedFiles: number
+  readonly failedFiles: number
+  readonly savedBytes: bigint
+}
+
 /**
  * Coordinates progressive catalog discovery and bounded concurrent file transfers
  * against any `TransferOutputSession` backend.
@@ -68,9 +80,9 @@ export class TransferJob {
   readonly #options: TransferJobOptions
   readonly #abort = new AbortController()
   readonly #tracker: TransferProgressTracker
-  #paused = false
-  #pauseReason: ReceivePauseReason = 'user'
-  #stopped = false
+  #exit: TransferExit | undefined
+  readonly #activeWrites = new Set<ActiveFileWrite>()
+  #finished = false
   #firstError: unknown
   #discoveryComplete = false
   #discoveryFailed = false
@@ -95,16 +107,87 @@ export class TransferJob {
   }
 
   pause(reason: ReceivePauseReason = 'user'): void {
-    if (this.#paused || this.#stopped) return
-    this.#paused = true
-    this.#pauseReason = reason
-    this.#abort.abort(new DOMException('Transfer paused', 'AbortError'))
+    this.#requestPause({ kind: 'paused', reason })
+  }
+
+  #requestPause(pause: TransferPause): void {
+    const previous = this.#exit
+    if (previous === undefined) {
+      this.#exit = pause
+      this.#abort.abort(new DOMException('Transfer paused', 'AbortError'))
+    } else if (previous.kind === 'paused' && previous.sharedOutputFailure === undefined) {
+      // A shared object failure prevents sibling flushes. A local storage failure only refines the pause reason.
+      const wasRequested = previous.reason === 'user' || previous.reason === 'interrupted'
+      const needsStorage = pause.reason === 'storage-full' || pause.reason === 'permission-needed'
+      if (pause.sharedOutputFailure !== undefined || (wasRequested && needsStorage)) this.#exit = pause
+    }
   }
 
   stop(): void {
-    if (this.#stopped) return
-    this.#stopped = true
+    if (this.#abort.signal.aborted) return
+    this.#exit = { kind: 'stopped' }
     this.#abort.abort(new DOMException('Transfer stopped', 'AbortError'))
+  }
+
+  detach(): void {
+    if (this.#abort.signal.aborted) return
+    this.#exit = { kind: 'detached' }
+    this.#abort.abort(new DOMException('Transfer detached', 'AbortError'))
+  }
+
+  get allReceivedSaved(): boolean {
+    return this.#options.output.capabilities.resumable && !this.#finished && !this.#abort.signal.aborted &&
+      this.#failedFiles === 0n &&
+      this.#tracker.snapshot().materializedBytes > 0n && [...this.#activeWrites].every(file => file.durable)
+  }
+
+  async checkpointActive(signal: AbortSignal): Promise<ActiveCheckpointSummary> {
+    const round = AbortSignal.any([signal, this.#abort.signal])
+    let savedFiles = 0, skippedFiles = 0, failedFiles = 0
+    let savedBytes = 0n
+    for (const file of [...this.#activeWrites]) {
+      if (round.aborted || this.#finished) break
+      try {
+        const cut = await file.checkpointOnDisconnect(round)
+        if (cut?.outcome === 'saved') {
+          savedFiles += 1
+          savedBytes += cut.savedBytes
+        } else if (cut?.outcome === 'skipped') {
+          skippedFiles += 1
+        }
+      } catch (error) {
+        failedFiles += 1
+        this.#handleOutputFailure(error)
+      }
+    }
+    return {
+      allReceivedSaved: !round.aborted && skippedFiles === 0 && failedFiles === 0 && this.allReceivedSaved,
+      savedFiles, skippedFiles, failedFiles, savedBytes,
+    }
+  }
+
+  #handleOutputFailure(error: unknown): boolean {
+    if (this.#exit !== undefined && this.#exit.kind !== 'paused') return true
+    const reason = storagePauseReason(error)
+    const sharedFailure = error instanceof TransferFaultError && error.fault.scope === FaultScope.Job ? error : undefined
+    if (reason !== undefined && this.#options.output.capabilities.resumable) {
+      this.#firstError ??= error
+      this.#requestPause(sharedFailure === undefined
+        ? { kind: 'paused', reason }
+        : { kind: 'paused', reason, sharedOutputFailure: sharedFailure })
+      return true
+    }
+    if (reason !== undefined || sharedFailure !== undefined) {
+      this.#failJob(error)
+      return true
+    }
+    return false
+  }
+
+  #failJob(error: unknown): void {
+    this.#firstError = error
+    this.#exit = { kind: 'failed', error }
+    this.#abort.abort(error)
   }
 
   progress(): TransferProgress {
@@ -126,6 +209,7 @@ export class TransferJob {
       this.#handleDiscoveryError(error)
     } finally {
       await Promise.allSettled(active)
+      this.#finished = true
       unsubscribeBandwidth?.()
       externalSignal?.removeEventListener('abort', onExternalAbort)
     }
@@ -161,21 +245,21 @@ export class TransferJob {
     )
 
     for await (const item of items) {
-      if (this.#paused || this.#stopped) break
+      if (this.#abort.signal.aborted) break
       if (item.kind === 'directory') {
         await this.#ensureDirectory(item)
         continue
       }
-      while (active.size >= maxWorkers && !this.#paused && !this.#stopped) {
+      while (active.size >= maxWorkers && !this.#abort.signal.aborted) {
         await Promise.race(active)
       }
-      if (this.#paused || this.#stopped) break
+      if (this.#abort.signal.aborted) break
       const task = this.#runFile(item).finally(() => active.delete(task))
       active.add(task)
     }
   }
 
-  async #ensureDirectory(item: Extract<Awaited<ReturnType<typeof discoverSelection>> extends AsyncGenerator<infer T> ? T : never, { kind: 'directory' }>): Promise<void> {
+  async #ensureDirectory(item: DiscoveredDirectory): Promise<void> {
     if (this.#options.output.ensureDirectory === undefined) return
     try {
       await this.#options.output.ensureDirectory({
@@ -186,16 +270,12 @@ export class TransferJob {
         }),
       }, this.#abort.signal)
     } catch (error) {
-      if (this.#paused || this.#stopped) return
       this.#recordDirectoryFailure(error)
     }
   }
 
   #recordDirectoryFailure(error: unknown): void {
-    if (this.#options.output.capabilities.resumable && isRecoverableTransferInterruption(error)) {
-      this.pause('interrupted')
-      return
-    }
+    if (this.#discoveryInterrupted(error)) return
     this.#discoveryFailed = true
     this.#failedDirectories += 1n
     this.#firstError ??= error
@@ -203,10 +283,17 @@ export class TransferJob {
   }
 
   async #finalizeDiscovery(): Promise<void> {
-    if (!this.#paused && !this.#stopped && !this.#discoveryFailed) {
+    if (!this.#abort.signal.aborted && !this.#discoveryFailed) {
+      try {
+        await this.#options.output.markDiscoveryComplete?.()
+      } catch (error) {
+        // A worker cannot repair a failed write of the session's discovery result.
+        if (!this.#handleOutputFailure(error)) this.#failJob(error)
+        if (this.#exit?.kind === 'failed') this.#tracker.observeDiscoverySettled('failed')
+        return
+      }
       this.#discoveryComplete = true
       this.#tracker.observeDiscoverySettled('complete')
-      await this.#options.output.markDiscoveryComplete?.()
       return
     }
     if (this.#discoveryFailed) {
@@ -214,37 +301,51 @@ export class TransferJob {
     }
   }
 
+  #discoveryInterrupted(error: unknown): boolean {
+    if (this.#handleOutputFailure(error) || this.#abort.signal.aborted) return true
+    if (!this.#options.output.capabilities.resumable || !isRecoverableTransferInterruption(error)) return false
+    this.pause('interrupted')
+    return true
+  }
+
   #handleDiscoveryError(error: unknown): void {
-    if (this.#paused || this.#stopped) return
-    if (this.#options.output.capabilities.resumable && isRecoverableTransferInterruption(error)) {
-      this.pause('interrupted')
-      return
-    }
+    if (this.#discoveryInterrupted(error)) return
     this.#discoveryFailed = true
     this.#firstError ??= error
     this.#tracker.observeDiscoverySettled('failed')
   }
 
   async #runFile(file: DiscoveredFile): Promise<void> {
-    const outcome = await transferSingleFile({
+    let current: ActiveFileWrite | undefined
+    const trackWrite = (next: ActiveFileWrite | undefined) => {
+      if (current !== undefined) this.#activeWrites.delete(current)
+      current = next
+      if (next !== undefined) this.#activeWrites.add(next)
+    }
+    const context: FileTransferContext = {
       revisions: this.#options.revisions,
       broker: this.#options.broker,
       output: this.#options.output,
       signal: this.#abort.signal,
-      isPaused: () => this.#paused,
-      isStopped: () => this.#stopped,
+      getExit: () => this.#exit,
+      onOutputFailure: error => this.#handleOutputFailure(error),
+      ...(this.#options.onUncheckpointedWrite === undefined ? {} : { onUncheckpointedWrite: this.#options.onUncheckpointedWrite }),
+      ...(this.#options.output.capabilities.resumable ? { trackWrite } : {}),
       onInitialCoverage: bytes => this.#tracker.observeInitialCoverage(bytes),
       onObjectBytes: bytes => this.#tracker.observeObjectBytes(bytes),
-      onWritten: bytes => this.#tracker.observeWritten(bytes),
+      onWriteCoverageChange: delta => this.#tracker.observeWriteCoverageChange(delta),
       onCapacityWait: (delta, ms, attempt) => this.#tracker.observeCapacityWait(delta, ms, attempt),
       remainingWork: () => {
         const snap = this.#tracker.snapshot()
         const rem = Number(snap.discoveredBytes - snap.materializedBytes)
         return { bytes: Math.max(0, rem), known: this.#discoveryComplete && Number.isSafeInteger(rem) }
       },
-    }, file)
-
-    this.#applyFileOutcome(file, outcome)
+    }
+    try {
+      this.#applyFileOutcome(file, await transferSingleFile(context, file))
+    } finally {
+      trackWrite(undefined)
+    }
   }
 
   #applyFileOutcome(file: DiscoveredFile, outcome: SingleFileTransferOutcome): void {
@@ -257,6 +358,8 @@ export class TransferJob {
       case 'paused':
         this.pause(outcome.reason)
         return
+      case 'detached':
+        return
       case 'stopped':
         this.stop()
         return
@@ -265,20 +368,22 @@ export class TransferJob {
         this.#sourceChangedCount += 1n
         this.#tracker.observeFileFailed()
         this.#recordSourceFailure(file, 'source-changed')
-        this.#recordMissing(file.relativePath, 'source-changed')
+        this.#recordMissing({ path: file.relativePath, reason: 'source-changed' })
         return
       case 'source-unavailable':
         this.#failedFiles += 1n
         this.#firstError ??= outcome.error
         this.#tracker.observeFileFailed()
         this.#recordSourceFailure(file, 'source-unavailable')
-        this.#recordMissing(file.relativePath, 'source-unavailable')
+        this.#recordMissing({ path: file.relativePath, reason: 'source-unavailable' })
         return
       case 'failed':
         this.#failedFiles += 1n
         this.#firstError ??= outcome.error
         this.#tracker.observeFileFailed()
-        this.#recordMissing(file.relativePath, 'file-failed')
+        this.#recordMissing(outcome.error instanceof FileDestinationConflictError
+          ? { path: file.relativePath, reason: 'destination-conflict', destinationPath: outcome.error.destinationPath }
+          : { path: file.relativePath, reason: 'file-failed' })
         return
     }
   }
@@ -293,9 +398,9 @@ export class TransferJob {
     }))
   }
 
-  #recordMissing(path: readonly string[], reason: MissingFileWarning['reason']): void {
+  #recordMissing(warning: MissingFileWarning): void {
     if (this.#missingFiles.length >= MAX_MISSING_WARNINGS) return
-    this.#missingFiles.push(Object.freeze({ path, reason }))
+    this.#missingFiles.push(Object.freeze(warning))
   }
 
   #buildResult(): TransferJobResult {
@@ -318,7 +423,7 @@ export class TransferJob {
     const status = this.#resolveStatus()
     return Object.freeze({
       status,
-      ...(status === 'paused' ? { pauseReason: this.#pauseReason } : {}),
+      ...(this.#exit?.kind === 'paused' ? { pauseReason: this.#exit.reason } : {}),
       completedFiles: this.#completedFiles,
       completedBytes: this.#completedBytes,
       discoveredFiles: this.#discoveredFiles,
@@ -333,9 +438,12 @@ export class TransferJob {
     })
   }
 
-  #resolveStatus(): TransferJobStatus {
-    if (this.#paused) return 'paused'
-    if (this.#stopped) return this.#completedFiles > 0n ? 'partial' : 'stopped'
+  #resolveStatus(): TransferJobResult['status'] {
+    if (this.#exit?.kind === 'detached' || this.#exit?.kind === 'paused') return this.#exit.kind
+    if (this.#exit?.kind === 'failed') {
+      return this.#options.output.capabilities.resumable && this.#completedFiles > 0n ? 'partial' : 'failed'
+    }
+    if (this.#exit?.kind === 'stopped') return this.#completedFiles > 0n ? 'partial' : 'stopped'
     if (this.#failedFiles === 0n && this.#failedDirectories === 0n && !this.#discoveryFailed) {
       return 'completed'
     }

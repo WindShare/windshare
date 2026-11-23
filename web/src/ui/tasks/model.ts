@@ -55,6 +55,7 @@ export interface TaskFacts {
   readonly progress: ReceiverProgress | null
   readonly safeRenamed: SafeRenamedSummary | null
   readonly details: readonly string[]
+  readonly outageCheckpointed: boolean
   readonly interruption: 'pause' | 'stop' | null
 }
 

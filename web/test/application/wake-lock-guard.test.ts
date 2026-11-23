@@ -8,6 +8,7 @@ import {
 } from '../../src/application/receive/wake-lock-guard'
 import { SelectionPolicy } from '../../src/catalog/selection'
 import { encodeBase64Url } from '../../src/crypto/bytes'
+import type { TransferJobResult } from '../../src/transfer/job'
 
 interface FakeSentinel extends ScreenWakeLockSentinelLike {
   released: boolean
@@ -200,16 +201,7 @@ describe('ScreenWakeLockGuard', () => {
       showDirectoryPicker: vi.fn(() => new Promise<FileSystemDirectoryHandle>(resolve => { resolvePicker = resolve })),
     }
 
-    let resolveJob!: (value: {
-      status: 'completed' | 'stopped'
-      completedFiles: bigint
-      completedBytes: bigint
-      discoveredFiles: bigint
-      discoveredBytes: bigint
-      discoveryComplete: boolean
-      failedFiles: bigint
-      failedDirectories: bigint
-    }) => void
+    let resolveJob!: (value: TransferJobResult) => void
     let jobCalls = 0
     const joined = {
       descriptor: { shareInstanceId: 'share-wl', syntheticRootId: 'root-wl' },
@@ -226,6 +218,7 @@ describe('ScreenWakeLockGuard', () => {
         return {
           pause: vi.fn(),
           stop: vi.fn(),
+          detach: vi.fn(),
           run: () => new Promise(resolve => { resolveJob = resolve }),
         }
       },
@@ -274,8 +267,13 @@ describe('ScreenWakeLockGuard', () => {
     expect(coordinator.startDownload(portableChoice!.choiceId)).toBe(true)
     await vi.waitFor(() => expect(jobCalls).toBe(2))
     await vi.waitFor(() => expect(fake.sentinels).toHaveLength(2))
-    await coordinator.dispose()
+    const disposed = coordinator.dispose()
     expect(fake.sentinels[1]!.release).toHaveBeenCalledTimes(1)
     expect(fake.visibilityListeners.size).toBe(0)
+    resolveJob({
+      status: 'detached', completedFiles: 0n, completedBytes: 0n, discoveredFiles: 1n, discoveredBytes: 32n,
+      discoveryComplete: true, failedFiles: 0n, failedDirectories: 0n,
+    })
+    await disposed
   })
 })

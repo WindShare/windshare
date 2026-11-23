@@ -22,7 +22,11 @@ export function presentTask(facts: TaskFacts, language: Language = 'en'): TaskPr
   const details = [...facts.details]
   const progress = presentTaskProgress(facts, language)
   const showProgress = ['preparing', 'downloading', 'waiting', 'paused', 'finishing'].includes(copy.stage)
-  if (!showProgress && progress !== null) details.push(progress.label, ...progress.details)
+  if (!showProgress && progress !== null) {
+    if (facts.lifecycle.kind === 'paused' || facts.lifecycle.kind === 'downloading') details.push(progress.label)
+    details.push(...progress.details)
+  }
+  if (facts.lifecycle.kind === 'failed' && facts.lifecycle.detail) details.push(facts.lifecycle.detail)
   if (facts.lifecycle.contentWarning !== undefined) {
     details.unshift(...contentWarningDetails(facts.lifecycle.contentWarning, facts.lifecycle.kind === 'paused', language))
   } else if (facts.completeness === 'partial') {
@@ -75,7 +79,9 @@ function contentWarningDetails(
     'file-failed': t.fileFailed,
   }
   for (const file of warning.missingFiles) {
-    details.push(t.missingFile(file.path.join('/'), reasons[file.reason], paused))
+    details.push(file.reason === 'destination-conflict'
+      ? t.destinationConflict(file.destinationPath)
+      : t.missingFile(file.path.join('/'), reasons[file.reason]))
   }
   const additional = missing - BigInt(warning.missingFiles.length)
   if (additional > 0n) details.push(t.moreMissing(additional, paused))

@@ -1,5 +1,5 @@
 import { BlobReader, Uint8ArrayWriter, ZipReader, type FileEntry } from '@zip.js/zip.js'
-import { describe, expect, it } from 'vitest'
+import { assert, describe, expect, it, vi } from 'vitest'
 import type { CatalogClient } from '../../src/catalog/client'
 import type { CommittedDirectory } from '../../src/catalog/page-store'
 import type { CatalogEntry, CatalogPage, ShareDescriptor } from '../../src/catalog/records'
@@ -86,7 +86,7 @@ async function readZipArchive(blob: Blob): Promise<{
   readonly files: Map<string, Uint8Array>
   readonly directories: Set<string>
 }> {
-  const reader = new ZipReader(new BlobReader(blob))
+  const reader = new ZipReader(new BlobReader(blob), { checkSignature: true })
   try {
     const entries = await reader.getEntries()
     const files = new Map<string, Uint8Array>()
@@ -247,6 +247,99 @@ describe('ZIP writers (portable streaming & OPFS progressive)', () => {
     expect(finalFiles.get('docs/b.txt')).toEqual(payloadB)
   })
 
+  it('recovers a truncated ZIP across a second interrupted repair without advertising missing payloads', async () => {
+    const taskId = 'cut-archive'
+    const io = new MemoryNativeObjectIO()
+    const store = new MemoryFileStore(io.events)
+    const open = () => ProgressiveZipWriter.open(taskId, store as unknown as ReceiveStore,
+      new ObjectCheckpointCoordinator({ io, operationId: taskId, objectId: 'archive.part' }))
+    const writer = await open()
+    const data = Uint8Array.of(1, 2, 3, 4, 5, 6)
+    const request = (fileId: string, exactSize = 6n) => ({ fileId, path: [fileId], exactSize, revision: 'r' })
+    const whole = await writer.openFile(request('z-whole'))
+    await writer.writeFileSlice(whole, 0n, data)
+    await writer.commitFile(whole, [byteRange(0n, 6n)])
+    const split = await writer.openFile(request('y-split'))
+    await writer.writeFileSlice(split, 0n, data.slice(0, 2))
+    await writer.writeFileSlice(split, 4n, data.slice(4))
+    await writer.checkpointFile(split, [byteRange(0n, 2n), byteRange(4n, 6n)])
+    const lost = await writer.openFile(request('a-lost'))
+    await writer.writeFileSlice(lost, 0n, data)
+    await writer.commitFile(lost, [byteRange(0n, 6n)])
+    await writer.ensureDirectory('d', ['empty-dir'])
+    const empty = await writer.openFile(request('empty', 0n))
+    await writer.commitFile(empty, [])
+    const original = io.bytes.slice()
+    await io.truncate(split.record.zipEntry.payloadOffset + 2n)
+
+    // IndexedDB's file-id order need not match physical ZIP layout.
+    vi.spyOn(store, 'listTaskFiles').mockImplementation(async () => [...store.files.values()].reverse())
+    const partialArchive = async () => readZipArchive(buildPartialZipBlob(
+      new File([io.bytes], 'cut.part'), await store.listTaskFiles(taskId)))
+    expect((await partialArchive()).files).toEqual(new Map([['z-whole', data], ['empty', new Uint8Array()]]))
+
+    // Crash while rebuilding the directory beyond the lost payload. Its slot is already non-exportable.
+    const write = io.writeAt.bind(io)
+    const directoryOffset = (await store.getFile(taskId, '__dir__:d'))!.zipEntry!.localHeaderOffset
+    vi.spyOn(io, 'writeAt').mockImplementation(async (offset, bytes) => {
+      if (offset === directoryOffset) throw new Error('repair interrupted')
+      await write(offset, bytes)
+    })
+    await expect(open()).rejects.toThrow('repair interrupted')
+    expect(await store.getFile(taskId, 'a-lost')).toMatchObject({ status: 'receiving', completedRanges: [] })
+    expect(await store.getFile(taskId, 'y-split')).toMatchObject({ completedRanges: [[0n, 2n]] })
+    vi.mocked(io.writeAt).mockRestore()
+
+    const resumed = await open()
+    expect(resumed.completedFile('z-whole')).toEqual({ size: 6n })
+    expect(resumed.completedFile('empty')).toEqual({ size: 0n })
+    expect(resumed.completedFile('a-lost')).toBeUndefined()
+    expect((await partialArchive()).files.has('a-lost')).toBe(false)
+    const splitAgain = await resumed.openFile(request('y-split'))
+    expect(splitAgain.completedRanges).toEqual([byteRange(0n, 2n)])
+    await resumed.writeFileSlice(splitAgain, 0n, Uint8Array.of(99, 99))
+    await resumed.writeFileSlice(splitAgain, 2n, data.slice(2))
+    await resumed.commitFile(splitAgain, [byteRange(0n, 6n)])
+    await expect(resumed.openFile(request('a-lost', 7n))).rejects.toMatchObject({ fault: { code: 'revision-changed' } })
+    const lostAgain = await resumed.openFile(request('a-lost'))
+    await expect(resumed.writeFileSlice(lostAgain, 5n, data)).rejects.toThrow(/exceeds/u)
+    await resumed.writeFileSlice(lostAgain, 0n, data)
+    await resumed.commitFile(lostAgain, [byteRange(0n, 6n)])
+    await resumed.ensureDirectory('d', ['empty-dir'])
+    await resumed.finalize()
+    for (const row of await store.listTaskFiles(taskId)) {
+      const { localHeaderOffset, payloadOffset } = row.zipEntry!
+      expect(io.bytes.slice(Number(localHeaderOffset), Number(payloadOffset)))
+        .toEqual(original.slice(Number(localHeaderOffset), Number(payloadOffset)))
+    }
+    const archive = await readZipArchive(new Blob([io.bytes]))
+    expect(archive.directories).toEqual(new Set(['empty-dir/']))
+    expect(archive.files).toEqual(new Map([['z-whole', data], ['y-split', data], ['a-lost', data], ['empty', new Uint8Array()]]))
+  })
+
+  it('restores a missing descriptor without fetching an intact payload, and rejects an empty partial export', async () => {
+    const taskId = 'cut-descriptor'
+    const io = new MemoryNativeObjectIO()
+    const store = new MemoryFileStore(io.events)
+    const open = () => ProgressiveZipWriter.open(taskId, store as unknown as ReceiveStore,
+      new ObjectCheckpointCoordinator({ io, operationId: taskId, objectId: 'archive.part' }))
+    const writer = await open()
+    const data = Uint8Array.of(3, 1, 4)
+    const file = await writer.openFile({ fileId: 'f', path: ['f'], revision: 'r', exactSize: 3n })
+    await writer.writeFileSlice(file, 0n, data)
+    await writer.commitFile(file, [byteRange(0n, 3n)])
+    const committed = await store.listTaskFiles(taskId)
+    expect(() => buildPartialZipBlob(new File([], 'evicted'), committed)).toThrow(/No completed files/u)
+    const { descriptorOffset, endOffset } = file.record.zipEntry
+    const descriptor = io.bytes.slice(Number(descriptorOffset), Number(endOffset))
+    await io.truncate(descriptorOffset + 1n)
+    const resumed = await open()
+    expect(resumed.completedFile('f')).toEqual({ size: 3n })
+    await resumed.finalize()
+    expect(io.bytes.slice(Number(descriptorOffset), Number(endOffset))).toEqual(descriptor)
+    expect((await readZipEntries(new Blob([io.bytes]))).get('f')).toEqual(data)
+  })
+
   it('defers directory entries until the active StreamingZipWriter file closes and rejects illegal concurrent states', async () => {
     const zip = new StreamingZipWriter({ taskId: 'stream-interleave', maxBytes: 1024n * 1024n })
     const fileA = zip.beginFile(['dirA', 'data.bin'], 4n)
@@ -377,7 +470,7 @@ describe('ZIP writers (portable streaming & OPFS progressive)', () => {
       output: wrappedOutput,
     }).run()
 
-    expect(result.status).toBe('completed')
+    assert(result.status === 'completed')
     const settled = await session.settle(result)
     expect(settled.lifecycle.kind).toBe('download-started')
     expect(blobs).toHaveLength(1)
@@ -556,7 +649,7 @@ describe('ZIP result-root layout integration', () => {
       output: portableSession.transferOutput,
       rootPath: artifactRootPath(tripOffers.zip.artifact),
     }).run()
-    expect(portableResult.status).toBe('completed')
+    assert(portableResult.status === 'completed')
     await portableSession.settle(portableResult)
     const tripArchive = await readZipArchive(portableWindow.blobs[0]!)
     expect(tripArchive.directories).toEqual(new Set(['Trip/']))
@@ -641,7 +734,7 @@ describe('ZIP result-root layout integration', () => {
       output: reopenedOpfs.transferOutput,
       rootPath: artifactRootPath(pausedTask.artifact),
     }).run()
-    expect(opfsResult.status).toBe('completed')
+    assert(opfsResult.status === 'completed')
     await reopenedOpfs.settle(opfsResult)
     await reopenedOpfs.close()
 

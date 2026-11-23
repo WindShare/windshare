@@ -1,5 +1,5 @@
 import { bigintToSafeNumber } from '../../content/geometry'
-import type { TransferJobResult } from '../../transfer/job'
+import type { SettledTransferJobResult } from '../../transfer/job'
 import type {
   TransferDirectoryRequest,
   TransferFileRequest,
@@ -112,7 +112,7 @@ class PortableSessionHandle implements OutputSessionHandle {
     })
   }
 
-  async settle(result: TransferJobResult): Promise<ReceiveTaskRecord> {
+  async settle(result: SettledTransferJobResult): Promise<ReceiveTaskRecord> {
     this.#settled = true
     if (result.status !== 'completed') {
       await this.#zip?.abort()
@@ -214,7 +214,7 @@ class PortableSessionHandle implements OutputSessionHandle {
             outOfOrder.set(offset, data.slice())
           }
         },
-        checkpoint: () => Promise.resolve(),
+        checkpoint: () => Promise.resolve('skipped' as const),
         commit: async () => {
           await zipFile.close()
         },
@@ -236,7 +236,7 @@ class PortableSessionHandle implements OutputSessionHandle {
         }
         buffer.set(data, start)
       },
-      checkpoint: () => Promise.resolve(),
+      checkpoint: () => Promise.resolve('skipped' as const),
       commit: () => Promise.resolve(),
       pause: () => Promise.resolve(),
       abort: async () => { this.#singleFileBuffer = undefined },
@@ -249,7 +249,7 @@ class PortableSessionHandle implements OutputSessionHandle {
   }
 }
 
-function failedReasonFor(status: TransferJobResult['status']): 'source-changed' | 'cancelled' | 'error' {
+function failedReasonFor(status: SettledTransferJobResult['status']): 'source-changed' | 'cancelled' | 'error' {
   if (status === 'source-changed') return 'source-changed'
   if (status === 'stopped') return 'cancelled'
   return 'error'

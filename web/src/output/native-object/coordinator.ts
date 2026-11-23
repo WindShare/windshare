@@ -1,3 +1,4 @@
+import { FaultScope, OutputFaultCode, outputFailure } from '../../transfer/fault'
 import type { NativeObjectIO } from './contracts'
 
 class MutationAdmissionDeclined extends Error {
@@ -96,11 +97,11 @@ export class ObjectCheckpointCoordinator implements NativeObjectIO {
       if (this.#closed) throw new Error('Native object coordinator is closed')
       try { return await operation() } catch (error) {
         if (error instanceof MutationAdmissionDeclined) throw error.cause
-        this.#failure = error
+        this.#failure = outputFailure(FaultScope.Job, error, OutputFaultCode.WriteFailed)
         this.#closed = true
         this.#emit('stopped')
         try { await this.#io.close() } catch { /* Preserve the failed cut's cause. */ }
-        throw error
+        throw this.#failure
       }
     })
     this.#tail = result.catch(() => undefined)

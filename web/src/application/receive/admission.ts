@@ -31,9 +31,7 @@ export function actionsForState(
     case 'preparing':
       return Object.freeze([])
     case 'downloading':
-      return backend === 'portable'
-        ? Object.freeze(['stop'])
-        : Object.freeze(['pause', 'stop'])
+      return interruptionActions(state.phase, backend)
     case 'paused':
       return Object.freeze([
         'continue',
@@ -65,6 +63,11 @@ export function actionsForState(
   }
 }
 
+function interruptionActions(phase: 'receiving' | 'finalizing', backend: SaveBackendKind): readonly ReceiveAction[] {
+  if (phase === 'finalizing') return Object.freeze([])
+  return backend === 'portable' ? Object.freeze(['stop']) : Object.freeze(['pause', 'stop'])
+}
+
 export function isLocalOnlyAction(action: ReceiveAction): boolean {
   return action === 'save' ||
     action === 'save-partial' ||
@@ -92,6 +95,7 @@ export function admitRetainedAction(
     shareEnded: boolean
   }>,
 ): ReceiveAdmission {
+  if (!task.actions.includes(action)) return blockedAdmission('actionUnavailable')
   if (task.activeElsewhere) return blockedAdmission('activeInAnotherTab')
   if (context.hasPendingAction) return blockedAdmission('busy')
   if (isLocalOnlyAction(action)) return ALLOWED_ADMISSION

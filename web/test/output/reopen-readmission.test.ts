@@ -1,5 +1,5 @@
 import { BlobReader, Uint8ArrayWriter, ZipReader, type FileEntry } from '@zip.js/zip.js'
-import { describe, expect, it } from 'vitest'
+import { assert, describe, expect, it } from 'vitest'
 import type { CatalogClient } from '../../src/catalog/client'
 import type { CommittedDirectory } from '../../src/catalog/page-store'
 import type { CatalogEntry, CatalogPage, ShareDescriptor } from '../../src/catalog/records'
@@ -331,6 +331,7 @@ describe('backend reopened-revision readmission', () => {
       output: session.transferOutput,
       onProgress: progress => { lastMaterialized = progress.materializedBytes },
     }).run()
+    assert(result.status !== 'detached')
     const settled = await session.settle(result)
     await session.close()
 
@@ -377,6 +378,7 @@ describe('backend reopened-revision readmission', () => {
       broker: fixture.broker,
       output: session.transferOutput,
     }).run()
+    assert(result.status !== 'detached')
     const settled = await session.settle(result)
     await session.close()
 
@@ -416,6 +418,7 @@ describe('backend reopened-revision readmission', () => {
       broker: fixture.broker,
       output: session.transferOutput,
     }).run()
+    assert(result.status !== 'detached')
     const settled = await session.settle(result)
     await session.close()
 

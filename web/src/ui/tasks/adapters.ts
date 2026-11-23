@@ -38,6 +38,7 @@ export function activeTaskFacts(input: Readonly<{
     progress,
     safeRenamed: output.safeRenamed,
     details: Object.freeze([]),
+    outageCheckpointed: output.outageCheckpointed,
     interruption: output.interruption,
   })
 }
@@ -69,6 +70,7 @@ export function retainedTaskFacts(
     progress: null,
     safeRenamed: task.safeRenamed ?? null,
     details: Object.freeze([]),
+    outageCheckpointed: false,
     interruption: null,
   })
 }

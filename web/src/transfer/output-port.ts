@@ -21,6 +21,9 @@ export interface CompletedOutputFile {
   readonly size: bigint
 }
 
+export type CheckpointReason = 'periodic' | 'disconnect' | 'retry'
+export type CheckpointOutcome = 'saved' | 'skipped'
+
 /**
  * Storage-neutral file writer consumed by `transfer/file-transfer.ts`.
  * Backends guarantee physical bytes are flushed before `checkpoint()` persists
@@ -35,7 +38,7 @@ export interface TransferOutputFile {
   readonly savedSize?: bigint
   writeAt(offset: bigint, data: Uint8Array): Promise<void>
   /** Flush physical storage first, then durably record `ranges` in IndexedDB. */
-  checkpoint(ranges: readonly ByteRange[]): Promise<void>
+  checkpoint(ranges: readonly ByteRange[], reason: CheckpointReason): Promise<CheckpointOutcome>
   /** Flush, close, and mark this file complete. */
   commit(ranges: readonly ByteRange[]): Promise<void>
   /** Flush accepted bytes and record `ranges` for later resume. */
@@ -60,7 +63,7 @@ export interface TransferOutputCapabilities {
    * Optional mid-file periodic checkpoint schedule.
    * Only backends with cheap in-place flushing (e.g. OPFS SyncAccessHandle)
    * should advertise this; copy-on-reopen streams like FSA commit on `pause()`,
-   * `commit()`, and explicit retry `checkpoint()` calls instead.
+   * `commit()`, and explicit retry or long-disconnect checkpoints.
    */
   readonly periodicCheckpoint?: PeriodicCheckpointPolicy
 }
