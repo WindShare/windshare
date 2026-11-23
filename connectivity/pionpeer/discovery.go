@@ -106,22 +106,7 @@ func (d *candidateDispatch) run(c *Connection, callback func(*pion.ICECandidate)
 				complete = true
 			default:
 				emit(host)
-				ip, err := netip.ParseAddr(host.Address)
-				if host.Typ != pion.ICECandidateTypeHost || err != nil {
-					continue
-				}
-				local := netip.AddrPortFrom(ip.Unmap(), host.Port)
-				for _, mapping := range c.mapped {
-					if mapping.Local == local && mapping.Protocol == host.Protocol.String() {
-						emitMapping(mapping, host)
-					}
-				}
-				if c.mux != nil && host.Protocol == pion.ICEProtocolUDP {
-					for _, url := range c.request.ICE.DiscoveryURLs() {
-						pending++
-						go d.probe(c, local, host, url)
-					}
-				}
+				pending += d.gatherHost(c, host, emitMapping)
 			}
 		}
 		if complete && pending == 0 {
@@ -129,6 +114,27 @@ func (d *candidateDispatch) run(c *Connection, callback func(*pion.ICECandidate)
 			return
 		}
 	}
+}
+
+func (d *candidateDispatch) gatherHost(c *Connection, host *pion.ICECandidate, emitMapping func(MappedEndpoint, *pion.ICECandidate)) int {
+	var pending int
+	ip, err := netip.ParseAddr(host.Address)
+	if host.Typ != pion.ICECandidateTypeHost || err != nil {
+		return 0
+	}
+	local := netip.AddrPortFrom(ip.Unmap(), host.Port)
+	for _, mapping := range c.mapped {
+		if mapping.Local == local && mapping.Protocol == host.Protocol.String() {
+			emitMapping(mapping, host)
+		}
+	}
+	if c.mux != nil && host.Protocol == pion.ICEProtocolUDP {
+		for _, url := range c.request.ICE.DiscoveryURLs() {
+			pending++
+			go d.probe(c, local, host, url)
+		}
+	}
+	return pending
 }
 
 func (d *candidateDispatch) probe(c *Connection, local netip.AddrPort, host *pion.ICECandidate, url string) {
