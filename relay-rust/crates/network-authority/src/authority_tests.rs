@@ -146,16 +146,7 @@ fn listed_node(key: [u8; 32], zone: Zone, region: &str) -> Node {
         operator: "official".into(),
         capacity_mbps: 100,
     };
-    Node::new(
-        spec,
-        "seed-op".into(),
-        crate::fleet::NodeState::Listed {
-            status: crate::fleet::topology::Status::Active,
-            maintenance: None,
-        },
-        1,
-    )
-    .unwrap()
+    Node::new(spec, crate::fleet::NodeState::Active, 1).unwrap()
 }
 
 impl Authority<Memory, Clock> {

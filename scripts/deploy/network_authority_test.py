@@ -136,6 +136,8 @@ class DeployReleaseConsistencyTests(unittest.TestCase):
                     "authority": {"url": "https://api.ourworld.top", "root": "prod-root"},
                 },
             )
+            args.origin_host = 'origin.ourworld.top'
+            args.zone = 'ourworld.top'
             generated_configs = []
 
             def fake_run(cmd, **kwargs):
@@ -153,12 +155,13 @@ class DeployReleaseConsistencyTests(unittest.TestCase):
             commands = [call.args[0] for call in run.call_args_list]
             self.assertEqual(
                 [cmd[cmd.index("--") + 1] for cmd in commands[:-1]],
-                ["verify", "verify-vantages", "verify-publisher"],
+                ["verify", "verify-publisher"],
             )
             self.assertIn("deploy", commands[-1])
             [config] = generated_configs
             self.assertEqual(config["vars"]["AUTHORITY_ROOT"], "prod-root")
             self.assertEqual(config["vars"]["API_ORIGIN"], "https://api.ourworld.top")
+            self.assertEqual(config["vars"]["AUTHORITY_ORIGIN"], "https://origin.ourworld.top")
             self.assertEqual(config["kv_namespaces"], [{"binding": "DIRECTORY", "id": DIRECTORY_ENV["DIRECTORY_KV_ID"]}])
             self.assertNotIn("DIRECTORY_PUBLICATION", config["vars"])
             self.assertNotIn("DIRECTORY_ORIGIN", config["vars"])

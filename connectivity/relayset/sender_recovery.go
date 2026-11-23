@@ -113,6 +113,11 @@ func (lifecycle *SenderLifecycle) recoverRegistration(callerContext, recoveryCon
 		if lifecycle.registrationFailed(&event, dialErr) {
 			return dialErr
 		}
+		lifecycle.mu.Lock()
+		if lifecycle.generation == 0 {
+			lifecycle.setRegistrationLocked(RegistrationRetrying)
+		}
+		lifecycle.mu.Unlock()
 		now := lifecycle.config.Clock.Now()
 		slow = slow || !now.Add(delay).Before(deadline)
 		wait := max(lifecycle.retryDelay(delay, slow), event.ServerRetryAt.Sub(now))

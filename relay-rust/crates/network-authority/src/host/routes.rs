@@ -362,17 +362,6 @@ fn admin_routes(
             let key = node_key(&path["/v1/admin/nodes/".len()..])?;
             serde_json::to_value(authority.node_by_key(&session, &key)?)?
         }
-        (Method::Post, "/v1/admin/nodes/cancel") => {
-            #[derive(serde::Deserialize)]
-            #[serde(deny_unknown_fields)]
-            struct Draft {
-                node_key: String,
-                operation_id: String,
-            }
-            let draft: Draft = parse(bytes)?;
-            authority.cancel_draft(&session, &draft.node_key, &draft.operation_id)?;
-            serde_json::json!({})
-        }
         (Method::Put, "/v1/admin/nodes/policy") => {
             let update = parse::<NodePolicyRequest>(bytes)?;
             let node = authority.set_node_policy(&session, &update.key, update.change)?;

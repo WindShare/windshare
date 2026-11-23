@@ -157,11 +157,8 @@ def deploy(args):
         "INITIALIZATION_TOKEN": token,
         "PASSWORD_PEPPER": pepper,
     }
-    maintenance = os.environ.get("FLEET_MAINTENANCE_TOKEN", "").strip()
-    if maintenance:
-        if not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", maintenance):
-            raise ValueError("Invalid fleet maintenance token")
-        secrets_to_upload["FLEET_MAINTENANCE_TOKEN"] = maintenance
+    if origin != host:
+        values["AUTHORITY_ORIGIN"] = https_origin("https://" + origin)
     mail_url = os.environ.get("EMAIL_WEBHOOK_URL", "").strip()
     mail_token = os.environ.get("EMAIL_WEBHOOK_TOKEN", "").strip()
     if mail_url or mail_token:
@@ -181,7 +178,6 @@ def deploy(args):
         raise ValueError("Invalid shared directory KV namespace")
     config += '\n[[kv_namespaces]]\nbinding = "DIRECTORY"\nid = ' + json.dumps(namespace) + '\n'
     values["DIRECTORY_CERTIFICATE"] = json.dumps(json.loads(os.environ["DIRECTORY_CERTIFICATE"]), separators=(",", ":"))
-    values["VANTAGE_KEYS"] = json.dumps(json.loads(os.environ.get("VANTAGE_KEYS") or "[]"), separators=(",", ":"))
     secrets_to_upload["DIRECTORY_SIGNING_SEED"] = directory_seed(os.environ["DIRECTORY_SIGNING_SEED"])
     config += "\n[vars]\n" + "".join(f"{k} = {json.dumps(v)}\n" for k, v in values.items())
     # Keep the config beside the template for Worker build paths. Credentials only enter
@@ -193,10 +189,6 @@ def deploy(args):
         seed_path.write_text(seed, encoding="utf-8")
         subprocess.run(["cargo", "run", "--quiet", "--locked", "--bin", "network-authority-keys", "--",
                         "verify", str(trust_path), str(seed_path)], cwd=CRATE, check=True)
-        agents_path = Path(private) / "vantages.json"
-        agents_path.write_text(values["VANTAGE_KEYS"], encoding="utf-8")
-        subprocess.run(["cargo", "run", "--quiet", "--locked", "--bin", "network-authority-keys", "--",
-                        "verify-vantages", str(agents_path)], cwd=CRATE, check=True)
         cert_path = Path(private) / "directory-certificate.json"
         cert_path.write_text(values["DIRECTORY_CERTIFICATE"], encoding="utf-8")
         directory_key = Path(private) / "directory.seed"

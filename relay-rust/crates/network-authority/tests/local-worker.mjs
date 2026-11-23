@@ -31,7 +31,7 @@ export function derivePasswordVerifier(role, username, password) {
   ).toString('base64url');
 }
 
-export function signedDescriptor(host, nodeKey, node, overrides = {}) {
+export function signedDescriptor(host, nodeKey, node, authority, overrides = {}) {
   const rawNode = Buffer.isBuffer(node) ? node : Buffer.from(node);
   const now = Math.floor(Date.now() / 1000);
   const payload = Buffer.from(JSON.stringify({
@@ -41,6 +41,7 @@ export function signedDescriptor(host, nodeKey, node, overrides = {}) {
     relay_endpoint: 'wss://' + host + '/v2/ws',
     zone: 'global',
     region: 'edge-test',
+    authority,
     services: { relay: true, stun: false },
     stun: [],
     issued_at: now,
@@ -52,6 +53,29 @@ export function signedDescriptor(host, nodeKey, node, overrides = {}) {
     descriptor: payload.toString('base64url'),
     signature: sign(null, Buffer.concat([Buffer.from('windshare/node-descriptor/v2\0'), payload]), nodeKey).toString('base64url'),
   };
+}
+
+function directoryRelease(nodes) {
+  const keys = () => generateKeyPairSync('ed25519');
+  const encodeKey = key => key.export({ format: 'der', type: 'spki' }).subarray(-32).toString('base64url');
+  const signed = (key, domain, value) => {
+    const bytes = Buffer.from(JSON.stringify(value));
+    return { payload: bytes.toString('base64url'),
+      signature: sign(null, Buffer.concat([Buffer.from(domain), bytes]), key).toString('base64url') };
+  };
+  const root = keys();
+  const online = keys();
+  const epoch = Math.floor(Date.now() / 1000) * 1000;
+  const date = days => new Date(epoch + days * 86400_000).toISOString().replace('.000Z', 'Z');
+  const network = 'test-network';
+  const certificate = { root: 'test-root', ...signed(root.privateKey, 'windshare/network-certificate/v1\0',
+    { format: 1, network, generation: 1, key: encodeKey(online.publicKey), not_before: date(-1), expires_at: date(120) }) };
+  const snapshot = { certificate, ...signed(online.privateKey, 'windshare/network-directory/v1\0',
+    { format: 1, network, generation: 1, serial: 1, issued_at: date(0), expires_at: date(90), nodes, public_stun: [] }) };
+  const release = { network, roots: [{ id: 'test-root', key: encodeKey(root.publicKey) }], snapshot,
+    link_host: 'https://front.example', backup_entry: 'https://backup.example' };
+  return { release, bindings: { TEST_DIRECTORY_RELEASE: JSON.stringify(release),
+    DIRECTORY_CERTIFICATE: JSON.stringify(certificate), DIRECTORY_SIGNING_SEED: online.privateKey.export({ format: 'jwk' }).d } };
 }
 
 export async function fixture(
@@ -71,34 +95,12 @@ export async function fixture(
   const host = 'relay.example';
   const base = 'https://' + host;
   const requests = [];
-  const mirrors = new Map();
-  // Seed an active listed node in SQLite so device-login flows can exercise an
-  // accepting node without requiring a production directory signing seed.
-  const activeRecord = {
-    key: [...activeNodeBytes],
-    spec: {
-      alias: 'active-edge',
-      node_key: activeNodeBytes.toString('base64url'),
-      relay: 'https://active.example',
-      stun: [],
-      roles: ['relay'],
-      zone: 'global',
-      region: 'edge-test',
-      provider: 'test',
-      operator: 'official',
-      capacity_mbps: 10,
-    },
-    operation_id: 'active-edge-seed',
-    state: { kind: 'listed', status: 'active', maintenance: null },
-    anonymous: false,
-    version: 1,
-  };
-  const useWrapper = activeNode || testControl || manualAlarm;
-  const seedActiveSql = activeNode
-    ? `const sql = state.storage.sql;
-        sql.exec('CREATE TABLE IF NOT EXISTS authority_records(key TEXT PRIMARY KEY,value TEXT NOT NULL) STRICT');
-        sql.exec('INSERT OR IGNORE INTO authority_records VALUES (?, ?)', ${JSON.stringify('node/' + activeNodeBytes.toString('base64url'))}, ${JSON.stringify(JSON.stringify(activeRecord))});`
-    : '';
+  const authority = { url: extra.API_ORIGIN ?? 'https://localhost', issuer: trust.root };
+  const activeSpec = { alias: 'active-edge', node_key: activeNodeBytes.toString('base64url'),
+    relay: 'https://active.example', stun: [], roles: ['relay'], zone: 'global', region: 'test',
+    provider: 'test', operator: 'official', capacity_mbps: 10, status: 'active' };
+  const { release, bindings } = directoryRelease(activeNode ? [activeSpec] : []);
+  const useWrapper = testControl || manualAlarm;
   const bootstrap = useWrapper ? [{ type: 'ESModule', path: join(build, 'fixture.mjs'), contents: `
     import worker, { NetworkAuthority } from './index.js';
     export default worker;
@@ -111,7 +113,6 @@ export async function fixture(
         this.ddlCount = 0;
         this.ddlInTransaction = 0;
         this.transactionDepth = 0;
-        ${seedActiveSql}
         const self = this;
         const wrapSql = sql => new Proxy(sql, {
           get(target, prop) {
@@ -248,13 +249,12 @@ export async function fixture(
           const custom = await outbound(request, url);
           if (custom) return custom;
         }
-        if (mirrors.has(url.href)) return Response.json(mirrors.get(url.href));
         if (url.hostname === 'cloudflare-dns.com') {
           assert.equal(url.searchParams.get('name'), host);
           return Response.json({ Status: 0, TC: false, Answer: url.searchParams.get('type') === '1' ? [{ type: 1, data: '1.1.1.1' }] : [] });
         }
         if (url.href !== base + '/.well-known/windshare') throw Error('Unexpected outbound request ' + url.href);
-        return Response.json(signedDescriptor(host, nodeKey, node));
+        return Response.json(signedDescriptor(host, nodeKey, node, authority));
       },
       kvNamespaces: ['DIRECTORY'],
       bindings: {
@@ -264,6 +264,7 @@ export async function fixture(
         AUTHORITY_SIGNING_SEED: (await readFile(join(keys, 'online-1.seed'), 'utf8')).trim(),
         INITIALIZATION_TOKEN: 'local-initialization-token',
         PASSWORD_PEPPER: TEST_PASSWORD_PEPPER,
+        ...bindings,
         ...extra,
       },
       durableObjects: { AUTHORITY: { className: useWrapper ? 'AuthorityFixture' : 'NetworkAuthority', useSQLite: true } },
@@ -273,5 +274,5 @@ export async function fixture(
   const worker = await mf.getWorker('authority');
   const enrollment = { url: base, node_key: node.toString('base64url'), alias: 'test-node', zone: 'global',
     region: 'edge-test', provider: 'test', roles: ['relay'], capacity_mbps: 5 };
-  return { worker, mf, trust, keys, nodeKey, node: [...node], activeNodeKey, activeNode: [...activeNodeBytes], requests, mirrors, enrollment };
+  return { worker, mf, trust, keys, nodeKey, node: [...node], activeNodeKey, activeNode: [...activeNodeBytes], requests, authority, release, enrollment };
 }

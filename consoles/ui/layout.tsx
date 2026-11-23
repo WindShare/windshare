@@ -52,7 +52,7 @@ export function SessionWait({ error, retry }: { error: Message | null; retry: ()
 }
 
 export function Badge({ children, tone = 'neutral' }: {
-  children: ReactNode; tone?: 'neutral' | 'good' | 'warning' | 'info'
+  children: ReactNode; tone?: 'neutral' | 'good' | 'danger' | 'warning' | 'info'
 }) {
   return <span className={'badge ' + tone}>{children}</span>
 }

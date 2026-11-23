@@ -1,11 +1,10 @@
 import assert from 'node:assert/strict';
 import { randomBytes, sign } from 'node:crypto';
 import test from 'node:test';
-import { readFile } from 'node:fs/promises';
 import { derivePasswordVerifier, fixture } from './local-worker.mjs';
 
 test('the Worker verifies client-derived password verifiers atomically inside the Durable Object', async t => {
-  const { worker, mf, trust, nodeKey, node, activeNodeKey, activeNode, requests, mirrors, enrollment } = await fixture(t, {}, { activeNode: true });
+  const { worker, mf, trust, nodeKey, node, activeNodeKey, activeNode, requests, release, enrollment } = await fixture(t, {}, { activeNode: true, testControl: true });
   // Hashed console bundles are immutable while HTML entrypoints remain uncached.
   const consolePage = await worker.fetch('https://localhost/console');
   assert.equal(consolePage.status, 200);
@@ -19,7 +18,7 @@ test('the Worker verifies client-derived password verifiers atomically inside th
 
   // External callers can never invoke internal DO orchestration routes.
   for (const internalPath of [
-    '/internal/fleet/stage',
+    '/internal/fleet/enroll',
     '/internal/fleet/tick',
     '/internal/accounts/login/complete',
     '/internal/admin/login/complete',
@@ -58,19 +57,7 @@ test('the Worker verifies client-derived password verifiers atomically inside th
   const cold = await worker.fetch(publicURL, { method: 'HEAD' });
   assert.equal(cold.headers.get('x-content-type-options'), 'nosniff');
   assert.equal(await cold.text(), '');
-  const release = JSON.parse(await readFile(new URL('../../../../deploy/network/release.json', import.meta.url)));
-  const decode = raw => JSON.parse(Buffer.from(raw, 'base64url'));
-  const payload = decode(release.snapshot.payload), grant = decode(release.snapshot.certificate.payload);
-  const usable = Date.now() + 300_000 >= Date.parse(payload.issued_at) && Date.now() < Math.min(Date.parse(grant.expires_at), Date.parse(payload.expires_at) + 7 * 86400_000);
-  assert.equal(cold.status, usable ? 200 : 503);
-  for (const unknownPath of ['/v1/vantage/unknown', '/v1/maintenance/unknown']) {
-    const unknown = await worker.fetch('https://localhost' + unknownPath, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: '{}',
-    });
-    assert.equal(unknown.status, 404, unknownPath);
-  }
+  assert.equal(cold.status, 200);
   const unknownInternal = await object.fetch('https://authority/internal/fleet/unknown', {
     method: 'POST',
     body: '{}',
@@ -82,22 +69,9 @@ test('the Worker verifies client-derived password verifiers atomically inside th
   assert.equal(wrongMethod.status, 404);
   const tick = await object.fetch('https://authority/internal/fleet/tick', { method: 'POST', body: '{}' });
   assert.equal(tick.status, 200);
-  assert.equal(tick.headers.get('x-directory-mirror-defer'), 'kv_just_published');
-  const tickBody = await tick.json();
-  const settlingTick = await object.fetch('https://authority/internal/fleet/tick', { method: 'POST', body: '{}' });
-  assert.equal(settlingTick.status, 200);
-  assert.equal(settlingTick.headers.get('x-directory-mirror-defer'), 'kv_settling');
-  await object.fetch('https://authority/__test/age-delivery', {
-    method: 'POST',
-    body: JSON.stringify({ ms: 120_000 }),
-  });
-  const steadyTick = await object.fetch('https://authority/internal/fleet/tick', { method: 'POST', body: '{}' });
-  assert.equal(steadyTick.status, 200);
-  assert.equal(steadyTick.headers.get('x-directory-mirror-defer'), null);
-  const directory = await worker.fetch('https://localhost/.well-known/windshare-network');
-  assert.equal(directory.status, usable ? 200 : 503);
-  if (usable) assert.deepEqual(await directory.json(), tickBody);
-  else assert.equal(directory.headers.get('cache-control'), 'no-store');
+  const directory = await worker.fetch(publicURL);
+  assert.equal(directory.status, 200);
+  assert.deepEqual(await directory.json(), release.snapshot);
 
   // Single-transaction admin initialize, login, console username, and password rotation.
   const operatorVerifier = derivePasswordVerifier('admin', 'operator', 'Operator-Password-2026!');
@@ -191,26 +165,10 @@ test('the Worker verifies client-derived password verifiers atomically inside th
   assert.equal(requests.length, 0);
   const discovered = (await call('/v1/admin/nodes/discover', { url: enrollment.url }, { admin: true })).value;
   assert.equal(discovered.node_key, enrollment.node_key);
-  const staged = (await call('/v1/admin/nodes', enrollment, { admin: true })).value;
-  assert.equal(staged.state.check.kind, 'queued');
-  await call('/v1/admin/nodes/cancel', { node_key: enrollment.node_key, operation_id: staged.operation_id }, { admin: true });
-  const replacement = (await call('/v1/admin/nodes', enrollment, { admin: true })).value;
-  assert.notEqual(replacement.operation_id, staged.operation_id);
-  await call('/v1/admin/nodes/cancel', { node_key: enrollment.node_key, operation_id: staged.operation_id }, { admin: true, status: 409 });
-  const mirrorURLs = [release.link_host, release.backup_entry].map(origin => origin + '/.well-known/windshare-network');
-  for (const url of mirrorURLs) mirrors.set(url, release.snapshot);
-  const promotion = () => worker.fetch('https://localhost/v1/admin/nodes/promote', {
-    method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'https://localhost', Cookie: adminCookie, 'X-CSRF-Token': csrf },
-    body: JSON.stringify({ node_key: enrollment.node_key, operation_id: replacement.operation_id, status: 'canary' }),
-  });
-  const matched = await promotion();
-  assert.equal(matched.status, 503);
-  assert.equal(await matched.text(), 'fleet temporarily unavailable');
-  assert.deepEqual(new Set(requests.slice(-2)), new Set(mirrorURLs));
-  mirrors.set(mirrorURLs[0], {});
-  const lagging = await promotion();
-  assert.equal(lagging.status, 403);
-  assert.equal((await lagging.json()).reason, 'mirror_lag');
+  const enrolled = (await call('/v1/admin/nodes', enrollment, { admin: true })).value;
+  assert.equal(enrolled.state, 'canary');
+  await call('/v1/admin/nodes/manage', { node_key: enrollment.node_key, expected_state: enrolled.state,
+    expected_policy_version: enrolled.version, action: { kind: 'disable', early_cutoff: true } }, { admin: true });
   const signInvitation = (targetNode, targetKey, origin) => {
     const invitePayload = Buffer.from(JSON.stringify({
       node: targetNode, issuer: [...Buffer.from(trust.root, 'base64url')],
@@ -222,16 +180,11 @@ test('the Worker verifies client-derived password verifiers atomically inside th
       sign(null, Buffer.concat([Buffer.from('windshare/device-invitation/v1\0'), invitePayload]), targetKey),
     ]).toString('base64url');
   };
-  const stagedInvitation = signInvitation(node, nodeKey, 'https://relay.example');
+  const disabledInvitation = signInvitation(node, nodeKey, 'https://relay.example');
   const blocked = await call('/v1/device/approve', {
-    invitation: stagedInvitation, login: { username: 'alice', password_verifier: firstVerifier },
+    invitation: disabledInvitation, login: { username: 'alice', password_verifier: firstVerifier },
   }, { source: '198.51.100.12', status: 403 });
   assert.equal(blocked.value.reason, 'node_unavailable');
-  await call('/v1/admin/nodes/cancel', { node_key: enrollment.node_key, operation_id: replacement.operation_id }, { admin: true });
-  const cancelled = await call('/v1/device/approve', {
-    invitation: stagedInvitation, login: { username: 'alice', password_verifier: firstVerifier },
-  }, { source: '198.51.100.12', status: 403 });
-  assert.equal(cancelled.value.reason, 'node_unavailable');
   const invitation = signInvitation(activeNode, activeNodeKey, 'https://active.example');
   const approved = await call('/v1/device/approve', {
     invitation, login: { username: 'alice', password_verifier: firstVerifier },

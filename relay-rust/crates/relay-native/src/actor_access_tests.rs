@@ -569,16 +569,6 @@ async fn draining_preserves_join_and_resume_for_an_existing_owner_share() {
     )
     .unwrap();
     let node = Runtime::default();
-    assert!(
-        node.maintenance
-            .set(crate::node::maintenance::Gate::install(store.path()).unwrap())
-            .is_ok()
-    );
-    let fence = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(store.path().with_added_extension("admission"))
-        .unwrap();
     node.access.configure(policy).unwrap();
     set_admission(&node, generation, 1, Admission::Accepting);
     with_access_actor(node.clone(), store, &fixture, async |harness| {
@@ -595,32 +585,6 @@ async fn draining_preserves_join_and_resume_for_an_existing_owner_share() {
         assert_eq!(read(&mut resumed).await, fixture.bytes("registeredB64"));
         let mut joined = harness.send_join(3, &fixture).await;
         assert_eq!(&read(&mut joined).await[..4], b"WS2D");
-        // A pending JOIN already owns the fence before its sender admits the session.
-        assert!(matches!(
-            fence.try_lock(),
-            Err(std::fs::TryLockError::WouldBlock)
-        ));
-        let (closed, applied) = tokio::sync::oneshot::channel();
-        harness
-            .tx
-            .send(Event::Disconnected(reference(3)))
-            .await
-            .unwrap();
-        harness
-            .tx
-            .send(Event::Closed(reference(3), closed))
-            .await
-            .unwrap();
-        applied.await.unwrap();
-        fence.try_lock().unwrap();
-        let mut retrying = harness.send_join(4, &fixture).await;
-        assert_refused(
-            &mut retrying,
-            ErrorFrame::AccessUnavailable(
-                windshare_relay_core::error_frame::RetryAfter::from_millis(1000).unwrap(),
-            ),
-        )
-        .await;
     })
     .await;
 }
@@ -791,111 +755,4 @@ async fn registration_authorized_traces_record_class_and_specific_refusal_reason
         budget_refused[0]["fields"]["reason"],
         "public_daily_budget_exhausted"
     );
-}
-
-#[tokio::test]
-async fn maintenance_gate_io_errors_warn_and_do_not_report_node_draining() {
-    use crate::test_support::capture_events_async;
-
-    let fixture = Fixture::new();
-    let now_seconds = fixture.now(false).0 / 1000;
-    let (generation, _account_bearer, policy) = access_fixture(now_seconds);
-    let directory = tempfile::tempdir().unwrap();
-    let store = Database::open(
-        &directory.path().join("authority.sqlite"),
-        fixture.identity().relay,
-    )
-    .unwrap();
-    let gate = crate::node::maintenance::Gate::install(store.path()).unwrap();
-    let node = Runtime::default();
-    assert!(node.maintenance.set(gate.clone()).is_ok());
-    node.access.configure(policy).unwrap();
-    set_admission(&node, generation, 1, Admission::Accepting);
-
-    let auth_events = capture_events_async(async {
-        gate.set_io_fault(Some(std::io::ErrorKind::PermissionDenied));
-        let expected_auth =
-            match windshare_relay_core::access::RegistrationDecision::SERVICE_UNAVAILABLE {
-                windshare_relay_core::access::RegistrationDecision::Unavailable(retry) => {
-                    ErrorFrame::AccessUnavailable(retry)
-                }
-                _ => unreachable!("SERVICE_UNAVAILABLE is Unavailable"),
-            };
-        let _ = with_sender(&node, &fixture, Some(OWNER_KEY), async |sender| {
-            assert_refused(&mut sender.writer, expected_auth).await;
-        })
-        .await;
-    })
-    .await;
-    assert!(auth_events.iter().any(|entry| {
-        entry["level"] == "WARN"
-            && entry["fields"]["event"] == "maintenance_gate_io_error"
-            && entry["fields"]["operation"] == "authorize"
-    }));
-    let registration = auth_events
-        .iter()
-        .find(|entry| entry["fields"]["event"] == "registration_authorized")
-        .expect("registration_authorized event");
-    assert_eq!(registration["fields"]["reason"], "maintenance_gate_error");
-
-    gate.set_io_fault(None);
-    let join_events = capture_events_async(async {
-        with_access_actor(node.clone(), store, &fixture, async |harness| {
-            let _sender = harness.publish(1, Some(OWNER_KEY), &fixture).await;
-            gate.set_io_fault(Some(std::io::ErrorKind::PermissionDenied));
-            let mut joined = harness.send_join(2, &fixture).await;
-            assert_refused(
-                &mut joined,
-                ErrorFrame::AccessUnavailable(
-                    windshare_relay_core::error_frame::RetryAfter::from_millis(1000).unwrap(),
-                ),
-            )
-            .await;
-        })
-        .await;
-    })
-    .await;
-    assert!(join_events.iter().any(|entry| {
-        entry["level"] == "WARN"
-            && entry["fields"]["event"] == "maintenance_gate_io_error"
-            && entry["fields"]["kind"] == "Join"
-    }));
-}
-
-#[tokio::test]
-async fn local_maintenance_fence_reports_distinct_refusal_reason_when_authority_accepts() {
-    use crate::test_support::capture_events_async;
-
-    let fixture = Fixture::new();
-    let now_seconds = fixture.now(false).0 / 1000;
-    let (generation, _account_bearer, policy) = access_fixture(now_seconds);
-    let directory = tempfile::tempdir().unwrap();
-    let store = Database::open(
-        &directory.path().join("authority.sqlite"),
-        fixture.identity().relay,
-    )
-    .unwrap();
-    let gate = crate::node::maintenance::Gate::install(store.path()).unwrap();
-    std::fs::write(
-        store.path().with_added_extension("admission"),
-        b"operation-stuck-1",
-    )
-    .unwrap();
-    let node = Runtime::default();
-    assert!(node.maintenance.set(gate).is_ok());
-    node.access.configure(policy).unwrap();
-    set_admission(&node, generation, 1, Admission::Accepting);
-
-    let events = capture_events_async(async {
-        let _ = with_sender(&node, &fixture, Some(OWNER_KEY), async |sender| {
-            let _ = read(&mut sender.writer).await;
-        })
-        .await;
-    })
-    .await;
-    let registration = events
-        .iter()
-        .find(|entry| entry["fields"]["event"] == "registration_authorized")
-        .expect("registration_authorized event");
-    assert_eq!(registration["fields"]["reason"], "local_maintenance");
 }

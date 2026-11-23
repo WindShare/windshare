@@ -15,9 +15,14 @@ fn node_identity(seed: u8) -> (SigningKey, String, String) {
     (key, B64.encode(raw_pub), B64.encode(digest.finalize()))
 }
 
+fn inspect_node(origin: &str, bytes: &[u8], now: u64) -> Result<Discovery, DescriptorError> {
+    inspect(origin, bytes, now, "issuer", &["https://api.example"])
+}
+
 fn valid_payload(node_key: &str, node_id: &str) -> Value {
     json!({
         "version": 2,
+        "authority": { "url": "https://api.example/", "issuer": "issuer" },
         "node_id": node_id,
         "node_key": node_key,
         "relay_endpoint": "wss://relay.example/v2/ws",
@@ -46,7 +51,7 @@ fn sign_envelope(key: &SigningKey, payload: &Value) -> Vec<u8> {
 fn inspect_accepts_valid_signed_descriptor() {
     let (key, node_key, node_id) = node_identity(7);
     let raw = sign_envelope(&key, &valid_payload(&node_key, &node_id));
-    let discovery = inspect(ORIGIN, &raw, NOW).unwrap();
+    let discovery = inspect_node(ORIGIN, &raw, NOW).unwrap();
     assert_eq!(discovery.node_key, node_key);
     assert_eq!(discovery.relay, ORIGIN);
     assert_eq!(discovery.roles, vec![Role::Relay, Role::Stun]);
@@ -60,7 +65,7 @@ fn inspect_classifies_malformed_oversized_and_unsigned_descriptors() {
     let valid = valid_payload(&node_key, &node_id);
 
     let bad_origin =
-        inspect("http://relay.example", &sign_envelope(&key, &valid), NOW).unwrap_err();
+        inspect_node("http://relay.example", &sign_envelope(&key, &valid), NOW).unwrap_err();
     assert_eq!(bad_origin.failure, DiscoveryFailure::InvalidUrl);
 
     let oversized = vec![b' '; MAX_DESCRIPTOR + 1];
@@ -96,7 +101,7 @@ fn inspect_classifies_malformed_oversized_and_unsigned_descriptors() {
         serde_json::to_vec(&bad_sig).unwrap(),
         sign_envelope(&key, &wrong_payload_version),
     ] {
-        let error = inspect(ORIGIN, &raw, NOW).unwrap_err();
+        let error = inspect_node(ORIGIN, &raw, NOW).unwrap_err();
         assert_eq!(
             error.failure,
             DiscoveryFailure::InvalidDescriptor,
@@ -121,7 +126,7 @@ fn inspect_classifies_expired_skewed_and_mismatched_descriptors() {
     ] {
         let mut payload = valid_payload(&node_key, &node_id);
         mutate(&mut payload);
-        let error = inspect(ORIGIN, &sign_envelope(&key, &payload), NOW).unwrap_err();
+        let error = inspect_node(ORIGIN, &sign_envelope(&key, &payload), NOW).unwrap_err();
         assert_eq!(
             error.failure,
             DiscoveryFailure::DescriptorExpired,
@@ -140,7 +145,7 @@ fn inspect_classifies_expired_skewed_and_mismatched_descriptors() {
     ] {
         let mut payload = valid_payload(&node_key, &node_id);
         mutate(&mut payload);
-        let error = inspect(ORIGIN, &sign_envelope(&key, &payload), NOW).unwrap_err();
+        let error = inspect_node(ORIGIN, &sign_envelope(&key, &payload), NOW).unwrap_err();
         assert_eq!(
             error.failure,
             DiscoveryFailure::DescriptorMismatch,
@@ -162,6 +167,7 @@ fn discovery_failure_wire_reasons_and_statuses_stay_in_sync() {
         (DiscoveryFailure::InvalidDescriptor, 422),
         (DiscoveryFailure::DescriptorExpired, 422),
         (DiscoveryFailure::DescriptorMismatch, 422),
+        (DiscoveryFailure::AuthorityMismatch, 422),
     ] {
         assert_eq!(failure.http_status(), expected_status);
         let encoded = serde_json::to_value(Fault::node_discovery(failure)).unwrap();
@@ -172,5 +178,25 @@ fn discovery_failure_wire_reasons_and_statuses_stay_in_sync() {
         } else {
             assert!(encoded.get("status").is_none());
         }
+    }
+}
+
+#[test]
+fn missing_or_partial_authority_settings_have_a_distinct_discovery_failure() {
+    let (key, node_key, node_id) = node_identity(10);
+    for authority in [
+        Value::Null,
+        json!({"issuer":"issuer"}),
+        json!({"url":"https://api.example"}),
+        json!({"url":"https://api.example","issuer":"different"}),
+    ] {
+        let mut payload = valid_payload(&node_key, &node_id);
+        payload["authority"] = authority;
+        assert_eq!(
+            inspect_node(ORIGIN, &sign_envelope(&key, &payload), NOW)
+                .unwrap_err()
+                .failure,
+            DiscoveryFailure::AuthorityMismatch
+        );
     }
 }

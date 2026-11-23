@@ -9,6 +9,9 @@ description = "Official network account, admission and traffic authority"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+test-release = []
+
 [dependencies]
 windshare-relay-access = { path = "../relay-access" }
 anyhow = "1"

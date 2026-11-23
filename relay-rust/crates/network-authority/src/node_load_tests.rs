@@ -1,12 +1,11 @@
 use super::*;
 use crate::fleet::{
     NodeState,
-    maintenance::Operation,
-    topology::{Role, Spec, Status},
+    topology::{Role, Spec},
 };
 use windshare_relay_access::usage::REPORT_INTERVAL_SECONDS;
 
-fn draining_node(key: [u8; 32], operation_id: &str) -> Node {
+fn draining_node(key: [u8; 32]) -> Node {
     let encoded_key = URL_SAFE_NO_PAD.encode(key);
     Node::new(
         Spec {
@@ -21,11 +20,7 @@ fn draining_node(key: [u8; 32], operation_id: &str) -> Node {
             operator: "official".into(),
             capacity_mbps: 100,
         },
-        operation_id.into(),
-        NodeState::Listed {
-            status: Status::Draining,
-            maintenance: Some(operation_id.into()),
-        },
+        NodeState::Draining,
         2,
     )
     .unwrap()
@@ -69,14 +64,10 @@ fn skewed_node_clocks_confirm_drain_on_receipt_time_and_survive_ntp_step_back() 
         .unwrap();
     let node = SigningKey::from_bytes(&[19; 32]);
     let node_key = node.verifying_key().to_bytes();
-    let op = Operation {
-        node_key: URL_SAFE_NO_PAD.encode(node_key),
-        operation_id: "rolling-upgrade-01".into(),
-    };
     save(
         &mut authority.store,
         &key("node", &node_key),
-        &draining_node(node_key, &op.operation_id),
+        &draining_node(node_key),
     )
     .unwrap();
 
@@ -87,7 +78,6 @@ fn skewed_node_clocks_confirm_drain_on_receipt_time_and_survive_ntp_step_back() 
     let _ = status(&mut authority, &signed);
     let detail = authority.node_by_key(&admin, &node_key).unwrap();
     assert!(detail.cutoff_ready);
-    assert!(authority.maintenance_status(&op).unwrap().confirmed);
     assert_eq!(detail.report.as_ref().unwrap().created_at, slow_created);
     assert_eq!(detail.report.as_ref().unwrap().reported_at, slow_receipt);
     authority.environment.now += 2 * REPORT_INTERVAL_SECONDS;
@@ -97,7 +87,6 @@ fn skewed_node_clocks_confirm_drain_on_receipt_time_and_survive_ntp_step_back() 
             .unwrap()
             .cutoff_ready
     );
-    assert!(authority.maintenance_status(&op).unwrap().confirmed);
     authority.environment.now += 1;
     assert!(
         !authority
@@ -105,7 +94,21 @@ fn skewed_node_clocks_confirm_drain_on_receipt_time_and_survive_ntp_step_back() 
             .unwrap()
             .cutoff_ready
     );
-    assert!(!authority.maintenance_status(&op).unwrap().confirmed);
+
+    authority.environment.now = slow_receipt + 3 * REPORT_INTERVAL_SECONDS;
+    assert!(
+        !authority
+            .node_by_key(&admin, &node_key)
+            .unwrap()
+            .report_stale
+    );
+    authority.environment.now += 1;
+    assert!(
+        authority
+            .node_by_key(&admin, &node_key)
+            .unwrap()
+            .report_stale
+    );
 
     // Fast node clock (+240 s) confirms immediately while alive, and expires on
     // authority receipt time instead of resurrecting after the node goes silent.
@@ -118,7 +121,6 @@ fn skewed_node_clocks_confirm_drain_on_receipt_time_and_survive_ntp_step_back() 
             .unwrap()
             .cutoff_ready
     );
-    assert!(authority.maintenance_status(&op).unwrap().confirmed);
     authority.environment.now += 2 * REPORT_INTERVAL_SECONDS + 1;
     assert!(fast_created.abs_diff(authority.environment.now) <= 2 * REPORT_INTERVAL_SECONDS);
     assert!(
@@ -127,7 +129,6 @@ fn skewed_node_clocks_confirm_drain_on_receipt_time_and_survive_ntp_step_back() 
             .unwrap()
             .cutoff_ready
     );
-    assert!(!authority.maintenance_status(&op).unwrap().confirmed);
 
     // Backward NTP step: a newer heartbeat with a smaller node created_at still
     // updates applied_policy_version and resident_shares instead of sticking on old load.
@@ -155,7 +156,6 @@ fn skewed_node_clocks_confirm_drain_on_receipt_time_and_survive_ntp_step_back() 
     assert_eq!(report.load.applied_policy_version, 3);
     assert_eq!(report.load.resident_shares, 0);
     assert!(detail.cutoff_ready);
-    assert!(authority.maintenance_status(&op).unwrap().confirmed);
 }
 
 #[test]
@@ -170,7 +170,7 @@ fn status_heartbeats_enforce_symmetric_clock_skew_while_queued_usage_retries_rem
     save(
         &mut authority.store,
         &key("node", &node_key),
-        &draining_node(node_key, "rolling-upgrade-02"),
+        &draining_node(node_key),
     )
     .unwrap();
 

@@ -198,12 +198,12 @@ impl DirectoryCache {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn bundled_release() -> Result<&'static Release> {
+fn bundled_release(env: &Env) -> Result<&'static Release> {
     static TRUST: OnceLock<Release> = OnceLock::new();
     if let Some(release) = TRUST.get() {
         return Ok(release);
     }
-    let _ = TRUST.set(Release::bundled()?);
+    let _ = TRUST.set(super::release(env)?);
     TRUST.get().context("missing release trust")
 }
 
@@ -213,8 +213,8 @@ thread_local! {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn select(body: Option<String>, now: i64) -> Result<Option<Rc<VerifiedDirectory>>> {
-    let release = bundled_release()?;
+fn select(env: &Env, body: Option<String>, now: i64) -> Result<Option<Rc<VerifiedDirectory>>> {
+    let release = bundled_release(env)?;
     CACHE.with_borrow_mut(|cache| cache.select(release, body, now))
 }
 
@@ -240,7 +240,7 @@ async fn response(method: Method, env: &Env) -> worker::Result<Response> {
         tracing::warn!(event = "directory_kv_read_failed", %error);
         None
     });
-    let selected = select(body, now).unwrap_or_else(|error| {
+    let selected = select(env, body, now).unwrap_or_else(|error| {
         tracing::error!(event = "directory_bundled_invalid", %error);
         None
     });

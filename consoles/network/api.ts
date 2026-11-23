@@ -3,7 +3,7 @@ import { networkCopy } from './locales'
 import { request, RequestError, type FaultMessage } from '../ui/request'
 import { decode, encode } from './identity'
 import { derivePasswordVerifier, isValidLoginPassword, isValidNewPassword, normalizeUsername } from './auth/password'
-import type { AccountDetails, AccountPage, AccountSummary, Discovery, Enrollment, TrafficStatus, MilestoneReview, NodeDetails, NodePage, FleetAction, PolicyChange, PolicySnapshot, Report, ReportPage, Restrictions, SettingsChanges, Snapshot, Target } from './model'
+import type { AccountDetails, AccountPage, AccountSummary, Discovery, Enrollment, MilestoneReview, NodeDetails, NodePage, FleetAction, PolicyChange, PolicySnapshot, Report, ReportPage, Restrictions, SettingsChanges, Snapshot, Target } from './model'
 
 function nodeHttpStatus(fault: Readonly<Record<string, unknown>>): Message {
   const status = typeof fault.status === 'number' && Number.isInteger(fault.status) ? fault.status : null
@@ -18,11 +18,7 @@ const messages: Readonly<Record<string, FaultMessage>> = {
   listing_changed: message(networkCopy, 'listingChanged'),
   alias_bound: message(networkCopy, 'aliasBound'),
   node_settings_changed: message(networkCopy, 'nodeSettingsChanged'),
-  vantage_key_bound: message(networkCopy, 'vantageKeyBound'),
-  verification_required: message(networkCopy, 'verificationRequired'),
   drain_pending: message(networkCopy, 'drainPending'),
-  maintenance_in_progress: message(networkCopy, 'maintenance'),
-  mirror_lag: message(networkCopy, 'mirrorLag'),
   invalid_node_url: message(networkCopy, 'invalidNodeUrl'),
   reserved_node_host: message(networkCopy, 'reservedNodeHost'),
   node_dns_failed: message(networkCopy, 'nodeDnsFailed'),
@@ -31,6 +27,7 @@ const messages: Readonly<Record<string, FaultMessage>> = {
   node_redirect_refused: message(networkCopy, 'nodeRedirectRefused'),
   node_http_status: nodeHttpStatus,
   node_invalid_descriptor: message(networkCopy, 'nodeInvalidDescriptor'),
+  authority_mismatch: message(networkCopy, 'authorityMismatch'),
   node_descriptor_expired: message(networkCopy, 'nodeDescriptorExpired'),
   node_descriptor_mismatch: message(networkCopy, 'nodeDescriptorMismatch'),
   credentials: message(networkCopy, 'invalidCredentials'),
@@ -152,9 +149,9 @@ export class AuthorityClient {
     this.csrf = result.csrf
   }
   discover = (url: string) => this.write<Discovery>('nodes/discover', { url })
-  promote = (node_key: string, operation_id: string, status: TrafficStatus) => this.write('nodes/promote', { node_key, operation_id, status })
-  manage = (node_key: string, operation_id: string, action: FleetAction) => this.write('nodes/manage', { node_key, operation_id, action })
-  cancelDraft = (node_key: string, operation_id: string) => this.write('nodes/cancel', { node_key, operation_id })
+  manage = (node: NodeDetails, action: FleetAction) => this.write('nodes/manage', {
+    node_key: node.spec.node_key, expected_state: node.state, expected_policy_version: node.version, action,
+  })
   enroll = (node: Enrollment) => this.write<NodeDetails>('nodes', node)
   policy = (key: number[], change: PolicyChange) => this.write<NodeDetails>('nodes/policy', { key, change }, 'PUT')
   updateSettings = (changes: SettingsChanges) => this.write<PolicySnapshot>('settings', changes, 'PATCH')

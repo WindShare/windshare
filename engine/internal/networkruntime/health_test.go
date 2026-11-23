@@ -307,7 +307,7 @@ func TestDiagnosticRecordsIncludeReadableAttemptStatesPlanTimingsAndAdmissionRea
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, err := planned.DiagnosticRecord().Payload().Get("published_candidates").MarshalJSON()
+	raw, err := planned.DiagnosticRecord().Payload().Get("initial_candidates").MarshalJSON()
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -7,8 +7,7 @@ import test from 'node:test';
 import { derivePasswordVerifier, fixture } from './local-worker.mjs';
 
 test('the local Worker preserves account and node policy across signed reports and retries', async t => {
-  const maintenanceToken = randomBytes(32).toString('base64url');
-  const { worker, trust, keys, nodeKey: privateKey, node, enrollment: proposed } = await fixture(t, { FLEET_MAINTENANCE_TOKEN: maintenanceToken });
+  const { worker, trust, keys, nodeKey: privateKey, node, enrollment: proposed } = await fixture(t);
   const url = new URL('https://localhost');
   const request = (input, options) => worker.fetch(String(input), options);
   const initialization = 'local-initialization-token';
@@ -107,14 +106,13 @@ test('the local Worker preserves account and node policy across signed reports a
   assert.deepEqual(second.account, first.account);
   assert.notDeepEqual(second.credential, first.credential);
   const enrolled = (await call('/v1/admin/nodes', enrollment, { admin: true })).value;
-  assert(enrolled.admission === 'draining' && !enrolled.anonymous && enrolled.version === 1);
-  // Staging preserves probe access while ordinary registrations wait for promotion.
+  assert(enrolled.admission === 'accepting' && !enrolled.anonymous && enrolled.version === 1);
   const update = (field, value) => call('/v1/admin/nodes/policy', { key: node, change: { field, value } }, { admin: true, method: 'PUT' });
   await update('anonymous_sharing', true);
   await call('/v1/admin/nodes/policy', { key: node, change: { field: 'admission', value: 'accepting' } }, { admin: true, method: 'PUT', status: 400 });
   const existing = (await call('/v1/admin/nodes', enrollment, { admin: true })).value;
   assert.equal(existing.spec.zone, 'cn');
-  assert(existing.admission === 'draining' && existing.anonymous && existing.version === 2);
+  assert(existing.admission === 'accepting' && existing.anonymous && existing.version === 2);
   const batch = {
     id: [...randomBytes(16)], node, issuer: [...Buffer.from(trust.root, 'base64url')],
     created_at: Math.floor(Date.now() / 1000), records: [], resident_accounts: [first.account], shares: [],
@@ -154,12 +152,6 @@ test('the local Worker preserves account and node policy across signed reports a
   await call(accountsEndpoint + '/' + Buffer.alloc(16).toString('base64url'), undefined, { ...adminGet, status: 400 });
   const nodesEndpoint = '/v1/admin/nodes';
   const encodedNodeKey = Buffer.from(node).toString('base64url');
-  const operation = { node_key: encodedNodeKey, operation_id: 'local-maintenance-check' };
-  await call('/v1/maintenance/status', operation, { status: 403, admin: true });
-  const maintenance = (await call('/v1/maintenance/status', operation, { secret: maintenanceToken })).value;
-  assert.equal(maintenance.held, false);
-  assert.equal(maintenance.applied_policy_version, existing.version);
-  await call('/v1/admin/nodes/manage', { ...operation, action: { kind: 'drain' } }, { secret: maintenanceToken, status: 403 });
   const nodeDetail = nodesEndpoint + '/' + encodedNodeKey;
   await call(nodeDetail, undefined, { method: 'GET', status: 403 });
   const { value: inspected } = await call(nodeDetail, undefined, adminGet);
@@ -168,22 +160,14 @@ test('the local Worker preserves account and node policy across signed reports a
   assert.deepEqual(inspected.report.load, batch.load);
   const liveLoad = { ...batch.load, active_sessions: 3 };
   await usage({ ...batch, id: [...randomBytes(16)], created_at: batch.created_at + 1, load: liveLoad });
-  const restaged = (await call('/v1/admin/nodes', enrollment, { admin: true })).value;
-  assert.deepEqual(restaged.report.load, liveLoad);
+  const reenrolled = (await call('/v1/admin/nodes', enrollment, { admin: true })).value;
+  assert.deepEqual(reenrolled.report.load, liveLoad);
   const { value: nextNodes } = await call(nodesEndpoint + '?after=' + encodedNodeKey, undefined, adminGet);
   assert(!nextNodes.entries.some(item => Buffer.from(item.key).equals(Buffer.from(node))));
   await call(nodesEndpoint + '?after=invalid', undefined, { ...adminGet, status: 400 });
   const { value: missingNode } = await call(nodesEndpoint + '/' + Buffer.from(randomBytes(32)).toString('base64url'),
     undefined, { ...adminGet, status: 404 });
   assert.equal(missingNode.kind, 'node_not_found');
-  const probe = [...Buffer.from('windshare-probe!')];
-  const probeShare = [...randomBytes(12)];
-  assert.deepEqual(await usage({ ...batch, id: [...randomBytes(16)], resident_accounts: [], records: [{
-    account: probe, day: Math.floor(batch.created_at / 86400), bytes: 1024 }], shares: [] }), { kind: 'usage_received' });
-  const probeStatus = await usage({ ...batch, id: [...randomBytes(16)], resident_accounts: [probe],
-    shares: [{ share: probeShare, account: probe }] });
-  assert.deepEqual(probeStatus.entitlements, []);
-  await call(accountsEndpoint + '/' + Buffer.from(probe).toString('base64url'), undefined, { ...adminGet, status: 404 });
   const allowance = initial.entitlements[0].entitlement;
   const day = Math.floor(batch.created_at / 86400);
   const report = {

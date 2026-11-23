@@ -28,7 +28,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
     /// # Errors
     /// Refuses unauthenticated nodes, conflicting batch IDs, invalid records or storage failures.
     pub fn usage(&mut self, signed: &[u8]) -> Result<SignedReply> {
-        let mut batch: Batch = parse_signed(signed)?;
+        let batch: Batch = parse_signed(signed)?;
         let now = self.environment.now();
         // Classify before stripping probe records so a probe-only usage batch
         // still receives a usage receipt and clears the node's outbox row.
@@ -72,10 +72,6 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 return self.sign_reply(RESPONSE_DOMAIN, batch.node, batch.id, now, reply);
             }
         };
-        let probe = windshare_relay_access::probe::PROBE_ACCOUNT;
-        batch.records.retain(|entry| entry.account != probe);
-        batch.resident_accounts.retain(|account| *account != probe);
-        batch.shares.retain(|entry| entry.account != probe);
         // Expected admission refusals commit limiter state in the host transaction.
         // Validate all referenced accounts before writing anything for this report.
         for account in batch

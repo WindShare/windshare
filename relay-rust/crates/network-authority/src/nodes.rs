@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use windshare_relay_access::usage::{Admission, Load, NodePolicy, REPORT_INTERVAL_SECONDS};
 
+const REPORT_STALE_SECONDS: u64 = 3 * REPORT_INTERVAL_SECONDS;
 const NODE_PAGE_SIZE: usize = 1000;
 pub const NODE_LOAD_CHECKPOINT_SECONDS: u64 = 15 * 60;
 
@@ -26,78 +27,44 @@ pub enum Zone {
 pub struct Node {
     pub key: [u8; 32],
     pub spec: Spec,
-    pub operation_id: String,
     state: NodeState,
     pub anonymous: bool,
     pub version: u64,
 }
 
-pub struct NodeMutation<'a> {
-    pub spec: &'a Spec,
-    pub operation_id: &'a mut String,
-    pub state: &'a mut NodeState,
-}
-
 impl Node {
-    pub(crate) fn new(
-        spec: Spec,
-        operation_id: String,
-        state: NodeState,
-        version: u64,
-    ) -> Result<Self> {
+    pub(crate) fn new(spec: Spec, state: NodeState, version: u64) -> Result<Self> {
         let key = public_key(&spec.node_key)?;
         let anonymous = spec.zone == Zone::Global;
         Ok(Self {
             key,
             spec,
-            operation_id,
             state,
             anonymous,
             version,
         })
     }
 
-    pub const fn state(&self) -> &NodeState {
-        &self.state
-    }
-
-    pub fn maintenance(&self) -> Option<&str> {
-        match &self.state {
-            NodeState::Listed { maintenance, .. } => maintenance.as_deref(),
-            NodeState::Staging { .. } | NodeState::Disabled => None,
-        }
+    pub const fn state(&self) -> NodeState {
+        self.state
     }
 
     pub const fn status(&self) -> Option<Status> {
         match self.state {
-            NodeState::Listed { status, .. } => Some(status),
-            NodeState::Staging { .. } | NodeState::Disabled => None,
+            NodeState::Canary => Some(Status::Canary),
+            NodeState::Active => Some(Status::Active),
+            NodeState::Draining => Some(Status::Draining),
+            NodeState::Disabled => None,
         }
-    }
-
-    pub const fn relay_drained(&self) -> bool {
-        matches!(
-            &self.state,
-            NodeState::Listed {
-                status: Status::Draining,
-                ..
-            } | NodeState::Listed {
-                maintenance: Some(_),
-                ..
-            }
-        )
     }
 
     pub fn admission(&self) -> Admission {
         match self.state {
             NodeState::Disabled => Admission::Disabled,
-            NodeState::Staging { .. } => Admission::Draining,
-            NodeState::Listed { .. }
-                if self.relay_drained() || !self.spec.roles.contains(&Role::Relay) =>
-            {
-                Admission::Draining
+            NodeState::Canary | NodeState::Active if self.spec.roles.contains(&Role::Relay) => {
+                Admission::Accepting
             }
-            NodeState::Listed { .. } => Admission::Accepting,
+            NodeState::Canary | NodeState::Active | NodeState::Draining => Admission::Draining,
         }
     }
 
@@ -109,36 +76,13 @@ impl Node {
         }
     }
 
-    /// Produces the final disabled policy for a retired node record, advancing
-    /// `version` only when retirement changes the effective relay admission.
-    pub(crate) fn retired_policy(&mut self) -> Result<NodePolicy> {
-        if self.admission() != Admission::Disabled {
-            self.bump_version()?;
-        }
-        Ok(NodePolicy {
-            version: self.version,
-            admission: Admission::Disabled,
-            anonymous: self.anonymous,
-        })
-    }
-
-    /// Mutates fleet lifecycle fields and advances `version` whenever the
-    /// derived relay `Admission` changes, preserving the anti-rollback barrier.
-    pub(crate) fn update_lifecycle<T>(
-        &mut self,
-        mutate: impl FnOnce(&mut NodeMutation<'_>) -> Result<T>,
-    ) -> Result<T> {
+    pub(crate) fn set_state(&mut self, state: NodeState) -> Result<()> {
         let before = self.admission();
-        let mut mutation = NodeMutation {
-            spec: &self.spec,
-            operation_id: &mut self.operation_id,
-            state: &mut self.state,
-        };
-        let result = mutate(&mut mutation)?;
+        self.state = state;
         if self.admission() != before {
             self.bump_version()?;
         }
-        Ok(result)
+        Ok(())
     }
 
     pub(crate) fn set_anonymous(&mut self, value: bool) -> Result<bool> {
@@ -163,6 +107,7 @@ pub struct NodeDetails {
     pub admission: Admission,
     pub report: Option<NodeLoadReport>,
     pub cutoff_ready: bool,
+    pub report_stale: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -179,11 +124,16 @@ impl NodeDetails {
             && report
                 .as_ref()
                 .is_some_and(|r| r.confirms(node.version, now) && r.load.resident_shares == 0);
+        let report_stale = node.state != NodeState::Disabled
+            && report
+                .as_ref()
+                .is_some_and(|r| now.saturating_sub(r.reported_at) > REPORT_STALE_SECONDS);
         Self {
             node,
             admission,
             report,
             cutoff_ready,
+            report_stale,
         }
     }
 }

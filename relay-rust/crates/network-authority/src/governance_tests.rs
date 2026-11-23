@@ -109,10 +109,7 @@ fn node_policy_versions_survive_same_second_changes_and_disabled_reports() {
         .unwrap()
         .unwrap();
     disabled_node
-        .update_lifecycle(|n| {
-            *n.state = crate::fleet::NodeState::Disabled;
-            Ok(())
-        })
+        .set_state(crate::fleet::NodeState::Disabled)
         .unwrap();
     save(
         &mut authority.store,

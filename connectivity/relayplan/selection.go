@@ -96,7 +96,25 @@ func (o selectionOrder) selectNetwork(plan *Plan, available int, ready, cooled [
 		return o.less(cooled[i], cooled[j])
 	})
 	target := min(TargetNetworkRegistrations, available)
-	plan.Network = selectReady(ready, available, plan.Policy)
+	var active, canaries []Candidate
+	for _, candidate := range ready {
+		if candidate.Canary {
+			canaries = append(canaries, candidate)
+		} else {
+			active = append(active, candidate)
+		}
+	}
+	plan.Network = selectReady(active, available, plan.Policy)
+	switch {
+	case len(active) >= target:
+		// A separate startup wave can reuse link slots if the active relays all fail.
+		plan.Standby = selectReady(canaries, target, plan.Policy)
+	case len(active) == 0:
+		plan.Network = selectReady(canaries, target, plan.Policy)
+	case len(canaries) != 0:
+		index := BackupIndex(active[0], canaries, plan.Policy)
+		plan.Network = append(plan.Network, canaries[index])
+	}
 	if len(ready) == 0 && len(cooled) > 0 {
 		plan.Decision.CooldownFallback = true
 		plan.Network = append(plan.Network, cooled[0])

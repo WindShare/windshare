@@ -29,6 +29,7 @@ type NetworkAdmissions struct {
 	states        []admissionState
 	changed       chan struct{}
 	primary       int
+	target        int
 	inflight      int
 	active        int
 	clock         Clock
@@ -91,15 +92,17 @@ func NewNetworkAdmissions(plan relayplan.Plan, clock Clock, serverRetryAt func(s
 	if clock == nil {
 		clock = SystemClock{}
 	}
-	a := &NetworkAdmissions{clock: clock, serverRetryAt: serverRetryAt, candidates: append([]relayplan.Candidate(nil), plan.Network...), policy: plan.Policy,
-		states: make([]admissionState, len(plan.Network)), changed: make(chan struct{}), primary: -1}
+	candidates := append(append([]relayplan.Candidate(nil), plan.Network...), plan.Standby...)
+	a := &NetworkAdmissions{clock: clock, serverRetryAt: serverRetryAt, candidates: candidates, policy: plan.Policy,
+		target: min(relayplan.TargetNetworkRegistrations, MaximumEndpoints-len(plan.Configured)),
+		states: make([]admissionState, len(candidates)), changed: make(chan struct{}), primary: -1}
 	started := clock.Now()
 	for i, candidate := range a.candidates {
 		at := candidate.ServerRetryAt
 		if !plan.Decision.CooldownFallback && candidate.CooldownUntil.After(at) {
 			at = candidate.CooldownUntil
 		}
-		a.states[i] = admissionState{notBefore: at, eligible: !at.After(started)}
+		a.states[i] = admissionState{notBefore: at, eligible: i < len(plan.Network) && !at.After(started)}
 	}
 	return a
 }
@@ -137,7 +140,7 @@ func (c admissionControl) Begin(ctx context.Context) (AttemptPermit, error) {
 			state.eligible = eligible
 			a.notify()
 		}
-		if state.eligible && a.active < relayplan.TargetNetworkRegistrations && a.inflight < relayplan.MaximumConcurrentAttempts &&
+		if state.eligible && a.active < a.target && a.inflight < relayplan.MaximumConcurrentAttempts &&
 			(a.primary < 0 || a.backup() == c.index) {
 			a.inflight++
 			a.mu.Unlock()
@@ -197,7 +200,7 @@ func (p *admissionPermit) Admit() bool {
 		a.record(index, AdmissionParked, AdmissionReasonPermitReleased)
 		return false
 	}
-	if a.active >= relayplan.TargetNetworkRegistrations {
+	if a.active >= a.target {
 		a.record(index, AdmissionParked, AdmissionReasonTargetReached)
 		return false
 	}

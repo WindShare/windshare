@@ -46,6 +46,7 @@ func cloneReady(ready Ready) Ready {
 	ready.Capability.PKHash = slices.Clone(ready.Capability.PKHash)
 	ready.Capability.Relays = slices.Clone(ready.Capability.Relays)
 	ready.Capability.NodeAliases = slices.Clone(ready.Capability.NodeAliases)
+	ready.Registrations.Candidates = slices.Clone(ready.Registrations.Candidates)
 	ready.Registrations.Admitted = slices.Clone(ready.Registrations.Admitted)
 	ready.Registrations.Rejected = slices.Clone(ready.Registrations.Rejected)
 	return ready

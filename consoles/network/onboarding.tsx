@@ -9,7 +9,7 @@ import { encode } from './identity'
 import { networkCopy } from './locales'
 import type { Discovery, NodeDetails, Publication, Role, Zone } from './model'
 
-type Props = { api: AuthorityClient; saved: (node: NodeDetails) => void; setup: Publication['setup'] | undefined }
+type Props = { api: AuthorityClient; saved: (node: NodeDetails) => void; refresh: () => Promise<void>; setup: Publication['setup'] | undefined }
 type SetupOptions = { zone: Zone; capacityMbps: number }
 
 const BYTES_PER_MBPS = 125_000
@@ -144,7 +144,7 @@ function FreshNodeSetup({ origin, setup, zone, onZoneChange, capacity, onCapacit
   </details>
 }
 
-export function EnrollNode({ api, saved, setup }: Props) {
+export function EnrollNode({ api, saved, refresh, setup }: Props) {
   const t = useCopy(networkCopy)
   const action = useAction()
   const [address, setAddress] = useState('')
@@ -175,6 +175,7 @@ export function EnrollNode({ api, saved, setup }: Props) {
           zone: data.get('zone') as Zone, region: String(data.get('region')).trim(), provider: String(data.get('provider')).trim(),
           roles, capacity_mbps: Number(data.get('capacity')) })
         saved(added)
+        await refresh()
         location.hash = 'node/' + encode(added.key)
       })
     }}>

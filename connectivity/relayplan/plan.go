@@ -128,6 +128,7 @@ type Decision struct {
 type Plan struct {
 	Configured []Candidate
 	Network    []Candidate
+	Standby    []Candidate
 	Policy     Policy
 	Decision   Decision
 }
@@ -219,6 +220,7 @@ func backupIndex(primary Candidate, candidates []Candidate, policy Policy, eligi
 		otherOperator = 1 << iota
 		otherProvider
 		pairZone
+		notCanary
 		withoutFailure
 	)
 	best, score := 0, -1
@@ -233,6 +235,9 @@ func backupIndex(primary Candidate, candidates []Candidate, policy Policy, eligi
 		value := 0
 		if candidate.history != recentlyFailed {
 			value += withoutFailure
+		}
+		if !candidate.Canary {
+			value += notCanary
 		}
 		if candidate.Zone == preferredZone {
 			value += pairZone

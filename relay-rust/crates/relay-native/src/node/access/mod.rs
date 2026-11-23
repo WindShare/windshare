@@ -42,7 +42,6 @@ pub(crate) struct Service {
 }
 
 struct State {
-    node_key: Option<[u8; 32]>,
     policy: Arc<Policy>,
     authorities: control::Authorities,
     controller: Option<Issuer>,
@@ -58,7 +57,6 @@ impl Default for Service {
     fn default() -> Self {
         Self {
             state: Arc::new(RwLock::new(State {
-                node_key: None,
                 policy: Arc::default(),
                 authorities: control::Authorities::default(),
                 controller: None,
@@ -76,9 +74,6 @@ impl Default for Service {
 }
 
 impl Service {
-    pub(super) fn identify(&self, key: [u8; 32]) {
-        self.write().node_key = Some(key);
-    }
     fn read(&self) -> RwLockReadGuard<'_, State> {
         self.state.read().expect("node access state")
     }
@@ -105,12 +100,7 @@ impl Service {
         for (&share, &(attribution, _)) in &state.residents {
             durable.entry(share).or_insert(attribution);
         }
-        // Synthetic verification probes occupy internal admission slots but are not
-        // user shares and must not hold authority drain/cutoff readiness open.
-        let resident_shares = durable
-            .into_iter()
-            .filter(|&(share, attribution)| !state.scoped_probe(share, attribution))
-            .count() as u64;
+        let resident_shares = durable.len() as u64;
         let version = state
             .authorities
             .policies
@@ -149,10 +139,6 @@ impl Service {
 
     pub fn allowed(&self, share: ShareId, attribution: Attribution) -> bool {
         !self.read().denied(share, attribution)
-    }
-
-    pub(crate) fn is_probe(&self, share: ShareId, attribution: Option<Attribution>) -> bool {
-        attribution.is_some_and(|a| self.read().scoped_probe(share, a))
     }
 
     pub(crate) fn is_owner(&self, attribution: Attribution) -> bool {
@@ -222,21 +208,16 @@ impl Service {
         let shares = state
             .residents
             .iter()
-            .filter_map(|(share, (attribution, _))| {
-                if state.scoped_probe(*share, *attribution) {
-                    return None;
+            .filter_map(|(share, (attribution, _))| match attribution {
+                Attribution::Account {
+                    issuer, account, ..
+                } if *issuer == authority => {
+                    Some(windshare_relay_access::usage::ShareAttribution {
+                        share: *share.as_bytes(),
+                        account: *account,
+                    })
                 }
-                match attribution {
-                    Attribution::Account {
-                        issuer, account, ..
-                    } if *issuer == authority => {
-                        Some(windshare_relay_access::usage::ShareAttribution {
-                            share: *share.as_bytes(),
-                            account: *account,
-                        })
-                    }
-                    _ => None,
-                }
+                _ => None,
             })
             .collect();
         drop(state);
@@ -247,17 +228,12 @@ impl Service {
         let state = self.read();
         let accounts = state
             .residents
-            .iter()
-            .filter_map(|(share, (attribution, _))| {
-                if state.scoped_probe(*share, *attribution) {
-                    return None;
-                }
-                match attribution {
-                    Attribution::Account {
-                        issuer, account, ..
-                    } => Some((*issuer, *account)),
-                    _ => None,
-                }
+            .values()
+            .filter_map(|(attribution, _)| match attribution {
+                Attribution::Account {
+                    issuer, account, ..
+                } => Some((*issuer, *account)),
+                _ => None,
             })
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
@@ -302,32 +278,11 @@ impl State {
                 .map_or(self.policy.anonymous, |p| p.anonymous)
     }
 
-    fn scoped_probe(&self, share: ShareId, attr: Attribution) -> bool {
-        let Attribution::Account {
-            issuer,
-            account,
-            credential,
-        } = attr
-        else {
-            return false;
-        };
-        Some(issuer) == self.controller
-            && account == windshare_relay_access::probe::PROBE_ACCOUNT
-            && self.node_key.is_some_and(|key| {
-                credential == windshare_relay_access::probe::credential(&key, share.as_bytes())
-            })
-    }
-
     pub(super) fn class(&self, attribution: Attribution, now: u64) -> (Class, Option<Allowance>) {
         match attribution {
             Attribution::Credential { .. } if self.owner(attribution) => (Class::Owner, None),
             Attribution::Credential { .. } => (Class::Standard, None),
             Attribution::Anonymous => (Class::Lowest, None),
-            Attribution::Account { account, .. }
-                if account == windshare_relay_access::probe::PROBE_ACCOUNT =>
-            {
-                (Class::Standard, None)
-            }
             Attribution::Account {
                 issuer, account, ..
             } => {
@@ -393,19 +348,9 @@ impl State {
         matches!(attribution, Attribution::Credential { principal, .. } if self.policy.owner_principals.contains(&principal))
     }
 
-    // Owners and controller-verified probes share reserved admission headroom so
-    // full public residency or leaked probe shares cannot block maintenance probes.
-    fn has_reserved_admission(&self, share: ShareId, attribution: Attribution) -> bool {
-        self.owner(attribution) || self.scoped_probe(share, attribution)
-    }
-
-    fn priority_for(
-        &self,
-        share: ShareId,
-        attribution: Attribution,
-    ) -> crate::connection::AdmissionPriority {
+    fn priority_for(&self, attribution: Attribution) -> crate::connection::AdmissionPriority {
         use crate::connection::AdmissionPriority;
-        if self.has_reserved_admission(share, attribution) {
+        if self.owner(attribution) {
             AdmissionPriority::Owner
         } else if matches!(attribution, Attribution::Anonymous) {
             AdmissionPriority::Anonymous

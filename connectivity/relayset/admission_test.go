@@ -200,13 +200,16 @@ func TestDeferredRegistrationHonorsSoftAndServerDeadlines(t *testing.T) {
 	}
 }
 
-func TestPendingDialRechecksConcurrentHTTPDeadline(t *testing.T) {
+func TestStandbyDialRechecksConcurrentHTTPDeadline(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		plan := admissionFixture()
 		start := time.Now()
 		first := start.Add(time.Second)
 		plan.Network[1].ServerRetryAt = first
 		plan.Network[1].Identity = "delayed"
+		plan.Network[1].Canary = true
+		plan.Standby = plan.Network[1:2]
+		plan.Network = plan.Network[:1]
 		var latest atomic.Int64
 		lookup := func(identity string) time.Time {
 			if identity == "delayed" {
@@ -216,7 +219,7 @@ func TestPendingDialRechecksConcurrentHTTPDeadline(t *testing.T) {
 		}
 		a := NewNetworkAdmissions(plan, nil, lookup)
 		done := make(chan AttemptPermit, 1)
-		go func() { p, _ := a.Control(plan.Network[1].URL).Begin(t.Context()); done <- p }()
+		go func() { p, _ := a.Control(plan.Standby[0].URL).Begin(t.Context()); done <- p }()
 		synctest.Wait()
 		latest.Store(first.Add(time.Second).UnixNano())
 		p, err := a.Control(plan.Network[0].URL).Begin(t.Context())

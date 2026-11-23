@@ -59,7 +59,15 @@ struct Services {
     stun: bool,
 }
 #[derive(Deserialize)]
+struct Authority {
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    issuer: String,
+}
+#[derive(Deserialize)]
 struct Descriptor {
+    authority: Option<Authority>,
     version: u8,
     node_id: String,
     node_key: String,
@@ -222,12 +230,29 @@ fn validate_services(
 
 /// # Errors
 /// Rejects invalid or stale signatures, mismatched endpoint identities and unusable service settings.
-pub fn inspect(origin: &str, bytes: &[u8], now: u64) -> Result<Discovery, DescriptorError> {
+pub fn inspect(
+    origin: &str,
+    bytes: &[u8],
+    now: u64,
+    issuer: &str,
+    authority_origins: &[&str],
+) -> Result<Discovery, DescriptorError> {
     let origin = public_origin(origin)
         .map_err(|_| DescriptorError::new(DiscoveryFailure::InvalidUrl, "invalid public origin"))?;
     let (value, key) = decode_verified(bytes)?;
     validate_identity_and_endpoint(&origin, &value, &key)?;
     validate_freshness(&value, now)?;
+    if !value.authority.as_ref().is_some_and(|a| {
+        a.issuer == issuer
+            && authority_origins
+                .iter()
+                .any(|origin| origin.trim_end_matches('/') == a.url.trim_end_matches('/'))
+    }) {
+        return Err(DescriptorError::new(
+            DiscoveryFailure::AuthorityMismatch,
+            "node authority issuer or URL does not match this authority",
+        ));
+    }
     let (roles, stun) = validate_services(&origin, &value)?;
     let capacity_mbps = value
         .capacity_bytes_per_second

@@ -48,11 +48,18 @@ func (s *Sender) statusLocked() SenderStatus {
 func (s *Sender) setRegistration(url string, registration routeRegistration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if current := s.routes[url]; current == registration || current.terminal {
+	s.setRegistrationLocked(url, registration)
+}
+
+func (s *Sender) setRegistrationLocked(url string, registration routeRegistration) {
+	if current, exists := s.routes[url]; !exists || current == registration || current.terminal {
 		return
 	}
 	s.routes[url] = registration
 	s.everReady = s.everReady || registration.state == RegistrationAvailable
+	if registration.terminal || registration.state == RegistrationRetrying || registration.state == RegistrationNeedsUserAuthorization {
+		s.initialFailureLocked(url)
+	}
 	if !s.stopping && s.ctx.Err() == nil && s.observer != nil {
 		s.observer(s.statusLocked())
 	}

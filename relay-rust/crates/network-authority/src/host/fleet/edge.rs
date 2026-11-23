@@ -1,11 +1,6 @@
-use super::{
-    DIRECTORY_PATH, internal, release,
-    route::{AdminRoute, Route},
-};
+use super::{Route, internal, release};
 use crate::fleet::{
-    Promote,
     descriptor::{self, MAX_DESCRIPTOR},
-    signature::{Envelope, MAX_BYTES},
     topology::{Role, Spec, public_origin},
 };
 use crate::{
@@ -62,7 +57,7 @@ pub(in crate::host) fn handles_edge(req: &Request) -> bool {
     req.method() == Method::Post
         && matches!(
             req.path().as_str(),
-            "/v1/admin/nodes/discover" | "/v1/admin/nodes" | "/v1/admin/nodes/promote"
+            "/v1/admin/nodes/discover" | "/v1/admin/nodes"
         )
 }
 #[derive(Deserialize)]
@@ -125,82 +120,18 @@ pub(super) async fn fetch_public(
     Ok(bytes)
 }
 
-pub(super) async fn mirrors_match(
-    expected: &Envelope,
-    operation_id: &str,
-    node_id: Option<&str>,
-) -> bool {
-    let Ok(release) = release() else { return false };
-    let check = async |origin: &str| {
-        let result = fetch_public(
-            &format!("{origin}{DIRECTORY_PATH}"),
-            MAX_BYTES,
-            "application/json",
-        )
-        .await
-        .map_err(anyhow::Error::from)
-        .and_then(|bytes| Envelope::decode(&bytes));
-        match result {
-            Ok(actual) => actual == *expected,
-            Err(error) => {
-                tracing::warn!(event="directory_mirror_unavailable", %operation_id, node_id, %origin, %error);
-                false
-            }
-        }
-    };
-    let (primary, backup) =
-        futures_util::future::join(check(&release.link_host), check(&release.backup_entry)).await;
-    tracing::info!(
-        event = "directory_mirrors_checked",
-        %operation_id,
-        node_id,
-        revision = %crate::fleet::publication::digest(expected).unwrap_or_default(),
-        primary,
-        backup
-    );
-    primary && backup
-}
-
 pub(in crate::host) async fn handle_edge(mut req: Request, env: &Env) -> Result<Response> {
     let cookie = req.headers().get("Cookie")?;
     let csrf = req.headers().get("X-CSRF-Token")?;
     let auth = (cookie.as_deref(), csrf.as_deref());
-    let mut verified = internal(env, Route::Admin(AdminRoute::Prepare), auth, &json!({})).await?;
+    let verified = internal(env, Route::Prepare, auth, &json!({})).await?;
     if verified.status_code() != HTTP_OK {
         return Ok(verified);
     }
     let Some(bytes) = read_body(&mut req).await? else {
         return Response::error("request too large", 413);
     };
-    if req.path() == "/v1/admin/nodes/promote" {
-        return handle_promote(&bytes, &mut verified, env, auth).await;
-    }
     handle_discover_or_enroll(&req, &bytes, env, auth).await
-}
-
-async fn handle_promote(
-    bytes: &[u8],
-    verified: &mut Response,
-    env: &Env,
-    auth: (Option<&str>, Option<&str>),
-) -> Result<Response> {
-    let Ok(command) = serde_json::from_slice::<Promote>(bytes) else {
-        return invalid();
-    };
-    let expected = verified.json::<Envelope>().await?;
-    if !mirrors_match(&expected, &command.operation_id, Some(&command.node_key)).await {
-        return routes::fault(&Fault::Denied {
-            reason: "mirror_lag".into(),
-        })
-        .map_err(failure);
-    }
-    internal(
-        env,
-        Route::Admin(AdminRoute::Promote),
-        auth,
-        &json!({"command":command,"observed_digest":crate::fleet::publication::digest(&expected).map_err(failure)?}),
-    )
-    .await
 }
 
 async fn handle_discover_or_enroll(
@@ -275,7 +206,7 @@ async fn handle_discover_or_enroll(
         operator: "official".into(),
         capacity_mbps: command.capacity_mbps,
     };
-    internal(env, Route::Admin(AdminRoute::Stage), auth, &spec).await
+    internal(env, Route::Enroll, auth, &spec).await
 }
 
 fn invalid() -> Result<Response> {
@@ -292,11 +223,20 @@ async fn discover_node(
     env: &Env,
 ) -> Result<std::result::Result<descriptor::Discovery, DiscoveryRejection>> {
     let host = url::Url::parse(origin).map_err(failure)?;
-    let release = release().map_err(failure)?;
+    let release = release(env).map_err(failure)?;
     let api = env.var("API_ORIGIN")?.to_string();
     let own = req.url()?.origin().ascii_serialization();
-    for protected in [release.link_host, release.backup_entry, api, own] {
-        let url = url::Url::parse(&protected).map_err(failure)?;
+    let direct = env.var("AUTHORITY_ORIGIN").ok().map(|v| v.to_string());
+    let issuer = env.var("AUTHORITY_ROOT")?.to_string();
+    let origins: Vec<_> = [Some(api.as_str()), direct.as_deref(), Some(own.as_str())]
+        .into_iter()
+        .flatten()
+        .collect();
+    for protected in [release.link_host.as_str(), release.backup_entry.as_str()]
+        .into_iter()
+        .chain(origins.iter().copied())
+    {
+        let url = url::Url::parse(protected).map_err(failure)?;
         if host.host() == url.host() {
             return Ok(Err(DiscoveryRejection::new(
                 DiscoveryFailure::ReservedHost,
@@ -325,8 +265,12 @@ async fn discover_node(
             return Ok(Err(DiscoveryRejection::new(reason, error.to_string())));
         }
     };
-    Ok(
-        descriptor::inspect(origin, &bytes, worker::Date::now().as_millis() / 1000)
-            .map_err(|error| DiscoveryRejection::new(error.failure, error.detail)),
+    Ok(descriptor::inspect(
+        origin,
+        &bytes,
+        worker::Date::now().as_millis() / 1000,
+        &issuer,
+        &origins,
     )
+    .map_err(|error| DiscoveryRejection::new(error.failure, error.detail)))
 }

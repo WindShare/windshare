@@ -16,7 +16,7 @@ tag = "v1"
 new_sqlite_classes = ["NetworkAuthority"]
 
 [triggers]
-crons = ["*/5 * * * *"]
+crons = ["0 * * * *"]
 
 [observability]
 enabled = true

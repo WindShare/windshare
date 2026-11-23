@@ -95,6 +95,7 @@ type RegistrationState uint8
 const (
 	RegistrationPending RegistrationState = iota
 	RegistrationNeedsUserAuthorization
+	RegistrationRetrying
 	RegistrationAvailable
 )
 
@@ -344,6 +345,9 @@ func (lifecycle *SenderLifecycle) StopRecovery() {
 		lifecycle.setRegistrationLocked(RegistrationPending)
 	}
 	lifecycle.mu.Unlock()
+	if lifecycle.config.Attempts != nil {
+		lifecycle.config.Attempts.Unavailable()
+	}
 }
 
 func (lifecycle *SenderLifecycle) Cleanup(ctx context.Context) error {

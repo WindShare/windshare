@@ -79,7 +79,7 @@ function Dashboard({ api, snapshot, update, refresh, loadMoreNodes, retry, refre
       saved={({ settings, registration_mode }) => update(current => ({ ...current, settings, registration_mode }))}
       reviewsSaved={reviews => update(current => ({ ...current, reviews }))} />
   } else if (page === 'enroll') {
-    view = <EnrollNode api={api} saved={enrollNode} setup={directory?.setup} />
+    view = <EnrollNode api={api} saved={enrollNode} refresh={refresh} setup={directory?.setup} />
   } else if (page === 'node') {
     const cached = snapshot.node_page.entries.find(entry => encode(entry.key) === id)
     view = cached ? <NodeDetail key={id} node={cached} api={api} saved={saveNode} directory={directory} refresh={refreshCurrent} />

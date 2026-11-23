@@ -210,6 +210,8 @@ pub enum DiscoveryFailure {
     DescriptorExpired,
     #[serde(rename = "node_descriptor_mismatch")]
     DescriptorMismatch,
+    #[serde(rename = "authority_mismatch")]
+    AuthorityMismatch,
 }
 impl DiscoveryFailure {
     pub const fn http_status(self) -> u16 {
@@ -218,7 +220,8 @@ impl DiscoveryFailure {
             Self::NonPublicAddress
             | Self::InvalidDescriptor
             | Self::DescriptorExpired
-            | Self::DescriptorMismatch => 422,
+            | Self::DescriptorMismatch
+            | Self::AuthorityMismatch => 422,
             Self::DnsFailed
             | Self::Unreachable
             | Self::RedirectRefused
@@ -238,6 +241,7 @@ impl DiscoveryFailure {
             Self::InvalidDescriptor => "node_invalid_descriptor",
             Self::DescriptorExpired => "node_descriptor_expired",
             Self::DescriptorMismatch => "node_descriptor_mismatch",
+            Self::AuthorityMismatch => "authority_mismatch",
         }
     }
 }

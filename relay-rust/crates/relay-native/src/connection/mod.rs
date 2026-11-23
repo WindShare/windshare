@@ -45,7 +45,6 @@ pub enum Closure {
 /// Dropping it aborts the connection; orderly terminal replies use `finish`.
 pub struct Outbox {
     bearer: Option<Bearer>,
-    pub(crate) join_lease: Option<crate::node::maintenance::JoinLease>,
     share_attribution: Arc<OnceLock<Attribution>>,
     source: Option<std::net::IpAddr>,
     connection: ConnectionRef,
@@ -70,7 +69,6 @@ pub fn channel(
     let (closure, closing) = watch::channel(Closure::Open);
     let outbox = Outbox {
         bearer: None,
-        join_lease: None,
         share_attribution: Arc::new(OnceLock::new()),
         source: None,
         connection,

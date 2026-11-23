@@ -5,33 +5,38 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/windshare/windshare/connectivity/relayplan"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/networkendpoint"
 	"github.com/windshare/windshare/core/nodedirectory"
+	"github.com/windshare/windshare/engine/networkconfig"
 	"github.com/windshare/windshare/engine/networkdirectory"
 )
 
 // PublishRelayHints retains pending registrations so a healthy relay can publish
 // immediately. An initial registration that has already ended cannot serve this share.
-func (selection Selection) PublishRelayHints(capability *link.Link, rejected []string) {
-	if len(selection.Plan.Network) == 0 && len(rejected) == 0 {
-		return
-	}
+func (selection Selection) PublishRelayHints(capability *link.Link, selected []string) []networkconfig.Candidate {
 	capability.Relays, capability.NodeAliases = nil, nil
-	for _, candidate := range selection.Plan.Configured {
-		if !slices.Contains(rejected, candidate.URL) {
-			capability.Relays = append(capability.Relays, candidate.URL)
-		}
-	}
-	for _, candidate := range selection.Plan.Network {
-		if !slices.Contains(rejected, candidate.URL) {
-			if selection.useAliases {
+	var published []networkconfig.Candidate
+	for _, group := range [][]relayplan.Candidate{selection.Plan.Configured, selection.Plan.Network, selection.Plan.Standby} {
+		for _, candidate := range group {
+			if !slices.Contains(selected, candidate.URL) {
+				continue
+			}
+			published = append(published, decisionCandidate(candidate))
+			if candidate.Alias != "" && selection.useAliases {
 				capability.NodeAliases = append(capability.NodeAliases, candidate.Alias)
 			} else {
 				capability.Relays = append(capability.Relays, candidate.URL)
 			}
 		}
 	}
+	return published
+}
+
+func decisionCandidate(candidate relayplan.Candidate) networkconfig.Candidate {
+	return networkconfig.Candidate{URL: candidate.URL, Alias: candidate.Alias, Configured: candidate.Configured,
+		CooldownUntil: candidate.CooldownUntil, ServerRetryAt: candidate.ServerRetryAt}
 }
 
 // Resolve returns immediately usable endpoints and optional bounded expansion.

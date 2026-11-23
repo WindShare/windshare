@@ -36,6 +36,7 @@ var ErrInvalidChunkSize = errors.New("invalid share block size")
 type Request struct {
 	Source      liveshare.FileSourceFactory
 	Relays      []relayprofile.Registration
+	Standby     []relayprofile.Registration
 	ChunkSize   uint32
 	Diagnostics diagnostics.Sink
 }

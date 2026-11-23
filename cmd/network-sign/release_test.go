@@ -1,4 +1,4 @@
-package networkprobe
+package main
 
 import (
 	"bytes"
@@ -28,9 +28,9 @@ func TestAuthorityOriginValidation(t *testing.T) {
 		{"https://[::1]:8443/", "https://[::1]:8443"},
 	}
 	for _, tc := range valid {
-		got, err := AuthorityOrigin(tc.raw)
+		got, err := authorityOrigin(tc.raw)
 		if err != nil || got != tc.want {
-			t.Fatalf("AuthorityOrigin(%q) = (%q, %v), want (%q, nil)", tc.raw, got, err, tc.want)
+			t.Fatalf("authorityOrigin(%q) = (%q, %v), want (%q, nil)", tc.raw, got, err, tc.want)
 		}
 	}
 	invalid := []string{
@@ -56,8 +56,8 @@ func TestAuthorityOriginValidation(t *testing.T) {
 		"https://api.example:70000",
 	}
 	for _, raw := range invalid {
-		if got, err := AuthorityOrigin(raw); err == nil {
-			t.Fatalf("AuthorityOrigin(%q) = %q, want error", raw, got)
+		if got, err := authorityOrigin(raw); err == nil {
+			t.Fatalf("authorityOrigin(%q) = %q, want error", raw, got)
 		}
 	}
 }
@@ -124,7 +124,7 @@ func TestLoadReleaseAndResolveAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gotEmbedded, err := LoadRelease("")
+	gotEmbedded, err := loadRelease("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,28 +137,28 @@ func TestLoadReleaseAndResolveAuthority(t *testing.T) {
 	if err := os.WriteFile(customPath, signedTestReleaseJSON(t, "windshare-staging", "https://staging-front.example", "https://staging-api.example/"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	custom, err := LoadRelease(customPath)
+	custom, err := loadRelease(customPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if custom.Directory.Network != "windshare-staging" || custom.LinkHost != "https://staging-front.example" || len(custom.Directory.Roots) != 2 {
 		t.Fatalf("unexpected custom release config: %+v", custom)
 	}
-	resolved, err := ResolveAuthority(custom, "")
+	resolved, err := resolveAuthority(custom, "")
 	if err != nil || resolved != "https://staging-api.example" {
-		t.Fatalf("ResolveAuthority(custom, empty) = (%q, %v)", resolved, err)
+		t.Fatalf("resolveAuthority(custom, empty) = (%q, %v)", resolved, err)
 	}
-	overridden, err := ResolveAuthority(custom, "https://override.workers.dev/")
+	overridden, err := resolveAuthority(custom, "https://override.workers.dev/")
 	if err != nil || overridden != "https://override.workers.dev" {
-		t.Fatalf("ResolveAuthority(custom, override) = (%q, %v)", overridden, err)
+		t.Fatalf("resolveAuthority(custom, override) = (%q, %v)", overridden, err)
 	}
-	if _, err := ResolveAuthority(&networkconfig.Config{}, ""); err == nil {
+	if _, err := resolveAuthority(&networkconfig.Config{}, ""); err == nil {
 		t.Fatal("missing release authority accepted")
 	}
-	if got, err := ResolveAuthority(&networkconfig.Config{}, "https://override.example"); err != nil || got != "https://override.example" {
-		t.Fatalf("ResolveAuthority(nil authority, override) = (%q, %v)", got, err)
+	if got, err := resolveAuthority(&networkconfig.Config{}, "https://override.example"); err != nil || got != "https://override.example" {
+		t.Fatalf("resolveAuthority(nil authority, override) = (%q, %v)", got, err)
 	}
-	if _, err := ResolveAuthority(&networkconfig.Config{Authority: &account.Config{URL: "http://insecure.example"}}, ""); err == nil {
+	if _, err := resolveAuthority(&networkconfig.Config{Authority: &account.Config{URL: "http://insecure.example"}}, ""); err == nil {
 		t.Fatal("insecure release authority accepted")
 	}
 
@@ -166,10 +166,10 @@ func TestLoadReleaseAndResolveAuthority(t *testing.T) {
 	if err := os.WriteFile(oversizedPath, bytes.Repeat([]byte{' '}, maxReleaseManifestBytes+1), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadRelease(oversizedPath); err == nil {
+	if _, err := loadRelease(oversizedPath); err == nil {
 		t.Fatal("oversized release manifest accepted")
 	}
-	if _, err := LoadRelease(filepath.Join(dir, "missing.json")); err == nil {
+	if _, err := loadRelease(filepath.Join(dir, "missing.json")); err == nil {
 		t.Fatal("missing release manifest accepted")
 	}
 }
