@@ -368,7 +368,8 @@ func senderResponseFinal(kind protocolsession.MessageKind) bool {
 	switch kind {
 	case protocolsession.MessageCatalogResult, protocolsession.MessageOpenResults,
 		protocolsession.MessageLeaseResult, protocolsession.MessageOperationComplete,
-		protocolsession.MessageOperationError, protocolsession.MessageLaneAttach:
+		protocolsession.MessageOperationError, protocolsession.MessageOperationRetry,
+		protocolsession.MessageLaneAttach:
 		return true
 	default:
 		return false

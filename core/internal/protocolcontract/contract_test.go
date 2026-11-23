@@ -95,7 +95,7 @@ const (
 	relayChallengeSeconds               = 30
 	joinStartingSeconds                 = 5
 	clientHelloReplaySeconds            = 300
-	operationReplayWindow               = 4096
+	operationReplayWindow               = 65536
 	applicationRelaySeconds             = 8
 	relaySessionTombstoneSeconds        = 60
 	maxOpaqueCiphertextBytes            = 64 << 10

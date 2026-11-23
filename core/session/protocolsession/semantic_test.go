@@ -79,6 +79,10 @@ func TestValidateSenderControlSemanticOwnsCoreSchemas(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	retry, err := EncodeOperationRetry(OperationRetryReasonReplayWindow)
+	if err != nil {
+		t.Fatal(err)
+	}
 	externalCalled := false
 	external := SenderControlSemanticValidatorFunc(func(MessageKind, OperationID, []byte) error {
 		externalCalled = true
@@ -88,6 +92,7 @@ func TestValidateSenderControlSemanticOwnsCoreSchemas(t *testing.T) {
 		MessageOperationError:  failure,
 		MessageScanProgress:    progress,
 		MessageSessionTerminal: terminal,
+		MessageOperationRetry:  retry,
 	} {
 		if err := validateSenderControlSemantic(external, kind, OperationID(2), body); err != nil {
 			t.Fatalf("valid core kind %d: %v", kind, err)
@@ -120,5 +125,26 @@ func TestValidateSenderControlSemanticDelegatesNonCoreKinds(t *testing.T) {
 	}
 	if err := validateSenderControlSemantic(nil, MessageCatalogResult, operationID, semantic); !errors.Is(err, ErrControlSemantic) {
 		t.Fatalf("missing external validator error = %v", err)
+	}
+}
+
+func TestOperationRetryCodecRejectsInvalidReason(t *testing.T) {
+	encoded, err := EncodeOperationRetry(OperationRetryReasonReplayWindow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reason, err := DecodeOperationRetry(encoded)
+	if err != nil || reason != OperationRetryReasonReplayWindow {
+		t.Fatalf("decode retry = (%d, %v), want (%d, nil)", reason, err, OperationRetryReasonReplayWindow)
+	}
+	if _, err := EncodeOperationRetry(OperationRetryReason(2)); !errors.Is(err, ErrInvalidOperationRetry) {
+		t.Fatalf("unknown encode reason err = %v", err)
+	}
+	invalidBody, err := EncodeBody(map[uint64]any{0: uint64(1), 1: uint64(99)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeOperationRetry(invalidBody); !errors.Is(err, ErrInvalidOperationRetry) {
+		t.Fatalf("unknown decode reason err = %v", err)
 	}
 }

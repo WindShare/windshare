@@ -9,6 +9,7 @@ import (
 
 	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session"
+	sessionobs "github.com/windshare/windshare/core/session/observation"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/requestlane"
 )
@@ -337,7 +338,52 @@ func (lanes *runtimeLanes) acceptFrame(lane *RuntimeLane, frame framechannel.Fra
 	if disposition == protocolsession.OperationSessionTerminal {
 		return protocolsession.NewPeerSessionTerminalError(message)
 	}
+	if disposition == protocolsession.OperationBelowReplayWindow {
+		lanes.respondBelowReplayWindow(lane, message)
+		return nil
+	}
 	return nil
+}
+
+func (lanes *runtimeLanes) respondBelowReplayWindow(lane *RuntimeLane, request protocolsession.Message) {
+	id, ok := request.OperationID()
+	if !ok {
+		return
+	}
+	body, err := protocolsession.EncodeOperationRetry(protocolsession.OperationRetryReasonReplayWindow)
+	if err != nil {
+		return
+	}
+	reply, err := protocolsession.NewMessage(protocolsession.MessageOperationRetry, &id, body)
+	if err != nil {
+		return
+	}
+	status := sessionobs.SendStatusNotSent
+	target := lane.identity
+	// Use non-blocking control enqueue so replying to a delayed request can
+	// never stall this lane's inbound pump behind outbound backpressure.
+	if lane.writer != nil && lane.writer.EnqueueControl(reply, nil) == nil {
+		status = sessionobs.SendStatusConfirmed
+	} else if fallback, selectErr := lanes.selectLane(nil); selectErr == nil &&
+		fallback.writer != nil && fallback.writer.EnqueueControl(reply, nil) == nil {
+		target = fallback.identity
+		status = sessionobs.SendStatusConfirmed
+	}
+	if lanes.runtime.protocolOperationTracingEnabled() {
+		lanes.runtime.traceProtocolOperation(sessionobs.ProtocolOperationObservation{
+			Stage:                  sessionobs.ProtocolOperationSenderRequestBelowWindow,
+			OperationID:            id,
+			RequestKind:            request.Kind(),
+			ResponseKind:           protocolsession.MessageOperationRetry,
+			HasResponse:            true,
+			Lane:                   target,
+			HasLane:                target.Valid(true),
+			HasSend:                true,
+			SendStatus:             status,
+			UsableLanesAtSelection: lanes.usableCount(),
+			Cause:                  sessionobs.ProtocolOperationCauseReplayWindow,
+		})
+	}
 }
 
 func (lanes *runtimeLanes) rejectInboundLocally(cause error) error {

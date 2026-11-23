@@ -23,6 +23,7 @@ const (
 	ProtocolOperationReceiverWaitingActiveCapacity
 	ProtocolOperationReceiverWaitingRetainedCapacity
 	ProtocolOperationReceiverAdmissionReady
+	ProtocolOperationSenderRequestBelowWindow
 )
 
 // SendStatus summarizes the physical transport status of an outbound protocol frame.
@@ -217,6 +218,8 @@ func (value ProtocolOperationStage) DiagnosticName() string {
 		return "receiver_waiting_retained_capacity"
 	case ProtocolOperationReceiverAdmissionReady:
 		return "receiver_admission_ready"
+	case ProtocolOperationSenderRequestBelowWindow:
+		return "sender_request_below_window"
 	default:
 		return "unknown_" + strconv.FormatUint(uint64(value), 10)
 	}

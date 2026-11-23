@@ -1,35 +1,10 @@
-import {
-  inferredRetiredRequestKind,
-  OperationTombstone,
-  requireRequestKind,
-  type ProtocolTraceContext,
-} from './operation-retirement'
+import { inferredRetiredRequestKind, OperationTombstone, requireRequestKind, type ProtocolTraceContext } from './operation-retirement'
 import { cancellationTraceReason, snapshotOperationRequest, type CancellationTraceReason } from './operation-diagnostics'
-import {
-  createReceivedProtocolError,
-  protocolMessageKindV1,
-  type ProtocolOperationSettlement,
-  type ProtocolTraceEvent,
-  type ReceivedProtocolError,
-} from './diagnostics'
-import {
-  createPeerAttemptIdentity,
-  createPeerPathIdentityValue,
-  createProtocolOperationIdentity,
-  type ProtocolCorrelation,
-} from './identities'
-import {
-  decodeOperationErrorControl,
-  peerFailureScope,
-  type MessageKind,
-  MESSAGE_KIND,
-  type SessionMessage,
-} from './message'
-import {
-  OperationContinuationAuthority,
-  RetiredPeerContinuations,
-} from './operation-continuation'
-import { type OperationCancelReason, type SessionOperation, SessionRuntimeError } from './runtime-types'
+import { createReceivedProtocolError, protocolMessageKindV1, type ProtocolOperationSettlement, type ProtocolTraceEvent, type ReceivedProtocolError } from './diagnostics'
+import { createPeerAttemptIdentity, createPeerPathIdentityValue, createProtocolOperationIdentity, type ProtocolCorrelation } from './identities'
+import { decodeOperationErrorControl, decodeOperationRetry, peerFailureScope, type MessageKind, MESSAGE_KIND, type SessionMessage } from './message'
+import { OperationContinuationAuthority, RetiredPeerContinuations } from './operation-continuation'
+import { type OperationCancelReason, OperationRetryError, type SessionOperation, SessionRuntimeError } from './runtime-types'
 
 export const SESSION_OPERATION_RESPONSE_QUEUE = 512
 export const SESSION_CONTROL_BACKLOG = 256
@@ -126,6 +101,9 @@ export class OperationQueue implements SessionOperation {
     if (available !== undefined) {
       this.#admission.release(available)
       if (this.#closed && this.#messages.length === 0) this.#settleConsumer()
+      if (available.kind === MESSAGE_KIND.operationRetry) {
+        return Promise.reject(new OperationRetryError(decodeOperationRetry(available.body)))
+      }
       return Promise.resolve(available)
     }
     if (this.#failure !== undefined) return Promise.reject(this.#failure)
@@ -186,6 +164,8 @@ export class OperationQueue implements SessionOperation {
         }
         this.#admission.charge(message)
         this.#messages.push(message)
+      } else if (message.kind === MESSAGE_KIND.operationRetry) {
+        reader.reject(new OperationRetryError(decodeOperationRetry(message.body)))
       } else {
         reader.resolve(message)
       }
@@ -522,6 +502,11 @@ export class OperationRouter {
       if (this.#retiredPeers.drops(message)) return
       if (id < 1n || id > this.#lastIssuedId) {
         throw new SessionRuntimeError('session', 'Inbound message uses an unknown operation ID')
+      }
+      if (message.kind === MESSAGE_KIND.operationRetry) {
+        // An operation-retry for an already-retired ID whose tombstone aged out
+        // of the FIFO cache is harmless; discard it without failing the session.
+        return
       }
       const requestKind = inferredRetiredRequestKind(message)
       if (requestKind === undefined) {

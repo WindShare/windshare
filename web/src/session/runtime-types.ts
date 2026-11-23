@@ -88,3 +88,17 @@ export class SessionRuntimeError extends Error {
     this.scope = scope
   }
 }
+
+/**
+ * Raised when the sender declines to admit a delayed request that fell behind
+ * its replay window and instructs the receiver to reissue it with a fresh ID.
+ */
+export class OperationRetryError extends SessionRuntimeError {
+  readonly reason: number
+
+  constructor(reason = 1, options?: ErrorOptions) {
+    super('lane', 'Operation fell behind the sender replay window and must be retried', options)
+    this.name = 'OperationRetryError'
+    this.reason = reason
+  }
+}

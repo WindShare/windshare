@@ -9,6 +9,8 @@ import (
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
+const maxOperationWindowRetries = 3
+
 // Each physical attempt owns a new operation identity. Retire the old sink and
 // cancellation authority before restarting a repeatable control transaction;
 // replaying its ID could hit the sender's completed-operation tombstone.
@@ -20,6 +22,7 @@ func runControlRequest[T any](
 	receive func(*sessioncore.Call) (T, error),
 ) (T, error) {
 	var zero T
+	windowRetries := 0
 	for {
 		if err := ctx.Err(); err != nil {
 			return zero, err
@@ -30,6 +33,16 @@ func runControlRequest[T any](
 		}
 		value, receiveErr := receive(call)
 		cleanupErr := rpc.CancelAndEnd(call, contentflow.CancelReasonOutputAbort)
+		if errors.Is(receiveErr, sessioncore.ErrOperationRetry) {
+			if cleanupErr != nil {
+				return zero, errors.Join(receiveErr, cleanupErr)
+			}
+			if windowRetries >= maxOperationWindowRetries || !rpc.Runtime().HasUsableLanes() {
+				return zero, receiveErr
+			}
+			windowRetries++
+			continue
+		}
 		if !errors.Is(receiveErr, sessioncore.ErrRequestCarrierRetired) {
 			return value, receiveErr
 		}

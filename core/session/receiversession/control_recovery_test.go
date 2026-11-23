@@ -2,12 +2,15 @@ package receiversession
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/session/contentflow"
+	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -106,4 +109,72 @@ func TestControlTransactionsSettleConfirmedFramesLostWithCarrier(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestControlTransactionsRecoverFromReplayWindowRetryAndCapAttempts(t *testing.T) {
+	fixture := newVerticalFixture(t)
+	sender, receiver, _, _ := connectObservedVerticalPair(t, fixture.senderFactory, fixture.receiverFactory)
+	defer sender.Close()
+	defer receiver.Close()
+
+	// Inject ErrOperationRetry on the first attempt of a repeatable control request and verify recovery.
+	var remainingRetries atomic.Int32
+	remainingRetries.Store(1)
+	wrapped := &retryInjectingRequestClient{requestClient: receiver.rpc, failWithRetry: &remainingRetries}
+	var attempts int
+	got, err := runControlRequest(t.Context(), wrapped, protocolsession.MessageListChildren, []byte{0xa0}, func(call *sessioncore.Call) (protocolsession.OperationID, error) {
+		attempts++
+		if remainingRetries.Add(-1) >= 0 {
+			return 0, sessioncore.ErrOperationRetry
+		}
+		return call.ID(), nil
+	})
+	if err != nil || attempts != 2 || got == 0 {
+		t.Fatalf("recovered control request = (id=%d, attempts=%d, err=%v), want 2 attempts and nil err", got, attempts, err)
+	}
+
+	// Verify bounded retry cap prevents an infinite loop against a misbehaving sender.
+	attempts = 0
+	_, err = runControlRequest(t.Context(), receiver.rpc, protocolsession.MessageListChildren, []byte{0xa0}, func(*sessioncore.Call) (int, error) {
+		attempts++
+		return 0, sessioncore.ErrOperationRetry
+	})
+	if !errors.Is(err, sessioncore.ErrOperationRetry) || attempts != maxOperationWindowRetries+1 {
+		t.Fatalf("capped control retry = (attempts=%d, err=%v), want (%d, ErrOperationRetry)", attempts, err, maxOperationWindowRetries+1)
+	}
+
+	// Verify RequestLane also recovers from ErrOperationRetry with a fresh OperationID.
+	remainingRetries.Store(1)
+	runtimeWithRetry := &Runtime{core: receiver.core, lifecycle: receiver.lifecycle, rpc: wrapped}
+	grant, err := runtimeWithRetry.RequestLane(t.Context(), 0)
+	if err != nil || grant.LaneID == 0 {
+		t.Fatalf("RequestLane after replay-window retry = (%+v, %v)", grant, err)
+	}
+}
+
+type retryInjectingRequestClient struct {
+	requestClient
+	failWithRetry *atomic.Int32
+}
+
+func (c *retryInjectingRequestClient) Await(ctx context.Context, call *sessioncore.Call) (protocolsession.Message, error) {
+	if c.failWithRetry.Add(-1) >= 0 {
+		return protocolsession.Message{}, sessioncore.ErrOperationRetry
+	}
+	return c.requestClient.Await(ctx, call)
+}
+
+func (c *retryInjectingRequestClient) AwaitCall(ctx context.Context, call *sessioncore.Call, cancelOnContext bool) (protocolsession.Message, error) {
+	if c.failWithRetry.Add(-1) >= 0 {
+		return protocolsession.Message{}, sessioncore.ErrOperationRetry
+	}
+	return c.requestClient.AwaitCall(ctx, call, cancelOnContext)
+}
+
+func (c *retryInjectingRequestClient) CancelAndEnd(call *sessioncore.Call, reason contentflow.CancelReason) error {
+	return c.requestClient.CancelAndEnd(call, reason)
+}
+
+func (c *retryInjectingRequestClient) Runtime() *sessioncore.Runtime {
+	return c.requestClient.Runtime()
 }

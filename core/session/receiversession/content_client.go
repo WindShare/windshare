@@ -341,25 +341,31 @@ func (client *receiverRevisionClient) renew(ctx context.Context, leaseID content
 	if err != nil {
 		return contentflow.RemoteLease{}, err
 	}
-	// Renewal changes the sender's acceptance window. A lost successful reply
-	// cannot be recovered by issuing another renewal, which would be too early.
-	call, err := client.rpc.Begin(ctx, protocolsession.MessageRenewLease, body)
-	if err != nil {
-		return contentflow.RemoteLease{}, err
+	// Renewal changes the sender's acceptance window, so an ambiguous lost reply
+	// cannot be retried. ErrOperationRetry proves the sender declined admission
+	// before executing the renewal, making a bounded fresh-ID retry safe.
+	for attempt := 0; ; attempt++ {
+		call, err := client.rpc.Begin(ctx, protocolsession.MessageRenewLease, body)
+		if err != nil {
+			return contentflow.RemoteLease{}, err
+		}
+		message, err := client.rpc.Await(ctx, call)
+		_ = client.rpc.CancelAndEnd(call, contentflow.CancelReasonOutputAbort)
+		if errors.Is(err, sessioncore.ErrOperationRetry) && attempt < maxOperationWindowRetries && client.rpc.Runtime().HasUsableLanes() {
+			continue
+		}
+		if err != nil {
+			return contentflow.RemoteLease{}, err
+		}
+		if message.Kind() == protocolsession.MessageOperationError {
+			return contentflow.RemoteLease{}, remoteRevisionOperationError(message)
+		}
+		if message.Kind() != protocolsession.MessageLeaseResult {
+			return contentflow.RemoteLease{}, session.ErrOperationMissing
+		}
+		unsigned := message.Body()
+		return contentflow.DecodeLeaseResult(unsigned, leaseID)
 	}
-	defer func() { _ = client.rpc.CancelAndEnd(call, contentflow.CancelReasonOutputAbort) }()
-	message, err := client.rpc.Await(ctx, call)
-	if err != nil {
-		return contentflow.RemoteLease{}, err
-	}
-	if message.Kind() == protocolsession.MessageOperationError {
-		return contentflow.RemoteLease{}, remoteRevisionOperationError(message)
-	}
-	if message.Kind() != protocolsession.MessageLeaseResult {
-		return contentflow.RemoteLease{}, session.ErrOperationMissing
-	}
-	unsigned := message.Body()
-	return contentflow.DecodeLeaseResult(unsigned, leaseID)
 }
 
 func (client *receiverRevisionClient) leaseError(leaseID content.LeaseID) error {
@@ -560,6 +566,9 @@ func (operation *receiverBlockOperation) receive(
 }
 
 func (operation *receiverBlockOperation) receiveFailure(cause error) (records.BlockRecord, error) {
+	if errors.Is(cause, sessioncore.ErrOperationRetry) {
+		return operation.reassignAfterRetirement(cause, contentflow.CancelReasonLaneRace)
+	}
 	if !errors.Is(cause, contentflow.ErrFragmentInactivity) && !errors.Is(cause, contentflow.ErrBlockResponseInactivity) {
 		return records.BlockRecord{}, cause
 	}

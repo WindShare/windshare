@@ -224,6 +224,7 @@ export class OperationContinuationAuthority {
     knownFingerprint?: string,
   ): Promise<void> {
     if (this.#state === 'closed') return
+    if (message.kind === MESSAGE_KIND.operationRetry) return
     if (message.kind === MESSAGE_KIND.peerCandidate && this.#peerBinding !== undefined) return
 
     const slot = replaySlot(message.kind)
@@ -274,6 +275,7 @@ export class OperationContinuationAuthority {
   #validateContinuation(message: SessionMessage): void {
     const expected = this.#peerBinding
     try {
+      if (message.kind === MESSAGE_KIND.operationRetry) return
       if (message.kind === MESSAGE_KIND.operationError) {
         const failure = decodeOperationErrorControl(message.body)
         if (expected !== undefined && (failure.peerAttempt === undefined ||
@@ -376,6 +378,7 @@ function isFinalResponse(kind: MessageKind): boolean {
     kind === MESSAGE_KIND.openResults ||
     kind === MESSAGE_KIND.cancel ||
     kind === MESSAGE_KIND.operationError ||
+    kind === MESSAGE_KIND.operationRetry ||
     kind === MESSAGE_KIND.operationComplete ||
     kind === MESSAGE_KIND.leaseResult ||
     kind === MESSAGE_KIND.laneAttach
@@ -396,7 +399,7 @@ export function requireOperationResponse(requestKind: MessageKind, message: Sess
 }
 
 function isResponseAllowed(request: MessageKind, response: MessageKind): boolean {
-  if (response === MESSAGE_KIND.operationError) return true
+  if (response === MESSAGE_KIND.operationError || response === MESSAGE_KIND.operationRetry) return true
   switch (request) {
     case MESSAGE_KIND.listChildren:
       return response === MESSAGE_KIND.scanProgress || response === MESSAGE_KIND.catalogResult

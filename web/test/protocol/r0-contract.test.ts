@@ -800,7 +800,7 @@ describe('R0 resource and state-machine contract', () => {
       maxSelectedRootNameBytes: '1048576',
       maxSelectedRoots: '4096',
       minChunkBytes: '1024',
-      operationReplayWindow: '4096',
+      operationReplayWindow: '65536',
       reassemblyOperation: '4194816',
       reassemblyProcess: '1073741824',
       reassemblyRecordsProcess: '256',

@@ -1,10 +1,11 @@
 import type { BlockRouteEligibility, BlockTransportRoute } from '../route-policy'
-import { SessionRuntimeError } from '../../session/runtime-types'
+import { OperationRetryError, SessionRuntimeError } from '../../session/runtime-types'
 
 const INITIAL_DIRECT_RESPONSE_MILLISECONDS = 25
 const INITIAL_RELAY_RESPONSE_MILLISECONDS = 250
 const MINIMUM_RESPONSE_MILLISECONDS = 1
 const RESPONSE_SAMPLE_WEIGHT = 0.25
+const MAXIMUM_OPERATION_WINDOW_RETRIES = 3
 
 export type LaneRequestKind = 'open_revisions' | 'list_children' | 'renew_lease' | 'release_lease'
 interface ContentQueueEstimate {
@@ -77,6 +78,7 @@ export class LaneRequests {
     operation: (route: { readonly laneId: number; readonly signal: AbortSignal }) => Promise<T>,
   ): Promise<T> {
     const signal = AbortSignal.any([this.#lifetime.signal, ...(request.signal === undefined ? [] : [request.signal])])
+    let windowRetries = 0
     while (true) {
       const reservation = await this.#reserve(request, signal)
       try {
@@ -87,6 +89,12 @@ export class LaneRequests {
         // Validate and invoke in the same turn: detach or policy changes cannot
         // invalidate an idle reservation between its last check and dispatch.
         return await this.#execute(request, signal, reservation, operation)
+      } catch (error) {
+        if (!signal.aborted && error instanceof OperationRetryError && windowRetries < MAXIMUM_OPERATION_WINDOW_RETRIES) {
+          windowRetries += 1
+          continue
+        }
+        throw error
       } finally {
         reservation.state.pending -= 1
       }

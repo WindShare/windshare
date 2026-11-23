@@ -6,8 +6,10 @@ import (
 )
 
 const (
-	DefaultActiveOperations     = 256
-	DefaultRecentTombstones     = protocolsession.OperationReplayWindow
+	DefaultActiveOperations = 256
+	// DefaultRecentTombstones bounds the per-session metadata FIFO cache
+	// independently from the compact 1-bit OperationReplayWindow bitset.
+	DefaultRecentTombstones     = 4096
 	SessionStoppedCode          = protocolsession.SessionTerminalCodeLast
 	MaximumTerminalMessageBytes = protocolsession.MaxSessionTerminalMessageBytes
 )

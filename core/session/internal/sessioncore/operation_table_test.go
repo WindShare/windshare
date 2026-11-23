@@ -119,7 +119,7 @@ func TestOperationTableSlidingReplayWindowAndHighThroughputNoBlock(t *testing.T)
 		}
 	}
 
-	// Out-of-order arrivals within the 4,096-op sliding window are accepted once and replays rejected.
+	// Out-of-order arrivals within the sliding window are accepted once and proven replays rejected.
 	admitAndFinish(10)
 	admitAndFinish(5)
 	admitAndFinish(1)
@@ -128,18 +128,72 @@ func TestOperationTableSlidingReplayWindowAndHighThroughputNoBlock(t *testing.T)
 		t.Fatalf("in-window replay of 5: err=%v, want ErrOperationIDReused", err)
 	}
 
-	// High-throughput sequential operations far exceeding OperationReplayWindow and MaxRecentTombstones
+	// High-throughput sequential operations exceeding OperationReplayWindow and MaxRecentTombstones
 	// must never block, fail, or retain unbounded tombstones.
-	for id := protocolsession.OperationID(11); id <= 5_000; id++ {
+	const highWater = protocolsession.OperationID(protocolsession.OperationReplayWindow + 1_000)
+	for id := protocolsession.OperationID(11); id <= highWater; id++ {
 		admitAndFinish(id)
 	}
 	if table.ActiveCount() != 0 || table.TombstoneCount() != 16 {
-		t.Fatalf("after 5000 ops: active=%d tombstones=%d", table.ActiveCount(), table.TombstoneCount())
+		t.Fatalf("after %d ops: active=%d tombstones=%d", highWater, table.ActiveCount(), table.TombstoneCount())
 	}
-	// IDs below (highWater - 4096) are unconditionally rejected as replayed.
-	belowWindow := operationMessageForTest(t, protocolsession.MessageListChildren, 500, []byte{0xa0})
-	if _, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, belowWindow); !errors.Is(err, protocolsession.ErrOperationIDReused) {
-		t.Fatalf("below-window replay of 500: err=%v, want ErrOperationIDReused", err)
+	// Proven in-window duplicate (evicted from 16-entry tombstone ring, still inside 65,536-bit window)
+	// must still fail with ErrOperationIDReused.
+	inWindowOld := operationMessageForTest(t, protocolsession.MessageListChildren, highWater-protocolsession.OperationReplayWindow+1, []byte{0xa0})
+	if _, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, inWindowOld); !errors.Is(err, protocolsession.ErrOperationIDReused) {
+		t.Fatalf("in-window boundary duplicate: err=%v, want ErrOperationIDReused", err)
+	}
+	// IDs strictly older than (highWater - OperationReplayWindow + 1) are classified as
+	// OperationBelowReplayWindow without terminating the session or admitting active state.
+	for _, staleID := range []protocolsession.OperationID{1, 500, highWater - protocolsession.OperationReplayWindow} {
+		belowWindow := operationMessageForTest(t, protocolsession.MessageListChildren, staleID, []byte{0xa0})
+		adm, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, belowWindow)
+		if err != nil || adm.disposition != protocolsession.OperationBelowReplayWindow {
+			t.Fatalf("below-window id %d: disp=%d err=%v, want (OperationBelowReplayWindow, nil)", staleID, adm.disposition, err)
+		}
+	}
+	if table.ActiveCount() != 0 || table.Terminated() {
+		t.Fatalf("below-window requests mutated state: active=%d terminated=%v", table.ActiveCount(), table.Terminated())
+	}
+}
+
+func TestOperationReplayWindowRingClearAndOverflowEdges(t *testing.T) {
+	var w operationReplayWindow
+	// Unseen skipped IDs across multi-word and wraparound jumps must stay Fresh while seen IDs stay Duplicate.
+	w.mark(1)
+	w.mark(200)
+	if got := w.classify(1); got != operationReplayDuplicate {
+		t.Fatalf("classify(1) = %d, want duplicate", got)
+	}
+	for _, skipped := range []protocolsession.OperationID{2, 63, 64, 65, 127, 128, 199} {
+		if got := w.classify(skipped); got != operationReplayFresh {
+			t.Fatalf("classify(%d) = %d, want fresh", skipped, got)
+		}
+	}
+	// Advance across the 65,536 ring wrap boundary by a multi-word jump so stale slot bits would collide if uncleared.
+	w.mark(protocolsession.OperationReplayWindow + 10)
+	if got := w.classify(1); got != operationReplayBelowWindow {
+		t.Fatalf("classify(1) after wrap = %d, want belowWindow", got)
+	}
+	if got := w.classify(protocolsession.OperationReplayWindow + 1); got != operationReplayFresh {
+		t.Fatalf("classify(W+1) = %d, want fresh (slot 1 must be cleared)", got)
+	}
+	if got := w.classify(200); got != operationReplayDuplicate {
+		t.Fatalf("classify(200) = %d, want duplicate", got)
+	}
+	// Near MaxUint64 jump must not overflow.
+	var top operationReplayWindow
+	const maxID = ^uint64(0)
+	top.mark(protocolsession.OperationID(maxID - 5))
+	top.mark(protocolsession.OperationID(maxID))
+	if got := top.classify(protocolsession.OperationID(maxID - 5)); got != operationReplayDuplicate {
+		t.Fatalf("near-max seen classify = %d, want duplicate", got)
+	}
+	if got := top.classify(protocolsession.OperationID(maxID - 2)); got != operationReplayFresh {
+		t.Fatalf("near-max skipped classify = %d, want fresh", got)
+	}
+	if got := top.classify(protocolsession.OperationID(maxID - protocolsession.OperationReplayWindow)); got != operationReplayBelowWindow {
+		t.Fatalf("near-max below-window classify = %d, want belowWindow", got)
 	}
 }
 

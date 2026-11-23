@@ -2,8 +2,11 @@ package receiversession
 
 import (
 	"context"
+	"errors"
+
 	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
+	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -20,23 +23,28 @@ func (runtime *Runtime) RequestLane(
 	if err != nil {
 		return protocolsession.LaneGrant{}, err
 	}
-	call, err := runtime.rpc.Begin(ctx, protocolsession.MessageLaneAttach, body)
-	if err != nil {
-		return protocolsession.LaneGrant{}, err
+	for attempt := 0; ; attempt++ {
+		call, err := runtime.rpc.Begin(ctx, protocolsession.MessageLaneAttach, body)
+		if err != nil {
+			return protocolsession.LaneGrant{}, err
+		}
+		message, err := runtime.rpc.Await(ctx, call)
+		_ = runtime.rpc.CancelAndEnd(call, contentflow.CancelReasonOutputAbort)
+		if errors.Is(err, sessioncore.ErrOperationRetry) && attempt < maxOperationWindowRetries && runtime.rpc.Runtime().HasUsableLanes() {
+			continue
+		}
+		if err != nil {
+			return protocolsession.LaneGrant{}, err
+		}
+		if message.Kind() == protocolsession.MessageOperationError {
+			return protocolsession.LaneGrant{}, remoteOperationError(message)
+		}
+		if message.Kind() != protocolsession.MessageLaneAttach {
+			return protocolsession.LaneGrant{}, session.ErrOperationMissing
+		}
+		unsigned := message.Body()
+		return protocolsession.DecodeLaneGrant(unsigned, call.ID())
 	}
-	defer func() { _ = runtime.rpc.CancelAndEnd(call, contentflow.CancelReasonOutputAbort) }()
-	message, err := runtime.rpc.Await(ctx, call)
-	if err != nil {
-		return protocolsession.LaneGrant{}, err
-	}
-	if message.Kind() == protocolsession.MessageOperationError {
-		return protocolsession.LaneGrant{}, remoteOperationError(message)
-	}
-	if message.Kind() != protocolsession.MessageLaneAttach {
-		return protocolsession.LaneGrant{}, session.ErrOperationMissing
-	}
-	unsigned := message.Body()
-	return protocolsession.DecodeLaneGrant(unsigned, call.ID())
 }
 
 func (runtime *Runtime) DetachLane(identity session.LaneIdentity) bool {

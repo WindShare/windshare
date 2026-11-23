@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { vi } from 'vitest'
 import { LaneRequests, type LaneRequestKind, type RequestSchedulingObservation } from '../../src/content/scheduling/requests'
 import { BlockReceiveWindow } from '../../src/content/scheduling/receive-window'
-import { SessionRuntimeError } from '../../src/session/runtime-types'
+import { OperationRetryError, SessionRuntimeError } from '../../src/session/runtime-types'
 import type { BlockRouteEligibility } from '../../src/content/route-policy'
 
 const DIRECT_ID = 2
@@ -179,6 +179,26 @@ describe('latency-sensitive request routing', () => {
     await expect(requests.run({ kind: 'open_revisions' }, async () => { calls += 1; throw failure })).rejects.toBe(failure)
     expect(calls).toBe(1)
     expect(await requests.run({ kind: 'open_revisions' }, async route => route.laneId)).toBe(RELAY_ID)
+    requests.close()
+  })
+
+  it('retries OperationRetryError onto a healthier lane and caps repeated retries', async () => {
+    const requests = router()
+    const triedLanes: number[] = []
+    const recovered = await requests.run({ kind: 'list_children' }, async route => {
+      triedLanes.push(route.laneId)
+      if (triedLanes.length === 1) throw new OperationRetryError()
+      return route.laneId
+    })
+    expect(triedLanes).toEqual([DIRECT_ID, RELAY_ID])
+    expect(recovered).toBe(RELAY_ID)
+
+    let attempts = 0
+    await expect(requests.run({ kind: 'list_children' }, async () => {
+      attempts += 1
+      throw new OperationRetryError()
+    })).rejects.toBeInstanceOf(OperationRetryError)
+    expect(attempts).toBe(4)
     requests.close()
   })
 

@@ -168,7 +168,8 @@ func (q *inboundQueue) routeAdmittedLocked(
 	if err != nil || admission.disposition == protocolsession.OperationDrop {
 		return admission.disposition, err
 	}
-	if admission.disposition == protocolsession.OperationSessionTerminal {
+	if admission.disposition == protocolsession.OperationSessionTerminal ||
+		admission.disposition == protocolsession.OperationBelowReplayWindow {
 		return admission.disposition, nil
 	}
 	event := routeEvent{

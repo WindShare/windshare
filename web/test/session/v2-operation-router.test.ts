@@ -1,14 +1,16 @@
 import { describe, expect, it } from 'vitest'
 
-import { encodeBody, encodeMessage, MESSAGE_KIND } from '../../src/session/message'
+import { encodeBody, encodeMessage, MESSAGE_KIND, OPERATION_RETRY_REASON, validateSenderControlBody } from '../../src/session/message'
 import type { ProtocolTraceEvent } from '../../src/session/diagnostics'
 import { createProtocolSessionIdentity } from '../../src/session/identities'
 import { MAXIMUM_PEER_CANDIDATES } from '../../src/session/operation-continuation'
 import {
   MAXIMUM_ACTIVE_OPERATIONS,
+  MAXIMUM_RECENT_TOMBSTONES,
   SESSION_CONTROL_BACKLOG,
   OperationRouter,
 } from '../../src/session/operation-router'
+import { OperationRetryError } from '../../src/session/runtime-types'
 
 const EMPTY_REQUEST_BODY = encodeBody([])
 const EXACT_CANDIDATE_REPLAY_STRESS_COUNT = 300
@@ -611,6 +613,50 @@ describe('v2 operation tombstone and admission ownership', () => {
     )).toThrow(
       /Active operation budget is exhausted/,
     )
+  })
+
+  it('rejects active operations with OperationRetryError without ending the session and ignores retired retries', async () => {
+    let terminated = false
+    const router = new OperationRouter(() => { terminated = true })
+    const retryBody = encodeBody(new Map<number, unknown>([[0, 1], [1, OPERATION_RETRY_REASON.replayWindow]]))
+    expect(() => validateSenderControlBody(MESSAGE_KIND.operationRetry, retryBody)).not.toThrow()
+    expect(() => validateSenderControlBody(
+      MESSAGE_KIND.operationRetry,
+      encodeBody(new Map<number, unknown>([[0, 1], [1, 99]])),
+    )).toThrow()
+
+    // Waiting reader path.
+    const active = router.create(MESSAGE_KIND.listChildren, EMPTY_REQUEST_BODY)
+    const waiting = active.next()
+    await router.route(encodeMessage(MESSAGE_KIND.operationRetry, active.id, retryBody))
+    await expect(waiting).rejects.toBeInstanceOf(OperationRetryError)
+    expect(router.owns(active)).toBe(false)
+    expect(terminated).toBe(false)
+
+    // Buffered message path (retry arrives before next() is called).
+    const buffered = router.create(MESSAGE_KIND.openRevisions, EMPTY_REQUEST_BODY)
+    await router.route(encodeMessage(MESSAGE_KIND.operationRetry, buffered.id, retryBody))
+    await expect(buffered.next()).rejects.toBeInstanceOf(OperationRetryError)
+
+    // Tombstoned (remote-final) operation safely drops a late operationRetry.
+    const completed = router.create(MESSAGE_KIND.listChildren, EMPTY_REQUEST_BODY)
+    await router.route(encodeMessage(
+      MESSAGE_KIND.catalogResult,
+      completed.id,
+      encodeBody(new Map<number, unknown>([[0, 1], [1, identity(99)]])),
+    ))
+    await expect(router.route(encodeMessage(MESSAGE_KIND.operationRetry, completed.id, retryBody))).resolves.toBeUndefined()
+
+    // Evicted tombstone (id <= lastIssuedId) safely drops operationRetry; unknown future ID still fails closed.
+    const evictedId = completed.id
+    for (let index = 0; index < MAXIMUM_RECENT_TOMBSTONES + 2; index += 1) {
+      const filler = router.create(MESSAGE_KIND.listChildren, EMPTY_REQUEST_BODY)
+      filler.close()
+    }
+    await expect(router.route(encodeMessage(MESSAGE_KIND.operationRetry, evictedId, retryBody))).resolves.toBeUndefined()
+    await expect(router.route(encodeMessage(MESSAGE_KIND.operationRetry, 999_999n, retryBody)))
+      .rejects.toMatchObject({ scope: 'session' })
+    expect(terminated).toBe(false)
   })
 })
 

@@ -20,6 +20,7 @@ const operationResponseFrames = 512
 var (
 	ErrOperationIDExhausted     = errors.New("session runtime operation identity space is exhausted")
 	ErrRequestCarrierRetired    = fmt.Errorf("%w: request carrier retired before response", ErrLaneUnavailable)
+	ErrOperationRetry           = errors.New("session runtime operation fell behind sender replay window")
 	errRequestNotDelivered      = errors.New("session runtime request was not delivered")
 	errContinuationNotDelivered = errors.New("session runtime continuation was not delivered")
 	errRPCOperationAuthority    = errors.New("session runtime request admission returned incomplete operation authority")
@@ -86,6 +87,7 @@ func (client *Requests) Register() error {
 		protocolsession.MessageBlockFragment,
 		protocolsession.MessageOperationComplete,
 		protocolsession.MessageOperationError,
+		protocolsession.MessageOperationRetry,
 		protocolsession.MessageScanProgress,
 		protocolsession.MessageLaneAttach,
 		protocolsession.MessagePeerAnswer,
@@ -478,8 +480,8 @@ func (client *Requests) AwaitCall(
 		case <-carrierRetired:
 			select {
 			case response := <-call.messages:
-				if message, accepted := call.acceptResponse(response); accepted {
-					return message, nil
+				if message, accepted, err := call.acceptAwaitedResponse(response); accepted {
+					return message, err
 				}
 				continue
 			default:
@@ -491,11 +493,23 @@ func (client *Requests) AwaitCall(
 			call.RecordTraceFailure(ErrRequestCarrierRetired)
 			return protocolsession.Message{}, ErrRequestCarrierRetired
 		case response := <-call.messages:
-			if message, accepted := call.acceptResponse(response); accepted {
-				return message, nil
+			if message, accepted, err := call.acceptAwaitedResponse(response); accepted {
+				return message, err
 			}
 		}
 	}
+}
+
+func (call *Call) acceptAwaitedResponse(response operationResponse) (protocolsession.Message, bool, error) {
+	message, accepted := call.acceptResponse(response)
+	if !accepted {
+		return protocolsession.Message{}, false, nil
+	}
+	if message.Kind() == protocolsession.MessageOperationRetry {
+		call.RecordTraceFailure(ErrOperationRetry)
+		return protocolsession.Message{}, true, ErrOperationRetry
+	}
+	return message, true, nil
 }
 
 func (client *Requests) End(call *Call) {

@@ -35,6 +35,11 @@ export const MESSAGE_KIND = Object.freeze({
   peerCandidate: 18,
   peerPathControl: 19,
   turnControl: 20,
+  operationRetry: 21,
+} as const)
+
+export const OPERATION_RETRY_REASON = Object.freeze({
+  replayWindow: 1,
 } as const)
 
 export const PEER_OPERATION_CODE = Object.freeze({
@@ -326,6 +331,9 @@ export function validateSenderControlBody(kind: MessageKind, body: Uint8Array): 
     case MESSAGE_KIND.peerCandidate:
       validatePeerCandidate(body)
       return
+    case MESSAGE_KIND.operationRetry:
+      decodeOperationRetry(body)
+      return
     default:
       throw new MessageError('Inbound sender control kind has no closed validator')
   }
@@ -408,6 +416,20 @@ function validateOperationComplete(body: Uint8Array): void {
   )
   requireSchema(fields.get(0), 'operation complete')
   requireUint32(fields.get(1), 'operation result count')
+}
+
+export function decodeOperationRetry(body: Uint8Array): number {
+  const fields = requireNumericMap(
+    decodeCanonicalCbor(body, MAXIMUM_PLAINTEXT_BYTES, 'operation retry'),
+    [0, 1],
+    'operation retry',
+  )
+  requireSchema(fields.get(0), 'operation retry')
+  const reason = requireUnsigned(fields.get(1), 'operation retry reason')
+  if (reason !== BigInt(OPERATION_RETRY_REASON.replayWindow)) {
+    throw new MessageError('Operation retry reason is outside its registry')
+  }
+  return Number(reason)
 }
 
 function validateLeaseResult(body: Uint8Array): void {

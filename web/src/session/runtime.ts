@@ -55,11 +55,14 @@ import {
   type LaneTermination,
   OPERATION_CANCEL_REASON,
   type OperationCancellation,
+  OperationRetryError,
   type ReceiverSessionOptions,
   type SessionOperation,
   SessionRuntimeError,
 } from './runtime-types'
 import type { SessionKeys } from './transcript'
+
+const MAXIMUM_OPERATION_WINDOW_RETRIES = 3
 
 export { SESSION_HANDSHAKE_TIMEOUT_MILLISECONDS } from './lane-admission'
 
@@ -225,17 +228,29 @@ export class ReceiverSessionRuntime {
     requestedLaneId = 0,
     options: LaneGrantRequestOptions = {},
   ): Promise<LaneGrant> {
-    const operation = await this.beginOperation(
-      MESSAGE_KIND.laneAttach,
-      encodeLaneAttachRequest(requestedLaneId),
-      options,
-    )
-    this.#emitProtocolTrace(() => Object.freeze({
-      eventName: 'lane_transition',
-      transition: 'grant_requested',
-      correlation: this.operationCorrelation(operation),
-    }))
-    const message = await operation.next(options.signal)
+    let operation!: SessionOperation
+    let message!: SessionMessage
+    for (let attempt = 0; ; attempt += 1) {
+      operation = await this.beginOperation(
+        MESSAGE_KIND.laneAttach,
+        encodeLaneAttachRequest(requestedLaneId),
+        options,
+      )
+      this.#emitProtocolTrace(() => Object.freeze({
+        eventName: 'lane_transition',
+        transition: 'grant_requested',
+        correlation: this.operationCorrelation(operation),
+      }))
+      try {
+        message = await operation.next(options.signal)
+        break
+      } catch (error) {
+        if (!options.signal?.aborted && error instanceof OperationRetryError && attempt < MAXIMUM_OPERATION_WINDOW_RETRIES) {
+          continue
+        }
+        throw error
+      }
+    }
     if (message.kind === MESSAGE_KIND.operationError) {
       throw new SessionRuntimeError('lane', 'Sender rejected the lane grant request')
     }

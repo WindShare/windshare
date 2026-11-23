@@ -55,8 +55,9 @@ func (value Role) DiagnosticName() string {
 const (
 	// OperationReplayWindow is the width (in operation IDs) of the sender's
 	// sliding duplicate-detection bitmap, accommodating cross-lane reordering
-	// without per-operation wall-clock tombstone retention.
-	OperationReplayWindow = 4096
+	// without per-operation wall-clock tombstone retention. 65,536 IDs occupy
+	// 8 KiB per session and cover >65 seconds at 1,000 operations/sec.
+	OperationReplayWindow = 65536
 
 	ControlQueueFrameLimit    = 256
 	ControlQueueByteLimit     = 4 * 1024 * 1024
@@ -156,13 +157,14 @@ var DefaultRouterLimits = RouterLimits{
 }
 
 // OperationDisposition reports whether an authenticated message is delivered,
-// idempotently dropped, or terminates the session.
+// idempotently dropped, terminates the session, or fell behind the replay window.
 type OperationDisposition uint8
 
 const (
 	OperationDeliver OperationDisposition = iota
 	OperationDrop
 	OperationSessionTerminal
+	OperationBelowReplayWindow
 )
 
 // OperationState is the read-only authority query backing an explicit Operation handle.
@@ -242,7 +244,7 @@ func (terminal *PeerSessionTerminalError) Terminal() (SessionTerminal, error) {
 }
 
 func MessageAllowedForOperation(requestKind, messageKind MessageKind) bool {
-	if messageKind == MessageOperationError {
+	if messageKind == MessageOperationError || messageKind == MessageOperationRetry {
 		return true
 	}
 	switch requestKind {
@@ -280,7 +282,8 @@ func ValidateKindDirection(direction Direction, kind MessageKind) error {
 		case MessageCatalogResult, MessageOpenResults, MessageBlockFragment,
 			MessageOperationError, MessageSessionTerminal, MessageLaneAttach,
 			MessageScanProgress, MessageOperationComplete, MessageLeaseResult,
-			MessagePeerAnswer, MessagePeerCandidate, MessagePeerPathControl, MessageTURNControl:
+			MessagePeerAnswer, MessagePeerCandidate, MessagePeerPathControl,
+			MessageTURNControl, MessageOperationRetry:
 			return nil
 		}
 	}

@@ -13,7 +13,7 @@ import type { LaneGrant } from '../../src/session/lane-codec'
 import { encodeCanonicalCbor } from '../../src/protocol/cbor'
 import { encodeTURNDemand } from '../../src/protocol/turn-control'
 import { EnvelopeOpener } from '../../src/session/envelope'
-import { encodeMessage, MESSAGE_KIND } from '../../src/session/message'
+import { encodeMessage, MESSAGE_KIND, OPERATION_RETRY_REASON } from '../../src/session/message'
 import type { ReceiverSessionOptions } from '../../src/session/runtime-types'
 import type { SessionKeys } from '../../src/session/transcript'
 import { b64ToBytes, loadVectorFile, type VectorCase } from '../vectors'
@@ -356,6 +356,39 @@ describe('receiver runtime caller-owned lane admission', () => {
     })
     expect(channel.closes).toBe(1)
     await runtime.close()
+  })
+
+  it('retries requestLaneGrant with a fresh operation ID on operationRetry without closing the session', async () => {
+    const { runtime, initialChannel } = runtimeFixture()
+    try {
+      const retryBody = encodeCanonicalCbor(new Map<number, unknown>([[0, 1], [1, OPERATION_RETRY_REASON.replayWindow]]))
+      const grantBody = encodeCanonicalCbor(new Map<number, unknown>([
+        [0, 1],
+        [1, 1],
+        [2, lane.attachedLaneId],
+        [3, lane.attachedLaneEpoch],
+        [4, b64ToBytes(lane.attachNonceB64)],
+      ]))
+      const openSpy = vi.spyOn(EnvelopeOpener.prototype, 'open')
+      openSpy
+        .mockResolvedValueOnce({ sequence: 0n, plaintext: encodeMessage(MESSAGE_KIND.operationRetry, 1n, retryBody).plaintext })
+        .mockResolvedValueOnce({ sequence: 1n, plaintext: encodeMessage(MESSAGE_KIND.laneAttach, 2n, grantBody).plaintext })
+
+      const pendingGrant = runtime.requestLaneGrant(0)
+      await vi.waitFor(() => expect(initialChannel.sent).toHaveLength(1))
+      initialChannel.receive(new Uint8Array())
+      await vi.waitFor(() => expect(initialChannel.sent).toHaveLength(2))
+      initialChannel.receive(new Uint8Array())
+
+      const granted = await pendingGrant
+      expect(granted.laneId).toBe(lane.attachedLaneId)
+      expect(granted.laneEpoch).toBe(lane.attachedLaneEpoch)
+      expect(granted.grantOperationId).toBe(2n)
+      expect(runtime.isClosed).toBe(false)
+    } finally {
+      vi.restoreAllMocks()
+      await runtime.close()
+    }
   })
 })
 

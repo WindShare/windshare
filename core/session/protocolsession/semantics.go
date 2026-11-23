@@ -183,6 +183,8 @@ func validateSenderControlSemantic(
 		err = ValidateSessionControlBody(RoleSender, kind, semantic)
 	case MessageSessionTerminal:
 		_, err = DecodeSessionTerminal(semantic)
+	case MessageOperationRetry:
+		_, err = DecodeOperationRetry(semantic)
 	default:
 		if external == nil {
 			return ErrControlSemantic
@@ -308,4 +310,47 @@ func DecodeSessionTerminal(encoded []byte) (SessionTerminal, error) {
 		return SessionTerminal{}, errors.Join(ErrInvalidSessionTerminal, err)
 	}
 	return terminal, nil
+}
+
+// OperationRetryReason identifies why the sender declined to admit a request
+// without terminating the session, asking the receiver to reissue it with a
+// fresh OperationID.
+type OperationRetryReason uint8
+
+const (
+	OperationRetryReasonReplayWindow OperationRetryReason = 1
+)
+
+var ErrInvalidOperationRetry = errors.New("operation retry body is invalid")
+
+func EncodeOperationRetry(reason OperationRetryReason) ([]byte, error) {
+	if reason != OperationRetryReasonReplayWindow {
+		return nil, ErrInvalidOperationRetry
+	}
+	return EncodeBody(map[uint64]any{
+		0: controlSemanticSchemaVersion,
+		1: uint64(reason),
+	})
+}
+
+func DecodeOperationRetry(encoded []byte) (OperationRetryReason, error) {
+	if err := validateCanonicalBody(encoded); err != nil {
+		return 0, errors.Join(ErrInvalidOperationRetry, err)
+	}
+	var fields map[uint64]any
+	if err := messageDecMode.Unmarshal(encoded, &fields); err != nil || len(fields) != 2 {
+		return 0, ErrInvalidOperationRetry
+	}
+	version, versionOK := fields[0].(uint64)
+	reasonValue, reasonOK := fields[1].(uint64)
+	if !versionOK || version != controlSemanticSchemaVersion || !reasonOK ||
+		reasonValue != uint64(OperationRetryReasonReplayWindow) {
+		return 0, ErrInvalidOperationRetry
+	}
+	reason := OperationRetryReason(reasonValue)
+	canonical, err := EncodeOperationRetry(reason)
+	if err != nil || !bytes.Equal(canonical, encoded) {
+		return 0, errors.Join(ErrInvalidOperationRetry, err)
+	}
+	return reason, nil
 }

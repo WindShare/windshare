@@ -36,6 +36,7 @@ const (
 	MessagePeerCandidate     MessageKind = 18
 	MessagePeerPathControl   MessageKind = 19
 	MessageTURNControl       MessageKind = 20
+	MessageOperationRetry    MessageKind = 21
 )
 
 const fragmentRoutingHeaderBytes = 4 + OperationIDBytes
@@ -318,7 +319,7 @@ func (m Message) OperationFingerprint(direction Direction) [sha256.Size]byte {
 }
 
 func (kind MessageKind) Valid() bool {
-	return kind >= MessageListChildren && kind <= MessageTURNControl
+	return kind >= MessageListChildren && kind <= MessageOperationRetry
 }
 
 // Session controls outlive negotiation operations and never acquire their permits.
@@ -339,7 +340,8 @@ func (kind MessageKind) IsRequest() bool {
 func (kind MessageKind) IsFinal() bool {
 	switch kind {
 	case MessageCatalogResult, MessageOpenResults, MessageCancel,
-		MessageOperationError, MessageOperationComplete, MessageLeaseResult:
+		MessageOperationError, MessageOperationComplete, MessageLeaseResult,
+		MessageOperationRetry:
 		return true
 	default:
 		return false
@@ -389,6 +391,8 @@ func (value MessageKind) DiagnosticName() string {
 		return "peer_path_control"
 	case MessageTURNControl:
 		return "turn_control"
+	case MessageOperationRetry:
+		return "operation_retry"
 	default:
 		return "unknown_" + strconv.FormatUint(uint64(value), 10)
 	}

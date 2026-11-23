@@ -16,6 +16,10 @@ func (table *operationTable) observeTombstoneLocked(
 	if message.Kind() == protocolsession.MessageCancel {
 		return protocolsession.OperationDrop, nil
 	}
+	if direction == protocolsession.DirectionSenderToReceiver && message.Kind() == protocolsession.MessageOperationRetry {
+		// An advisory replay-window retry for an already-settled operation is harmless.
+		return protocolsession.OperationDrop, nil
+	}
 	if tombstone.cancelled {
 		return table.observeCancelledTombstoneLocked(id, tombstone, direction, message)
 	}
@@ -133,7 +137,7 @@ func (table *operationTable) AdmitOutboundRequest(
 	if !message.Kind().IsRequest() && message.Kind() != protocolsession.MessageLaneAttach {
 		return protocolsession.Operation{}, 0, false, nil, protocolsession.ErrUnexpectedOperation
 	}
-	if table.currentRecordLocked(id) != nil || table.seen.contains(id) {
+	if table.currentRecordLocked(id) != nil || table.seen.classify(id) != operationReplayFresh {
 		return protocolsession.Operation{}, 0, false, nil, protocolsession.ErrOperationIDReused
 	}
 	_, rec, err := table.beginOperationLocked(id, protocolsession.DirectionReceiverToSender, session.LaneIdentity{}, message, violationHandler)

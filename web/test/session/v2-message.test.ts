@@ -31,7 +31,7 @@ describe('v2 session wire registry', () => {
     },
   )
 
-  it.each([0n, 21n, 255n, 0xffffffffffffffffn, BigInt(MESSAGE_KIND.blockFragment)])(
+  it.each([0n, 22n, 255n, 0xffffffffffffffffn, BigInt(MESSAGE_KIND.blockFragment)])(
     'rejects unknown kinds and the data codec on the control path: %s', kind => {
       const plaintext = encodeCanonicalCbor(new Map<number, unknown>([[0, kind], [1, null], [2, null]]))
       expect(() => decodeMessage(plaintext)).toThrow('unknown or uses the wrong codec')

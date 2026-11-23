@@ -39,7 +39,7 @@ export const PROTOCOL_MESSAGE_KINDS = Object.freeze([
   'lease_result',
   'peer_answer',
   'peer_candidate',
-  'peer_path_control', 'turn_control',
+  'peer_path_control', 'turn_control', 'operation_retry',
 ] as const)
 
 export type ProtocolMessageKind = (typeof PROTOCOL_MESSAGE_KINDS)[number]
@@ -355,5 +355,6 @@ export function protocolMessageKindV1(kind: MessageKind): ProtocolMessageKind {
     case MESSAGE_KIND.peerCandidate: return 'peer_candidate'
     case MESSAGE_KIND.turnControl: return 'turn_control'
     case MESSAGE_KIND.peerPathControl: return 'peer_path_control'
+    case MESSAGE_KIND.operationRetry: return 'operation_retry'
   }
 }

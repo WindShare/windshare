@@ -17,6 +17,7 @@ const (
 	ProtocolOperationCauseOperationClosed
 	ProtocolOperationCauseProtocolFailure
 	ProtocolOperationCauseSuperseded
+	ProtocolOperationCauseReplayWindow
 )
 
 // IsLifecycle identifies causes that alone cannot establish an operation fault.
@@ -58,6 +59,8 @@ func (value ProtocolOperationCause) DiagnosticName() string {
 		return "protocol_failure"
 	case ProtocolOperationCauseSuperseded:
 		return "superseded"
+	case ProtocolOperationCauseReplayWindow:
+		return "replay_window"
 	default:
 		return "unknown_" + strconv.FormatUint(uint64(value), 10)
 	}

@@ -11,27 +11,40 @@ import (
 
 const (
 	operationReplayWindowBits  = protocolsession.OperationReplayWindow
+	operationReplayWindowMask  = operationReplayWindowBits - 1
 	operationReplayWindowWords = operationReplayWindowBits / 64
 )
 
-// operationReplayWindow is a fixed 512-byte sliding bitset that tracks seen
-// monotonic 64-bit operation IDs across multi-lane reordering without retaining
-// per-operation wall-clock tombstones or throttling session throughput.
+type operationReplayStatus uint8
+
+const (
+	operationReplayFresh operationReplayStatus = iota
+	operationReplayDuplicate
+	operationReplayBelowWindow
+)
+
+// operationReplayWindow is a fixed 8 KiB O(1) ring-buffer bitset that tracks
+// seen monotonic 64-bit operation IDs across multi-lane reordering without
+// retaining per-operation wall-clock tombstones or throttling session throughput.
 type operationReplayWindow struct {
 	highWater uint64
 	bits      [operationReplayWindowWords]uint64
 }
 
-func (w *operationReplayWindow) contains(id protocolsession.OperationID) bool {
+func (w *operationReplayWindow) classify(id protocolsession.OperationID) operationReplayStatus {
 	v := id.Uint64()
 	if v == 0 || v > w.highWater {
-		return false
+		return operationReplayFresh
 	}
 	diff := w.highWater - v
 	if diff >= operationReplayWindowBits {
-		return true
+		return operationReplayBelowWindow
 	}
-	return (w.bits[diff/64] & (uint64(1) << (diff % 64))) != 0
+	slot := v & operationReplayWindowMask
+	if (w.bits[slot>>6] & (uint64(1) << (slot & 63))) != 0 {
+		return operationReplayDuplicate
+	}
+	return operationReplayFresh
 }
 
 func (w *operationReplayWindow) mark(id protocolsession.OperationID) {
@@ -39,37 +52,52 @@ func (w *operationReplayWindow) mark(id protocolsession.OperationID) {
 	if v == 0 {
 		return
 	}
+	if w.highWater == 0 {
+		w.highWater = v
+		slot := v & operationReplayWindowMask
+		w.bits[slot>>6] |= uint64(1) << (slot & 63)
+		return
+	}
 	if v > w.highWater {
 		shift := v - w.highWater
 		if shift >= operationReplayWindowBits {
 			clear(w.bits[:])
-		} else {
-			w.shiftLeft(shift)
+		} else if shift > 1 {
+			w.clearInterval(w.highWater+1, v)
 		}
 		w.highWater = v
-		w.bits[0] |= 1
+		slot := v & operationReplayWindowMask
+		w.bits[slot>>6] |= uint64(1) << (slot & 63)
 		return
 	}
-	diff := w.highWater - v
-	if diff < operationReplayWindowBits {
-		w.bits[diff/64] |= uint64(1) << (diff % 64)
+	if w.highWater-v < operationReplayWindowBits {
+		slot := v & operationReplayWindowMask
+		w.bits[slot>>6] |= uint64(1) << (slot & 63)
 	}
 }
 
-func (w *operationReplayWindow) shiftLeft(shift uint64) {
-	wordShift := int(shift / 64)
-	bitShift := shift % 64
-	for i := operationReplayWindowWords - 1; i >= 0; i-- {
-		src := i - wordShift
-		if src < 0 {
-			w.bits[i] = 0
+// clearInterval zeroes ring-buffer bits for every skipped ID in [from, to).
+// Callers guarantee 0 < to - from < operationReplayWindowBits.
+func (w *operationReplayWindow) clearInterval(from, to uint64) {
+	for k := from; k < to; {
+		slot := k & operationReplayWindowMask
+		word := slot >> 6
+		bitOffset := slot & 63
+		remaining := to - k
+		if bitOffset == 0 && remaining >= 64 {
+			w.bits[word] = 0
+			k += 64
 			continue
 		}
-		val := w.bits[src] << bitShift
-		if bitShift > 0 && src > 0 {
-			val |= w.bits[src-1] >> (64 - bitShift)
+		count := min(remaining, 64-bitOffset)
+		var clearMask uint64
+		if count == 64 {
+			clearMask = ^uint64(0)
+		} else {
+			clearMask = ((uint64(1) << count) - 1) << bitOffset
 		}
-		w.bits[i] = val
+		w.bits[word] &^= clearMask
+		k += count
 	}
 }
 
@@ -274,7 +302,7 @@ func (table *operationTable) hasCurrentID(id protocolsession.OperationID) (bool,
 	if table.terminal {
 		return false, true
 	}
-	return table.currentRecordLocked(id) != nil || table.seen.contains(id), false
+	return table.currentRecordLocked(id) != nil || table.seen.classify(id) != operationReplayFresh, false
 }
 
 // WaitForCapacity waits until an active operation slot is available. Because
@@ -554,8 +582,8 @@ func (table *operationTable) beginOperationLocked(
 	violationHandler func(protocolsession.AuthenticatedOperationViolation),
 ) (protocolsession.OperationDisposition, *operationRecord, error) {
 	if message.Kind() == protocolsession.MessageCancel {
-		if table.seen.contains(id) {
-			// Already seen and evicted from the recent tombstone ring.
+		if table.seen.classify(id) != operationReplayFresh {
+			// Already seen or older than the replay window; nothing active to cancel.
 			return protocolsession.OperationDrop, nil, nil
 		}
 		table.seen.mark(id)
@@ -567,8 +595,15 @@ func (table *operationTable) beginOperationLocked(
 		(!message.Kind().IsRequest() && message.Kind() != protocolsession.MessageLaneAttach) {
 		return protocolsession.OperationDrop, nil, protocolsession.ErrUnknownOperation
 	}
-	if table.seen.contains(id) {
+	switch table.seen.classify(id) {
+	case operationReplayDuplicate:
 		return protocolsession.OperationDrop, nil, protocolsession.ErrOperationIDReused
+	case operationReplayBelowWindow:
+		// An ID older than the bounded sliding window can be a legitimate request
+		// delayed on a slow lane rather than a proven replay. Refuse admission to
+		// preserve operation-ID uniqueness, but let the lane request a fresh-ID retry
+		// instead of terminating the healthy session.
+		return protocolsession.OperationBelowReplayWindow, nil, nil
 	}
 	if len(table.active) >= table.limits.MaxActive {
 		return protocolsession.OperationDrop, nil, protocolsession.ErrActiveOperationBudget

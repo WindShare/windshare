@@ -88,6 +88,8 @@ func protocolOperationCause(err error) sessionobs.ProtocolOperationCause {
 		return sessionobs.ProtocolOperationCauseRuntimeClosed
 	case errors.Is(err, ErrLaneUnavailable):
 		return sessionobs.ProtocolOperationCauseLaneUnavailable
+	case errors.Is(err, ErrOperationRetry):
+		return sessionobs.ProtocolOperationCauseReplayWindow
 	case errors.Is(err, protocolsession.ErrWriterStopped):
 		return sessionobs.ProtocolOperationCauseWriterStopped
 	case err == session.ErrOperationMissing: //nolint:errorlint // An opaque Is match cannot prove that this operation ended.
