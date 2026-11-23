@@ -75,7 +75,7 @@ func (engine *Engine) StartShare(ctx context.Context, request ShareRequest) (*Sh
 		CatalogBudget: engine.catalog, CacheBudget: engine.cache, Connectivity: engine.connectivity,
 		Prepare: injected.Prepare, PollNetwork: pollNetwork,
 		Attempts: admissions.Control, Clock: engine.config.Clock,
-		ICEPool: engine.network.ICEPool,
+		ICEPool: engine.network.ICEPool, SleepInhibitor: engine.config.SleepInhibitor,
 	}
 	if injected.Relays != nil {
 		dependencies.Relays = func(ctx context.Context, _ []string, _ relayset.SenderFactory) (share.Relays, error) {

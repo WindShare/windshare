@@ -17,7 +17,10 @@ import (
 	"github.com/windshare/windshare/engine/internal/task"
 )
 
-const getProgressInterval = 500 * time.Millisecond
+const (
+	getProgressInterval       = 500 * time.Millisecond
+	receiveSleepInhibitReason = "WindShare active download"
+)
 
 func runAttempt(ctx context.Context, input preparedRequest, deps Dependencies, retained *getOutputPreparation) (completed task.Completion[Result]) {
 	a := &runner{receiverRecoveryOptions: deps.Recovery, receiverPeerFactory: deps.PeerFactory, receiverDial: deps.ReceiverDial, getOutputFactory: input.output, control: deps.Control, clock: deps.Clock}
@@ -73,7 +76,9 @@ func runAttempt(ctx context.Context, input preparedRequest, deps Dependencies, r
 		return
 	}
 	active.demandContent()
-	result := a.runTransferJob(ctx, prepared.job, observation, active.observeContent)
+	result := runWithSleepInhibition(deps.SleepInhibitor, func() transfer.JobResult {
+		return a.runTransferJob(ctx, prepared.job, observation, active.observeContent)
+	})
 	active.continuation.Close()
 	admissionErr := active.execution.admission.Err()
 	runtimeErr, connectionErr := receiverTerminationErrors(active.session.runtime, active.session.connection)
@@ -124,6 +129,15 @@ func (active *receiveOperation) settleAttempt(ctx context.Context, settlement *S
 	completed.Value.Elapsed = elapsed
 	completed.Value.Connectivity = connectivity
 	return completed
+}
+
+func runWithSleepInhibition(inhibitor SleepInhibitor, fn func() transfer.JobResult) transfer.JobResult {
+	if inhibitor != nil {
+		if release, err := inhibitor.InhibitSleep(receiveSleepInhibitReason); err == nil && release != nil {
+			defer release()
+		}
+	}
+	return fn()
 }
 
 func (a *runner) runTransferJob(ctx context.Context, job *transfer.TransferJob, observation getObservation, observeSelection func(transfer.ReceiveProgressSnapshot)) transfer.JobResult {

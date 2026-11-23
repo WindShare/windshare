@@ -22,6 +22,7 @@ import (
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relaysetup"
 	"github.com/windshare/windshare/internal/platformsetup"
+	"github.com/windshare/windshare/internal/powerinhibit"
 )
 
 // 退出码语义(§6.9 工程要求):脚本据此区分"该重试"(网络)与"该改命令"
@@ -123,7 +124,7 @@ func Main() int {
 		return ExitFailure
 	}
 	app := &App{
-		engineConfig: engine.Config{Network: network},
+		engineConfig: engine.Config{Network: network, SleepInhibitor: powerinhibit.New()},
 		Stdout:       os.Stdout, Stderr: os.Stderr, Stdin: os.Stdin,
 		networkSetup:    platformsetup.New(),
 		loadShareConfig: relayconfig.Load,

@@ -15,6 +15,7 @@ import (
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relaysetup"
 	"github.com/windshare/windshare/internal/diaglog"
+	"github.com/windshare/windshare/internal/powerinhibit"
 )
 
 const (
@@ -87,9 +88,10 @@ func Start() (*Host, error) {
 	}
 	store := relayconfig.FileStore{}
 	application, err := engine.New(engine.Config{
-		Network:     network,
-		Diagnostics: trace.engineDiagnostics(),
-		RelaySetup:  relaysetup.Dependencies{Store: relaysetup.FileStore{Settings: store}},
+		Network:        network,
+		Diagnostics:    trace.engineDiagnostics(),
+		RelaySetup:     relaysetup.Dependencies{Store: relaysetup.FileStore{Settings: store}},
+		SleepInhibitor: powerinhibit.New(),
 	})
 	if err != nil {
 		host.stopDiagnostics()

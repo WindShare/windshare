@@ -90,6 +90,11 @@ type Relay interface {
 	CompleteObservations() relayv2.LifecycleObservationCompletion
 }
 
+// SleepInhibitor keeps the host awake while at least one receiver session is active.
+type SleepInhibitor interface {
+	InhibitSleep(reason string) (release func(), err error)
+}
+
 type Dependencies struct {
 	Clock            relayset.Clock
 	Control          task.Control
@@ -99,6 +104,7 @@ type Dependencies struct {
 	CacheBudget      *contentflow.ProcessCacheBudget
 	Connectivity     *nativeconnectivity.Capacity
 	ICEPool          func() icepolicy.ICEEndpointPool
+	SleepInhibitor   SleepInhibitor
 	Prepare          func(context.Context, liveshare.SenderConfig) (Prepared, error)
 	Relays           func(context.Context, []string, relayset.SenderFactory) (Relays, error)
 	Relay            func(relayset.SenderLifecycleConfig) (Relay, error)

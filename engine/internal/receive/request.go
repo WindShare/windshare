@@ -67,10 +67,16 @@ type systemTicker struct{ ticker *time.Ticker }
 func (t systemTicker) C() <-chan time.Time { return t.ticker.C }
 func (t systemTicker) Stop()               { t.ticker.Stop() }
 
+// SleepInhibitor keeps the host awake while an active receive transfer runs.
+type SleepInhibitor interface {
+	InhibitSleep(reason string) (release func(), err error)
+}
+
 type Dependencies struct {
 	Capacity         *liveshare.ReceiveCapacity
 	Connectivity     *nativeconnectivity.Capacity
 	ICEPool          func() icepolicy.ICEEndpointPool
+	SleepInhibitor   SleepInhibitor
 	Control          task.Control
 	Clock            Clock
 	ReceiverDial     func(context.Context, relayv2.ReceiverConfig) (relayset.ReceiverConnection, error)

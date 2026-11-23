@@ -118,6 +118,7 @@ func (engine *Engine) StartReceive(ctx context.Context, request ReceiveRequest) 
 		Capacity:         engine.receiveCapacity,
 		ResolveEndpoints: expand,
 		ICEPool:          engine.network.ICEPool,
+		SleepInhibitor:   engine.config.SleepInhibitor,
 	}
 	current, err := startWorkflow(engine, ctx, "receive", request.Diagnostics, func(ctx context.Context, control task.Control) task.Completion[receive.Result] {
 		dependencies.Control = control

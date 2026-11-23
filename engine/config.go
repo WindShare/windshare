@@ -45,6 +45,13 @@ type Clock interface {
 	Wait(ctx context.Context, delay time.Duration, wake <-chan struct{}) error
 }
 
+// SleepInhibitor prevents idle OS system sleep while active transfers run
+// (display sleep and screen lock remain allowed). Hosts inject platform-native
+// implementations so engine packages remain OS-agnostic.
+type SleepInhibitor interface {
+	InhibitSleep(reason string) (release func(), err error)
+}
+
 type Config struct {
 	Network *networkconfig.Config
 	// Diagnostics receives engine-scoped infrastructure events (such as
@@ -52,6 +59,7 @@ type Config struct {
 	Diagnostics         diagnostics.Sink
 	RelaySetup          relaysetup.Dependencies
 	Clock               Clock
+	SleepInhibitor      SleepInhibitor
 	Random              io.Reader
 	CleanupTimeout      time.Duration
 	ObservationCapacity observationstream.Capacity

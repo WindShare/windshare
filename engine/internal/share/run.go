@@ -186,7 +186,7 @@ func (s *activeShare) serve(ctx, resourceContext context.Context) (task.FailureC
 	}
 	// Admission belongs to the share lifetime, so callers need no presentation
 	// acknowledgement to make a returned capability usable.
-	s.server = startSessionServer(resourceContext, s.factory, s.relays, o)
+	s.server = startSessionServer(resourceContext, s.factory, s.relays, o, newSleepGuard(d.SleepInhibitor, d.Control.Diagnostics))
 	registrations := relayset.SenderRegistrations{Admitted: []string{s.relays.ReadyRelayURL()}}
 	if source, ok := s.relays.(interface {
 		Registrations() relayset.SenderRegistrations
@@ -287,7 +287,7 @@ type sessionServer struct {
 	received bool
 }
 
-func startSessionServer(ctx context.Context, factory SessionFactory, relays Relays, o *observations) *sessionServer {
+func startSessionServer(ctx context.Context, factory SessionFactory, relays Relays, o *observations, sleep *sleepGuard) *sessionServer {
 	server := &sessionServer{done: make(chan error, 1)}
 	go func() {
 		for {
@@ -313,6 +313,8 @@ func startSessionServer(ctx context.Context, factory SessionFactory, relays Rela
 					_ = channel.Close()
 					return
 				}
+				releaseSleep := sleep.enter()
+				defer releaseSleep()
 				<-admission.Session.Done()
 				admission.Session.Close()
 				o.emit(Observation{Milestone: SessionRetired, Session: admission.Session.ProtocolSessionID()})
