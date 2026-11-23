@@ -110,8 +110,8 @@ func projectTask(view *Share, current running) {
 			view.Selection.Root = selected
 		}
 	case engine.ShareStartupFailed:
-		if state.StartupError != nil {
-			view.Error = failure("startup_failed", state.StartupError)
+		if state.StartupError != nil && !isCancellationError(state.StartupError) {
+			view.Error = engineFailure("startup_failed", state.StartupError)
 		}
 	}
 	if state.State == engine.TaskStopping || state.State == engine.TaskFinished {
@@ -145,18 +145,39 @@ func projectTask(view *Share, current running) {
 	if result := state.Result; result != nil {
 		view.State, view.URL, view.BackupURL, view.Relay = Finished, "", "", nil
 		view.Authorization = state.Authorization
-		view.Result = &Completion{
-			Outcome: outcomeName(result.Outcome), StopReason: reasonName(result.StopReason),
-			Error: errorText(result.Err), CleanupError: errorText(result.CleanupError),
+		completion := Completion{
+			Outcome:    outcomeName(result.Outcome),
+			StopReason: reasonName(result.StopReason),
 		}
-		if view.Error == nil {
-			if err := result.Err; err != nil {
-				view.Error = failure("share_failed", err)
-			} else if err := result.CleanupError; err != nil {
-				view.Error = failure("share_failed", err)
-			}
+		if result.Outcome == engine.OutcomeFailed {
+			completion.Error = errorText(result.Err)
+			completion.CleanupError = errorText(result.CleanupError)
+			view.Error = terminalTaskFailure(state, result)
+		} else {
+			// Task settlement owns terminal outcome semantics: cancellation or clean
+			// stop must never surface a startup or cancellation cause as a failure.
+			view.Error = nil
 		}
+		view.Result = &completion
 	}
+}
+
+func terminalTaskFailure(state engine.ShareSnapshot, result *engine.TaskResult[engine.ShareResult]) *Failure {
+	if state.Startup == engine.ShareStartupFailed && state.StartupError != nil && !isCancellationError(state.StartupError) {
+		return engineFailure("startup_failed", state.StartupError)
+	}
+	if result.Err != nil {
+		return engineFailure("share_failed", result.Err)
+	}
+	if result.CleanupError != nil {
+		return engineFailure("share_failed", result.CleanupError)
+	}
+	return nil
+}
+
+func isCancellationError(err error) bool {
+	described, ok := engine.DescribeFailure(err)
+	return ok && described.Code == engine.FailureCanceled
 }
 
 func errorText(err error) string {

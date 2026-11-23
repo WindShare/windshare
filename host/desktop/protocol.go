@@ -159,8 +159,16 @@ type Message struct {
 	Error    *Failure  `json:"error,omitempty"`
 }
 
+// failure builds a host/control-layer error without engine domain classification
+// so settings, account, setup, and request errors never inherit transfer fallback codes.
 func failure(code string, err error) *Failure {
-	result := &Failure{Code: code, Message: errorText(err)}
+	return &Failure{Code: code, Message: errorText(err)}
+}
+
+// engineFailure attaches structured engine classification and source metadata
+// at boundaries that actually carry share-engine failures.
+func engineFailure(code string, err error) *Failure {
+	result := failure(code, err)
 	if described, ok := engine.DescribeFailure(err); ok && described.Valid() {
 		result.EngineCode = string(described.Code)
 		result.SourcePath = described.SourcePath
