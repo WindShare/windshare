@@ -1,11 +1,14 @@
 package socketauthority
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"strings"
+	"time"
 
 	"github.com/pion/ice/v4"
 	"github.com/pion/logging"
@@ -13,15 +16,31 @@ import (
 
 // Mux routes each local interface/family to its own physical endpoint. It is
 // immutable once published; only Authority closes it.
-type Mux struct{ endpoints []*ice.UDPMuxDefault }
+type Mux struct{ endpoints []*ice.UniversalUDPMuxDefault }
 
-func (m *Mux) endpoint(addr net.Addr) (*ice.UDPMuxDefault, error) {
+func (m *Mux) endpoint(addr net.Addr) (*ice.UniversalUDPMuxDefault, error) {
 	for _, endpoint := range m.endpoints {
 		if endpoint.GetListenAddresses()[0].String() == addr.String() {
 			return endpoint, nil
 		}
 	}
 	return nil, fmt.Errorf("socket endpoint unavailable: %s", addr)
+}
+
+func (m *Mux) DiscoverXORMappedAddr(ctx context.Context, local netip.AddrPort, server *net.UDPAddr, timeout time.Duration) (netip.AddrPort, error) {
+	endpoint, err := m.endpoint(net.UDPAddrFromAddrPort(local))
+	if err != nil {
+		return netip.AddrPort{}, err
+	}
+	mapped, err := endpoint.GetXORMappedAddrContext(ctx, server, timeout)
+	if err != nil {
+		return netip.AddrPort{}, err
+	}
+	ip, ok := netip.AddrFromSlice(mapped.IP)
+	if !ok || mapped.Port <= 0 || mapped.Port > 65535 || ip.Unmap().Is4() != local.Addr().Is4() {
+		return netip.AddrPort{}, ErrInvalid
+	}
+	return netip.AddrPortFrom(ip.Unmap(), uint16(mapped.Port)), nil
 }
 
 func (m *Mux) GetConn(ufrag string, addr net.Addr) (net.PacketConn, error) {

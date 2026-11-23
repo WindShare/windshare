@@ -69,17 +69,21 @@ func connectPayload(t *testing.T, left, right *Connection, filter func(pion.ICEC
 	}
 	channel.OnOpen(func() { opened <- struct{}{} })
 	var leftCandidates, rightCandidates []pion.ICECandidateInit
+	leftGather, rightGather := make(chan struct{}), make(chan struct{})
 	left.OnICECandidate(func(candidate *pion.ICECandidate) {
 		if candidate != nil {
 			leftCandidates = append(leftCandidates, candidate.ToJSON())
+		} else {
+			close(leftGather)
 		}
 	})
 	right.OnICECandidate(func(candidate *pion.ICECandidate) {
 		if candidate != nil {
 			rightCandidates = append(rightCandidates, candidate.ToJSON())
+		} else {
+			close(rightGather)
 		}
 	})
-	leftGather := pion.GatheringCompletePromise(left.PeerConnection)
 	offer, err := left.CreateOffer(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -95,7 +99,6 @@ func connectPayload(t *testing.T, left, right *Connection, filter func(pion.ICEC
 	if err = right.SetRemoteDescription(remoteOffer); err != nil {
 		t.Fatal(err)
 	}
-	rightGather := pion.GatheringCompletePromise(right.PeerConnection)
 	answer, err := right.CreateAnswer(nil)
 	if err != nil {
 		t.Fatal(err)

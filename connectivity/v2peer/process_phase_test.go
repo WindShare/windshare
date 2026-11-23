@@ -84,7 +84,7 @@ func TestNativeReceiverProcessWaitPrecedesPreparationAndFullCheckingPhases(t *te
 	defer attempt.Close()
 	attempt.phases.observeICE(pion.ICEConnectionStateChecking)
 	checking := receiveTest(t, timers.created)
-	if checking.phase != PeerAttemptPhaseChecking || checking.duration != 40*time.Second {
+	if checking.phase != PeerAttemptPhaseChecking || checking.duration != 32*time.Second {
 		t.Fatal(checking)
 	}
 	preparation.timer.Fire()
