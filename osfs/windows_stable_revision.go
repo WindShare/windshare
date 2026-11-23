@@ -272,6 +272,9 @@ func (f *windowsStableFile) Verify(ctx context.Context) error {
 func (f *windowsStableFile) verifyLocked() error {
 	current, err := f.handle.Token()
 	if err != nil {
+		if errors.Is(err, content.ErrRevisionStale) || isWindowsPlaceholderError(err) {
+			return fmt.Errorf("%w: %w", content.ErrSourceDrift, err)
+		}
 		return fmt.Errorf("inspect Windows stable source: %w", err)
 	}
 	if !current.sameOpenedRevision(f.baseline) {

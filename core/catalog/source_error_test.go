@@ -21,3 +21,14 @@ func TestSelectionNameCollisionPreservesBothLabelsWithoutClaimingCatalogCorrupti
 		}
 	}
 }
+
+func TestCloudPlaceholderOmissionAndSourceFailureSemantics(t *testing.T) {
+	if !SourceOmissionCloudPlaceholder.Valid() || SourceOmissionCloudPlaceholder.RequiresDetail() {
+		t.Fatalf("SourceOmissionCloudPlaceholder validity=%v requiresDetail=%v",
+			SourceOmissionCloudPlaceholder.Valid(), SourceOmissionCloudPlaceholder.RequiresDetail())
+	}
+	err := &SourceError{Operation: "acquire selected root", Failure: SourceFailureCloudPlaceholder, Cause: errors.New("offline")}
+	if err.Failure != SourceFailureCloudPlaceholder || !strings.Contains(err.Error(), "offline") {
+		t.Fatalf("unexpected SourceError: %+v", err)
+	}
+}

@@ -163,11 +163,11 @@ func (s *RootedRevisionSource) OpenStable(ctx context.Context, record catalog.No
 			pathfailure.Filesystem("inspect stable revision", locator.RelativePath(), err), content.RevisionComparisonUnavailable,
 		)
 	}
-	if !before.Mode().IsRegular() || before.Mode()&os.ModeSymlink != 0 || isReparsePoint(before) {
+	if !canOpenRootRelativeRegularFile(before) {
 		s.mu.RUnlock()
 		return nil, content.WithRevisionComparison(content.ErrRevisionStale, content.RevisionComparisonMismatch)
 	}
-	handle, err := root.Open(locator.RelativePath())
+	handle, err := openRootObjectNoRecall(root, locator.RelativePath())
 	if err != nil {
 		s.mu.RUnlock()
 		if errors.Is(err, os.ErrNotExist) {
@@ -200,11 +200,17 @@ func (s *RootedRevisionSource) OpenStable(ctx context.Context, record catalog.No
 			pathfailure.Filesystem("stat stable revision", locator.RelativePath(), err), content.RevisionComparisonUnavailable,
 		)
 	}
+	openedKind, _, err := inspectHandleKind(handle, info)
+	if err != nil {
+		return nil, content.WithRevisionComparison(
+			pathfailure.Filesystem("classify stable revision", locator.RelativePath(), err), content.RevisionComparisonUnavailable,
+		)
+	}
 	// Lstat on both sides of Open prevents a path replacement from being
 	// accepted merely because its final target is regular. The binder then
 	// matches the opened handle to the parent generation's private identity.
-	if !after.Mode().IsRegular() || after.Mode()&os.ModeSymlink != 0 || isReparsePoint(after) ||
-		!info.Mode().IsRegular() || isReparsePoint(info) || !os.SameFile(before, info) || !os.SameFile(after, info) ||
+	if !canOpenRootRelativeRegularFile(after) || openedKind != sourceEntryRegularFile ||
+		!os.SameFile(before, info) || !os.SameFile(after, info) ||
 		uint64(info.Size()) != record.Entry().ExpectedSize() {
 		return nil, content.WithRevisionComparison(content.ErrRevisionStale, content.RevisionComparisonMismatch)
 	}

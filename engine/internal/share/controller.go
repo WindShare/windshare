@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/windshare/windshare/connectivity/relayset"
+	"github.com/windshare/windshare/core/catalog"
 )
 
 // Controller retains the first service-ready result independently of diagnostic
@@ -15,6 +16,9 @@ type Controller struct {
 	relayStatus      func() relayset.SenderStatus
 	finalRelayStatus relayset.SenderStatus
 	hasRelayStatus   bool
+	omittedDirs      map[catalog.DirectoryID]struct{}
+	omittedCount     uint64
+	omittedSamples   []catalog.SourceOmission
 	ready            Ready
 	readyErr         error
 	readyDone        chan struct{}

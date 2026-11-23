@@ -128,12 +128,33 @@ func projectTask(view *Share, current running) {
 			Terminal:  state.RelayAvailability.Terminal,
 		}
 	}
+	if state.SourceOmissions != nil && state.SourceOmissions.Count > 0 {
+		samples := make([]SourceOmission, 0, len(state.SourceOmissions.Samples))
+		for _, sample := range state.SourceOmissions.Samples {
+			samples = append(samples, SourceOmission{
+				Name:   sample.Name,
+				Reason: string(sample.Reason),
+				Detail: sample.Detail,
+			})
+		}
+		view.Omissions = &SourceOmissions{
+			Count:   state.SourceOmissions.Count,
+			Samples: samples,
+		}
+	}
 	if result := state.Result; result != nil {
 		view.State, view.URL, view.BackupURL, view.Relay = Finished, "", "", nil
 		view.Authorization = state.Authorization
 		view.Result = &Completion{
 			Outcome: outcomeName(result.Outcome), StopReason: reasonName(result.StopReason),
 			Error: errorText(result.Err), CleanupError: errorText(result.CleanupError),
+		}
+		if view.Error == nil {
+			if err := result.Err; err != nil {
+				view.Error = failure("share_failed", err)
+			} else if err := result.CleanupError; err != nil {
+				view.Error = failure("share_failed", err)
+			}
 		}
 	}
 }

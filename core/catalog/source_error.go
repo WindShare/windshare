@@ -11,6 +11,7 @@ const (
 	SourceFailureMissing
 	SourceFailureAccessDenied
 	SourceFailureUnsupported
+	SourceFailureCloudPlaceholder
 	SourceFailureStale
 )
 

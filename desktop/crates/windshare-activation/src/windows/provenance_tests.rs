@@ -284,3 +284,34 @@ fn short_path_aliases_expand_durable_items_and_still_catch_ephemeral_roots() {
         .unwrap_err();
     assert!(error.to_string().contains(SAVE_LOCALLY));
 }
+
+#[test]
+fn get_file_attributes_distinguishes_ea_ephemeral_and_cloud_placeholders() {
+    use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_EA;
+    assert_eq!(
+        classify_get_file_attributes(FILE_ATTRIBUTE_NORMAL.0 | FILE_ATTRIBUTE_EA.0),
+        AttributeDurability::Durable
+    );
+    assert_eq!(
+        classify_get_file_attributes(FILE_ATTRIBUTE_TEMPORARY.0),
+        AttributeDurability::NonDurable
+    );
+    assert_eq!(
+        classify_get_file_attributes(FILE_ATTRIBUTE_OFFLINE.0),
+        AttributeDurability::NonDurable
+    );
+    assert_eq!(
+        classify_get_file_attributes(FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS.0),
+        AttributeDurability::CloudPlaceholder
+    );
+    assert_eq!(
+        classify_get_file_attributes(
+            FILE_ATTRIBUTE_OFFLINE.0 | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS.0
+        ),
+        AttributeDurability::CloudPlaceholder
+    );
+    assert_eq!(
+        classify_get_file_attributes(INVALID_FILE_ATTRIBUTES),
+        AttributeDurability::NonDurable
+    );
+}

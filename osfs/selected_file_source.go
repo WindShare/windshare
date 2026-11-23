@@ -99,6 +99,8 @@ func classifySourceError(operation string, reference catalog.SourceReference, ca
 		failure = catalog.SourceFailureAccessDenied
 	case errors.Is(cause, os.ErrNotExist), errors.Is(cause, content.ErrRevisionNotFound):
 		failure = catalog.SourceFailureMissing
+	case errors.Is(cause, errSourceCloudPlaceholder):
+		failure = catalog.SourceFailureCloudPlaceholder
 	case errors.Is(cause, content.ErrUnsupportedStability):
 		failure = catalog.SourceFailureUnsupported
 	case errors.Is(cause, content.ErrRevisionStale), errors.Is(cause, catalog.ErrDirectoryStale):

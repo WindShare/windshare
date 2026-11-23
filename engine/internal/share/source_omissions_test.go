@@ -34,3 +34,64 @@ func TestSourceOmissionsReachProductObservationsWithoutDiagnostics(t *testing.T)
 		t.Fatalf("omission fact lost: %+v", events[0])
 	}
 }
+
+func TestControllerAggregatesSourceOmissionsByDirectoryIDAndNotifiesOnChange(t *testing.T) {
+	controller := NewController()
+	notifications := 0
+	obs := newObservations(task.Control{
+		StateChanged: func() { notifications++ },
+	}, Request{})
+	obs.bindController(controller)
+	defer obs.complete()
+
+	dirA, _ := catalog.DirectoryIDFromBytes([]byte{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1})
+	dirB, _ := catalog.DirectoryIDFromBytes([]byte{2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2})
+
+	// Zero-count report must not notify or populate snapshot summary.
+	obs.ObserveSourceOmissions(catalog.SourceOmissions{Directory: dirA, Count: 0})
+	if notifications != 0 {
+		t.Fatalf("zero omissions triggered %d notifications", notifications)
+	}
+	if _, ok := controller.SourceOmissions(); ok {
+		t.Fatal("zero omissions produced a summary")
+	}
+
+	obs.ObserveSourceOmissions(catalog.SourceOmissions{
+		Directory: dirA,
+		Count:     2,
+		Samples: []catalog.SourceOmission{
+			{Name: "a.docx", Reason: catalog.SourceOmissionCloudPlaceholder},
+			{Name: "link", Reason: catalog.SourceOmissionSymbolicLink},
+		},
+	})
+	// Duplicate report for the same DirectoryID is idempotent and does not notify again.
+	obs.ObserveSourceOmissions(catalog.SourceOmissions{
+		Directory: dirA,
+		Count:     2,
+		Samples:   []catalog.SourceOmission{{Name: "a.docx", Reason: catalog.SourceOmissionCloudPlaceholder}},
+	})
+	if notifications != 1 {
+		t.Fatalf("notifications = %d, want 1", notifications)
+	}
+
+	// Second distinct directory aggregates count and bounds retained samples.
+	manySamples := make([]catalog.SourceOmission, catalog.MaxSourceOmissionSamples)
+	for i := range manySamples {
+		manySamples[i] = catalog.SourceOmission{Name: "cloud.bin", Reason: catalog.SourceOmissionCloudPlaceholder}
+	}
+	obs.ObserveSourceOmissions(catalog.SourceOmissions{
+		Directory: dirB,
+		Count:     uint64(len(manySamples)),
+		Samples:   manySamples,
+	})
+	if notifications != 2 {
+		t.Fatalf("notifications = %d, want 2", notifications)
+	}
+	summary, ok := controller.SourceOmissions()
+	if !ok || summary.Count != uint64(2+len(manySamples)) || len(summary.Samples) != catalog.MaxSourceOmissionSamples {
+		t.Fatalf("summary = %+v (ok=%v)", summary, ok)
+	}
+	if summary.Samples[0].Name != "a.docx" || summary.Samples[0].Reason != catalog.SourceOmissionCloudPlaceholder {
+		t.Fatalf("first sample = %+v", summary.Samples[0])
+	}
+}

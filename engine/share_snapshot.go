@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+
+	"github.com/windshare/windshare/core/catalog"
 )
 
 type ShareStartupState uint8
@@ -13,6 +15,13 @@ const (
 	ShareStartupFailed
 )
 
+// ShareSourceOmissions retains the cumulative count and bounded examples of
+// entries skipped across directories discovered so far during a share.
+type ShareSourceOmissions struct {
+	Count   uint64
+	Samples []catalog.SourceOmission
+}
+
 // ShareSnapshot separates retained startup from lifecycle and current relay
 // admission. Existing P2P transfers do not depend on relay availability.
 type ShareSnapshot struct {
@@ -22,6 +31,7 @@ type ShareSnapshot struct {
 	StartupError      error
 	Authorization     *ShareAuthorization
 	RelayAvailability *RelayAvailability
+	SourceOmissions   *ShareSourceOmissions
 	// Result is present only after Done closes: all task work has joined.
 	Result *TaskResult[ShareResult]
 }
@@ -52,6 +62,12 @@ func (current *ShareTask) Snapshot() ShareSnapshot {
 			Total:     value.Total,
 			EverReady: value.EverReady,
 			Terminal:  value.Terminal,
+		}
+	}
+	if omissions, hasOmissions := current.controller.SourceOmissions(); hasOmissions {
+		snapshot.SourceOmissions = &ShareSourceOmissions{
+			Count:   omissions.Count,
+			Samples: omissions.Samples,
 		}
 	}
 	// Read lifecycle after startup and availability so cancellation cannot pair

@@ -118,20 +118,14 @@ fn a_rejected_settings_submission_retains_its_own_failure() {
         model.account_request,
         crate::AccountRequest::Failed {
             id: "account:1".into(),
-            error: crate::Failure {
-                code: "request_rejected".into(),
-                message: "3".into(),
-            },
+            error: crate::Failure::new("request_rejected", "3"),
         }
     );
     assert_eq!(
         model.setup_request,
         crate::SetupRequest::Failed {
             id: "setup:2".into(),
-            error: crate::Failure {
-                code: "request_rejected".into(),
-                message: "4".into(),
-            },
+            error: crate::Failure::new("request_rejected", "4"),
         }
     );
     assert_eq!(model.command_error.as_deref(), Some("5"));
@@ -192,10 +186,7 @@ fn cancel_setup_ignores_stale_failure_until_acknowledged() {
         shared.model.lock().unwrap().setup_request,
         crate::SetupRequest::Failed {
             id: "setup:1".into(),
-            error: crate::Failure {
-                code: "setup_cancel_failed".into(),
-                message: "new failure".into(),
-            },
+            error: crate::Failure::new("setup_cancel_failed", "new failure"),
         }
     );
 }

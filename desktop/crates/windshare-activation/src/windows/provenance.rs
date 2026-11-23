@@ -10,9 +10,8 @@ use windows::{
     Win32::{
         Globalization::{CSTR_EQUAL, CompareStringOrdinal},
         Storage::FileSystem::{
-            FILE_ATTRIBUTE_OFFLINE, FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS,
-            FILE_ATTRIBUTE_RECALL_ON_OPEN, FILE_ATTRIBUTE_TEMPORARY, GetFileAttributesW,
-            GetLongPathNameW, INVALID_FILE_ATTRIBUTES,
+            FILE_ATTRIBUTE_OFFLINE, FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS, FILE_ATTRIBUTE_TEMPORARY,
+            GetFileAttributesW, GetLongPathNameW, INVALID_FILE_ATTRIBUTES,
         },
         System::Com::CoTaskMemFree,
         UI::Shell::{
@@ -27,12 +26,19 @@ use windows::{
 #[path = "provenance_tests.rs"]
 mod tests;
 
-const NON_DURABLE_ATTRIBUTES: u32 = FILE_ATTRIBUTE_TEMPORARY.0
-    | FILE_ATTRIBUTE_OFFLINE.0
-    | FILE_ATTRIBUTE_RECALL_ON_OPEN.0
-    | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS.0;
+// Bit 0x00040000 is FILE_ATTRIBUTE_EA on GetFileAttributesW and must not be
+// treated as FILE_ATTRIBUTE_RECALL_ON_OPEN (which applies only to dir listings).
+const EPHEMERAL_ATTRIBUTES: u32 = FILE_ATTRIBUTE_TEMPORARY.0 | FILE_ATTRIBUTE_OFFLINE.0;
 
 pub const SAVE_LOCALLY: &str = "Save these items to a regular local folder first, then share them again. You can also select files directly in Explorer.";
+pub const CLOUD_PLACEHOLDER: &str = "This item isn’t fully downloaded on this device. Make it available on this device, then share it again.";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AttributeDurability {
+    Durable,
+    CloudPlaceholder,
+    NonDurable,
+}
 
 pub struct Provenance {
     ephemeral_roots: Vec<PathBuf>,
@@ -69,17 +75,37 @@ impl Provenance {
         }
         // Inspect attributes before opening or canonicalizing so offline cloud
         // placeholders are rejected without triggering on-demand hydration.
-        if !has_durable_attributes(&raw_path) {
-            return Err(reject("non_durable_attributes", &raw_path, None));
+        match check_attribute_durability(&raw_path) {
+            AttributeDurability::Durable => {}
+            AttributeDurability::CloudPlaceholder => {
+                return Err(reject_cloud_placeholder(
+                    "cloud_placeholder",
+                    &raw_path,
+                    None,
+                ));
+            }
+            AttributeDurability::NonDurable => {
+                return Err(reject("non_durable_attributes", &raw_path, None));
+            }
         }
         let canonical = std::fs::canonicalize(&raw_path)
             .map_err(|_| reject("canonicalize_failed", &raw_path, None))?;
-        if !has_durable_attributes(&canonical) {
-            return Err(reject(
-                "non_durable_target_attributes",
-                &raw_path,
-                Some(&canonical),
-            ));
+        match check_attribute_durability(&canonical) {
+            AttributeDurability::Durable => {}
+            AttributeDurability::CloudPlaceholder => {
+                return Err(reject_cloud_placeholder(
+                    "cloud_placeholder_target",
+                    &raw_path,
+                    Some(&canonical),
+                ));
+            }
+            AttributeDurability::NonDurable => {
+                return Err(reject(
+                    "non_durable_target_attributes",
+                    &raw_path,
+                    Some(&canonical),
+                ));
+            }
         }
         // Expand 8.3 short aliases for clean display names while leaving any leaf
         // symlink intact so Go osfs enforces one uniform no-follow boundary.
@@ -223,20 +249,50 @@ fn verify_independent_item(
 }
 
 fn reject(reason: &'static str, path: &Path, canonical: Option<&Path>) -> anyhow::Error {
+    reject_with(reason, path, canonical, SAVE_LOCALLY)
+}
+
+fn reject_cloud_placeholder(
+    reason: &'static str,
+    path: &Path,
+    canonical: Option<&Path>,
+) -> anyhow::Error {
+    reject_with(reason, path, canonical, CLOUD_PLACEHOLDER)
+}
+
+fn reject_with(
+    reason: &'static str,
+    path: &Path,
+    canonical: Option<&Path>,
+    message: &'static str,
+) -> anyhow::Error {
     tracing::warn!(
         event = "activation.source_provenance_rejected",
         reason,
         path = ?path,
         canonical = ?canonical
     );
-    anyhow::anyhow!(SAVE_LOCALLY)
+    anyhow::anyhow!(message)
 }
 
-fn has_durable_attributes(path: &Path) -> bool {
+fn check_attribute_durability(path: &Path) -> AttributeDurability {
     let native = wide(path);
     // SAFETY: terminated native path; only file metadata attributes are queried.
     let attributes = unsafe { GetFileAttributesW(PCWSTR(native.as_ptr())) };
-    attributes != INVALID_FILE_ATTRIBUTES && attributes & NON_DURABLE_ATTRIBUTES == 0
+    classify_get_file_attributes(attributes)
+}
+
+const fn classify_get_file_attributes(attributes: u32) -> AttributeDurability {
+    if attributes == INVALID_FILE_ATTRIBUTES {
+        return AttributeDurability::NonDurable;
+    }
+    if attributes & FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS.0 != 0 {
+        return AttributeDurability::CloudPlaceholder;
+    }
+    if attributes & EPHEMERAL_ATTRIBUTES != 0 {
+        return AttributeDurability::NonDurable;
+    }
+    AttributeDurability::Durable
 }
 
 fn is_direct_absolute(path: &Path) -> bool {

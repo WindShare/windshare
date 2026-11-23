@@ -178,7 +178,8 @@ func failureMessage(failure engine.Failure) string {
 	case engine.FailureDirectAdmission:
 		message = "The direct channel could not be admitted."
 	case engine.FailureSourceUnavailable, engine.FailureSourceMissing, engine.FailureSourceAccessDenied,
-		engine.FailureSourceUnsupported, engine.FailureSourceOmitted, engine.FailureSourceChanged:
+		engine.FailureSourceUnsupported, engine.FailureSourceCloudPlaceholder,
+		engine.FailureSourceOmitted, engine.FailureSourceChanged:
 		message = sourceFailureMessage(failure)
 	case engine.FailureCatalogUnavailable:
 		message = "The content catalog is unavailable."
@@ -238,6 +239,8 @@ func sourceFailureMessage(failure engine.Failure) string {
 		return "Permission denied while opening the source. Check read access to the source and its parent directory."
 	case engine.FailureSourceUnsupported:
 		return "This source cannot be shared safely. Select a regular file or directory on a supported filesystem; symbolic links are not supported."
+	case engine.FailureSourceCloudPlaceholder:
+		return "This item is stored in the cloud and not fully available on this device. Make this item available on this device, then share it again."
 	case engine.FailureSourceOmitted:
 		return "The sender could not include some source items. Ask the sender to check the skipped names and reasons, fix the source, and share it again."
 	case engine.FailureSourceChanged:

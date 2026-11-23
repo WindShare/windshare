@@ -215,9 +215,9 @@ impl Desktop {
             card = card.child(theme.caption(retry_time(locale, at)));
         }
         if blocking.recovery == RecoveryAction::RepairSettings
-            && let Some(error) = share.error()
+            && let Some(error) = share.error_message(locale)
         {
-            card = card.child(theme.caption(error.to_owned()));
+            card = card.child(theme.caption(error));
         }
         let mut actions = row().gap(px(10.)).flex_wrap();
         if let Some((label, action)) = continuation {

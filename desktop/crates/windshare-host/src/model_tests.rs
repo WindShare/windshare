@@ -74,6 +74,7 @@ fn accepted(id: &str, state: ShareState) -> Share {
         operation_id: id.into(),
         created_at_ms: 0,
         selection: None,
+        omissions: None,
         state,
     }
 }
@@ -292,4 +293,49 @@ fn setup_cancel_request_settles_if_setup_finishes_first() {
             id: "setup:1".into()
         }
     );
+}
+
+#[test]
+fn structured_share_failure_and_omissions_wire_contract_deserializes() {
+    let failed: Share = serde_json::from_value(serde_json::json!({
+        "operation_id": "cloud-op",
+        "state": "finished",
+        "result": { "outcome": "failed", "stop_reason": "none", "error": "fallback" },
+        "error": {
+            "code": "startup_failed",
+            "message": "fallback",
+            "engine_code": "source_cloud_placeholder",
+            "source_path": "C:\\Users\\alice\\OneDrive\\deck.pptx"
+        }
+    }))
+    .unwrap();
+    let failure = failed.failure().unwrap();
+    assert_eq!(failure.code, "startup_failed");
+    assert_eq!(
+        failure.engine_code.as_deref(),
+        Some("source_cloud_placeholder")
+    );
+    assert_eq!(
+        failure.source_path.as_deref(),
+        Some("C:\\Users\\alice\\OneDrive\\deck.pptx")
+    );
+
+    let sharing_with_omissions: Share = serde_json::from_value(serde_json::json!({
+        "operation_id": "mixed-op",
+        "state": "sharing",
+        "task_id": "engine:1",
+        "url": "https://ws.example/id#key",
+        "omissions": {
+            "count": 2,
+            "samples": [
+                { "name": "remote.docx", "reason": "cloud_placeholder" }
+            ]
+        }
+    }))
+    .unwrap();
+    let omissions = sharing_with_omissions.omissions.unwrap();
+    assert_eq!(omissions.count, 2);
+    assert_eq!(omissions.samples.len(), 1);
+    assert_eq!(omissions.samples[0].name, "remote.docx");
+    assert_eq!(omissions.samples[0].reason, "cloud_placeholder");
 }

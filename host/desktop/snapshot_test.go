@@ -6,6 +6,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/engine"
 )
@@ -108,5 +109,84 @@ func TestProjectTaskPublishesAndClearsBackupURL(t *testing.T) {
 	projectTask(&finished, running{task: task})
 	if finished.URL != "" || finished.BackupURL != "" {
 		t.Fatalf("finished share retained links: (%q, %q)", finished.URL, finished.BackupURL)
+	}
+}
+
+func TestProjectTaskProjectsStructuredFailuresCollisionsRuntimeErrorsAndOmissions(t *testing.T) {
+	// 1. Startup cloud placeholder error preserves Failure.Code and exposes EngineCode + SourcePath.
+	cloudErr := &catalog.SelectionError{
+		Label: `C:\Users\alice\OneDrive\deck.pptx`,
+		Cause: &catalog.SourceError{Failure: catalog.SourceFailureCloudPlaceholder},
+	}
+	var startupView Share
+	projectTask(&startupView, running{task: &fakeShare{
+		id: "engine:cloud",
+		state: engine.ShareSnapshot{
+			State:        engine.TaskFinished,
+			Startup:      engine.ShareStartupFailed,
+			StartupError: cloudErr,
+			Result:       &engine.TaskResult[engine.ShareResult]{Outcome: engine.OutcomeFailed, Err: cloudErr},
+		},
+	}})
+	if startupView.Error == nil || startupView.Error.Code != "startup_failed" ||
+		startupView.Error.EngineCode != string(engine.FailureSourceCloudPlaceholder) ||
+		startupView.Error.SourcePath != `C:\Users\alice\OneDrive\deck.pptx` {
+		t.Fatalf("cloud startup error = %+v", startupView.Error)
+	}
+
+	// 2. Selection collision carries FirstPath / SecondPath without overloading Failure.Code.
+	collisionErr := &catalog.SelectionNameCollisionError{
+		FirstLabel:  `C:\work\Report.pdf`,
+		SecondLabel: `D:\other\report.pdf`,
+	}
+	var collisionView Share
+	projectTask(&collisionView, running{task: &fakeShare{
+		id: "engine:collision",
+		state: engine.ShareSnapshot{
+			State:        engine.TaskFinished,
+			Startup:      engine.ShareStartupFailed,
+			StartupError: collisionErr,
+			Result:       &engine.TaskResult[engine.ShareResult]{Outcome: engine.OutcomeFailed, Err: collisionErr},
+		},
+	}})
+	if collisionView.Error == nil || collisionView.Error.Code != "startup_failed" ||
+		collisionView.Error.EngineCode != string(engine.FailureSelectionCollision) ||
+		collisionView.Error.SelectionCollision == nil ||
+		collisionView.Error.SelectionCollision.FirstPath != `C:\work\Report.pdf` ||
+		collisionView.Error.SelectionCollision.SecondPath != `D:\other\report.pdf` {
+		t.Fatalf("collision startup error = %+v", collisionView.Error)
+	}
+
+	// 3. Runtime failure after ShareReadyReached populates structured view.Error and preserves Omissions.
+	publicKey := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)).Public().(ed25519.PublicKey)
+	capability, err := link.NewSenderAuthenticated(make([]byte, link.ReadSecretBytes), publicKey, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeErr := &catalog.SourceError{Failure: catalog.SourceFailureStale}
+	var runtimeView Share
+	projectTask(&runtimeView, running{task: &fakeShare{
+		id: "engine:runtime",
+		state: engine.ShareSnapshot{
+			State:   engine.TaskFinished,
+			Startup: engine.ShareReadyReached,
+			Ready:   engine.ShareReady{Capability: capability, Frontend: "https://ws.example"},
+			SourceOmissions: &engine.ShareSourceOmissions{
+				Count: 2,
+				Samples: []catalog.SourceOmission{
+					{Name: "cloud-only.docx", Reason: catalog.SourceOmissionCloudPlaceholder},
+				},
+			},
+			Result: &engine.TaskResult[engine.ShareResult]{Outcome: engine.OutcomeFailed, Err: runtimeErr},
+		},
+	}})
+	if runtimeView.Error == nil || runtimeView.Error.Code != "share_failed" ||
+		runtimeView.Error.EngineCode != string(engine.FailureSourceChanged) {
+		t.Fatalf("runtime failure = %+v", runtimeView.Error)
+	}
+	if runtimeView.Omissions == nil || runtimeView.Omissions.Count != 2 ||
+		len(runtimeView.Omissions.Samples) != 1 || runtimeView.Omissions.Samples[0].Name != "cloud-only.docx" ||
+		runtimeView.Omissions.Samples[0].Reason != string(catalog.SourceOmissionCloudPlaceholder) {
+		t.Fatalf("omissions projection = %+v", runtimeView.Omissions)
 	}
 }

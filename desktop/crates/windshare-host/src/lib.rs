@@ -32,7 +32,8 @@ pub fn check_host() -> anyhow::Result<()> {
 pub use model::{
     BlockingReason, Completion, Connection, CreationBlock, Failure, Model, Operation,
     OperationState, Outcome, RecoveryAction, RelayAvailability, RelayStatus, SelectedRoot,
-    Selection, SenderTrace, SenderTraceChange, Share, ShareState, Snapshot, StopReason,
+    Selection, SelectionCollision, SenderTrace, SenderTraceChange, Share, ShareState, Snapshot,
+    SourceOmission, SourceOmissions, StopReason,
 };
 
 use request::Command;

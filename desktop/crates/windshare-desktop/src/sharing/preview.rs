@@ -30,6 +30,7 @@ impl Desktop {
                 age: ShareAge::JustNow,
                 tone: bundle.tone(),
                 symbol: bundle.icon(),
+                omissions: None,
                 state: ShareState::Preparing { error: None },
             },
         );

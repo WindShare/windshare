@@ -5,6 +5,70 @@ use crate::{
 };
 use windshare_ui::{Icon, Tone};
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ShareError {
+    CloudPlaceholder {
+        path: Option<String>,
+    },
+    SourceUnsupported {
+        path: Option<String>,
+    },
+    SourceMissing {
+        path: Option<String>,
+    },
+    SourceAccessDenied {
+        path: Option<String>,
+    },
+    SourceChanged {
+        path: Option<String>,
+    },
+    SourceUnavailable {
+        path: Option<String>,
+    },
+    SelectionCollision {
+        first_path: String,
+        second_path: String,
+    },
+    Message(String),
+}
+
+impl ShareError {
+    pub fn from_failure(failure: &windshare_host::Failure) -> Self {
+        match failure.engine_code.as_deref() {
+            Some("source_cloud_placeholder") => Self::CloudPlaceholder {
+                path: failure.source_path.clone(),
+            },
+            Some("source_unsupported") => Self::SourceUnsupported {
+                path: failure.source_path.clone(),
+            },
+            Some("source_missing") => Self::SourceMissing {
+                path: failure.source_path.clone(),
+            },
+            Some("source_access_denied") => Self::SourceAccessDenied {
+                path: failure.source_path.clone(),
+            },
+            Some("source_changed") => Self::SourceChanged {
+                path: failure.source_path.clone(),
+            },
+            Some("source_unavailable") => Self::SourceUnavailable {
+                path: failure.source_path.clone(),
+            },
+            Some("selection_collision") => failure.selection_collision.as_ref().map_or_else(
+                || Self::Message(failure.message.clone()),
+                |collision| Self::SelectionCollision {
+                    first_path: collision.first_path.clone(),
+                    second_path: collision.second_path.clone(),
+                },
+            ),
+            _ => Self::Message(failure.message.clone()),
+        }
+    }
+
+    pub fn message(&self, locale: Language) -> String {
+        locale.share_error(self)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum ShareSource {
     Preview,
@@ -16,14 +80,14 @@ pub enum ShareState {
     AwaitingAuthorization(windshare_host::ShareAuthorization),
     AwaitingConfiguration {
         blocking: windshare_host::CreationBlock,
-        error: Option<String>,
+        error: Option<ShareError>,
     },
     AwaitingNetwork {
         blocking: windshare_host::CreationBlock,
-        error: Option<String>,
+        error: Option<ShareError>,
     },
     Preparing {
-        error: Option<String>,
+        error: Option<ShareError>,
     },
     Live {
         publication: SharePublication,
@@ -31,13 +95,13 @@ pub enum ShareState {
     },
     Stopping,
     Stopped {
-        error: Option<String>,
+        error: Option<ShareError>,
     },
     Cancelled {
-        error: Option<String>,
+        error: Option<ShareError>,
     },
     Failed {
-        error: Option<String>,
+        error: Option<ShareError>,
         authorization: Option<windshare_host::ShareAuthorization>,
     },
 }
@@ -52,6 +116,7 @@ pub struct Share {
     pub age: ShareAge,
     pub tone: Tone,
     pub symbol: Icon,
+    pub omissions: Option<windshare_host::SourceOmissions>,
     pub state: ShareState,
 }
 
@@ -70,18 +135,38 @@ impl Share {
         }
     }
 
-    pub fn error(&self) -> Option<&str> {
+    pub const fn error(&self) -> Option<&ShareError> {
         match &self.state {
             ShareState::AwaitingConfiguration { error, .. }
             | ShareState::AwaitingNetwork { error, .. }
             | ShareState::Preparing { error }
             | ShareState::Stopped { error }
             | ShareState::Cancelled { error }
-            | ShareState::Failed { error, .. } => error.as_deref(),
+            | ShareState::Failed { error, .. } => error.as_ref(),
             ShareState::AwaitingAuthorization(_)
             | ShareState::Live { .. }
             | ShareState::Stopping => None,
         }
+    }
+
+    pub fn error_message(&self, locale: Language) -> Option<String> {
+        self.error().map(|error| error.message(locale))
+    }
+
+    pub fn omission_notice(&self, locale: Language) -> Option<String> {
+        self.omissions
+            .as_ref()
+            .filter(|omissions| omissions.count > 0)
+            .map(|omissions| locale.source_omissions_notice(omissions))
+    }
+
+    pub fn has_notice(&self) -> bool {
+        self.error().is_some()
+            || self.relay_notice().is_some()
+            || self
+                .omissions
+                .as_ref()
+                .is_some_and(|omissions| omissions.count > 0)
     }
 
     pub const fn authorization(&self) -> Option<&windshare_host::ShareAuthorization> {

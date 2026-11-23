@@ -17,11 +17,12 @@ const (
 type SourceOmissionReason string
 
 const (
-	SourceOmissionNone         SourceOmissionReason = ""
-	SourceOmissionSymbolicLink SourceOmissionReason = "symbolic_link"
-	SourceOmissionReparsePoint SourceOmissionReason = "reparse_point"
-	SourceOmissionSpecialFile  SourceOmissionReason = "special_file"
-	SourceOmissionName         SourceOmissionReason = "unrepresentable_name"
+	SourceOmissionNone             SourceOmissionReason = ""
+	SourceOmissionSymbolicLink     SourceOmissionReason = "symbolic_link"
+	SourceOmissionReparsePoint     SourceOmissionReason = "reparse_point"
+	SourceOmissionCloudPlaceholder SourceOmissionReason = "cloud_placeholder"
+	SourceOmissionSpecialFile      SourceOmissionReason = "special_file"
+	SourceOmissionName             SourceOmissionReason = "unrepresentable_name"
 	// SourceOmissionNameCollision marks every member of a sibling group whose names
 	// match under portable name matching; none can be preferred without guessing.
 	SourceOmissionNameCollision SourceOmissionReason = "name_collision"
@@ -30,8 +31,8 @@ const (
 
 func (reason SourceOmissionReason) Valid() bool {
 	switch reason {
-	case SourceOmissionSymbolicLink, SourceOmissionReparsePoint, SourceOmissionSpecialFile,
-		SourceOmissionName, SourceOmissionNameCollision, SourceOmissionAccessDenied:
+	case SourceOmissionSymbolicLink, SourceOmissionReparsePoint, SourceOmissionCloudPlaceholder,
+		SourceOmissionSpecialFile, SourceOmissionName, SourceOmissionNameCollision, SourceOmissionAccessDenied:
 		return true
 	default:
 		return false

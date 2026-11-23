@@ -67,6 +67,12 @@ func (a *Application) logShareState(share Share) {
 	}
 	if share.Error != nil {
 		fields["error_code"] = share.Error.Code
+		if share.Error.EngineCode != "" {
+			fields["engine_error_code"] = share.Error.EngineCode
+		}
+	}
+	if share.Omissions != nil && share.Omissions.Count > 0 {
+		fields["omitted_count"] = share.Omissions.Count
 	}
 	if share.Result != nil {
 		fields["outcome"] = share.Result.Outcome

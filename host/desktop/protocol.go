@@ -27,8 +27,22 @@ type Request struct {
 }
 
 type Failure struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code               string                     `json:"code"`
+	Message            string                     `json:"message"`
+	EngineCode         string                     `json:"engine_code,omitempty"`
+	SourcePath         string                     `json:"source_path,omitempty"`
+	SelectionCollision *engine.SelectionCollision `json:"selection_collision,omitempty"`
+}
+
+type SourceOmission struct {
+	Name   string `json:"name"`
+	Reason string `json:"reason"`
+	Detail string `json:"detail,omitempty"`
+}
+
+type SourceOmissions struct {
+	Count   uint64           `json:"count"`
+	Samples []SourceOmission `json:"samples,omitempty"`
 }
 
 type ShareState string
@@ -53,6 +67,7 @@ type Share struct {
 	BackupURL     string                     `json:"backup_url,omitempty"`
 	Selection     *Selection                 `json:"selection,omitempty"`
 	Relay         *RelayAvailability         `json:"relay,omitempty"`
+	Omissions     *SourceOmissions           `json:"omissions,omitempty"`
 	Result        *Completion                `json:"result,omitempty"`
 	Error         *Failure                   `json:"error,omitempty"`
 	Blocking      *CreationBlock             `json:"blocking,omitempty"`
@@ -144,5 +159,16 @@ type Message struct {
 	Error    *Failure  `json:"error,omitempty"`
 }
 
-func failure(code string, err error) *Failure { return &Failure{Code: code, Message: errorText(err)} }
-func (m Message) bytes() ([]byte, error)      { return json.Marshal(m) }
+func failure(code string, err error) *Failure {
+	result := &Failure{Code: code, Message: errorText(err)}
+	if described, ok := engine.DescribeFailure(err); ok && described.Valid() {
+		result.EngineCode = string(described.Code)
+		result.SourcePath = described.SourcePath
+		if described.SelectionCollision != nil {
+			collision := *described.SelectionCollision
+			result.SelectionCollision = &collision
+		}
+	}
+	return result
+}
+func (m Message) bytes() ([]byte, error) { return json.Marshal(m) }

@@ -25,6 +25,8 @@ func sourceOmissionReason(sample catalog.SourceOmission) string {
 		return "symbolic link; select the actual file or directory"
 	case catalog.SourceOmissionReparsePoint:
 		return "reparse point; select the actual file or directory"
+	case catalog.SourceOmissionCloudPlaceholder:
+		return "item not fully available on this device"
 	case catalog.SourceOmissionSpecialFile:
 		return "special file; only regular files and directories can be shared"
 	case catalog.SourceOmissionName:
