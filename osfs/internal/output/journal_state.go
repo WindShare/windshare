@@ -23,7 +23,7 @@ const (
 	journalHeaderReadBufferBytes = 4 * 1024
 	journalStateReadBufferBytes  = 32 * 1024
 	journalMaxLineBytes          = 4 << 20
-	publicationFingerprintBytes  = sha256.Size
+	stageFingerprintBytes        = sha256.Size
 	journalLifecycleActive       = "active"
 	journalLifecycleStopped      = "share_stopped"
 	journalLifecycleAttn         = "attention"
@@ -89,6 +89,7 @@ type partialEntry struct {
 	Ranges        []content.Range
 	CheckpointGen uint64
 	BlockedReason transfer.ItemBlockReason
+	Fingerprint   [stageFingerprintBytes]byte
 }
 
 // publishingEntry records a completed staged file just before its no-replace
@@ -102,7 +103,7 @@ type publishingEntry struct {
 	ExactSize     uint64
 	PartName      string
 	CheckpointGen uint64
-	Fingerprint   [publicationFingerprintBytes]byte
+	Fingerprint   [stageFingerprintBytes]byte
 }
 
 type deliveredEntry struct {
@@ -209,6 +210,13 @@ func (s *journalState) applyPartial(rec journalRecord) error {
 	if err != nil {
 		return err
 	}
+	var fp [stageFingerprintBytes]byte
+	if rec.Fingerprint != "" {
+		fp, err = decodeFingerprint(rec.Fingerprint)
+		if err != nil {
+			return err
+		}
+	}
 	if rec.Path == "" || rec.PartName == "" {
 		return fmt.Errorf("%w: invalid partial record", errJournalCorrupt)
 	}
@@ -223,6 +231,7 @@ func (s *journalState) applyPartial(rec journalRecord) error {
 		Ranges:        slices.Clone(rec.Ranges),
 		CheckpointGen: rec.CheckpointGen,
 		BlockedReason: transfer.ItemBlockReason(rec.BlockedReason),
+		Fingerprint:   fp,
 	}
 	return nil
 }
@@ -299,15 +308,15 @@ func decodeFileRecordIdentity(rec journalRecord) (catalog.FileID, content.FileRe
 	return fid, rev, meta, nil
 }
 
-func decodeFingerprint(encoded string) ([publicationFingerprintBytes]byte, error) {
-	var out [publicationFingerprintBytes]byte
+func decodeFingerprint(encoded string) ([stageFingerprintBytes]byte, error) {
+	var out [stageFingerprintBytes]byte
 	raw, err := hex.DecodeString(encoded)
 	if err != nil || len(raw) != len(out) {
-		return out, fmt.Errorf("%w: invalid publication fingerprint", errJournalCorrupt)
+		return out, fmt.Errorf("%w: invalid stage fingerprint", errJournalCorrupt)
 	}
 	copy(out[:], raw)
-	if out == ([publicationFingerprintBytes]byte{}) {
-		return out, fmt.Errorf("%w: zero publication fingerprint", errJournalCorrupt)
+	if out == ([stageFingerprintBytes]byte{}) {
+		return out, fmt.Errorf("%w: zero stage fingerprint", errJournalCorrupt)
 	}
 	return out, nil
 }
@@ -355,6 +364,10 @@ func partialToRecord(entry partialEntry) journalRecord {
 	if !entry.Metadata.IsZero() {
 		metaHex = hex.EncodeToString(entry.Metadata.Bytes())
 	}
+	var fpHex string
+	if entry.Fingerprint != ([stageFingerprintBytes]byte{}) {
+		fpHex = hex.EncodeToString(entry.Fingerprint[:])
+	}
 	return journalRecord{
 		Kind:          "partial",
 		FileID:        hex.EncodeToString(entry.FileID.Bytes()),
@@ -366,6 +379,7 @@ func partialToRecord(entry partialEntry) journalRecord {
 		Ranges:        entry.Ranges,
 		CheckpointGen: entry.CheckpointGen,
 		BlockedReason: uint16(entry.BlockedReason),
+		Fingerprint:   fpHex,
 	}
 }
 
