@@ -152,6 +152,7 @@ export async function gallerySnapshot(scenario: Scenario): Promise<GallerySnapsh
       : {
           kind: 'tree',
           suggestedName: 'Summer photos',
+          rootPath: ['Summer photos'],
           knownFileCount: 12,
           knownBytes: 6_710_886n,
           complete: true,

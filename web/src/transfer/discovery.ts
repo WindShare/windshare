@@ -32,6 +32,11 @@ export type SelectionShape =
   | Readonly<{
       kind: 'tree'
       suggestedName: string
+      /**
+       * Source catalog path prefix anchored as the result root (e.g. `['Photos']`
+       * or `['Photos', 'Trip']`), or `[]` for a synthetic multi-root wrapper.
+       */
+      rootPath: readonly string[]
       knownFileCount: number
       knownBytes: bigint
       complete: boolean
@@ -48,6 +53,7 @@ const SHAPE_PROBE_DIRECTORY_LIMIT = 4
 // Bound guided ancestor verification to the maximum legal catalog depth plus root
 // so deep explicitly selected targets still resolve without allowing unbounded walks.
 const SHAPE_GUIDED_DIRECTORY_LIMIT = CATALOG_PATH_DEPTH + 1
+const EMPTY_PATH: readonly string[] = Object.freeze([])
 
 type CommittedDir = Awaited<ReturnType<CatalogClient['loadDirectory']>>
 
@@ -73,7 +79,8 @@ interface ProbeState {
   selectedFiles: number
   selectedDirectories: number
   knownBytes: bigint
-  firstRootName: string | undefined
+  commonRoot: readonly string[] | undefined
+  unprobedPaths: (readonly string[])[]
   complete: boolean
 }
 
@@ -157,6 +164,18 @@ class DiscoveryQueues<T extends TraversableFrame> {
       return { frame: this.#fallback.shift()!, guided: false }
     }
     return undefined
+  }
+
+  pendingPaths(tracker: SelectionDiscoveryTracker): readonly (readonly string[])[] {
+    const paths: (readonly string[])[] = []
+    for (const frame of this.#guided) {
+      if (frame.selected || tracker.hasRemainingTargets) paths.push(frame.path)
+    }
+    for (const frame of this.#selected) paths.push(frame.path)
+    if (tracker.hasRemainingTargets) {
+      for (const frame of this.#fallback) paths.push(frame.path)
+    }
+    return paths
   }
 
   #nextGuided(tracker: SelectionDiscoveryTracker): T | undefined {
@@ -282,7 +301,8 @@ async function probeSelectionSubtree(
     selectedFiles: 0,
     selectedDirectories: 0,
     knownBytes: 0n,
-    firstRootName: undefined,
+    commonRoot: undefined,
+    unprobedPaths: [],
     complete: true,
   }
   const tracker = new SelectionDiscoveryTracker(selection, descriptor.syntheticRootId)
@@ -291,7 +311,7 @@ async function probeSelectionSubtree(
   const rootFrame: ProbeFrame = {
     id: descriptor.syntheticRoot,
     idText: descriptor.syntheticRootId,
-    path: [],
+    path: EMPTY_PATH,
     ancestry: [descriptor.syntheticRootId],
     selected: selection.directorySelected(descriptor.syntheticRootId, []),
     committed: rootCommitted,
@@ -305,10 +325,15 @@ async function probeSelectionSubtree(
     if (next === undefined) break
     if (!admitProbeDirectory(next.guided, state, budget)) {
       state.complete = false
+      state.unprobedPaths.push(next.frame.path)
       break
     }
     const committed = next.frame.committed ?? await catalog.loadDirectory(next.frame.id, { signal })
     await probeDirectoryPages(catalog, selection, tracker, next.frame, committed, visited, queues, state, signal)
+  }
+
+  if (!state.complete) {
+    state.unprobedPaths.push(...queues.pendingPaths(tracker))
   }
 
   return buildProbeShape(state)
@@ -348,6 +373,9 @@ async function probeDirectoryPages(
     if (!dir.selected && !tracker.hasRemainingTargets) return
     if (pageIndex + 1 < committed.pageCount && state.selectedDirectories > 0 && state.selectedFiles > 1) {
       state.complete = false
+      if (dir.selected || tracker.hasRemainingTargets) {
+        state.unprobedPaths.push(dir.path)
+      }
       return
     }
   }
@@ -369,7 +397,7 @@ function recordProbedEntry(
     if (!selected) return
     state.selectedFiles += 1
     state.knownBytes += entry.expectedSize
-    state.firstRootName ??= entryPath[0]
+    extendCommonRoot(state, dir.path)
     state.singleFile = state.selectedFiles === 1 && state.selectedDirectories === 0
       ? { file: entry, sourcePath: entryPath }
       : undefined
@@ -378,7 +406,7 @@ function recordProbedEntry(
   if (selected) {
     state.selectedDirectories += 1
     state.singleFile = undefined
-    state.firstRootName ??= entry.name
+    extendCommonRoot(state, entryPath)
   }
   if (visited.has(entry.idText) || dir.ancestry.includes(entry.idText)) return
   visited.add(entry.idText)
@@ -405,13 +433,43 @@ function buildProbeShape(state: ProbeState): SelectionShape {
       exactBytes: state.singleFile.file.expectedSize,
     })
   }
+  const rootPath = resolveProbeRootPath(state)
   return Object.freeze({
     kind: 'tree',
-    suggestedName: state.firstRootName ?? DEFAULT_ARCHIVE_NAME,
+    suggestedName: rootPath.at(-1) ?? DEFAULT_ARCHIVE_NAME,
+    rootPath,
     knownFileCount: state.selectedFiles,
     knownBytes: state.knownBytes,
     complete: state.complete,
   })
+}
+
+function extendCommonRoot(state: ProbeState, directoryPath: readonly string[]): void {
+  state.commonRoot = state.commonRoot === undefined
+    ? directoryPath
+    : commonPathPrefix(state.commonRoot, directoryPath)
+}
+
+function commonPathPrefix(
+  left: readonly string[],
+  right: readonly string[],
+): readonly string[] {
+  const limit = Math.min(left.length, right.length)
+  let matched = 0
+  while (matched < limit && left[matched] === right[matched]) matched += 1
+  if (matched === left.length) return left
+  if (matched === right.length) return right
+  return Object.freeze(left.slice(0, matched))
+}
+
+function resolveProbeRootPath(state: ProbeState): readonly string[] {
+  let root = state.commonRoot
+  if (root === undefined) return EMPTY_PATH
+  for (const unprobed of state.unprobedPaths) {
+    root = commonPathPrefix(root, unprobed)
+    if (root.length === 0) return EMPTY_PATH
+  }
+  return root.length === 0 ? EMPTY_PATH : root
 }
 
 type DiscoveryFrame = TraversableFrame
@@ -424,7 +482,7 @@ export async function* discoverSelection(
   descriptor: ShareDescriptor,
   catalog: CatalogClient,
   selection: FrozenSelectionPolicy,
-  stripSingleFilePrefix: boolean,
+  rootPath: readonly string[],
   signal: AbortSignal,
   callbacks: DiscoveryCallbacks = {},
 ): AsyncGenerator<DiscoveredItem, void> {
@@ -434,7 +492,7 @@ export async function* discoverSelection(
   const rootFrame: DiscoveryFrame = {
     id: descriptor.syntheticRoot,
     idText: descriptor.syntheticRootId,
-    path: [],
+    path: EMPTY_PATH,
     ancestry: [descriptor.syntheticRootId],
     selected: selection.directorySelected(descriptor.syntheticRootId, []),
   }
@@ -456,7 +514,7 @@ export async function* discoverSelection(
       tracker,
       current,
       committed,
-      stripSingleFilePrefix,
+      rootPath,
       visited,
       queues,
       signal,
@@ -486,7 +544,7 @@ async function* scanDiscoveryDirectory(
   tracker: SelectionDiscoveryTracker,
   current: DiscoveryFrame,
   committed: CommittedDir,
-  stripSingleFilePrefix: boolean,
+  rootPath: readonly string[],
   visited: Set<string>,
   queues: DiscoveryQueues<DiscoveryFrame>,
   signal: AbortSignal,
@@ -502,7 +560,7 @@ async function* scanDiscoveryDirectory(
         tracker,
         current,
         entry,
-        stripSingleFilePrefix,
+        rootPath,
         visited,
         queues,
         callbacks,
@@ -518,7 +576,7 @@ function classifyDiscoveryEntry(
   tracker: SelectionDiscoveryTracker,
   current: DiscoveryFrame,
   entry: CatalogEntry,
-  stripSingleFilePrefix: boolean,
+  rootPath: readonly string[],
   visited: Set<string>,
   queues: DiscoveryQueues<DiscoveryFrame>,
   callbacks: DiscoveryCallbacks,
@@ -528,7 +586,8 @@ function classifyDiscoveryEntry(
   const selected = selection.selected(entry, current.ancestry)
   if (entry.kind === 'file') {
     if (!selected) return undefined
-    const relativePath = stripSingleFilePrefix ? Object.freeze([entry.name]) : sourcePath
+    const stripped = stripRootPath(sourcePath, rootPath)
+    const relativePath = stripped.length > 0 ? stripped : Object.freeze([entry.name])
     const item: DiscoveredFile = Object.freeze({ kind: 'file', entry, sourcePath, relativePath })
     callbacks.onFileDiscovered?.(item)
     return item
@@ -546,6 +605,23 @@ function classifyDiscoveryEntry(
     }, tracker.isHintedDirectory(childAncestry))
   }
   return selected
-    ? Object.freeze({ kind: 'directory', entry, sourcePath, relativePath: sourcePath, selected: true })
+    ? Object.freeze({
+        kind: 'directory',
+        entry,
+        sourcePath,
+        relativePath: stripRootPath(sourcePath, rootPath),
+        selected: true,
+      })
     : undefined
+}
+
+function stripRootPath(
+  sourcePath: readonly string[],
+  rootPath: readonly string[],
+): readonly string[] {
+  if (rootPath.length === 0 || sourcePath.length < rootPath.length) return sourcePath
+  for (let index = 0; index < rootPath.length; index += 1) {
+    if (sourcePath[index] !== rootPath[index]) return sourcePath
+  }
+  return Object.freeze(sourcePath.slice(rootPath.length))
 }

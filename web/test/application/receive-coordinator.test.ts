@@ -176,6 +176,7 @@ describe('receive admission and coordinator', () => {
       inspectSelection: async () => ({
         kind: 'tree' as const,
         suggestedName: 'Album',
+        rootPath: ['Album'],
         knownFileCount: 2,
         knownBytes: 100n,
         complete: true,

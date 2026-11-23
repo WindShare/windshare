@@ -10,15 +10,18 @@ import type { FileRevisionDescriptor } from '../../src/content/records'
 import type { RevisionReader } from '../../src/content/session-services'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import type { BrowserDownloadWindow } from '../../src/output/backends/browser-handoff'
+import { planArtifactOffers } from '../../src/output/backends/contract'
+import { openNewOPFSSession, reopenOPFSSession } from '../../src/output/backends/opfs'
 import { openPortableSession } from '../../src/output/backends/portable'
 import type { NativeObjectIO } from '../../src/output/native-object/contracts'
 import { ObjectCheckpointCoordinator } from '../../src/output/native-object/coordinator'
 import type { ReceiveStore } from '../../src/output/store/database'
-import type { ReceiveFileRecord } from '../../src/output/store/types'
+import type { ReceiveFileRecord, ReceiveTaskRecord } from '../../src/output/store/types'
 import { buildPartialZipBlob, ProgressiveZipWriter } from '../../src/output/zip/progressive-zip'
 import { StreamingZipWriter } from '../../src/output/zip/streaming-zip'
+import { inspectSelectionShape } from '../../src/transfer/discovery'
 import { TransferJob } from '../../src/transfer/job'
-import { selectionKey, selectionSpecFromPolicy } from '../../src/transfer/selection'
+import { artifactRootPath, selectionKey, selectionSpecFromPolicy } from '../../src/transfer/selection'
 import { initialReceiveState } from '../../src/transfer/state'
 
 class MemoryNativeObjectIO implements NativeObjectIO {
@@ -455,5 +458,199 @@ describe('ZIP writers (portable streaming & OPFS progressive)', () => {
     } finally {
       await reader.close()
     }
+  })
+})
+
+describe('ZIP result-root layout integration', () => {
+  it('preserves a single result-root folder inside Portable and OPFS ZIP archives across fresh runs and resume', async () => {
+    const shareInstance = fixedId(1)
+    const rootId = fixedId(2)
+    const photosId = fixedId(10)
+    const tripId = fixedId(11)
+    const aId = fixedId(20)
+    const bId = fixedId(21)
+    const payloadA = new TextEncoder().encode('alpha-photo')
+    const payloadB = new TextEncoder().encode('beta-photo')
+
+    const photosEntry: CatalogEntry = Object.freeze({ kind: 'directory', id: photosId, idText: encodeBase64Url(photosId), name: 'Photos' })
+    const tripEntry: CatalogEntry = Object.freeze({ kind: 'directory', id: tripId, idText: encodeBase64Url(tripId), name: 'Trip' })
+    const fileA: CatalogEntry = Object.freeze({ kind: 'file', id: aId, idText: encodeBase64Url(aId), name: 'a.jpg', expectedSize: BigInt(payloadA.byteLength) })
+    const fileB: CatalogEntry = Object.freeze({ kind: 'file', id: bId, idText: encodeBase64Url(bId), name: '1.jpg', expectedSize: BigInt(payloadB.byteLength) })
+
+    const pages = new Map([
+      [encodeBase64Url(rootId), makeDirectoryPage(shareInstance, rootId, [photosEntry])],
+      [photosEntry.idText, makeDirectoryPage(shareInstance, photosId, [fileA, tripEntry])],
+      [tripEntry.idText, makeDirectoryPage(shareInstance, tripId, [fileB])],
+    ])
+    const payloads = new Map([[fileA.idText, payloadA], [fileB.idText, payloadB]])
+    const descriptor = Object.freeze({
+      shareInstance,
+      shareInstanceId: encodeBase64Url(shareInstance),
+      syntheticRoot: rootId,
+      syntheticRootId: encodeBase64Url(rootId),
+    }) as unknown as ShareDescriptor
+    const catalog = Object.freeze({
+      loadDirectory: async (directoryId: Uint8Array) => pages.get(encodeBase64Url(directoryId))!.committed,
+      page: async (committed: CommittedDirectory) => pages.get(committed.directoryIdText)!.page,
+    }) as unknown as CatalogClient
+    const revisions: RevisionReader = {
+      open: async (fileId: Uint8Array) => {
+        const key = encodeBase64Url(fileId)
+        const bytes = payloads.get(key)!
+        const rev = fixedId(71)
+        return Object.freeze({
+          descriptor: Object.freeze({
+            shareInstance,
+            shareInstanceId: descriptor.shareInstanceId,
+            fileId,
+            fileIdText: key,
+            fileRevision: rev,
+            fileRevisionText: encodeBase64Url(rev),
+            exactSize: BigInt(bytes.byteLength),
+            geometry: new FileGeometry(BigInt(bytes.byteLength), 32n),
+          }) as FileRevisionDescriptor,
+          leaseId: fixedId(99),
+          release: async () => undefined,
+        })
+      },
+    }
+    const broker: BlockRangeReader = {
+      readRange: async function* (revDesc, _leaseId, span) {
+        const bytes = payloads.get(revDesc.fileIdText)!
+        yield Object.freeze({ offset: span.start, data: bytes.subarray(Number(span.start), Number(span.end)) })
+      },
+    }
+
+    // 1. Portable ZIP of subfolder Photos/Trip -> Trip.zip containing Trip/ and Trip/1.jpg.
+    const tripPolicy = new SelectionPolicy(false)
+    tripPolicy.set(tripEntry, [descriptor.syntheticRootId, photosEntry.idText], true)
+    const tripSelection = tripPolicy.snapshot()
+    const tripSpec = selectionSpecFromPolicy(descriptor.shareInstanceId, descriptor.syntheticRootId, tripSelection)
+    const tripKey = selectionKey(tripSpec)
+    const tripShape = await inspectSelectionShape(descriptor, catalog, tripSelection, new AbortController().signal)
+    const tripOffers = planArtifactOffers({
+      epoch: 1n,
+      selectionKey: tripKey,
+      shape: tripShape,
+      capabilities: { indexedDb: false, fsa: false, opfs: false, portable: true, availableStorageBytes: null },
+    })
+    if (tripOffers.kind !== 'ready' || tripOffers.zip === null) throw new Error('expected portable zip offer')
+    expect(tripOffers.zip.suggestedName).toBe('Trip.zip')
+    expect(tripOffers.zip.artifact.rootPath).toEqual(['Photos', 'Trip'])
+
+    const portableWindow = createMockDownloadWindow()
+    const portableSession = openPortableSession({
+      task: {
+        taskId: 'portable-trip',
+        selection: tripSpec,
+        selectionKey: tripKey,
+        artifact: tripOffers.zip.artifact,
+        lifecycle: initialReceiveState('portable-trip'),
+      },
+      windowPort: portableWindow.windowPort,
+    })
+    const portableResult = await new TransferJob({
+      descriptor,
+      catalog,
+      selection: tripSelection,
+      revisions,
+      broker,
+      output: portableSession.transferOutput,
+      rootPath: artifactRootPath(tripOffers.zip.artifact),
+    }).run()
+    expect(portableResult.status).toBe('completed')
+    await portableSession.settle(portableResult)
+    const tripArchive = await readZipArchive(portableWindow.blobs[0]!)
+    expect(tripArchive.directories).toEqual(new Set(['Trip/']))
+    expect([...tripArchive.files.keys()]).toEqual(['Trip/1.jpg'])
+    expect(tripArchive.files.get('Trip/1.jpg')).toEqual(payloadB)
+
+    // 2. OPFS progressive ZIP of whole folder Photos/ across pause + reopen -> Photos/a.jpg and Photos/Trip/1.jpg.
+    const wholeSelection = new SelectionPolicy(true).snapshot()
+    const wholeSpec = selectionSpecFromPolicy(descriptor.shareInstanceId, descriptor.syntheticRootId, wholeSelection)
+    const wholeKey = selectionKey(wholeSpec)
+    const wholeShape = await inspectSelectionShape(descriptor, catalog, wholeSelection, new AbortController().signal)
+    const wholeOffers = planArtifactOffers({
+      epoch: 2n,
+      selectionKey: wholeKey,
+      shape: wholeShape,
+      capabilities: { indexedDb: true, fsa: false, opfs: true, portable: true, availableStorageBytes: 1_000_000n },
+    })
+    if (wholeOffers.kind !== 'ready' || wholeOffers.zip === null) throw new Error('expected opfs zip offer')
+    expect(wholeOffers.zip.suggestedName).toBe('Photos.zip')
+
+    const io = new MemoryNativeObjectIO()
+    const tasks = new Map<string, ReceiveTaskRecord>()
+    const fileStore = new MemoryFileStore(io.events)
+    const store = Object.freeze({
+      putTask: async (record: ReceiveTaskRecord) => { tasks.set(record.taskId, record) },
+      getTask: async (taskId: string) => tasks.get(taskId),
+      listTasks: async () => [...tasks.values()],
+      deleteTask: async (taskId: string) => { tasks.delete(taskId) },
+      putFile: (record: ReceiveFileRecord) => fileStore.putFile(record),
+      getFile: (taskId: string, fileId: string) => fileStore.getFile(taskId, fileId),
+      listTaskFiles: (taskId: string) => fileStore.listTaskFiles(taskId),
+    }) as unknown as ReceiveStore
+    const opfsFileHandle = {
+      getFile: async () => new File([io.bytes], 'opfs-photos.part'),
+    } as unknown as FileSystemFileHandle
+    const opfsDirHandle = {
+      getDirectoryHandle: async () => opfsDirHandle,
+      getFileHandle: async () => opfsFileHandle,
+    } as unknown as FileSystemDirectoryHandle
+    const opfsEnv = Object.freeze({
+      getRootDirectory: async () => opfsDirHandle,
+      openNativeObject: async () => io,
+    })
+    const opfsWindow = createMockDownloadWindow()
+    const opfsSession = await openNewOPFSSession({
+      task: {
+        taskId: 'opfs-photos',
+        selection: wholeSpec,
+        selectionKey: wholeKey,
+        artifact: wholeOffers.zip.artifact,
+        lifecycle: initialReceiveState('opfs-photos'),
+      },
+      store,
+      env: opfsEnv,
+      windowPort: opfsWindow.windowPort,
+    })
+    const pausedTask = await opfsSession.settle({
+      status: 'paused',
+      pauseReason: 'user',
+      completedFiles: 0n,
+      completedBytes: 0n,
+      discoveredFiles: 0n,
+      discoveredBytes: 0n,
+      discoveryComplete: false,
+      failedFiles: 0n,
+      failedDirectories: 0n,
+    })
+    await opfsSession.close()
+
+    const reopenedOpfs = await reopenOPFSSession({
+      task: pausedTask,
+      store,
+      env: opfsEnv,
+      windowPort: opfsWindow.windowPort,
+    })
+    const opfsResult = await new TransferJob({
+      descriptor,
+      catalog,
+      selection: wholeSelection,
+      revisions,
+      broker,
+      output: reopenedOpfs.transferOutput,
+      rootPath: artifactRootPath(pausedTask.artifact),
+    }).run()
+    expect(opfsResult.status).toBe('completed')
+    await reopenedOpfs.settle(opfsResult)
+    await reopenedOpfs.close()
+
+    const opfsArchive = await readZipArchive(opfsWindow.blobs[0]!)
+    expect(opfsArchive.directories).toEqual(new Set(['Photos/', 'Photos/Trip/']))
+    expect([...opfsArchive.files.keys()].sort()).toEqual(['Photos/Trip/1.jpg', 'Photos/a.jpg'])
+    expect(opfsArchive.files.get('Photos/a.jpg')).toEqual(payloadA)
+    expect(opfsArchive.files.get('Photos/Trip/1.jpg')).toEqual(payloadB)
   })
 })

@@ -66,6 +66,7 @@ export async function installArtifactActionActivationHarness(): Promise<Artifact
     inspectSelection: async () => ({
       kind: 'tree' as const,
       suggestedName: 'photos',
+      rootPath: ['photos'],
       knownFileCount: 2,
       knownBytes: 128n,
       complete: true,

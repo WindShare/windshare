@@ -19,6 +19,7 @@ import type {
 
 const MAX_MISSING_WARNINGS = 20
 const MAX_SOURCE_FAILURES = 20
+const EMPTY_ROOT_PATH: readonly string[] = Object.freeze([])
 
 export interface TransferJobOptions {
   readonly transferJobId?: string
@@ -29,7 +30,7 @@ export interface TransferJobOptions {
   readonly broker: BlockRangeReader
   readonly lanes?: ContentLaneStatus
   readonly output: TransferOutputSession
-  readonly stripSingleFilePrefix?: boolean
+  readonly rootPath?: readonly string[]
   readonly onProgress?: (progress: TransferProgress) => void
 }
 
@@ -145,7 +146,7 @@ export class TransferJob {
       this.#options.descriptor,
       this.#options.catalog,
       this.#options.selection,
-      this.#options.stripSingleFilePrefix ?? false,
+      this.#options.rootPath ?? EMPTY_ROOT_PATH,
       this.#abort.signal,
       {
         onOmittedEntries: count => this.#tracker.observeOmittedEntries(count),

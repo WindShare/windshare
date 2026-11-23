@@ -231,6 +231,7 @@ describe('v2 joined-share projection authority', () => {
     expect(shape).toEqual({
       kind: 'tree',
       suggestedName: 'shared',
+      rootPath: ['shared'],
       knownFileCount: 1,
       knownBytes: 68n,
       complete: true,

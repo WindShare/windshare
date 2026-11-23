@@ -29,7 +29,7 @@ import {
   triggerBrowserDownload,
   type BrowserDownloadWindow,
 } from './browser-handoff'
-import type { OutputSessionHandle, StartBackendTaskInput } from './contract'
+import { resolveZipEntryPath, type OutputSessionHandle, type StartBackendTaskInput } from './contract'
 
 const OPFS_ROOT_DIR = 'windshare-tasks'
 const OPFS_MAX_CONCURRENT_FILES = 4
@@ -320,8 +320,11 @@ class OPFSSessionHandle implements OutputSessionHandle {
         }),
       }),
       ...(input.zip === undefined ? {} : {
-        ensureDirectory: (request: TransferDirectoryRequest) =>
-          input.zip!.ensureDirectory(request.directoryId, request.path, request.modifiedTimeMilliseconds),
+        ensureDirectory: async (request: TransferDirectoryRequest) => {
+          const zipPath = resolveZipEntryPath(input.record.artifact, request.path)
+          if (zipPath === undefined) return
+          await input.zip!.ensureDirectory(request.directoryId, zipPath, request.modifiedTimeMilliseconds)
+        },
       }),
       openFile: (request: TransferFileRequest, signal: AbortSignal) => this.#openFile(request, signal),
       markDiscoveryComplete: async () => {
@@ -459,9 +462,13 @@ class OPFSSessionHandle implements OutputSessionHandle {
 
   async #openZipFile(request: TransferFileRequest): Promise<TransferOutputFile> {
     const zip = this.#zip!
+    const zipPath = resolveZipEntryPath(this.#record.artifact, request.path)
+    if (zipPath === undefined) {
+      throw new TypeError('ZIP file entry requires a non-empty path')
+    }
     const opened = await zip.openFile({
       fileId: request.fileId,
-      path: request.path,
+      path: zipPath,
       revision: request.revision,
       ...(request.sourceMetadata === undefined ? {} : { sourceMetadata: request.sourceMetadata }),
       exactSize: request.exactSize,

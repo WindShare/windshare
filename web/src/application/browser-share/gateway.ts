@@ -196,7 +196,7 @@ export class JoinedBrowserShare {
     connectivity: ConnectivityActivation,
     options: Partial<Pick<
       TransferJobOptions,
-      'transferJobId' | 'onProgress' | 'stripSingleFilePrefix'
+      'transferJobId' | 'onProgress' | 'rootPath'
     >> & {
       readonly selection?: FrozenSelectionPolicy
     } = {},

@@ -218,7 +218,7 @@ describe('transfer discovery and job execution', () => {
     expect(pausedRanges).toEqual([byteRange(0n, 4n)])
 
     const discovered: string[] = []
-    for await (const item of discoverSelection(fixture.descriptor, fixture.catalog, new SelectionPolicy(true).snapshot(), false, new AbortController().signal)) {
+    for await (const item of discoverSelection(fixture.descriptor, fixture.catalog, new SelectionPolicy(true).snapshot(), [], new AbortController().signal)) {
       if (item.kind === 'file') discovered.push(item.entry.name)
     }
     expect(discovered).toEqual(['movie.bin'])
@@ -306,5 +306,181 @@ describe('transfer discovery and job execution', () => {
     } finally {
       nowSpy.mockRestore()
     }
+  })
+
+  it('derives result root paths accurately across single-folder, subfolder, multi-root, and partial selections', async () => {
+    const shareInstance = id(1)
+    const rootId = id(2)
+    const photosId = id(10)
+    const tripId = id(11)
+    const otherId = id(12)
+    const docsId = id(13)
+    const photoAId = id(20)
+    const photoBId = id(21)
+    const tripOneId = id(22)
+    const tripSubId = id(23)
+    const tripTwoId = id(24)
+    const docId = id(25)
+
+    const dir = (rawId: Uint8Array<ArrayBuffer>, name: string): Extract<CatalogEntry, { kind: 'directory' }> =>
+      Object.freeze({ kind: 'directory', id: rawId, idText: encodeBase64Url(rawId), name })
+    const file = (rawId: Uint8Array<ArrayBuffer>, name: string, size: bigint): Extract<CatalogEntry, { kind: 'file' }> =>
+      Object.freeze({ kind: 'file', id: rawId, idText: encodeBase64Url(rawId), name, expectedSize: size })
+
+    const makeTreeCatalog = (tree: ReadonlyMap<string, readonly CatalogEntry[]>) => {
+      const committedById = new Map<string, { committed: CommittedDirectory; page: CatalogPage }>()
+      for (const [dirIdText, entries] of tree) {
+        const rawDirId = dirIdText === encodeBase64Url(rootId) ? rootId : id(0)
+        const committed: CommittedDirectory = Object.freeze({
+          directoryId: rawDirId,
+          directoryIdText: dirIdText,
+          generation: id(3),
+          generationText: encodeBase64Url(id(3)),
+          pageCount: 1,
+          entryCount: entries.length,
+          omittedCount: 0n,
+          terminalCommitment: new Uint8Array(32),
+        })
+        const page: CatalogPage = Object.freeze({
+          shareInstance,
+          directoryId: rawDirId,
+          directoryIdText: dirIdText,
+          generation: committed.generation,
+          generationText: committed.generationText,
+          pageIndex: 0,
+          terminal: true,
+          previousCommitment: new Uint8Array(32),
+          entries: Object.freeze([...entries]),
+          omittedCount: 0n,
+          objectCommitment: new Uint8Array(32),
+          encodedBytes: 64,
+        })
+        committedById.set(dirIdText, { committed, page })
+      }
+      const descriptor: ShareDescriptor = Object.freeze({
+        shareInstance,
+        shareInstanceId: encodeBase64Url(shareInstance),
+        syntheticRoot: rootId,
+        syntheticRootId: encodeBase64Url(rootId),
+      }) as unknown as ShareDescriptor
+      const catalog = Object.freeze({
+        loadDirectory: async (dirId: Uint8Array) => committedById.get(encodeBase64Url(dirId))!.committed,
+        page: async (committed: CommittedDirectory) => committedById.get(committed.directoryIdText)!.page,
+      }) as unknown as CatalogClient
+      return { descriptor, catalog }
+    }
+
+    const photosEntry = dir(photosId, 'Photos')
+    const tripEntry = dir(tripId, 'Trip')
+    const otherEntry = dir(otherId, 'Other')
+    const docsEntry = dir(docsId, 'Docs')
+    const photoA = file(photoAId, 'a.jpg', 10n)
+    const photoB = file(photoBId, 'b.jpg', 20n)
+    const tripOne = file(tripOneId, '1.jpg', 30n)
+    const tripSub = dir(tripSubId, 'sub')
+    const tripTwo = file(tripTwoId, '2.jpg', 40n)
+    const docC = file(docId, 'c.pdf', 50n)
+
+    // 1. Sole folder with multiple files and subdirs (triggers probe early-stop) still anchors at ['Photos'].
+    const singleFolder = makeTreeCatalog(new Map([
+      [encodeBase64Url(rootId), [photosEntry]],
+      [photosEntry.idText, [photoA, photoB, tripEntry, otherEntry]],
+      [tripEntry.idText, [tripOne, tripSub]],
+      [tripSub.idText, [tripTwo]],
+      [otherEntry.idText, []],
+    ]))
+    const wholeFolderShape = await inspectSelectionShape(
+      singleFolder.descriptor,
+      singleFolder.catalog,
+      new SelectionPolicy(true).snapshot(),
+      new AbortController().signal,
+    )
+    expect(wholeFolderShape).toMatchObject({ kind: 'tree', suggestedName: 'Photos', rootPath: ['Photos'] })
+
+    const folderItems: Array<{ kind: string; relative: readonly string[]; source: readonly string[] }> = []
+    for await (const item of discoverSelection(
+      singleFolder.descriptor,
+      singleFolder.catalog,
+      new SelectionPolicy(true).snapshot(),
+      wholeFolderShape.kind === 'tree' ? wholeFolderShape.rootPath : [],
+      new AbortController().signal,
+    )) {
+      folderItems.push({ kind: item.kind, relative: item.relativePath, source: item.sourcePath })
+    }
+    expect(folderItems).toContainEqual({ kind: 'directory', relative: [], source: ['Photos'] })
+    expect(folderItems).toContainEqual({ kind: 'file', relative: ['a.jpg'], source: ['Photos', 'a.jpg'] })
+    expect(folderItems).toContainEqual({ kind: 'directory', relative: ['Trip', 'sub'], source: ['Photos', 'Trip', 'sub'] })
+    expect(folderItems).toContainEqual({ kind: 'file', relative: ['Trip', 'sub', '2.jpg'], source: ['Photos', 'Trip', 'sub', '2.jpg'] })
+
+    // 2. Selecting only subfolder Photos/Trip anchors at ['Photos', 'Trip'] with suggestedName 'Trip'.
+    const tripPolicy = new SelectionPolicy(false)
+    tripPolicy.set(tripEntry, [singleFolder.descriptor.syntheticRootId, photosEntry.idText], true)
+    const tripShape = await inspectSelectionShape(
+      singleFolder.descriptor,
+      singleFolder.catalog,
+      tripPolicy.snapshot(),
+      new AbortController().signal,
+    )
+    expect(tripShape).toMatchObject({ kind: 'tree', suggestedName: 'Trip', rootPath: ['Photos', 'Trip'] })
+
+    // 3. Selecting only two files inside Photos anchors at ['Photos'].
+    const twoPhotosPolicy = new SelectionPolicy(false)
+    twoPhotosPolicy.set(photoA, [singleFolder.descriptor.syntheticRootId, photosEntry.idText], true)
+    twoPhotosPolicy.set(photoB, [singleFolder.descriptor.syntheticRootId, photosEntry.idText], true)
+    const twoPhotosShape = await inspectSelectionShape(
+      singleFolder.descriptor,
+      singleFolder.catalog,
+      twoPhotosPolicy.snapshot(),
+      new AbortController().signal,
+    )
+    expect(twoPhotosShape).toMatchObject({ kind: 'tree', suggestedName: 'Photos', rootPath: ['Photos'] })
+
+    // 4. Selecting only one file inside a folder with sibling subdirs remains single-file.
+    const onePhotoPolicy = new SelectionPolicy(false)
+    onePhotoPolicy.set(photoA, [singleFolder.descriptor.syntheticRootId, photosEntry.idText], true)
+    const onePhotoShape = await inspectSelectionShape(
+      singleFolder.descriptor,
+      singleFolder.catalog,
+      onePhotoPolicy.snapshot(),
+      new AbortController().signal,
+    )
+    expect(onePhotoShape).toMatchObject({ kind: 'single-file', sourcePath: ['Photos', 'a.jpg'] })
+
+    // 5. Multiple root files use synthetic root ('windshare-download') rather than first filename.
+    const multiFiles = makeShareFixture([
+      { seed: 41, name: 'a.jpg', bytes: new Uint8Array([1, 2]) },
+      { seed: 42, name: 'b.jpg', bytes: new Uint8Array([3, 4]) },
+    ])
+    const multiFileShape = await inspectSelectionShape(
+      multiFiles.descriptor,
+      multiFiles.catalog,
+      new SelectionPolicy(true).snapshot(),
+      new AbortController().signal,
+    )
+    expect(multiFileShape).toMatchObject({ kind: 'tree', suggestedName: 'windshare-download', rootPath: [] })
+
+    // 6. Multiple root folders use synthetic root, while unchecking Docs anchors cleanly at ['Photos'].
+    const multiRoots = makeTreeCatalog(new Map([
+      [encodeBase64Url(rootId), [photosEntry, docsEntry]],
+      [photosEntry.idText, [photoA]],
+      [docsEntry.idText, [docC]],
+    ]))
+    const bothRootsShape = await inspectSelectionShape(
+      multiRoots.descriptor,
+      multiRoots.catalog,
+      new SelectionPolicy(true).snapshot(),
+      new AbortController().signal,
+    )
+    expect(bothRootsShape).toMatchObject({ kind: 'tree', suggestedName: 'windshare-download', rootPath: [] })
+
+    const onlyPhotosPolicy = new SelectionPolicy(true)
+    onlyPhotosPolicy.set(docsEntry, [multiRoots.descriptor.syntheticRootId], false)
+    const onlyPhotosShape = await inspectSelectionShape(
+      multiRoots.descriptor,
+      multiRoots.catalog,
+      onlyPhotosPolicy.snapshot(),
+      new AbortController().signal,
+    )
+    expect(onlyPhotosShape).toMatchObject({ kind: 'tree', suggestedName: 'Photos', rootPath: ['Photos'] })
   })
 })

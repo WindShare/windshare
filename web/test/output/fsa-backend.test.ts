@@ -1,14 +1,22 @@
 import { describe, expect, it } from 'vitest'
+import type { CatalogClient } from '../../src/catalog/client'
+import type { CommittedDirectory } from '../../src/catalog/page-store'
+import type { CatalogEntry, CatalogPage, ShareDescriptor } from '../../src/catalog/records'
+import { SelectionPolicy } from '../../src/catalog/selection'
 import type { BlockRangeReader } from '../../src/content/broker'
 import { FileGeometry, byteRange } from '../../src/content/geometry'
 import type { FileRevisionDescriptor } from '../../src/content/records'
 import type { RevisionReader } from '../../src/content/session-services'
 import { encodeBase64Url } from '../../src/crypto/bytes'
+import { planArtifactOffers } from '../../src/output/backends/contract'
 import { discardFSATask, openNewFSASession, reopenFSASession } from '../../src/output/backends/fsa'
 import type { OutputTraceEvent } from '../../src/output/diagnostics'
 import type { ReceiveStore } from '../../src/output/store/database'
 import type { ReceiveFileRecord, ReceiveTaskRecord } from '../../src/output/store/types'
+import { inspectSelectionShape } from '../../src/transfer/discovery'
 import { transferSingleFile } from '../../src/transfer/file-transfer'
+import { TransferJob } from '../../src/transfer/job'
+import { artifactRootPath, selectionKey, selectionSpecFromPolicy } from '../../src/transfer/selection'
 import { initialReceiveState } from '../../src/transfer/state'
 
 class MemoryReceiveStore {
@@ -689,5 +697,210 @@ describe('FSA discard safety', () => {
 
     expect(existingDir.children.has('.gitkeep')).toBe(true)
     expect(parent.stats.recursiveRemoveCalls).toBe(0)
+  })
+})
+
+describe('FSA result-root layout integration', () => {
+  const fullCaps = {
+    indexedDb: true,
+    fsa: true,
+    opfs: true,
+    portable: true,
+    availableStorageBytes: 1_000_000n,
+  } as const
+
+  function makeCatalogFixture(
+    entriesByDir: ReadonlyMap<string, readonly CatalogEntry[]>,
+    payloadsById: ReadonlyMap<string, Uint8Array<ArrayBuffer>>,
+    rootId: Uint8Array<ArrayBuffer>,
+  ) {
+    const shareInstance = new Uint8Array(16).fill(1)
+    const pages = new Map<string, { committed: CommittedDirectory; page: CatalogPage }>()
+    for (const [dirIdText, entries] of entriesByDir) {
+      const committed: CommittedDirectory = Object.freeze({
+        directoryId: rootId,
+        directoryIdText: dirIdText,
+        generation: new Uint8Array(16).fill(3),
+        generationText: encodeBase64Url(new Uint8Array(16).fill(3)),
+        pageCount: 1,
+        entryCount: entries.length,
+        omittedCount: 0n,
+        terminalCommitment: new Uint8Array(32),
+      })
+      const page: CatalogPage = Object.freeze({
+        shareInstance,
+        directoryId: rootId,
+        directoryIdText: dirIdText,
+        generation: committed.generation,
+        generationText: committed.generationText,
+        pageIndex: 0,
+        terminal: true,
+        previousCommitment: new Uint8Array(32),
+        entries: Object.freeze([...entries]),
+        omittedCount: 0n,
+        objectCommitment: new Uint8Array(32),
+        encodedBytes: 64,
+      })
+      pages.set(dirIdText, { committed, page })
+    }
+    const descriptor: ShareDescriptor = Object.freeze({
+      shareInstance,
+      shareInstanceId: encodeBase64Url(shareInstance),
+      syntheticRoot: rootId,
+      syntheticRootId: encodeBase64Url(rootId),
+    }) as unknown as ShareDescriptor
+    const catalog: CatalogClient = Object.freeze({
+      loadDirectory: async (directoryId: Uint8Array) => pages.get(encodeBase64Url(directoryId))!.committed,
+      page: async (committed: CommittedDirectory) => pages.get(committed.directoryIdText)!.page,
+    }) as unknown as CatalogClient
+    const revisions: RevisionReader = {
+      open: async (fileId: Uint8Array) => {
+        const key = encodeBase64Url(fileId)
+        const bytes = payloadsById.get(key)!
+        const rev = new Uint8Array(16).fill(70)
+        return Object.freeze({
+          descriptor: Object.freeze({
+            shareInstance,
+            shareInstanceId: descriptor.shareInstanceId,
+            fileId,
+            fileIdText: key,
+            fileRevision: rev,
+            fileRevisionText: encodeBase64Url(rev),
+            exactSize: BigInt(bytes.byteLength),
+            geometry: new FileGeometry(BigInt(bytes.byteLength), 64n),
+          }) as FileRevisionDescriptor,
+          leaseId: new Uint8Array(16).fill(99),
+          release: async () => undefined,
+        })
+      },
+    }
+    const broker: BlockRangeReader = {
+      readRange: async function* (revDesc, _leaseId, span) {
+        const bytes = payloadsById.get(revDesc.fileIdText)!
+        yield Object.freeze({ offset: span.start, data: bytes.subarray(Number(span.start), Number(span.end)) })
+      },
+    }
+    return { descriptor, catalog, revisions, broker }
+  }
+
+  function listTreePaths(dir: FakeDirectoryHandle, prefix = ''): string[] {
+    const out: string[] = []
+    for (const [name, child] of [...dir.children.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+      const next = prefix === '' ? name : `${prefix}/${name}`
+      if (child instanceof FakeDirectoryHandle) {
+        out.push(`${next}/`)
+        out.push(...listTreePaths(child, next))
+      } else {
+        out.push(next)
+      }
+    }
+    return out
+  }
+
+  it('writes single-folder, subfolder, multi-file, and multi-root downloads without duplicate top-level folders', async () => {
+    const rootId = new Uint8Array(16).fill(2)
+    const rootText = encodeBase64Url(rootId)
+    const photosId = new Uint8Array(16).fill(10)
+    const tripId = new Uint8Array(16).fill(11)
+    const docsId = new Uint8Array(16).fill(12)
+    const aId = new Uint8Array(16).fill(20)
+    const bId = new Uint8Array(16).fill(21)
+    const cId = new Uint8Array(16).fill(22)
+
+    const photosEntry: CatalogEntry = Object.freeze({ kind: 'directory', id: photosId, idText: encodeBase64Url(photosId), name: 'Photos' })
+    const tripEntry: CatalogEntry = Object.freeze({ kind: 'directory', id: tripId, idText: encodeBase64Url(tripId), name: 'Trip' })
+    const docsEntry: CatalogEntry = Object.freeze({ kind: 'directory', id: docsId, idText: encodeBase64Url(docsId), name: 'Docs' })
+    const aBytes = new TextEncoder().encode('alpha')
+    const bBytes = new TextEncoder().encode('beta')
+    const cBytes = new TextEncoder().encode('gamma')
+    const fileA: CatalogEntry = Object.freeze({ kind: 'file', id: aId, idText: encodeBase64Url(aId), name: 'a.jpg', expectedSize: BigInt(aBytes.byteLength) })
+    const fileB: CatalogEntry = Object.freeze({ kind: 'file', id: bId, idText: encodeBase64Url(bId), name: 'b.jpg', expectedSize: BigInt(bBytes.byteLength) })
+    const fileC: CatalogEntry = Object.freeze({ kind: 'file', id: cId, idText: encodeBase64Url(cId), name: 'c.pdf', expectedSize: BigInt(cBytes.byteLength) })
+    const payloads = new Map([[fileA.idText, aBytes], [fileB.idText, bBytes], [fileC.idText, cBytes]])
+
+    const runFsaDownload = async (
+      taskId: string,
+      entriesByDir: ReadonlyMap<string, readonly CatalogEntry[]>,
+      policy: SelectionPolicy,
+    ) => {
+      const fixture = makeCatalogFixture(entriesByDir, payloads, rootId)
+      const selection = policy.snapshot()
+      const spec = selectionSpecFromPolicy(fixture.descriptor.shareInstanceId, fixture.descriptor.syntheticRootId, selection)
+      const key = selectionKey(spec)
+      const shape = await inspectSelectionShape(fixture.descriptor, fixture.catalog, selection, new AbortController().signal)
+      const offers = planArtifactOffers({ epoch: 1n, selectionKey: key, shape, capabilities: fullCaps })
+      if (offers.kind !== 'ready') throw new Error('expected ready offers')
+      const store = new MemoryReceiveStore()
+      const parent = new FakeDirectoryHandle('Downloads', store.events)
+      const session = await openNewFSASession({
+        task: {
+          taskId,
+          selection: spec,
+          selectionKey: key,
+          artifact: offers.primary.artifact,
+          lifecycle: initialReceiveState(taskId),
+        },
+        parentHandle: parent as unknown as FileSystemDirectoryHandle,
+        store: store as unknown as ReceiveStore,
+      })
+      const result = await new TransferJob({
+        descriptor: fixture.descriptor,
+        catalog: fixture.catalog,
+        selection,
+        revisions: fixture.revisions,
+        broker: fixture.broker,
+        output: session.transferOutput,
+        rootPath: artifactRootPath(offers.primary.artifact),
+      }).run()
+      expect(result.status).toBe('completed')
+      await session.settle(result)
+      await session.close()
+      return listTreePaths(parent)
+    }
+
+    // 1. Whole single folder Photos/ -> Downloads/Photos/a.jpg and Downloads/Photos/Trip/b.jpg (no Photos/Photos).
+    const singleFolderTree = new Map<string, readonly CatalogEntry[]>([
+      [rootText, [photosEntry]],
+      [photosEntry.idText, [fileA, tripEntry]],
+      [tripEntry.idText, [fileB]],
+    ])
+    expect(await runFsaDownload('t-single-dir', singleFolderTree, new SelectionPolicy(true))).toEqual([
+      'Photos/',
+      'Photos/a.jpg',
+      'Photos/Trip/',
+      'Photos/Trip/b.jpg',
+    ])
+
+    // 2. Subfolder Photos/Trip/ only -> Downloads/Trip/b.jpg (no Trip/Photos/Trip).
+    const tripOnly = new SelectionPolicy(false)
+    tripOnly.set(tripEntry, [rootText, photosEntry.idText], true)
+    expect(await runFsaDownload('t-subfolder', singleFolderTree, tripOnly)).toEqual([
+      'Trip/',
+      'Trip/b.jpg',
+    ])
+
+    // 3. Multiple root files a.jpg + b.jpg -> Downloads/windshare-download/{a.jpg, b.jpg} (no a.jpg/ folder).
+    const multiFileTree = new Map<string, readonly CatalogEntry[]>([
+      [rootText, [fileA, fileB]],
+    ])
+    expect(await runFsaDownload('t-multi-file', multiFileTree, new SelectionPolicy(true))).toEqual([
+      'windshare-download/',
+      'windshare-download/a.jpg',
+      'windshare-download/b.jpg',
+    ])
+
+    // 4. Multiple root directories Photos/ + Docs/ -> Downloads/windshare-download/{Docs/c.pdf, Photos/a.jpg}.
+    const multiDirTree = new Map<string, readonly CatalogEntry[]>([
+      [rootText, [photosEntry, docsEntry]],
+      [photosEntry.idText, [fileA]],
+      [docsEntry.idText, [fileC]],
+    ])
+    expect(await runFsaDownload('t-multi-dir', multiDirTree, new SelectionPolicy(true))).toEqual([
+      'windshare-download/',
+      'windshare-download/Docs/',
+      'windshare-download/Docs/c.pdf',
+      'windshare-download/Photos/',
+      'windshare-download/Photos/a.jpg',
+    ])
   })
 })

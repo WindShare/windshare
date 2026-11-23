@@ -15,6 +15,7 @@ import type { FrozenSelectionPolicy } from '../../catalog/selection'
 import type { TransferJob } from '../../transfer/job'
 import { EMPTY_TRANSFER_PROGRESS, type TransferProgress } from '../../transfer/progress'
 import {
+  artifactRootPath,
   createTaskId,
   policyFromSelectionSpec,
   selectionKey,
@@ -477,7 +478,7 @@ export class ReceiveCoordinator {
       session,
       selection,
       key,
-      choice.artifact.singleFileId !== undefined,
+      artifactRootPath(choice.artifact),
       display ?? null,
       initial,
     )
@@ -488,7 +489,7 @@ export class ReceiveCoordinator {
     session: OutputSessionHandle,
     selection: FrozenSelectionPolicy,
     activeSelectionKey: string,
-    stripSingleFilePrefix: boolean,
+    rootPath: readonly string[],
     display: ReceiveOperationDisplay | null,
     initialLifecycle: ReceiveLifecycleState,
   ): Promise<void> {
@@ -510,7 +511,7 @@ export class ReceiveCoordinator {
 
     const job = joined.createTransferJob(session.transferOutput, connectivity, {
       selection,
-      stripSingleFilePrefix,
+      rootPath,
       onProgress: progress => this.#observeProgress(progress),
     })
     this.#activeJob = job
@@ -590,13 +591,12 @@ export class ReceiveCoordinator {
         throw new DOMException('Open the matching share link to continue this download', 'InvalidStateError')
       }
       const selection = policyFromSelectionSpec(outcome.task.selection)
-      const stripSingle = outcome.task.artifact.singleFileId !== undefined
       await this.#runSession(
         joined,
         outcome.session,
         selection,
         outcome.task.selectionKey,
-        stripSingle,
+        artifactRootPath(outcome.task.artifact),
         outcome.task.display ?? null,
         outcome.task.lifecycle,
       )

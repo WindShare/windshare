@@ -106,7 +106,7 @@ async function runTransfer(
     deliveryStarted = true
     const result = await joined.createTransferJob(output, activation, {
       selection,
-      stripSingleFilePrefix: true,
+      rootPath: shape.sourcePath.slice(0, -1),
     }).run()
     const received = await delivery.snapshot()
     const failures: ObservedTransferFailure[] = (result.sourceRevisionFailures?.files ?? []).map(failure => ({

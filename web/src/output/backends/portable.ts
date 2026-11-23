@@ -18,6 +18,7 @@ import {
 } from './browser-handoff'
 import {
   PORTABLE_MAX_BYTES,
+  resolveZipEntryPath,
   type OutputSessionHandle,
   type StartBackendTaskInput,
 } from './contract'
@@ -170,7 +171,9 @@ class PortableSessionHandle implements OutputSessionHandle {
   }
 
   async #ensureDir(request: TransferDirectoryRequest): Promise<void> {
-    await this.#zip?.addDirectory(request.path, request.modifiedTimeMilliseconds)
+    const zipPath = resolveZipEntryPath(this.#baseRecord.artifact, request.path)
+    if (zipPath === undefined) return
+    await this.#zip?.addDirectory(zipPath, request.modifiedTimeMilliseconds)
   }
 
   async #openFile(request: TransferFileRequest, signal: AbortSignal): Promise<TransferOutputFile> {
@@ -183,7 +186,11 @@ class PortableSessionHandle implements OutputSessionHandle {
     }
 
     if (this.#isZip && this.#zip !== undefined) {
-      const zipFile = this.#zip.beginFile(request.path, request.exactSize, request.modifiedTimeMilliseconds)
+      const zipPath = resolveZipEntryPath(this.#baseRecord.artifact, request.path)
+      if (zipPath === undefined) {
+        throw new TypeError('ZIP file entry requires a non-empty path')
+      }
+      const zipFile = this.#zip.beginFile(zipPath, request.exactSize, request.modifiedTimeMilliseconds)
       let expectedOffset = 0n
       const outOfOrder = new Map<bigint, Uint8Array>()
       const discard = async () => {

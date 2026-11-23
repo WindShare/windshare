@@ -92,6 +92,7 @@ describe('artifact offer planning', () => {
     const shape: SelectionShape = {
       kind: 'tree',
       suggestedName: 'Album',
+      rootPath: ['Album'],
       knownFileCount: 3,
       knownBytes: 10_000n,
       complete: true,
@@ -106,8 +107,10 @@ describe('artifact offer planning', () => {
     if (withFsa.kind === 'ready') {
       expect(withFsa.primary.backend).toBe('fsa')
       expect(withFsa.primary.artifactKind).toBe('directory-tree')
+      expect(withFsa.primary.artifact.rootPath).toEqual(['Album'])
       expect(withFsa.zip?.backend).toBe('opfs')
       expect(withFsa.zip?.suggestedName).toBe('Album.zip')
+      expect(withFsa.zip?.artifact.rootPath).toEqual(['Album'])
     }
   })
 })

@@ -90,9 +90,11 @@ function planSingleFileOffers(
   shape: Extract<SelectionShape, { kind: 'single-file' }>,
   caps: BrowserOutputCapabilities,
 ): ArtifactOffers {
+  const rootPath = Object.freeze(shape.sourcePath.slice(0, -1))
   const artifact: ResolvedArtifactSpec = Object.freeze({
     kind: 'original-file',
     name: shape.file.name,
+    rootPath,
     singleFileId: shape.file.idText,
     singleFilePath: shape.sourcePath,
     singleFileSize: shape.exactBytes,
@@ -100,6 +102,7 @@ function planSingleFileOffers(
   const fsaArtifact: ResolvedArtifactSpec = Object.freeze({
     kind: 'directory-tree',
     name: shape.file.name,
+    rootPath,
     singleFileId: shape.file.idText,
     singleFilePath: shape.sourcePath,
     singleFileSize: shape.exactBytes,
@@ -152,6 +155,7 @@ function planTreeOffers(
   const folderArtifact: ResolvedArtifactSpec = Object.freeze({
     kind: 'directory-tree',
     name: shape.suggestedName,
+    rootPath: shape.rootPath,
   })
   const zipName = shape.suggestedName.toLowerCase().endsWith('.zip')
     ? shape.suggestedName
@@ -159,6 +163,7 @@ function planTreeOffers(
   const zipArtifact: ResolvedArtifactSpec = Object.freeze({
     kind: 'zip-archive',
     name: zipName,
+    rootPath: shape.rootPath,
   })
 
   const choices: ArtifactChoice[] = []
@@ -267,4 +272,20 @@ export interface StartBackendTaskInput {
   readonly lifecycle: ReceiveLifecycleState
   readonly display?: ReceiveOperationDisplay
   readonly safeRenamed?: SafeRenamedSummary
+}
+
+/**
+ * Maps a result-root-relative path to its path inside a ZIP archive.
+ * When anchored at a single source directory, entries stay nested under that
+ * directory name so extracting the archive mirrors the direct-folder layout.
+ */
+export function resolveZipEntryPath(
+  artifact: ResolvedArtifactSpec,
+  relativePath: readonly string[],
+): readonly string[] | undefined {
+  const archiveRoot = artifact.rootPath?.at(-1)
+  if (archiveRoot === undefined) {
+    return relativePath.length > 0 ? relativePath : undefined
+  }
+  return Object.freeze([archiveRoot, ...relativePath])
 }

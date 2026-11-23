@@ -24,6 +24,11 @@ export interface SelectionSpec {
 export interface ResolvedArtifactSpec {
   readonly kind: ArtifactKind
   readonly name: string
+  /**
+   * Source catalog path prefix anchored as the result root.
+   * Discovery strips this prefix to produce paths relative to the artifact root.
+   */
+  readonly rootPath?: readonly string[]
   /** Set for single-file downloads so single-file layouts avoid an extra wrapper folder. */
   readonly singleFileId?: string
   readonly singleFilePath?: readonly string[]
@@ -31,6 +36,15 @@ export interface ResolvedArtifactSpec {
 }
 
 const TASK_ID_BYTES = 16
+const EMPTY_ROOT_PATH: readonly string[] = Object.freeze([])
+
+export function artifactRootPath(artifact: ResolvedArtifactSpec): readonly string[] {
+  if (artifact.rootPath !== undefined) return artifact.rootPath
+  if (artifact.singleFilePath !== undefined && artifact.singleFilePath.length > 1) {
+    return Object.freeze(artifact.singleFilePath.slice(0, -1))
+  }
+  return EMPTY_ROOT_PATH
+}
 
 export function createTaskId(): string {
   const bytes = new Uint8Array(TASK_ID_BYTES)

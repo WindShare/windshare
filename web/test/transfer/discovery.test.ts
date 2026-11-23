@@ -175,7 +175,7 @@ describe('selection shape probing and progressive discovery', () => {
 
     tree.loadedDirectories.length = 0
     const discovered: string[] = []
-    for await (const item of discoverSelection(tree.descriptor, tree.catalog, unhinted, true, new AbortController().signal)) {
+    for await (const item of discoverSelection(tree.descriptor, tree.catalog, unhinted, [], new AbortController().signal)) {
       discovered.push(`${item.kind}:${item.relativePath.join('/')}`)
     }
     expect(discovered).toEqual(['file:invoice.pdf'])
@@ -243,7 +243,13 @@ describe('selection shape probing and progressive discovery', () => {
 
     tree.loadedDirectories.length = 0
     const items: string[] = []
-    for await (const item of discoverSelection(tree.descriptor, tree.catalog, frozen, true, new AbortController().signal)) {
+    for await (const item of discoverSelection(
+      tree.descriptor,
+      tree.catalog,
+      frozen,
+      shape.kind === 'single-file' ? shape.sourcePath.slice(0, -1) : [],
+      new AbortController().signal,
+    )) {
       items.push(`${item.kind}:${item.relativePath.join('/')}`)
     }
     expect(items).toEqual(['file:invoice.pdf'])
@@ -281,6 +287,7 @@ describe('selection shape probing and progressive discovery', () => {
     expect(shape).toEqual({
       kind: 'tree',
       suggestedName: 'docs',
+      rootPath: ['project', 'docs'],
       knownFileCount: 1,
       knownBytes: 512n,
       complete: true,
@@ -290,18 +297,21 @@ describe('selection shape probing and progressive discovery', () => {
     tree.loadedDirectories.length = 0
     const failedDirs: string[] = []
     const items: string[] = []
+    const sources: string[] = []
     for await (const item of discoverSelection(
       tree.descriptor,
       tree.catalog,
       frozen,
-      false,
+      shape.kind === 'tree' ? shape.rootPath : [],
       new AbortController().signal,
       { onDirectoryFailed: id => failedDirs.push(id) },
     )) {
       items.push(`${item.kind}:${item.relativePath.join('/')}`)
+      sources.push(`${item.kind}:${item.sourcePath.join('/')}`)
     }
     expect(failedDirs).toEqual([])
-    expect(items).toEqual(['directory:project/docs', 'file:project/docs/guide.md'])
+    expect(items).toEqual(['directory:', 'file:guide.md'])
+    expect(sources).toEqual(['directory:project/docs', 'file:project/docs/guide.md'])
     expect(tree.loadedDirectories).toEqual([tree.rootIdText, projectId, docs.idText])
   })
 
@@ -345,7 +355,13 @@ describe('selection shape probing and progressive discovery', () => {
     })
 
     const items: string[] = []
-    for await (const item of discoverSelection(tree.descriptor, tree.catalog, staleHintPolicy, true, new AbortController().signal)) {
+    for await (const item of discoverSelection(
+      tree.descriptor,
+      tree.catalog,
+      staleHintPolicy,
+      shape.kind === 'single-file' ? shape.sourcePath.slice(0, -1) : [],
+      new AbortController().signal,
+    )) {
       items.push(`${item.kind}:${item.sourcePath.join('/')}`)
     }
     expect(items).toEqual(['file:actual-dir/moved.pdf'])
@@ -373,7 +389,7 @@ describe('selection shape probing and progressive discovery', () => {
     const frozen = policy.snapshot()
 
     const items: string[] = []
-    for await (const item of discoverSelection(tree.descriptor, tree.catalog, frozen, false, new AbortController().signal)) {
+    for await (const item of discoverSelection(tree.descriptor, tree.catalog, frozen, [], new AbortController().signal)) {
       items.push(`${item.kind}:${item.relativePath.join('/')}`)
     }
     expect(items).toEqual(['directory:normal', 'file:excluded-with-keep/keep.pdf', 'file:normal/a.txt'])
