@@ -431,16 +431,11 @@ func (table *operationTable) cancelRecordLocked(active *operationRecord) {
 	table.retirePeerAttemptLocked(active)
 	delete(table.active, active.id)
 	clearContinuationReplayLocked(active)
-	_, existed := table.tombstones[active.id]
-	table.tombstones[active.id] = operationTombstone{
+	table.putTombstoneLocked(active.id, operationTombstone{
 		finalKind: protocolsession.MessageCancel,
 		cancelled: true,
 		record:    active,
-	}
-	if !existed {
-		table.tombstoneOrder = append(table.tombstoneOrder, active.id)
-		table.evictOverflowTombstonesLocked()
-	}
+	})
 	table.notifyCapacityLocked()
 }
 

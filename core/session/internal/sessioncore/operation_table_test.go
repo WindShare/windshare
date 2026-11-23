@@ -524,3 +524,191 @@ func TestRetiredPeerContinuationSurvivesOperationGC(t *testing.T) {
 		t.Fatalf("retired older sequence not collected: disp=%d err=%v", adm.disposition, err)
 	}
 }
+
+func assertTombstoneOrder(t *testing.T, table *operationTable, want []protocolsession.OperationID) {
+	t.Helper()
+	table.mu.Lock()
+	defer table.mu.Unlock()
+	if len(table.tombstones) != len(want) {
+		t.Fatalf("tombstone map len=%d want %d", len(table.tombstones), len(want))
+	}
+	if len(want) == 0 {
+		if table.tombstoneHead != nil || table.tombstoneTail != nil {
+			t.Fatalf("empty queue has non-nil endpoints: head=%v tail=%v", table.tombstoneHead, table.tombstoneTail)
+		}
+		return
+	}
+	if table.tombstoneHead == nil || table.tombstoneTail == nil {
+		t.Fatalf("non-empty queue has nil endpoint: head=%v tail=%v", table.tombstoneHead, table.tombstoneTail)
+	}
+	if table.tombstoneHead.tombstonePrev != nil {
+		t.Fatalf("head prev=%v want nil", table.tombstoneHead.tombstonePrev)
+	}
+	if table.tombstoneTail.tombstoneNext != nil {
+		t.Fatalf("tail next=%v want nil", table.tombstoneTail.tombstoneNext)
+	}
+	var prev *operationRecord
+	cur := table.tombstoneHead
+	for i, wantID := range want {
+		if cur == nil {
+			t.Fatalf("list ended early at index %d want %d entries", i, len(want))
+		}
+		if cur.id != wantID {
+			t.Fatalf("list[%d]=%d want %d", i, cur.id, wantID)
+		}
+		if cur.tombstonePrev != prev {
+			t.Fatalf("list[%d] prev mismatch", i)
+		}
+		tombstone, ok := table.tombstones[cur.id]
+		if !ok || tombstone.record != cur {
+			t.Fatalf("list[%d] id=%d missing or mismatched in map", i, cur.id)
+		}
+		prev = cur
+		cur = cur.tombstoneNext
+	}
+	if cur != nil || prev != table.tombstoneTail {
+		t.Fatalf("list tail mismatch: cur=%v prev=%v tail=%v", cur, prev, table.tombstoneTail)
+	}
+}
+
+func TestOperationTableTombstoneEvictionPinnedPositionsAndTermination(t *testing.T) {
+	table, err := newOperationTable(
+		protocolsession.OperationLimits{MaxActive: 8, MaxRecentTombstones: 3},
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retireOutbound := func(id protocolsession.OperationID, keepPinned bool) func(bool) {
+		t.Helper()
+		req := operationMessageForTest(t, protocolsession.MessageListChildren, id, []byte{0xa0})
+		op, _, _, release, admitErr := table.AdmitOutboundRequest(req, nil)
+		if admitErr != nil {
+			t.Fatalf("admit %d: %v", id, admitErr)
+		}
+		if !keepPinned {
+			release(true)
+		}
+		if _, cancelErr := table.CancelOperation(op.ID()); cancelErr != nil {
+			t.Fatalf("cancel %d: %v", id, cancelErr)
+		}
+		return release
+	}
+
+	rel1 := retireOutbound(1, true)
+	rel2 := retireOutbound(2, true)
+	retireOutbound(3, false)
+	assertTombstoneOrder(t, table, []protocolsession.OperationID{1, 2, 3})
+
+	// Skips pinned head [1, 2] and unlinks unpinned tail 3.
+	retireOutbound(4, false)
+	assertTombstoneOrder(t, table, []protocolsession.OperationID{1, 2, 4})
+
+	// Skips pinned [1, 2], unlinks middle 4, keeps new pinned tail 5.
+	rel5 := retireOutbound(5, true)
+	assertTombstoneOrder(t, table, []protocolsession.OperationID{1, 2, 5})
+
+	// All entries pinned: queue temporarily exceeds cap until one unpins.
+	rel6 := retireOutbound(6, true)
+	assertTombstoneOrder(t, table, []protocolsession.OperationID{1, 2, 5, 6})
+
+	// Unpinning middle entry 2 immediately evicts it without disturbing [1, 5, 6].
+	rel2(true)
+	assertTombstoneOrder(t, table, []protocolsession.OperationID{1, 5, 6})
+
+	// Unpinning oldest entry 1 preserves its FIFO position at the head for the next eviction.
+	rel1(true)
+	retireOutbound(7, false)
+	assertTombstoneOrder(t, table, []protocolsession.OperationID{5, 6, 7})
+
+	// Capture retained records before termination to confirm intrusive links are detached.
+	table.mu.Lock()
+	retained := []*operationRecord{
+		table.tombstones[5].record,
+		table.tombstones[6].record,
+		table.tombstones[7].record,
+	}
+	table.mu.Unlock()
+
+	if err := table.TerminateLocal(); err != nil {
+		t.Fatal(err)
+	}
+	assertTombstoneOrder(t, table, nil)
+	for _, rec := range retained {
+		if rec.tombstonePrev != nil || rec.tombstoneNext != nil {
+			t.Fatalf("terminated record %d still linked: prev=%v next=%v", rec.id, rec.tombstonePrev, rec.tombstoneNext)
+		}
+	}
+	// Late in-flight release after termination must remain a safe no-op.
+	rel5(false)
+	rel6(false)
+	assertTombstoneOrder(t, table, nil)
+}
+
+func TestOperationTableProductionCapTombstoneFIFO(t *testing.T) {
+	capLimit := session.DefaultRecentTombstones
+	table, err := newOperationTable(
+		protocolsession.OperationLimits{MaxActive: session.DefaultActiveOperations, MaxRecentTombstones: capLimit},
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lane := session.LaneIdentity{ID: 1, Epoch: 0}
+	total := capLimit * 2
+	for rawID := 1; rawID <= total; rawID++ {
+		id := protocolsession.OperationID(rawID)
+		req := operationMessageForTest(t, protocolsession.MessageListChildren, id, []byte{0xa0})
+		adm, admitErr := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, req)
+		if admitErr != nil || adm.disposition != protocolsession.OperationDeliver {
+			t.Fatalf("admit %d: disp=%d err=%v", id, adm.disposition, admitErr)
+		}
+		if _, cancelErr := table.CancelOperation(adm.op.ID()); cancelErr != nil {
+			t.Fatalf("cancel %d: %v", id, cancelErr)
+		}
+	}
+	want := make([]protocolsession.OperationID, capLimit)
+	for i := range capLimit {
+		want[i] = protocolsession.OperationID(capLimit + 1 + i)
+	}
+	assertTombstoneOrder(t, table, want)
+	if table.Current(protocolsession.OperationID(capLimit)) {
+		t.Fatalf("evicted boundary id %d still current", capLimit)
+	}
+	if !table.Current(protocolsession.OperationID(capLimit + 1)) {
+		t.Fatalf("oldest retained id %d missing", capLimit+1)
+	}
+}
+
+func BenchmarkOperationTableRetireAtFullTombstoneCap(b *testing.B) {
+	table, err := newOperationTable(
+		protocolsession.OperationLimits{
+			MaxActive:           session.DefaultActiveOperations,
+			MaxRecentTombstones: session.DefaultRecentTombstones,
+		},
+		nil,
+	)
+	if err != nil {
+		b.Fatal(err)
+	}
+	nextID := protocolsession.OperationID(1)
+	retireOne := func() {
+		id := nextID
+		nextID++
+		rec := &operationRecord{id: id, requestKind: protocolsession.MessageRequestBlocks}
+		table.mu.Lock()
+		table.putTombstoneLocked(id, operationTombstone{
+			finalKind: protocolsession.MessageOperationComplete,
+			record:    rec,
+		})
+		table.mu.Unlock()
+	}
+	for range session.DefaultRecentTombstones {
+		retireOne()
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		retireOne()
+	}
+}

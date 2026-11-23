@@ -101,6 +101,9 @@ type operationRecord struct {
 	preferredLane session.LaneIdentity
 	sendMu        sync.Mutex
 	inFlight      uint32
+	// Intrusive FIFO retirement links owned by operationTable under table.mu.
+	tombstonePrev *operationRecord
+	tombstoneNext *operationRecord
 
 	continuations                   *operationContinuationState
 	deferredContinuationScope       protocolsession.OperationContinuationScope
@@ -169,7 +172,8 @@ type operationTable struct {
 	lastIssued      protocolsession.OperationID
 	active          map[protocolsession.OperationID]*operationRecord
 	tombstones      map[protocolsession.OperationID]operationTombstone
-	tombstoneOrder  []protocolsession.OperationID
+	tombstoneHead   *operationRecord
+	tombstoneTail   *operationRecord
 	terminal        bool
 	peerSlots       map[uint8]*retiredPeerSlot
 	capacityChanged chan struct{}
@@ -324,26 +328,77 @@ func (table *operationTable) notifyCapacityLocked() {
 	}
 }
 
-func (table *operationTable) evictOverflowTombstonesLocked() {
-	if len(table.tombstones) <= table.limits.MaxRecentTombstones {
+func (table *operationTable) putTombstoneLocked(
+	id protocolsession.OperationID,
+	tombstone operationTombstone,
+) {
+	if existing, existed := table.tombstones[id]; existed {
+		if existing.record != nil && existing.record != tombstone.record {
+			table.unlinkTombstoneLocked(existing.record)
+			table.appendTombstoneLocked(tombstone.record)
+		}
+		table.tombstones[id] = tombstone
 		return
 	}
-	excess := len(table.tombstones) - table.limits.MaxRecentTombstones
-	kept := table.tombstoneOrder[:0]
-	for _, id := range table.tombstoneOrder {
-		tombstone, exists := table.tombstones[id]
-		if !exists {
-			continue
-		}
-		if excess > 0 && tombstone.record.inFlight == 0 {
-			delete(table.tombstones, id)
-			excess--
-			continue
-		}
-		kept = append(kept, id)
+	table.tombstones[id] = tombstone
+	table.appendTombstoneLocked(tombstone.record)
+	table.evictOverflowTombstonesLocked()
+}
+
+func (table *operationTable) appendTombstoneLocked(rec *operationRecord) {
+	if rec == nil {
+		return
 	}
-	clear(table.tombstoneOrder[len(kept):])
-	table.tombstoneOrder = kept
+	rec.tombstonePrev = table.tombstoneTail
+	rec.tombstoneNext = nil
+	if table.tombstoneTail != nil {
+		table.tombstoneTail.tombstoneNext = rec
+	} else {
+		table.tombstoneHead = rec
+	}
+	table.tombstoneTail = rec
+}
+
+func (table *operationTable) unlinkTombstoneLocked(rec *operationRecord) {
+	if rec.tombstonePrev != nil {
+		rec.tombstonePrev.tombstoneNext = rec.tombstoneNext
+	} else {
+		table.tombstoneHead = rec.tombstoneNext
+	}
+	if rec.tombstoneNext != nil {
+		rec.tombstoneNext.tombstonePrev = rec.tombstonePrev
+	} else {
+		table.tombstoneTail = rec.tombstonePrev
+	}
+	rec.tombstonePrev = nil
+	rec.tombstoneNext = nil
+}
+
+func (table *operationTable) clearTombstonesLocked() {
+	// Detach intrusive links so any lingering in-flight releaser holding one
+	// record cannot retain the rest of the retired chain for GC.
+	for cur := table.tombstoneHead; cur != nil; {
+		next := cur.tombstoneNext
+		cur.tombstonePrev = nil
+		cur.tombstoneNext = nil
+		cur = next
+	}
+	table.tombstoneHead = nil
+	table.tombstoneTail = nil
+	clear(table.tombstones)
+}
+
+func (table *operationTable) evictOverflowTombstonesLocked() {
+	excess := len(table.tombstones) - table.limits.MaxRecentTombstones
+	for cur := table.tombstoneHead; excess > 0 && cur != nil; {
+		next := cur.tombstoneNext
+		if cur.inFlight == 0 {
+			table.unlinkTombstoneLocked(cur)
+			delete(table.tombstones, cur.id)
+			excess--
+		}
+		cur = next
+	}
 }
 
 func (table *operationTable) TerminateLocal() error {
@@ -357,8 +412,7 @@ func (table *operationTable) TerminateLocal() error {
 	}
 	table.terminal = true
 	clear(table.active)
-	clear(table.tombstones)
-	table.tombstoneOrder = nil
+	table.clearTombstonesLocked()
 	table.notifyCapacityLocked()
 	return nil
 }
@@ -434,8 +488,7 @@ func (table *operationTable) observeLocked(
 	if message.Kind() == protocolsession.MessageSessionTerminal {
 		table.terminal = true
 		clear(table.active)
-		clear(table.tombstones)
-		table.tombstoneOrder = nil
+		table.clearTombstonesLocked()
 		table.notifyCapacityLocked()
 		return protocolsession.OperationSessionTerminal, nil, nil, nil
 	}
@@ -638,15 +691,10 @@ func (table *operationTable) addTombstoneLocked(
 	cancelled bool,
 	record *operationRecord,
 ) {
-	_, existed := table.tombstones[id]
-	table.tombstones[id] = operationTombstone{
+	table.putTombstoneLocked(id, operationTombstone{
 		finalKind:   message.Kind(),
 		fingerprint: message.OperationFingerprint(direction),
 		cancelled:   cancelled,
 		record:      record,
-	}
-	if !existed {
-		table.tombstoneOrder = append(table.tombstoneOrder, id)
-		table.evictOverflowTombstonesLocked()
-	}
+	})
 }
