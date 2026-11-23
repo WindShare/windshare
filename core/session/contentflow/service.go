@@ -32,16 +32,33 @@ type RecordEncoder interface {
 	EncodeBlock(records.BlockRecord) ([]byte, error)
 }
 
+// TransferActivity observes sender-side content delivery without coupling
+// protocol flow to host power management or session lifetime.
+type TransferActivity interface {
+	BeginTransfer() (end func())
+}
+
+type TransferActivityFunc func() func()
+
+func (function TransferActivityFunc) BeginTransfer() func() {
+	if function == nil {
+		return nil
+	}
+	return function()
+}
+
 type SenderServiceConfig struct {
-	Store   RevisionStore
-	Encoder RecordEncoder
-	Cache   *SharedBlockCache
+	Store            RevisionStore
+	Encoder          RecordEncoder
+	Cache            *SharedBlockCache
+	TransferActivity TransferActivity
 }
 
 type SenderService struct {
-	store   RevisionStore
-	encoder RecordEncoder
-	cache   *SharedBlockCache
+	store    RevisionStore
+	encoder  RecordEncoder
+	cache    *SharedBlockCache
+	activity TransferActivity
 
 	mu             sync.Mutex
 	closed         bool
@@ -58,7 +75,7 @@ func NewSenderService(config SenderServiceConfig) (*SenderService, error) {
 		return nil, errors.New("content sender service requires store, encoder, and share cache")
 	}
 	return &SenderService{
-		store: config.Store, encoder: config.Encoder, cache: config.Cache,
+		store: config.Store, encoder: config.Encoder, cache: config.Cache, activity: config.TransferActivity,
 		leases: make(map[content.LeaseID]content.FileRevisionDescriptor), released: make(map[content.LeaseID]struct{}),
 	}, nil
 }
@@ -115,6 +132,14 @@ func (s *SenderService) Open(ctx context.Context, request OpenRequest) (OpenResu
 	}
 	maps.Copy(s.leases, leases)
 	s.mu.Unlock()
+	if len(leases) > 0 && s.activity != nil {
+		// Opening at least one valid revision signals transfer onset for both
+		// zero-byte files and pre-block output setup; RenewLease intentionally
+		// stays excluded so idle previews cannot extend host wakefulness.
+		if end := s.activity.BeginTransfer(); end != nil {
+			end()
+		}
+	}
 	return validatedResults, nil
 }
 
@@ -282,6 +307,11 @@ func (s *SenderService) ServeBlocks(
 		unwatch()
 		cancelWork(nil)
 	}()
+	if s.activity != nil {
+		if end := s.activity.BeginTransfer(); end != nil {
+			defer end()
+		}
+	}
 	for delivered, index := range validated.indices {
 		if err := context.Cause(workContext); err != nil {
 			return uint32(delivered), s.normalizeWorkCause(descriptor, err)

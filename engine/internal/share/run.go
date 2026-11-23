@@ -74,6 +74,7 @@ type activeShare struct {
 	relays          Relays
 	peers           Peers
 	factory         SessionFactory
+	sleep           *sleepGuard
 	server          *sessionServer
 	cancelResources context.CancelFunc
 	networkDone     chan struct{}
@@ -175,7 +176,8 @@ func (s *activeShare) serve(ctx, resourceContext context.Context) (task.FailureC
 	if s.peers == nil {
 		return task.FailureLocal, ErrConfiguration
 	}
-	s.factory, err = s.prepared.NewRuntimeFactory(o.runtimeConfig(s.relays, s.peers))
+	s.sleep = newSleepGuard(d.SleepInhibitor, d.Control.Diagnostics)
+	s.factory, err = s.prepared.NewRuntimeFactory(o.runtimeConfig(s.relays, s.peers, s.sleep))
 	if err != nil {
 		return task.FailureLocal, err
 	}
@@ -187,7 +189,7 @@ func (s *activeShare) serve(ctx, resourceContext context.Context) (task.FailureC
 	}
 	// Admission belongs to the share lifetime, so callers need no presentation
 	// acknowledgement to make a returned capability usable.
-	s.server = startSessionServer(resourceContext, s.factory, s.relays, o, newSleepGuard(d.SleepInhibitor, d.Control.Diagnostics))
+	s.server = startSessionServer(resourceContext, s.factory, s.relays, o)
 	registrations := relayset.SenderRegistrations{Admitted: []string{s.relays.ReadyRelayURL()}}
 	if source, ok := s.relays.(interface {
 		Registrations() relayset.SenderRegistrations
@@ -252,6 +254,7 @@ func (s *activeShare) close() (task.FailureClass, error) {
 		}
 		s.server.workers.Wait()
 	}
+	s.sleep.close()
 	if s.peers != nil {
 		cleanup, cancel := d.Control.CleanupContext()
 		localError = errors.Join(localError, s.peers.Close(cleanup))
@@ -288,7 +291,7 @@ type sessionServer struct {
 	received bool
 }
 
-func startSessionServer(ctx context.Context, factory SessionFactory, relays Relays, o *observations, sleep *sleepGuard) *sessionServer {
+func startSessionServer(ctx context.Context, factory SessionFactory, relays Relays, o *observations) *sessionServer {
 	server := &sessionServer{done: make(chan error, 1)}
 	go func() {
 		for {
@@ -314,8 +317,6 @@ func startSessionServer(ctx context.Context, factory SessionFactory, relays Rela
 					_ = channel.Close()
 					return
 				}
-				releaseSleep := sleep.enter()
-				defer releaseSleep()
 				<-admission.Session.Done()
 				admission.Session.Close()
 				o.emit(Observation{Milestone: SessionRetired, Session: admission.Session.ProtocolSessionID()})

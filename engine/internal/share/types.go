@@ -92,7 +92,7 @@ type Relay interface {
 	CompleteObservations() relayv2.LifecycleObservationCompletion
 }
 
-// SleepInhibitor keeps the host awake while at least one receiver session is active.
+// SleepInhibitor keeps the host awake while sender content transfers are active.
 type SleepInhibitor interface {
 	InhibitSleep(reason string) (release func(), err error)
 }

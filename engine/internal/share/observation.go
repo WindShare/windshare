@@ -11,6 +11,7 @@ import (
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/observationstream"
+	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
 	sessionobs "github.com/windshare/windshare/core/session/observation"
@@ -152,8 +153,17 @@ func (o *observations) ObserveSenderSessionTerminated(value sessionobs.SenderSes
 	o.control.Diagnostics.Record(value)
 }
 
-func (o *observations) runtimeConfig(relays Relays, peers sendersession.PeerHandlerFactory) liveshare.RuntimeFactoryConfig {
-	config := liveshare.RuntimeFactoryConfig{TerminalConnectivity: relays, PeerHandlers: peers, ProtocolObservations: o.protocol}
+func (o *observations) runtimeConfig(
+	relays Relays,
+	peers sendersession.PeerHandlerFactory,
+	activity contentflow.TransferActivity,
+) liveshare.RuntimeFactoryConfig {
+	config := liveshare.RuntimeFactoryConfig{
+		TerminalConnectivity: relays,
+		PeerHandlers:         peers,
+		TransferActivity:     activity,
+		ProtocolObservations: o.protocol,
+	}
 	if o.detailed {
 		config.TerminalSendObserver, config.SessionTerminalObserver = o, o
 	}

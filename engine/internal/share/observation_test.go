@@ -24,7 +24,11 @@ func TestShareProtocolAndTerminalObservationAuthorityFollowsRequest(t *testing.T
 		t.Run(test.name, func(t *testing.T) {
 			f := newShareFixture(t)
 			o := newObservations(f.dependencies.Control, test.request)
-			config := o.runtimeConfig(f.relays, nil)
+			guard := newSleepGuard(nil, f.dependencies.Control.Diagnostics)
+			config := o.runtimeConfig(f.relays, nil, guard)
+			if config.TransferActivity != guard {
+				t.Fatal("transfer activity omitted from runtime factory config")
+			}
 			if !config.ProtocolObservations.IsZero() != test.request.Diagnostics.Enabled() {
 				t.Fatal("protocol producer ignored diagnostic authority")
 			}

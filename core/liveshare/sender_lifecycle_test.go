@@ -5,14 +5,24 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"os"
+	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/diagnostics"
+	"github.com/windshare/windshare/core/internal/testoutputroot"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/session/contentflow"
+	sendersession "github.com/windshare/windshare/core/session/sendersession"
+	"github.com/windshare/windshare/core/transfer"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
+	"github.com/windshare/windshare/osfs"
 )
 
 type blockingSenderRuntimeLifecycle struct {
@@ -245,4 +255,139 @@ func TestPreparedSenderStopFreezesRuntimeBeforeAsyncJoin(t *testing.T) {
 
 func (*closeOrderCatalogSource) OpenStable(context.Context, catalog.NodeRecord) (content.StableFile, error) {
 	return nil, content.ErrRevisionNotFound
+}
+
+func TestPreparedSenderForwardsTransferActivityOnlyForContentDelivery(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "tree")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	payload := bytes.Repeat([]byte("transfer-activity"), 256)
+	if err := os.WriteFile(filepath.Join(root, "file.bin"), payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	sender, err := PrepareSender(context.Background(), SenderConfig{
+		CatalogBudget:    testCatalogBudget(),
+		CacheBudget:      testCacheBudget(),
+		RevisionCapacity: newTestRevisionCapacity(t),
+		Source:           testFileSource([]string{root}),
+		Relays:           []string{"ws://127.0.0.1:8484"},
+		ChunkSize:        catalog.MinChunkSize,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sender.Close()
+
+	receiver, err := PrepareReceiver(ReceiverConfig{
+		Capacity:         testReceiveCapacity(t),
+		Capability:       sender.Capability(),
+		DescriptorObject: sender.Registration().Descriptor,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer receiver.Close()
+
+	var enters, leaves, active atomic.Int32
+	config := testRuntimeFactoryConfig(&testTerminalConnectivity{})
+	config.TransferActivity = contentflow.TransferActivityFunc(func() func() {
+		enters.Add(1)
+		active.Add(1)
+		return func() {
+			active.Add(-1)
+			leaves.Add(1)
+		}
+	})
+	factory, err := sender.NewRuntimeFactory(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	senderChannel, receiverChannel := newFacadeChannelPair()
+	accepted := make(chan struct {
+		runtime *sendersession.Runtime
+		err     error
+	}, 1)
+	go func() {
+		runtime, acceptErr := factory.Accept(context.Background(), senderChannel)
+		accepted <- struct {
+			runtime *sendersession.Runtime
+			err     error
+		}{runtime: runtime, err: acceptErr}
+	}()
+
+	receiverRuntime, err := receiver.Connect(context.Background(), receiverChannel, transferlanes.RouteRelay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer receiverRuntime.Close()
+	acceptedResult := <-accepted
+	if acceptedResult.err != nil {
+		t.Fatal(acceptedResult.err)
+	}
+	defer acceptedResult.runtime.Close()
+
+	// Authenticating a session and browsing directories must not count as content transfer.
+	if _, err := receiverRuntime.Catalog().LoadDirectory(context.Background(), receiverRuntime.Descriptor().SyntheticRoot()); err != nil {
+		t.Fatal(err)
+	}
+	if got := enters.Load(); got != 0 {
+		t.Fatalf("transfer activity enters during catalog browse = %d, want 0", got)
+	}
+
+	outputFixture := testoutputroot.New(t)
+	output, err := osfs.NewOutputAuthority(osfs.OutputConfig{
+		RootPath: outputFixture.RootPath, CreateRoot: outputFixture.CreateRoot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = output.Close() })
+	rules, _ := transfer.NewSelectionRules(true, nil)
+	selection, err := transfer.NewSelectionSpec(
+		receiverRuntime.Descriptor().ShareInstance(), receiverRuntime.Descriptor().SyntheticRoot(), rules,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := output.BindDestination(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	lookup, err := output.SelectOperation(context.Background(), selection, receivecontract.AutomaticOperation())
+	if err != nil || lookup.Kind() != osfs.OutputLookupCreateReady {
+		t.Fatalf("native lookup = (%d, %v)", lookup.Kind(), err)
+	}
+	artifact, err := receivecontract.NewResultRootDirectoryTree(receivecontract.NewSyntheticSelectionResultRoot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation, err := lookup.Create(context.Background(), artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, ok := operation.ReceiveIntent()
+	if !ok {
+		t.Fatal("native operation omitted receive intent")
+	}
+	jobID, err := transfer.NewTransferJobID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := receiverRuntime.NewTransferJob(intent, jobID, operation, diagnostics.Sink{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := job.Run(context.Background()); result.Outcome != transfer.DirectTreeOutcomeSuccess {
+		t.Fatalf("job result = %+v", result)
+	}
+
+	if enters.Load() < 2 {
+		t.Fatalf("transfer activity enters after file download = %d, want >= 2 (open + block serve)", enters.Load())
+	}
+	if active.Load() != 0 || enters.Load() != leaves.Load() {
+		t.Fatalf("unbalanced transfer activity after download: enters=%d leaves=%d active=%d",
+			enters.Load(), leaves.Load(), active.Load())
+	}
 }

@@ -57,6 +57,7 @@ type RegistrationMaterial struct {
 type RuntimeFactoryConfig struct {
 	TerminalConnectivity    sendersession.TerminalConnectivity
 	PeerHandlers            sendersession.PeerHandlerFactory
+	TransferActivity        contentflow.TransferActivity
 	TerminalSendObserver    sessionobs.SenderTerminalSendObserver
 	SessionTerminalObserver sessionobs.SenderSessionTerminalObserver
 	ProtocolObservations    observationstream.Producer[sessionobs.ProtocolObservation]
@@ -469,6 +470,7 @@ func (sender *PreparedSender) NewRuntimeFactory(config RuntimeFactoryConfig) (*s
 		}
 		service, err := contentflow.NewSenderService(contentflow.SenderServiceConfig{
 			Store: session, Encoder: records.Encoder{}, Cache: sender.cache,
+			TransferActivity: config.TransferActivity,
 		})
 		if err != nil {
 			return nil, errors.Join(err, session.Close())
