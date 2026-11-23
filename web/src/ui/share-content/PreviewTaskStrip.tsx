@@ -1,7 +1,8 @@
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReceiverController } from '../controller'
 import { taskActions } from '../experience/task-actions'
 import { receiverCopy } from '../locales/receiver'
+import type { ReceiverFailure } from '../model'
 import { useCopy } from '../preferences/use-preferences'
 import { ReceiverIcon } from '../receiver-presentation/ReceiverIcon'
 import { useReceiveRate } from '../tasks/use-receive-rate'
@@ -17,9 +18,22 @@ function taskSignature(task: TaskPresentation | null): string | null {
   return task === null ? null : `${task.operationId}:${task.generation}:${task.stage}`
 }
 
+function joinStatusParts(...parts: readonly (string | null | undefined)[]): string {
+  return parts.filter((part): part is string => part !== null && part !== undefined && part.length > 0).join(' · ')
+}
+
 function activeTaskStatusText(task: TaskPresentation, rate: string | null): string {
-  if (task.progress === null) return task.headline
-  return rate === null ? task.progress.label : `${task.progress.label} · ${rate}`
+  const progress = task.progress
+  if (progress === null) return task.headline
+  if (task.stage === 'preparing') {
+    return progress.receivedObjectBytes > 0n || progress.writtenBytes > 0n
+      ? joinStatusParts(task.headline, progress.label, progress.status)
+      : task.headline
+  }
+  if (task.stage === 'waiting' || task.stage === 'finishing') {
+    return joinStatusParts(task.headline, progress.label, progress.status)
+  }
+  return joinStatusParts(progress.label, rate, progress.status)
 }
 
 function ActivePreviewTaskStrip({ task }: { readonly task: TaskPresentation }) {
@@ -41,13 +55,25 @@ function ActivePreviewTaskStrip({ task }: { readonly task: TaskPresentation }) {
  * Independently subscribes to `controller.presentation.task` so background transfer
  * progress ticks never re-render the media preview surface or file explorer.
  */
-export function PreviewTaskStrip({ controller }: { readonly controller: ReceiverController }) {
+export function PreviewTaskStrip({
+  controller,
+  onActionFailure,
+  onClearActionFailure,
+}: {
+  readonly controller: ReceiverController
+  readonly onActionFailure?: (failure: ReceiverFailure) => void
+  readonly onClearActionFailure?: () => void
+}) {
   const source = controller.presentation.task
   const snapshot = useSyncExternalStore(source.subscribe, source.getSnapshot, source.getSnapshot)
   const task = snapshot.current
   const activation = snapshot.output.activationPresentation
   const [initialSignature] = useState(() => taskSignature(task))
   const [expiredSignature, setExpiredSignature] = useState<string | null>(null)
+  const mountedRef = useRef(true)
+  // Remember the snapshot signature at the moment a failure was reported so batched
+  // store updates from the failing action do not immediately wipe the new error.
+  const reportedErrorSignatureRef = useRef<string | null | undefined>(undefined)
   const currentSignature = taskSignature(task)
   const showDelivered =
     task !== null &&
@@ -55,6 +81,18 @@ export function PreviewTaskStrip({ controller }: { readonly controller: Receiver
     currentSignature !== null &&
     currentSignature !== initialSignature &&
     expiredSignature !== currentSignature
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
+
+  useEffect(() => {
+    if (reportedErrorSignatureRef.current === undefined) return
+    if (reportedErrorSignatureRef.current === currentSignature) return
+    reportedErrorSignatureRef.current = undefined
+    onClearActionFailure?.()
+  }, [currentSignature, onClearActionFailure])
 
   useEffect(() => {
     if (!showDelivered || currentSignature === null) return
@@ -79,7 +117,6 @@ export function PreviewTaskStrip({ controller }: { readonly controller: Receiver
 
   if (ACTIONABLE_STAGES.has(task.stage)) {
     const primary = task.primaryAction
-    const actions = taskActions(controller)
     const busy = snapshot.retained.pending !== null
     return <div className={`media-preview-task-strip task-tone-${task.tone}`} data-task-stage={task.stage}>
       <div className="media-preview-task-row">
@@ -92,7 +129,18 @@ export function PreviewTaskStrip({ controller }: { readonly controller: Receiver
         {primary !== null && <button type="button" className="media-preview-task-action"
           disabled={busy || primary.disabledReason !== null}
           title={primary.disabledReason ?? undefined}
-          onClick={() => actions.perform(primary)}>
+          onClick={() => {
+            reportedErrorSignatureRef.current = undefined
+            onClearActionFailure?.()
+            taskActions(controller, onActionFailure === undefined ? undefined : {
+              onAsyncFailure: failure => {
+                if (!mountedRef.current) return false
+                reportedErrorSignatureRef.current = taskSignature(source.getSnapshot().current)
+                onActionFailure(failure)
+                return true
+              },
+            }).perform(primary)
+          }}>
           {primary.label}
         </button>}
       </div>

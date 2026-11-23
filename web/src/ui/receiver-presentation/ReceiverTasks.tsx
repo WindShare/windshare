@@ -4,7 +4,7 @@ import { useRef, useState, useSyncExternalStore } from 'react'
 import type { ChooseArtifactIntent, ReceiverController } from '../controller'
 import { taskActions } from '../experience/task-actions'
 import { downloadScopeLabel } from '../experience/share-presentation'
-import { isDismissibleWorkspaceTask, resolveWorkspaceTaskLayout } from '../experience/retained-match'
+import { dismissedTaskKey, isDismissibleWorkspaceTask, resolveWorkspaceTaskLayout } from '../experience/retained-match'
 import { presentSavingActions } from '../saving'
 import { SavingControls } from '../saving/SavingControls'
 import { InAppBrowserHint } from '../saving/InAppBrowserHint'
@@ -73,24 +73,24 @@ export function ReceiverDownloads({ controller, open, onOpenChange, ...entry }: 
   />
 }
 
-export function ReceiverPrimarySaving({ controller, dismissedTaskIds }: {
+export function ReceiverPrimarySaving({ controller, dismissedTaskKeys }: {
   readonly controller: ReceiverController
-  readonly dismissedTaskIds?: ReadonlySet<string>
+  readonly dismissedTaskKeys?: ReadonlySet<string>
 }) {
   const source = controller.presentation.task
   const snapshot = useSyncExternalStore(source.subscribe, source.getSnapshot, source.getSnapshot)
   const t = useCopy(receiverCopy).saving
-  const { collapseRemoteSaving, repeatRemoteLabel } = resolveWorkspaceTaskLayout(snapshot, dismissedTaskIds)
+  const { collapseRemoteSaving, repeatRemoteLabel } = resolveWorkspaceTaskLayout(snapshot, dismissedTaskKeys)
   if (!snapshot.hasContent || collapseRemoteSaving) return null
   const actionLabel = repeatRemoteLabel ? t.downloadAgain : downloadScopeLabel(snapshot.share, snapshot.draft, t)
   return renderSavingControls(controller, snapshot, actionLabel, repeatRemoteLabel ? 'redownload' : 'default')
 }
 
-export function ReceiverActivity({ controller, openDownloads, dismissedTaskIds, onDismissTask }: {
+export function ReceiverActivity({ controller, openDownloads, dismissedTaskKeys, onDismissTask }: {
   readonly controller: ReceiverController
   readonly openDownloads: () => void
-  readonly dismissedTaskIds?: ReadonlySet<string>
-  readonly onDismissTask?: (taskId: string) => void
+  readonly dismissedTaskKeys?: ReadonlySet<string>
+  readonly onDismissTask?: (taskKey: string) => void
 }) {
   const source = controller.presentation.task
   const snapshot = useSyncExternalStore(source.subscribe, source.getSnapshot, source.getSnapshot)
@@ -100,7 +100,7 @@ export function ReceiverActivity({ controller, openDownloads, dismissedTaskIds, 
   const invoker = useRef<HTMLButtonElement>(null)
   const copy = useCopy(receiverCopy)
   const t = copy.saving
-  const { primaryTask, collapseRemoteSaving, repeatRemoteLabel, banner } = resolveWorkspaceTaskLayout(snapshot, dismissedTaskIds)
+  const { primaryTask, collapseRemoteSaving, repeatRemoteLabel, banner } = resolveWorkspaceTaskLayout(snapshot, dismissedTaskKeys)
   const details = primaryTask !== null && detailsOperationId === primaryTask.operationId
   const handoffHelpOpen = primaryTask !== null && handoffHelpOpenId === primaryTask.operationId
   const baseActions = taskActions(controller)
@@ -132,7 +132,7 @@ export function ReceiverActivity({ controller, openDownloads, dismissedTaskIds, 
       actions={actions}
       busy={snapshot.retained.pending !== null}
       {...(onDismissTask !== undefined && isDismissibleWorkspaceTask(primaryTask)
-        ? { onDismiss: () => onDismissTask(primaryTask.operationId) }
+        ? { onDismiss: () => onDismissTask(dismissedTaskKey(primaryTask.operationId, primaryTask.generation)) }
         : {})}
       onDetails={element => {
         invoker.current = element

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { canPreviewFile } from '../../preview/capability'
 import type { ReceiverController } from '../controller'
 import { DetailSheet } from '../controls/DetailSheet'
@@ -10,12 +10,16 @@ import { singleFileDownloadState, type SingleFileDownloadReadiness } from '../sh
 
 const STARTED_FEEDBACK_MS = 1_500
 
+type PreviewModalError =
+  | Readonly<{ kind: 'file'; fileId: string; failure: ReceiverFailure }>
+  | Readonly<{ kind: 'task'; failure: ReceiverFailure }>
+
 export function ReceiverBrowsing({ controller }: { readonly controller: ReceiverController }) {
   const source = controller.presentation.browsing
   const snapshot = useSyncExternalStore(source.subscribe, source.getSnapshot, source.getSnapshot)
   const invoker = useRef<HTMLButtonElement>(null)
   const [startedFeedback, setStartedFeedback] = useState<Readonly<{ fileId: string; nonce: number }> | null>(null)
-  const [previewError, setPreviewError] = useState<Readonly<{ fileId: string; failure: ReceiverFailure }> | null>(null)
+  const [modalError, setModalError] = useState<PreviewModalError | null>(null)
 
   useEffect(() => {
     if (startedFeedback === null) return
@@ -25,16 +29,25 @@ export function ReceiverBrowsing({ controller }: { readonly controller: Receiver
 
   const clearPreviewFeedback = () => {
     setStartedFeedback(null)
-    setPreviewError(null)
+    setModalError(null)
   }
 
+  const handleTaskActionFailure = useCallback((failure: ReceiverFailure) => {
+    setModalError({ kind: 'task', failure })
+  }, [])
+
+  const handleClearTaskActionFailure = useCallback(() => {
+    setModalError(previous => (previous?.kind === 'task' ? null : previous))
+  }, [])
+
   const showStartedFeedback = (fileId: string) => {
-    setPreviewError(null)
+    setModalError(previous => (previous?.kind === 'file' && previous.fileId === fileId ? null : previous))
     setStartedFeedback(previous => ({ fileId, nonce: (previous?.nonce ?? 0) + 1 }))
   }
 
   const openPreviewItem = (id: string) => {
-    clearPreviewFeedback()
+    setStartedFeedback(null)
+    setModalError(previous => (previous?.kind === 'file' ? null : previous))
     controller.previewFile(id)
   }
 
@@ -91,23 +104,26 @@ export function ReceiverBrowsing({ controller }: { readonly controller: Receiver
       started: startedFeedback?.fileId === fileId,
       disabledReason: state.disabledReason,
       onDownload: () => {
-        setPreviewError(null)
+        setModalError(null)
         const result = controller.downloadPreviewedFile({
           onExported: () => showStartedFeedback(fileId),
-          onAsyncFailure: failure => setPreviewError({ fileId, failure }),
+          onAsyncFailure: failure => setModalError({ kind: 'file', fileId, failure }),
         })
         if (result.kind === 'saved-image') {
           showStartedFeedback(fileId)
         } else if (result.kind === 'failed') {
-          setPreviewError({ fileId, failure: result.failure })
+          setModalError({ kind: 'file', fileId, failure: result.failure })
         }
       },
     }
   }
 
-  const activeDownloadError = preview.state !== 'idle' && previewError?.fileId === preview.fileId
-    ? previewError.failure
-    : null
+  let activeModalError: ReceiverFailure | null = null
+  if (preview.state !== 'idle' && modalError !== null) {
+    if (modalError.kind === 'task' || modalError.fileId === preview.fileId) {
+      activeModalError = modalError.failure
+    }
+  }
 
   return <>
     <ShareContent share={share} preview={preview} previewActions={previewActions}
@@ -144,8 +160,12 @@ export function ReceiverBrowsing({ controller }: { readonly controller: Receiver
           actions={previewActions}
           {...(navigation === undefined ? {} : { navigation })}
           {...(previewDownload === undefined ? {} : { download: previewDownload })}
-          downloadError={activeDownloadError}
-          statusStrip={<PreviewTaskStrip controller={controller} />}
+          downloadError={activeModalError}
+          statusStrip={<PreviewTaskStrip
+            controller={controller}
+            onActionFailure={handleTaskActionFailure}
+            onClearActionFailure={handleClearTaskActionFailure}
+          />}
         />
       </DetailSheet>}
   </>

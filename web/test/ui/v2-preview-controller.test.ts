@@ -6,7 +6,7 @@ import { ReceiveStore } from '../../src/output/store/database'
 import { AutomaticPhotoDeferredError } from '../../src/preview/automatic-photo'
 import { ReceiverController } from '../../src/ui/controller'
 import { PreviewController } from '../../src/ui/preview-controller'
-import { resolveWorkspaceTaskLayout } from '../../src/ui/experience/retained-match'
+import { dismissedTaskKey, resolveWorkspaceTaskLayout } from '../../src/ui/experience/retained-match'
 import { EMPTY_PREVIEW, type ReceiverFailure } from '../../src/ui/model'
 import type { BrowseDirectory, BrowserReceiverGateway, JoinedBrowserShare } from '../../src/application/browser-share/gateway'
 import { createMemoryOPFSEnv, createMockDownloadWindow, MemoryReceiveStore } from '../output/opfs-fixture'
@@ -535,9 +535,12 @@ describe('single-photo blob reuse, preview picker isolation, and workspace task 
 
     // Dismissing a handed-to-browser card hides it in workspace while retaining history.
     const taskSnap = controller.presentation.task.getSnapshot()
-    const currentId = taskSnap.current?.operationId
-    expect(currentId).toBeDefined()
-    const dismissedLayout = resolveWorkspaceTaskLayout(taskSnap, new Set([currentId!]))
+    const currentTask = taskSnap.current
+    expect(currentTask).not.toBeNull()
+    const dismissedLayout = resolveWorkspaceTaskLayout(
+      taskSnap,
+      new Set([dismissedTaskKey(currentTask!.operationId, currentTask!.generation)]),
+    )
     expect(dismissedLayout.primaryTask).toBeNull()
     expect(dismissedLayout.collapseRemoteSaving).toBe(false)
 
@@ -652,6 +655,7 @@ describe('single-photo blob reuse, preview picker isolation, and workspace task 
     const baseTaskSnap = controller.presentation.task.getSnapshot()
     const readyTask = {
       operationId: 'opfs-ready',
+      generation: 1n,
       stage: 'ready-to-save',
       completeness: 'complete',
       primaryAction: { id: 'save', target: { kind: 'retained', action: 'save' }, disabledReason: null },
@@ -660,7 +664,7 @@ describe('single-photo blob reuse, preview picker isolation, and workspace task 
     }
     const readyLayout = resolveWorkspaceTaskLayout(
       { ...baseTaskSnap, current: readyTask as unknown as NonNullable<typeof baseTaskSnap.current> },
-      new Set(['opfs-ready']),
+      new Set([dismissedTaskKey('opfs-ready', 1n)]),
     )
     expect(readyLayout.primaryTask?.operationId).toBe('opfs-ready')
 
@@ -668,6 +672,7 @@ describe('single-photo blob reuse, preview picker isolation, and workspace task 
     const shareInstance = baseTaskSnap.share?.shareInstance ?? identityText(7)
     const opfsHandedTask = {
       operationId: 'opfs-handed',
+      generation: 2n,
       stage: 'handed-to-browser',
       completeness: 'complete',
       primaryAction: { id: 'save', target: { kind: 'retained', action: 'save' }, disabledReason: null },
@@ -695,9 +700,178 @@ describe('single-photo blob reuse, preview picker isolation, and workspace task 
     }
     expect(resolveWorkspaceTaskLayout(opfsRetainedSnap).primaryTask?.operationId).toBe('opfs-handed')
     expect(resolveWorkspaceTaskLayout(opfsRetainedSnap).collapseRemoteSaving).toBe(true)
-    const dismissedOpfsLayout = resolveWorkspaceTaskLayout(opfsRetainedSnap, new Set(['opfs-handed']))
+    const dismissedKeys = new Set([dismissedTaskKey('opfs-handed', 2n)])
+    const dismissedOpfsLayout = resolveWorkspaceTaskLayout(opfsRetainedSnap, dismissedKeys)
     expect(dismissedOpfsLayout.primaryTask).toBeNull()
     expect(dismissedOpfsLayout.collapseRemoteSaving).toBe(false)
+
+    // Re-exporting increments generation so the workspace card resurfaces naturally.
+    const reExportedSnap = {
+      ...opfsRetainedSnap,
+      tasks: [{ ...opfsHandedTask, generation: 3n } as unknown as NonNullable<typeof baseTaskSnap.current>],
+    }
+    expect(resolveWorkspaceTaskLayout(reExportedSnap, dismissedKeys).primaryTask?.operationId).toBe('opfs-handed')
+    expect(resolveWorkspaceTaskLayout(reExportedSnap, dismissedKeys).collapseRemoteSaving).toBe(true)
+
+    await controller.dispose()
+  })
+})
+
+describe('preview export guards, modal task failure routing, and shareScope visits', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('guards late onExported callbacks, routes task action failures locally with unmount fallback, and advances shareScope visitId across switches', async () => {
+    const store = new MemoryReceiveStore()
+    vi.spyOn(ReceiveStore, 'open').mockResolvedValue(Object.assign(store, { close: vi.fn() }) as unknown as ReceiveStore)
+    const { env } = createMemoryOPFSEnv()
+    vi.spyOn(outputContract, 'probeBrowserOutputCapabilities').mockResolvedValue(Object.freeze({
+      indexedDb: true, fsa: false, opfs: true, portable: true, availableStorageBytes: 64n * 1024n * 1024n,
+    }))
+    const { windowPort: baseWin, downloads } = createMockDownloadWindow()
+    const windowPort = {
+      ...baseWin,
+      indexedDB: { open: vi.fn() } as unknown as IDBFactory,
+    }
+    const shareAId = identityText(7)
+    const shareBId = identityText(9)
+    const fileA = { ...entry, id: identity(2), idText: identityText(2), name: 'clip-a.mp4', expectedSize: 20n * 1024n * 1024n }
+    const fileB = { ...entry, id: identity(3), idText: identityText(3), name: 'photo-b.png', expectedSize: 100n }
+    const makeJoined = (shareId: string, shareBytes: Uint8Array) => ({
+      descriptor: {
+        shareInstance: shareBytes, shareInstanceId: shareId,
+        syntheticRoot: identity(1), syntheticRootId: identityText(1),
+      },
+      recoveryIdentity: 'share.recovery',
+      protocolSessionId: identityText(8),
+      protocolSessionIdentity: identityText(8),
+      selection: new SelectionPolicy(true),
+      replaceSelection(this: { selection: SelectionPolicy }, next: SelectionPolicy) { this.selection = next },
+      rootDirectory: () => rootDirectory,
+      page: async (directory: BrowseDirectory) => ({
+        directory, pageIndex: 0, pageCount: 1, entryCount: 2, omittedCount: 0n, entries: [fileA, fileB],
+      }),
+      inspectSelection: async () => ({
+        kind: 'tree' as const, suggestedName: 'Album', rootPath: [], knownFileCount: 2, knownBytes: fileA.expectedSize + fileB.expectedSize, complete: true,
+      }),
+      subscribeCatalogScanProgress: () => () => undefined,
+      subscribePathActivity: () => () => undefined,
+      subscribeConnection: (listener: (value: { kind: 'connected' }) => void) => { listener({ kind: 'connected' }); return () => undefined },
+      subscribeProtocolGeneration: () => () => undefined,
+      beginPreviewConnectivity: () => ({ routes: [], close: vi.fn() }),
+      preview: async (target: typeof fileA) => {
+        if (target.idText === fileA.idText) {
+          return {
+            current: {
+              kind: 'video', name: target.name, url: 'blob:a', mimeType: 'video/mp4',
+              width: 320, height: 180, durationSeconds: 10, keyframeSeconds: 0, decodeSeconds: 0,
+            },
+            seek: async () => { throw new Error('unused') },
+            close: async () => undefined,
+          }
+        }
+        return {
+          current: { kind: 'image', name: target.name, url: 'blob:b', mimeType: 'image/png', width: 20, height: 10 },
+          imageBlob: new Blob([Uint8Array.of(1)], { type: 'image/png' }),
+          seek: async () => { throw new Error('unused') },
+          close: async () => undefined,
+        }
+      },
+      close: async () => undefined,
+    }) as unknown as JoinedBrowserShare
+
+    const joinedA1 = makeJoined(shareAId, identity(7))
+    const joinedB = makeJoined(shareBId, identity(9))
+    const joinedA2 = makeJoined(shareAId, identity(7))
+    let joinIndex = 0
+    const shares = [joinedA1, joinedB, joinedA2]
+    const controller = new ReceiverController(
+      { join: async () => shares[joinIndex++]! } as unknown as BrowserReceiverGateway,
+      { windowPort: windowPort as unknown as ReceiveWindowPort, opfsEnv: env },
+    )
+
+    // Pre-populate a sealed OPFS record for fileA on shareA so preview download triggers async OPFS export.
+    const opfsDir = await (await env.getRootDirectory()).getDirectoryHandle('windshare-tasks', { create: true })
+    const fileHandle = await opfsDir.getFileHandle('task-a.part', { create: true })
+    const nativeIo = await env.openNativeObject!(fileHandle)
+    await nativeIo.writeAt(0n, new Uint8Array(8))
+    await nativeIo.close()
+
+    const singlePolicy = new SelectionPolicy(false)
+    singlePolicy.set(fileA, rootDirectory.ancestry, true)
+    const { selectionSpecFromPolicy, selectionKey: computeSelectionKey } = await import('../../src/transfer/selection')
+    const specA = selectionSpecFromPolicy(shareAId, identityText(1), singlePolicy.snapshot())
+    const keyA = computeSelectionKey(specA)
+    await store.putTask({
+      taskId: 'task-a',
+      shareInstance: shareAId,
+      selectionKey: keyA,
+      selection: specA,
+      artifact: { kind: 'original-file', name: fileA.name, singleFileId: fileA.idText, singleFilePath: [fileA.name] },
+      backend: 'opfs',
+      lifecycle: { kind: 'download-started', taskId: 'task-a', generation: 2n, retained: true, fileName: fileA.name },
+      target: { kind: 'opfs', objectName: 'task-a.part', fileName: fileA.name, isZip: false, allocatedLength: 8n, sealedSize: 8n },
+      discoveryComplete: true,
+      updatedAt: 1,
+    })
+
+    controller.initialize({ capabilityInput: 'share-a', pageUrl: 'https://receiver.invalid/s/a' })
+    await waitFor(() =>
+      controller.getSnapshot().output.capabilitiesState === 'ready' &&
+      controller.getSnapshot().retained.tasks.length === 1,
+    )
+
+    // Switching preview from fileA to fileB before OPFS export completes must suppress fileA's late onExported.
+    controller.previewFile(fileA.idText)
+    await waitFor(() => controller.getSnapshot().preview.state === 'video')
+    let exportedCalls = 0
+    expect(controller.downloadPreviewedFile({ onExported: () => { exportedCalls += 1 } })).toEqual({ kind: 'exported' })
+    controller.previewFile(fileB.idText)
+    await waitFor(() => downloads.length === 1 && controller.getSnapshot().retained.pending === null)
+    expect(exportedCalls).toBe(0)
+
+    // Staying on fileA receives onExported normally.
+    controller.previewFile(fileA.idText)
+    await waitFor(() => controller.getSnapshot().preview.state === 'video')
+    expect(controller.downloadPreviewedFile({ onExported: () => { exportedCalls += 1 } })).toEqual({ kind: 'exported' })
+    await waitFor(() => exportedCalls === 1 && controller.getSnapshot().retained.pending === null)
+    expect(downloads).toHaveLength(2)
+
+    // Retained action failure routes locally when onAsyncFailure handles it (returns true/void),
+    // and falls back to global snapshot.error when onAsyncFailure returns false (unmounted modal).
+    const missingTask = {
+      ...controller.getSnapshot().retained.tasks[0]!,
+      taskId: 'missing-task',
+      lifecycle: { kind: 'ready-to-save' as const, taskId: 'missing-task', generation: 1n, size: 8n, fileName: 'gone.bin' },
+      actions: ['save' as const],
+    }
+    const localFailures: ReceiverFailure[] = []
+    controller.performRetainedAction(missingTask, 'save', {
+      onAsyncFailure: failure => { localFailures.push(failure); return true },
+    })
+    await waitFor(() => localFailures.length === 1)
+    expect(controller.getSnapshot().error).toBeNull()
+
+    controller.performRetainedAction(missingTask, 'save', {
+      onAsyncFailure: () => false,
+    })
+    await waitFor(() => controller.getSnapshot().error !== null)
+
+    // shareScope.visitId advances monotonically across A -> B -> A and stays stable within a share.
+    const scopeA1 = controller.presentation.shareScope.getSnapshot()
+    expect(scopeA1.shareInstance).toBe(shareAId)
+    let scopeNotifications = 0
+    const unsubScope = controller.presentation.shareScope.subscribe(() => { scopeNotifications += 1 })
+    controller.toggleSelection(fileB.idText)
+    expect(scopeNotifications).toBe(0)
+    controller.submitKey('share-b')
+    await waitFor(() => controller.presentation.shareScope.getSnapshot().shareInstance === shareBId)
+    const scopeB = controller.presentation.shareScope.getSnapshot()
+    expect(scopeB.visitId).toBeGreaterThan(scopeA1.visitId)
+    controller.submitKey('share-a-again')
+    await waitFor(() => controller.presentation.shareScope.getSnapshot().shareInstance === shareAId)
+    const scopeA2 = controller.presentation.shareScope.getSnapshot()
+    expect(scopeA2.visitId).toBeGreaterThan(scopeB.visitId)
+    unsubScope()
 
     await controller.dispose()
   })

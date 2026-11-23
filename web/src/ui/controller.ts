@@ -1,4 +1,3 @@
-import { CryptoError } from '../crypto/errors'
 import { SelectionPolicy } from '../catalog/selection'
 import { BrowserReceiverGateway, type BrowsePage, type JoinedBrowserShare } from '../application/browser-share/gateway'
 import {
@@ -19,12 +18,14 @@ import type { CapturedLocation } from './capability/location'
 import type { ReceiverControllerOptions } from './controller/contracts'
 import {
   findReadyOfferChoice,
+  joinFailure,
   mapReceiverFailure,
   outcomeFailure,
   previewDownloadResultFromOutcome,
   type ChooseArtifactIntent,
   type PreviewDownloadCallbacks,
   type PreviewDownloadResult,
+  type TaskActionCallbacks,
 } from './controller/failures'
 import { BrowserNavigationCoordinator } from './controller/navigation'
 import { JoinedShareObservation } from './controller/joined-observation'
@@ -43,7 +44,7 @@ export type { DiagnosticFormatter, SecurityMilestone } from '../application/brow
 export { captureLocation } from './capability/location'
 export type { CapturedLocation, LocationCaptureOptions } from './capability/location'
 export type { ReceiverControllerOptions } from './controller/contracts'
-export type { ChooseArtifactIntent, PreviewDownloadCallbacks, PreviewDownloadResult } from './controller/failures'
+export type { ChooseArtifactIntent, PreviewDownloadCallbacks, PreviewDownloadResult, TaskActionCallbacks } from './controller/failures'
 export type { ReceiverTraceEvent } from '../application/receive/contracts'
 
 export class ReceiverController {
@@ -138,6 +139,7 @@ export class ReceiverController {
       isDisposed: () => this.#disposed,
       snapshot: () => this.#snapshot,
       publish: snapshot => this.#publish(snapshot),
+      mapFailure: error => mapReceiverFailure(error, err => this.#publicError(err)),
       onActionError: error => this.#publishActionError(error),
       recordIntent: action => this.recordExperienceIntent(action),
       beginProjection: joined => this.#beginSelectionProjection(joined),
@@ -365,8 +367,16 @@ export class ReceiverController {
           this.#previews.cancel()
         }
       },
-      ...(callbacks?.onExported === undefined ? {} : { onExported: callbacks.onExported }),
+      ...(callbacks?.onExported === undefined ? {} : {
+        onExported: () => {
+          const current = this.#snapshot.preview
+          if (!this.#disposed && current.state !== 'idle' && current.fileId === fileId) {
+            callbacks.onExported?.()
+          }
+        },
+      }),
       onAsyncError: error => {
+        if (this.#disposed) return
         const current = this.#snapshot.preview
         if (current.state !== 'idle' && current.fileId === fileId && callbacks?.onAsyncFailure !== undefined) {
           callbacks.onAsyncFailure(mapReceiverFailure(error, err => this.#publicError(err)))
@@ -390,8 +400,8 @@ export class ReceiverController {
     return this.#receive.activeActionAdmission(action)
   }
 
-  performLifecycleAction(action: ReceiveAction): void {
-    this.#operationTransitions.performLifecycleAction(action)
+  performLifecycleAction(action: ReceiveAction, callbacks?: TaskActionCallbacks): void {
+    this.#operationTransitions.performLifecycleAction(action, callbacks)
   }
 
   get canRetainCurrentOperation(): boolean { return this.#receive.canRetainCurrent }
@@ -402,8 +412,8 @@ export class ReceiverController {
     return this.#receive.retainedActionAdmission(task, action)
   }
 
-  performRetainedAction(task: RetainedTaskSnapshot, action: ReceiveAction): void {
-    this.#operationTransitions.performRetainedAction(task, action)
+  performRetainedAction(task: RetainedTaskSnapshot, action: ReceiveAction, callbacks?: TaskActionCallbacks): void {
+    this.#operationTransitions.performRetainedAction(task, action, callbacks)
   }
 
   prepareReplacementDownload(task: RetainedTaskSnapshot, failure: SourceRevisionFailure): void {
@@ -670,21 +680,5 @@ export class ReceiverController {
     } catch {
       // Diagnostic sinks cannot affect join control flow.
     }
-  }
-}
-
-function joinFailure(error: unknown, detail: string): NonNullable<ReceiverSnapshot['error']> {
-  if (!(error instanceof CryptoError)) return detail
-  switch (error.code) {
-    case 'malformed-key':
-    case 'malformed-link':
-    case 'malformed-share-id':
-    case 'missing-key':
-    case 'key-conflict':
-      return { kind: 'invalidLink', detail }
-    case 'webcrypto-unavailable':
-      return { kind: 'secureContext', detail }
-    default:
-      return detail
   }
 }
