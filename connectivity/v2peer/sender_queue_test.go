@@ -194,7 +194,7 @@ func TestSenderCapacityWaitSharesPreparationAndBothPeersKeepFullChecking(t *test
 			t.Fatalf("checking got reset preparation or shortened: %+v", checking)
 		}
 	}
-	h.clock.Advance(39 * time.Second)
+	h.clock.Advance(PeerICECheckingBudget - time.Nanosecond)
 	if h.receiver.phaseContext.Err() != nil {
 		t.Fatal("receiver lost full checking window", h.receiver.phaseContext.Err())
 	}
@@ -210,7 +210,7 @@ func TestSenderCapacityWaitSharesPreparationAndBothPeersKeepFullChecking(t *test
 	if h.started.Load() != nativepeer.ConcurrentAttempts+1 {
 		t.Fatal("unexpected provider start count", h.started.Load())
 	}
-	h.clock.Advance(time.Second)
+	h.clock.Advance(time.Nanosecond)
 	receiveTest(t, h.receiver.done)
 	receiveTest(t, h.sender.done)
 }

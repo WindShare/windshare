@@ -38,6 +38,31 @@ func TestQueueDeadlineInterruptsSnapshotBeforeReservingCapacity(t *testing.T) {
 	}
 }
 
+func TestDelayedPollCannotRetireCurrentGenerationLease(t *testing.T) {
+	_, _, makeNative := newAdmissionFixture(t, 0)
+	n := makeNative()
+	monitor := n.config.Monitor.(*testMonitor)
+	stale := &testMonitor{state: monitor.state}
+	n.Maintain(t.Context())
+	monitor.state.ResumeSequence++
+	_ = startActual(t, n, 1).Close()
+	generation := n.NetworkGeneration()
+	if generation != 2 {
+		t.Fatal("missing replacement generation", generation)
+	}
+	n.config.Monitor = stale
+	request := attemptFor(1)
+	request.Binding.AttemptSequence++
+	prepared, err := n.PrepareAttempt(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prepared.Close()
+	if prepared.snapshot.GenerationID() != generation || prepared.path.lease == nil || prepared.path.lease.GenerationID() != generation {
+		t.Fatal("delayed first-generation sample displaced the current lease")
+	}
+}
+
 func TestProcessProviderQueueHasFiniteCapacityAndManagerCloseDetachesWaiters(t *testing.T) {
 	gate, _, makeNative := newAdmissionFixture(t, 0)
 	active, waiting, overflow := makeNative(), makeNative(), makeNative()
