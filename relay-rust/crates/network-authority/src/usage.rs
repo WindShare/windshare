@@ -30,10 +30,8 @@ impl<R: Store, E: Environment> Authority<R, E> {
     pub fn usage(&mut self, signed: &[u8]) -> Result<SignedReply> {
         let batch: Batch = parse_signed(signed)?;
         let now = self.environment.now();
-        // Classify before stripping probe records so a probe-only usage batch
-        // still receives a usage receipt and clears the node's outbox row.
-        let usage = !batch.records.is_empty();
         ensure!(batch.valid(), Fault::Invalid);
+        let usage = !batch.records.is_empty();
         let reporting = self.authenticate_node(batch.issuer, batch.node, USAGE_DOMAIN, signed)?;
         // Queued accounting batches can arrive after an outage, so only future
         // skew is bounded. Live status heartbeats must sit within the symmetric
@@ -87,19 +85,16 @@ impl<R: Store, E: Environment> Authority<R, E> {
         }
 
         let result = if usage {
-            if !batch.records.is_empty() {
-                self.charge_usage(&batch, signed)?;
-            }
+            self.charge_usage(&batch, signed)?;
             ReportResult::UsageReceived
         } else {
             self.remember_shares(&batch.shares)?;
-            self.status(&batch, policy)?
-        };
-        // Queued accounting batches can outlive several policy revisions.
-        // Only the signed status round trip can acknowledge a drain.
-        if !usage {
+            let status = self.status(&batch, policy)?;
+            // Queued accounting batches can outlive several policy revisions.
+            // Only the signed status round trip can acknowledge a drain.
             self.record_load(&batch, now)?;
-        }
+            status
+        };
         self.sign_reply(RESPONSE_DOMAIN, batch.node, batch.id, now, result)
     }
 
