@@ -450,6 +450,10 @@ fn native_console_aligns_error_codes_and_enrollment_payload_contract() {
         .status,
         StatusCode::OK
     );
+    let after_approve = console
+        .dispatch(&Method::GET, "/api/enrollments", &json!({}), &session, 100)
+        .unwrap();
+    assert_eq!(after_approve.body, json!({"enrollments": []}));
     let claim_body = json!({
         "enrollment_id": enrolled.body["enrollment_id"],
         "claim_secret": text_id(&secret),
@@ -463,6 +467,26 @@ fn native_console_aligns_error_codes_and_enrollment_payload_contract() {
     assert_eq!(installed.status, StatusCode::OK);
     assert!(installed.body.get("managed_turn").is_none());
     assert!(admitted(&console, key));
+
+    let next_secret = [18_u8; 32];
+    let next_enrolled = post(
+        &console,
+        "/api/enrollments",
+        &json!({
+            "device_name":"Laptop",
+            "claim_digest":text_id(&Digest::of(&next_secret).0),
+        }),
+        "",
+    );
+    assert_eq!(next_enrolled.status, StatusCode::OK);
+    let visible = console
+        .dispatch(&Method::GET, "/api/enrollments", &json!({}), &session, 100)
+        .unwrap();
+    assert_eq!(visible.body["enrollments"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        visible.body["enrollments"][0]["enrollment_id"],
+        next_enrolled.body["enrollment_id"]
+    );
 
     assert_eq!(
         post(&console, "/api/enrollments/cancel", &claim_body, "").status,

@@ -73,8 +73,8 @@ impl AccessStore for CloudflareAccessStore<'_> {
         self.db.get(&key("enrollment", id))
     }
 
-    fn list_enrollments(&self) -> Result<Vec<Enrollment>> {
-        self.db.list("enrollment:")
+    fn list_pending_enrollments(&self) -> Result<Vec<Enrollment>> {
+        self.db.list_pending_enrollments()
     }
 
     fn save_enrollment(&mut self, enrollment: &Enrollment) -> Result<()> {

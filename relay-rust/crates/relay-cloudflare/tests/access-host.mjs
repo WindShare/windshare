@@ -18,7 +18,7 @@ export class AccessObject extends DurableObject {
       await this.ctx.storage.deleteAlarm();
       return this.rust.alarm();
     }
-    if (path === '/__test/revoked-credentials' && request.method === 'POST') {
+    if (path === '/__test/access-entries' && request.method === 'POST') {
       const entries = await request.json();
       this.ctx.storage.transactionSync(() => {
         for (const { key, value } of entries) {

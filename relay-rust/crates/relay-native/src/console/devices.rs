@@ -83,15 +83,8 @@ impl AccessStore for NativeAccessStore<'_, '_> {
         database::enrollment(&self.tx.db, id)
     }
 
-    fn list_enrollments(&self) -> Result<Vec<Enrollment>> {
-        let mut statement = self.tx.db.prepare(
-            "SELECT body FROM console_enrollments WHERE expires IS NOT NULL ORDER BY rowid",
-        )?;
-        let mut enrollments = Vec::new();
-        for body in statement.query_map([], |row| row.get::<_, String>(0))? {
-            enrollments.push(serde_json::from_str(&body?)?);
-        }
-        Ok(enrollments)
+    fn list_pending_enrollments(&self) -> Result<Vec<Enrollment>> {
+        database::list_pending_enrollments(&self.tx.db)
     }
 
     fn save_enrollment(&mut self, enrollment: &Enrollment) -> Result<()> {

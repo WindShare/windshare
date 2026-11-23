@@ -205,7 +205,7 @@ test('credential history pages across timestamp ties without loading revoked row
     };
   });
   const authority = (await mf.getBindings('relay')).ACCESS.getByName('authority');
-  const seeded = await authority.fetch('https://internal/__test/revoked-credentials', {
+  const seeded = await authority.fetch('https://internal/__test/access-entries', {
     method: 'POST', body: JSON.stringify(entries),
   });
   assert.equal(seeded.status, 200);
@@ -219,6 +219,58 @@ test('credential history pages across timestamp ties without loading revoked row
   assert.deepEqual(second.credentials.map(entry => entry.revoked_at), [3, 2]);
   const seen = [...first.credentials, ...second.credentials].map(entry => 'credential:' + entry.credential_id);
   assert.deepEqual(new Set(seen), new Set(entries.map(entry => entry.key)));
+});
+
+test('pending enrollments remain discoverable past 1001 installed receipts', async t => {
+  const mf = new Miniflare(options(password, origin, 'https://127.0.0.1', true));
+  t.after(() => mf.dispose());
+  const consoleWorker = await mf.getWorker('console');
+  const login = await consoleWorker.fetch(origin + '/api/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin },
+    body: JSON.stringify({ password }),
+  });
+  assert.equal(login.status, 200);
+  const cookie = login.headers.get('Set-Cookie').split(';')[0];
+  // '!' sorts strictly before every URL-safe base64 character so these durable
+  // receipts would fill the entire prefix window if SQL did not filter first.
+  const installedReceipts = Array.from({ length: 1050 }, (_, index) => {
+    const id = Buffer.alloc(16);
+    id.writeUInt32BE(index, 12);
+    return {
+      key: 'enrollment:!' + String(index).padStart(4, '0'),
+      value: {
+        id: [...id], user_code: 'AAAA-AAAA', device_name: 'Old device',
+        claim_digest: Array(32).fill(0), created_at: 1, expires_at: 2, next_poll_at: 1,
+        state: { Installed: { credential: [...id] } },
+      },
+    };
+  });
+  const authority = (await mf.getBindings('relay')).ACCESS.getByName('authority');
+  const seeded = await authority.fetch('https://internal/__test/access-entries', {
+    method: 'POST', body: JSON.stringify(installedReceipts),
+  });
+  assert.equal(seeded.status, 200);
+  const fresh = claimant();
+  const created = await consoleWorker.fetch(origin + '/api/enrollments', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ device_name: 'Fresh device', claim_digest: fresh.claim_digest }),
+  });
+  assert.equal(created.status, 200, await created.clone().text());
+  const enrollment = await created.json();
+  const listed = await consoleWorker.fetch(origin + '/api/enrollments', { headers: { Cookie: cookie } });
+  assert.equal(listed.status, 200, await listed.clone().text());
+  const { enrollments } = await listed.json();
+  assert.equal(enrollments.length, 1);
+  assert.equal(enrollments[0].enrollment_id, enrollment.enrollment_id);
+  assert.equal(enrollments[0].user_code, enrollment.user_code);
+  const approved = await consoleWorker.fetch(origin + '/api/enrollments/approve', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin, Cookie: cookie },
+    body: JSON.stringify({ enrollment_id: enrollment.enrollment_id, user_code: enrollment.user_code }),
+  });
+  assert.equal(approved.status, 200, await approved.clone().text());
+  const afterApprove = await consoleWorker.fetch(origin + '/api/enrollments', { headers: { Cookie: cookie } });
+  assert.equal(afterApprove.status, 200);
+  assert.deepEqual((await afterApprove.json()).enrollments, []);
 });
 
 test('production Go protocol clients observe revocation and durable administrative termination', { timeout: 60_000 }, async () => {

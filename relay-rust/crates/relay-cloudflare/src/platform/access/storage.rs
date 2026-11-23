@@ -1,12 +1,13 @@
 use super::failure;
 use serde::{Serialize, de::DeserializeOwned};
-use windshare_relay_access::{Credential, Digest};
+use windshare_relay_access::{Credential, Digest, Enrollment};
 use windshare_relay_console::{credentials::RevokedCredentialPosition, text_id};
 use worker::{Result, SqlStorage, SqlStorageValue, State};
 
 const CREDENTIAL_ROWS: &str = "key GLOB 'credential:*'";
 const ENROLLMENT_ROWS: &str = "key GLOB 'enrollment:*'";
 const ACTIVE_CREDENTIALS: &str = "json_extract(value, '$.state') = 'Active'";
+const PENDING_ENROLLMENTS: &str = "json_extract(value, '$.state') = 'Pending'";
 const REVOKED_AT: &str = "json_extract(value, '$.state.Revoked.at')";
 const TERMINATION_BATCH_SIZE: i64 = 32;
 pub const TERMINATION_RETRY_MS: u64 = 5_000;
@@ -86,12 +87,32 @@ impl Database {
     }
     pub fn list_active_credentials(&self) -> Result<Vec<Credential>> {
         self.ensure_active_index()?;
-        self.read_credentials(
+        self.read_values(
             &format!(
                 "SELECT value FROM access_entries INDEXED BY access_active_credentials
                 WHERE {CREDENTIAL_ROWS} AND {ACTIVE_CREDENTIALS} ORDER BY key"
             ),
             vec![],
+            "invalid credential row",
+        )
+    }
+    pub fn list_pending_enrollments(&self) -> Result<Vec<Enrollment>> {
+        let pending =
+            format!("{ENROLLMENT_ROWS} AND expires IS NOT NULL AND {PENDING_ENROLLMENTS}");
+        self.0.exec(
+            &format!(
+                "CREATE INDEX IF NOT EXISTS access_pending_enrollments
+                      ON access_entries(key) WHERE {pending}"
+            ),
+            None,
+        )?;
+        self.read_values(
+            &format!(
+                "SELECT value FROM access_entries INDEXED BY access_pending_enrollments
+                WHERE {pending} ORDER BY key"
+            ),
+            vec![],
+            "invalid enrollment row",
         )
     }
     pub fn pending_enrollments(&self) -> Result<usize> {
@@ -121,12 +142,13 @@ impl Database {
         )?;
         let read = |filter: &str, order: &str, mut args: Vec<SqlStorageValue>, take: usize| {
             args.push(i64::try_from(take).map_err(failure)?.into());
-            self.read_credentials(
+            self.read_values(
                 &format!(
                     "SELECT value FROM access_entries INDEXED BY access_revoked_credentials
                     WHERE {revoked} {filter} ORDER BY {order} LIMIT ?"
                 ),
                 args,
+                "invalid credential row",
             )
         };
         let order = format!("{REVOKED_AT} DESC, key DESC");
@@ -154,13 +176,18 @@ impl Database {
         }
         Ok(credentials)
     }
-    fn read_credentials(&self, query: &str, args: Vec<SqlStorageValue>) -> Result<Vec<Credential>> {
+    fn read_values<T: DeserializeOwned>(
+        &self,
+        query: &str,
+        args: Vec<SqlStorageValue>,
+        invalid_row: &str,
+    ) -> Result<Vec<T>> {
         self.0
             .exec(query, Some(args))?
             .raw()
             .map(|row| match row?.as_slice() {
                 [SqlStorageValue::String(value)] => serde_json::from_str(value).map_err(failure),
-                _ => Err(failure("invalid credential row")),
+                _ => Err(failure(invalid_row)),
             })
             .collect()
     }

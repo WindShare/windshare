@@ -47,8 +47,13 @@ impl AccessStore for MemoryStore {
         Ok(self.enrollments.get(id).cloned())
     }
 
-    fn list_enrollments(&self) -> Result<Vec<Enrollment>, Self::Error> {
-        Ok(self.enrollments.values().cloned().collect())
+    fn list_pending_enrollments(&self) -> Result<Vec<Enrollment>, Self::Error> {
+        Ok(self
+            .enrollments
+            .values()
+            .filter(|e| e.state == EnrollmentState::Pending)
+            .cloned()
+            .collect())
     }
 
     fn save_enrollment(&mut self, enrollment: &Enrollment) -> Result<(), Self::Error> {
@@ -172,6 +177,10 @@ fn enrollment_activates_only_on_install_and_supports_recovery_and_cancel() {
         103,
     )
     .unwrap();
+    assert_eq!(
+        list_pending_enrollments(&store).unwrap(),
+        json!({"enrollments": []})
+    );
 
     let claimed = claim(&mut store, &claim_body, 102 + 5_000).unwrap();
     assert_eq!(claimed.body["expires_at"], first.enrollment.expires_at);

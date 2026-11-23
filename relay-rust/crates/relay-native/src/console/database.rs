@@ -6,6 +6,7 @@ use windshare_relay_access::{Credential, Enrollment, EnrollmentState};
 use windshare_relay_console::http::ConsoleError;
 
 const ACTIVE_CREDENTIALS: &str = "json_extract(body, '$.state') = 'Active'";
+const PENDING_ENROLLMENTS: &str = "json_extract(body, '$.state') = 'Pending'";
 
 pub(super) struct Management<'db> {
     pub db: Transaction<'db>,
@@ -48,7 +49,9 @@ pub(super) fn initialize(db: &Connection) -> Result<()> {
         CREATE TABLE IF NOT EXISTS console_attempts (scope TEXT PRIMARY KEY, expires INTEGER NOT NULL, attempts INTEGER NOT NULL) STRICT;")?;
     db.execute_batch(&format!(
         "CREATE INDEX IF NOT EXISTS console_active_credentials
-         ON console_credentials(id) WHERE {ACTIVE_CREDENTIALS};"
+         ON console_credentials(id) WHERE {ACTIVE_CREDENTIALS};
+         CREATE INDEX IF NOT EXISTS console_pending_enrollments
+         ON console_enrollments(id) WHERE expires IS NOT NULL AND {PENDING_ENROLLMENTS};"
     ))?;
     Ok(())
 }
@@ -90,6 +93,18 @@ pub(super) fn enrollment(db: &Connection, id: &[u8; 16]) -> Result<Option<Enroll
         )
         .optional()?;
     Ok(body.map(|v| serde_json::from_str(&v)).transpose()?)
+}
+
+pub(super) fn list_pending_enrollments(db: &Connection) -> Result<Vec<Enrollment>> {
+    let mut statement = db.prepare(&format!(
+        "SELECT body FROM console_enrollments INDEXED BY console_pending_enrollments
+         WHERE expires IS NOT NULL AND {PENDING_ENROLLMENTS} ORDER BY rowid"
+    ))?;
+    let mut enrollments = Vec::new();
+    for body in statement.query_map([], |row| row.get::<_, String>(0))? {
+        enrollments.push(serde_json::from_str(&body?)?);
+    }
+    Ok(enrollments)
 }
 
 pub(super) fn save_enrollment(db: &Connection, e: &Enrollment) -> Result<()> {

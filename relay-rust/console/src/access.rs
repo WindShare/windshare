@@ -67,11 +67,11 @@ pub trait AccessStore {
     /// Propagates host storage errors.
     fn enrollment(&self, id: &[u8; 16]) -> Result<Option<Enrollment>, Self::Error>;
 
-    /// Lists enrollment records that may still require administrator approval.
+    /// Lists pending enrollment records awaiting administrator approval.
     ///
     /// # Errors
     /// Propagates host storage errors.
-    fn list_enrollments(&self) -> Result<Vec<Enrollment>, Self::Error>;
+    fn list_pending_enrollments(&self) -> Result<Vec<Enrollment>, Self::Error>;
 
     /// Persists an enrollment, retaining installed receipts without an expiry deadline.
     ///
@@ -395,10 +395,9 @@ pub fn cancel<S: AccessStore>(
 /// Propagates host storage errors as [`AccessError::Store`].
 pub fn list_pending_enrollments<S: AccessStore>(store: &S) -> Result<Value, AccessError<S::Error>> {
     let enrollments: Vec<_> = store
-        .list_enrollments()
+        .list_pending_enrollments()
         .map_err(AccessError::Store)?
         .iter()
-        .filter(|e| e.state == EnrollmentState::Pending)
         .map(pending_enrollment_view)
         .collect();
     Ok(json!({"enrollments": enrollments}))
