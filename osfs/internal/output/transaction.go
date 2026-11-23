@@ -363,7 +363,12 @@ func (tx *fileTransaction) settleCommitCollisionLocked() (transfer.FileSettlemen
 		return transfer.FileSettlement{}, err
 	}
 	tx.settled = true
-	tx.session.recordSettledFile(tx.canonicalPath, settlement)
+	tx.session.recordSettledOutcome(tx.canonicalPath, tx, settledFileOutcome{
+		fileID:   tx.binding.FileID(),
+		revision: tx.binding.FileRevision(),
+		kind:     transfer.FileCollision,
+		bound:    true,
+	})
 	return settlement, nil
 }
 
@@ -392,7 +397,9 @@ func (tx *fileTransaction) settlePublishedLocked(warnings []transfer.FileMetadat
 		}
 	}
 	tx.settled = true
-	tx.session.recordSettledFile(tx.canonicalPath, settlement)
+	// Delivery receipt is already recorded in op.journal; release the active
+	// slot without retaining a per-file FileSettlement copy in Session.
+	tx.session.releaseActiveFile(tx.canonicalPath, tx)
 	return settlement, nil
 }
 
@@ -429,7 +436,8 @@ func (tx *fileTransaction) Pause(ctx context.Context) (transfer.FileSettlement, 
 		return transfer.FileSettlement{}, err
 	}
 	tx.settled = true
-	tx.session.recordSettledFile(tx.canonicalPath, settlement)
+	// Paused files remain resumable within the same session (e.g. revision reopen).
+	tx.session.releaseActiveFile(tx.canonicalPath, tx)
 	return settlement, nil
 }
 
@@ -457,6 +465,11 @@ func (tx *fileTransaction) Retire(ctx context.Context) (transfer.FileSettlement,
 		return transfer.FileSettlement{}, err
 	}
 	tx.settled = true
-	tx.session.recordSettledFile(tx.canonicalPath, settlement)
+	tx.session.recordSettledOutcome(tx.canonicalPath, tx, settledFileOutcome{
+		fileID:   tx.binding.FileID(),
+		revision: tx.binding.FileRevision(),
+		kind:     transfer.FileFailed,
+		bound:    true,
+	})
 	return settlement, nil
 }

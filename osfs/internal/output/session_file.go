@@ -37,9 +37,9 @@ func (s *Session) BeginFile(
 		return transfer.FileStart{}, transfer.ErrDirectTreeSessionFatal
 	}
 	canonicalPath := file.MaterializationRelativePath().String()
-	if settled, exists := s.settledFiles[canonicalPath]; exists {
+	if outcome, exists := s.settledOutcomes[canonicalPath]; exists {
 		s.mu.Unlock()
-		return transfer.NewFileSettlementStart(settled)
+		return s.replaySettledOutcome(outcome, file.Target())
 	}
 	if _, active := s.activeFiles[canonicalPath]; active {
 		s.mu.Unlock()
@@ -54,8 +54,7 @@ func (s *Session) BeginFile(
 
 	desc := file.Descriptor()
 	target := file.Target()
-	objectID := ownedObjectIDFor(s.intent.OperationID(), target.Locator().Digest())
-	binding, err := transfer.BindFileMaterializationTarget(target, objectID)
+	binding, err := s.bindTarget(target)
 	if err != nil {
 		return transfer.FileStart{}, err
 	}
@@ -76,7 +75,6 @@ func (s *Session) BeginFile(
 		if err != nil {
 			return transfer.FileStart{}, err
 		}
-		s.recordSettledFile(canonicalPath, settlement)
 		return transfer.NewFileSettlementStart(settlement)
 	}
 
@@ -150,7 +148,11 @@ func (s *Session) settleCollision(canonicalPath string, target transfer.FileMate
 	if err != nil {
 		return transfer.FileStart{}, err
 	}
-	s.recordSettledFile(canonicalPath, settlement)
+	s.recordSettledOutcome(canonicalPath, nil, settledFileOutcome{
+		fileID:   target.FileID(),
+		revision: target.FileRevision(),
+		kind:     transfer.FileCollision,
+	})
 	return transfer.NewFileSettlementStart(settlement)
 }
 
@@ -415,7 +417,12 @@ func (s *Session) handleRevisionMismatch(
 	if err != nil {
 		return transfer.FileStart{}, err
 	}
-	s.recordSettledFile(canonicalPath, settlement)
+	s.recordSettledOutcome(canonicalPath, nil, settledFileOutcome{
+		fileID:          target.FileID(),
+		revision:        target.FileRevision(),
+		kind:            transfer.FileItemBlocked,
+		itemBlockReason: transfer.ItemBlockRevisionConflict,
+	})
 	return transfer.NewFileSettlementStart(settlement)
 }
 
@@ -437,7 +444,6 @@ func (s *Session) reconcilePublishedWithoutStage(
 		if err != nil {
 			return transfer.FileStart{}, err
 		}
-		s.recordSettledFile(canonicalPath, settlement)
 		return transfer.NewFileSettlementStart(settlement)
 	}
 	if collided {
@@ -630,16 +636,6 @@ func (s *Session) releaseActiveFile(canonicalPath string, tx *fileTransaction) {
 	defer s.mu.Unlock()
 	if s.activeFiles[canonicalPath] == tx {
 		delete(s.activeFiles, canonicalPath)
-	}
-}
-
-func (s *Session) recordSettledFile(canonicalPath string, settlement transfer.FileSettlement) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.activeFiles, canonicalPath)
-	// Paused files remain resumable within the same session (e.g. revision reopen).
-	if settlement.Kind() != transfer.FilePaused {
-		s.settledFiles[canonicalPath] = settlement
 	}
 }
 

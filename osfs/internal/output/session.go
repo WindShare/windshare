@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
@@ -21,6 +22,18 @@ type dirState struct {
 	dir           *Dir
 	finalized     bool
 	settlement    transfer.DirectorySettlement
+}
+
+// settledFileOutcome retains only the compact fields needed to replay
+// non-delivered terminal file settlements within the active session.
+// Delivered files rely on op.journal's delivery receipts instead of keeping
+// per-file transfer.FileSettlement structs in memory.
+type settledFileOutcome struct {
+	fileID          catalog.FileID
+	revision        content.FileRevision
+	kind            transfer.FileSettlementKind
+	bound           bool
+	itemBlockReason transfer.ItemBlockReason
 }
 
 // Session implements transfer.DirectTreeSession and transfer.DeliveryHistory
@@ -41,7 +54,7 @@ type Session struct {
 	rootSettled     bool
 	dirsByLogical   map[string]*dirState
 	activeFiles     map[string]*fileTransaction
-	settledFiles    map[string]transfer.FileSettlement
+	settledOutcomes map[string]settledFileOutcome
 }
 
 var (
@@ -107,7 +120,6 @@ func newSession(a *Authority, op *Operation) (*Session, error) {
 		names:         mapper,
 		dirsByLogical: make(map[string]*dirState),
 		activeFiles:   make(map[string]*fileTransaction),
-		settledFiles:  make(map[string]transfer.FileSettlement),
 	}, nil
 }
 
@@ -491,4 +503,64 @@ func (s *Session) closeDirHandlesLocked() {
 			state.dir = nil
 		}
 	}
+}
+
+func (s *Session) bindTarget(target transfer.FileMaterializationTarget) (transfer.MaterializedFileBinding, error) {
+	objectID := ownedObjectIDFor(s.intent.OperationID(), target.Locator().Digest())
+	return transfer.BindFileMaterializationTarget(target, objectID)
+}
+
+func (s *Session) recordSettledOutcome(canonicalPath string, tx *fileTransaction, outcome settledFileOutcome) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if tx != nil && s.activeFiles[canonicalPath] == tx {
+		delete(s.activeFiles, canonicalPath)
+	}
+	if s.settledOutcomes == nil {
+		s.settledOutcomes = make(map[string]settledFileOutcome)
+	}
+	s.settledOutcomes[canonicalPath] = outcome
+}
+
+func (s *Session) replaySettledOutcome(
+	outcome settledFileOutcome,
+	target transfer.FileMaterializationTarget,
+) (transfer.FileStart, error) {
+	if outcome.fileID != target.FileID() || outcome.revision != target.FileRevision() {
+		return transfer.FileStart{}, transfer.ErrInvalidOutputBinding
+	}
+	var (
+		settlement transfer.FileSettlement
+		err        error
+	)
+	switch outcome.kind {
+	case transfer.FileCollision:
+		if outcome.bound {
+			binding, bindErr := s.bindTarget(target)
+			if bindErr != nil {
+				return transfer.FileStart{}, bindErr
+			}
+			settlement, err = transfer.NewTransactionCollisionFileSettlement(binding)
+		} else {
+			settlement, err = transfer.NewCollisionFileSettlement(target)
+		}
+	case transfer.FileItemBlocked:
+		stateRef, refErr := transfer.NewMaterializationStateRef(s.sessionID, target.Locator().Digest())
+		if refErr != nil {
+			return transfer.FileStart{}, refErr
+		}
+		settlement, err = transfer.NewImmediateItemBlockedFileSettlement(target, stateRef, outcome.itemBlockReason)
+	case transfer.FileFailed:
+		binding, bindErr := s.bindTarget(target)
+		if bindErr != nil {
+			return transfer.FileStart{}, bindErr
+		}
+		settlement, err = transfer.NewFailedFileSettlement(binding)
+	default:
+		return transfer.FileStart{}, transfer.ErrInvalidOutputBinding
+	}
+	if err != nil {
+		return transfer.FileStart{}, err
+	}
+	return transfer.NewFileSettlementStart(settlement)
 }
