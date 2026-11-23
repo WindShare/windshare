@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 
+	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/engine/internal/receive"
 	"github.com/windshare/windshare/engine/internal/task"
 	appobs "github.com/windshare/windshare/engine/observation"
@@ -37,6 +38,9 @@ const (
 	ReceiveRetentionLiveReleased    = receive.RetentionLiveReleased
 	ReceiveRetentionDiscarded       = receive.RetentionDiscarded
 )
+
+// ReceiveSourceChanged reports item faults that only a new link can finish.
+func ReceiveSourceChanged(value transferfault.Fault) bool { return receive.SourceChanged(value) }
 
 type ReceiveRequest = receive.Request
 type ReceiveOutputAdmission = receive.OutputAdmission

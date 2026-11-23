@@ -32,8 +32,8 @@ const (
 	RecoverySourceOmitted
 	RecoveryInvalidRequest
 	RecoveryNeedsInspection
-	// The sender's files no longer match the revision this link committed. A
-	// share never re-admits drifted content, so only a new link can finish.
+	// Every unfinished item changed at the source. A share never re-admits
+	// drifted content, so only a new link can finish them.
 	RecoverySourceChanged
 )
 
@@ -236,7 +236,7 @@ func pauseActions(recovery RecoveryOutcome, idle bool) []RecoveryAction {
 	}
 }
 
-func recoveryReason(class task.FailureClass, failure Failure, result transfer.JobResult, cleanupErr error) RecoveryReason {
+func recoveryReason(class task.FailureClass, failure Failure, result transfer.JobResult, cleanupErr error, onlySourceChanged bool) RecoveryReason {
 	if cleanupErr != nil {
 		return RecoveryNeedsInspection
 	}
@@ -261,9 +261,9 @@ func recoveryReason(class task.FailureClass, failure Failure, result transfer.Jo
 	if code, ok := failure.Fault.SessionCode(); ok && code == transferfault.SessionDependencyContract {
 		return RecoveryNeedsInspection
 	}
-	// Drift outranks per-file outcomes: moving a collision or repairing output
-	// cannot make the same link serve the changed source again.
-	if class == task.FailureSourceDrift {
+	// Only a change that leaves nothing else unfinished ends this link's use.
+	// Mixed outcomes stay retryable because retry can still finish other files.
+	if class == task.FailureSourceDrift && onlySourceChanged {
 		return RecoverySourceChanged
 	}
 	outcomes := result.Progress.FileOutcomes

@@ -214,24 +214,42 @@ func TestStoppedShareRecoveryUsesRetainedOutputAuthority(t *testing.T) {
 	}
 }
 
-// A share never re-admits a changed source under its link, so the same request
-// cannot finish; offering retry would only repeat the drift failure.
-func TestSourceDriftOffersDiscardInsteadOfSameLinkRetry(t *testing.T) {
+// pureSourceDrift settles a complete job whose only unfinished file changed at
+// the source; every other discovered file is already published.
+func pureSourceDrift(t *testing.T) (SettlementInput, transferfault.Fault) {
+	t.Helper()
 	drift, err := transferfault.NewSource(transferfault.ScopeFileLocal, transferfault.SourceRevisionChanged)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return SettlementInput{Result: transfer.JobResult{
+		Outcome: transfer.DirectTreeOutcomePartial, SourceDriftFault: drift,
+		Files: []transfer.FileJobFailure{{Path: "d/b.txt", Stage: transfer.FailureRevisionOpen, Fault: drift}},
+		Progress: transfer.ReceiveProgressSnapshot{
+			Discovery: transfer.DiscoveryComplete, CountersExact: true, DiscoveredFiles: 2, PublishedFiles: 1,
+			FileOutcomes: transfer.FileOutcomeSummary{DownloadedFiles: 1, FailedFiles: 1},
+		},
+	}}, drift
+}
+
+// A share never re-admits a changed source under its link, so when nothing else
+// is unfinished the same request cannot make progress and retry is withheld.
+func TestSourceDriftOffersDiscardInsteadOfSameLinkRetry(t *testing.T) {
+	stale, err := transferfault.NewCatalog(transferfault.ScopeDirectoryLocal, transferfault.CatalogDirectoryStale)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, test := range []struct {
-		name      string
-		collision bool
-		action    RecoveryAction
-		retention ProgressRetention
-		discards  int
+		name           string
+		action         RecoveryAction
+		retention      ProgressRetention
+		discards       int
+		staleDirectory bool
 	}{
 		{name: "unattended", retention: RetentionCheckpoints},
 		{name: "exit keeps partials", action: RecoveryExit, retention: RetentionCheckpoints},
 		{name: "discard", action: RecoveryDiscard, retention: RetentionDiscarded, discards: 1},
-		{name: "drift outranks a movable collision", collision: true, action: RecoveryExit, retention: RetentionCheckpoints},
+		{name: "stale directory listing", action: RecoveryExit, retention: RetentionCheckpoints, staleDirectory: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			prepared, authority := recoveryTestPreparation(t, OutputResumable)
@@ -250,11 +268,11 @@ func TestSourceDriftOffersDiscardInsteadOfSameLinkRetry(t *testing.T) {
 			completed := runOperation(t.Context(), request, Dependencies{}, func(_ context.Context, _ preparedRequest, _ Dependencies, retained *getOutputPreparation) task.Completion[Result] {
 				attempts++
 				*retained = prepared
-				job := transfer.JobResult{Outcome: transfer.DirectTreeOutcomePartial, SourceDriftFault: drift}
-				if test.collision {
-					job.Progress.FileOutcomes.CollisionFiles = 1
+				input, _ := pureSourceDrift(t)
+				if test.staleDirectory {
+					input.Result.Directories = []transfer.DirectoryJobFailure{{Path: "d/sub", Stage: transfer.FailureDirectoryDiscovery, Fault: stale}}
 				}
-				result, err := Settle(SettlementInput{Result: job})
+				result, err := Settle(input)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -269,6 +287,91 @@ func TestSourceDriftOffersDiscardInsteadOfSameLinkRetry(t *testing.T) {
 				completed.FailureClass != task.FailureSourceDrift || recovery.Reason != RecoverySourceChanged ||
 				recovery.Retryable() || recovery.ShareStopped() || recovery.Retention != test.retention {
 				t.Fatalf("recovery=%+v class=%d attempts=%d prompts=%d discards=%d", recovery, completed.FailureClass, attempts, prompts, authority.discards)
+			}
+		})
+	}
+}
+
+// Drift beside other unfinished work keeps the repairable reason: retrying the
+// same link can still finish unchanged files after an interruption, a lost
+// connection or a moved collision.
+func TestSourceDriftKeepsRetryWhileOtherWorkCanFinish(t *testing.T) {
+	session, err := transferfault.NewSession(transferfault.ScopeSessionTerminal, transferfault.SessionTransport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*SettlementInput)
+		reason RecoveryReason
+	}{
+		{"interruption", func(input *SettlementInput) {
+			input.ContextError = context.Canceled
+			input.Result.TerminationCause, input.Result.TerminationInterruption = context.Canceled, transfer.TransferInterruptionCanceled
+			input.Result.Progress.DiscoveredFiles++
+			input.Result.Progress.FileOutcomes.PausedFiles++
+			input.Result.Progress.RestartReusableBytes = 1 << 20
+		}, RecoveryTransferFailure},
+		{"network loss", func(input *SettlementInput) {
+			input.ConnectionError = errors.New("relay connection lost")
+			input.Result.TerminationCause, input.Result.TerminationFault = errors.New("session ended"), session
+			input.Result.Progress.DiscoveredFiles++
+		}, RecoveryTransferFailure},
+		{"collision", func(input *SettlementInput) {
+			input.Result.Progress.DiscoveredFiles++
+			input.Result.Progress.FileOutcomes.CollisionFiles++
+		}, RecoveryCollision},
+		{"unchanged file still unfinished", func(input *SettlementInput) {
+			input.Result.Progress.DiscoveredFiles++
+		}, RecoveryTransferFailure},
+		{"unattributed omitted failure", func(input *SettlementInput) {
+			input.Result.OmittedFileFailures = 1
+		}, RecoveryTransferFailure},
+		{"incomplete discovery", func(input *SettlementInput) {
+			input.Result.Progress.Discovery = transfer.DiscoveryOpen
+		}, RecoveryTransferFailure},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prepared, authority := recoveryTestPreparation(t, OutputResumable)
+			attempts, prompts := 0, 0
+			request := Request{Capability: link.Link{Suite: link.SuiteSenderAuthenticated}, Connectivity: ConnectivityRelayOnly, OnPause: func(_ context.Context, pause Pause) (RecoveryAction, error) {
+				prompts++
+				if prompts > 1 {
+					// Only the changed file remains, so retry is no longer offered.
+					if pause.Recovery.Reason != RecoverySourceChanged || pause.Allows(RecoveryRetry) {
+						t.Fatalf("pure drift after retry pause = %+v", pause.Recovery)
+					}
+					return RecoveryExit, nil
+				}
+				if pause.Recovery.Reason != test.reason || !pause.Allows(RecoveryRetry) || !pause.Allows(RecoveryDiscard) {
+					t.Fatalf("mixed drift pause = %+v", pause.Recovery)
+				}
+				return RecoveryRetry, nil
+			}}
+			completed := runOperation(t.Context(), request, Dependencies{}, func(_ context.Context, _ preparedRequest, _ Dependencies, retained *getOutputPreparation) task.Completion[Result] {
+				attempts++
+				if attempts > 1 {
+					// The retry finishes everything except the changed file.
+					input, _ := pureSourceDrift(t)
+					result, err := Settle(input)
+					if err != nil {
+						t.Fatal(err)
+					}
+					return result
+				}
+				*retained = prepared
+				input, _ := pureSourceDrift(t)
+				test.mutate(&input)
+				result, err := Settle(input)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return result
+			})
+			recovery := completed.Value.Recovery
+			if attempts != 2 || prompts != 2 || authority.discards != 0 || completed.FailureClass != task.FailureSourceDrift ||
+				recovery.Reason != RecoverySourceChanged || recovery.Retryable() {
+				t.Fatalf("recovery=%+v attempts=%d prompts=%d discards=%d", recovery, attempts, prompts, authority.discards)
 			}
 		})
 	}
