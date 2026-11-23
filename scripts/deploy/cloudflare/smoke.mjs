@@ -127,7 +127,7 @@ try {
   if (managedTURN || bindingFixture) {
     env.WINDSHARE_TURN_SMOKE_CONFIG = savedConfig;
     env.WINDSHARE_TURN_SMOKE_SOURCE = managedTURN ? 'managed' : 'local';
-    command(process.execPath, ['web/node_modules/@playwright/test/cli.js', 'test', '--config', 'web/playwright.network.config.ts',
+    command(process.execPath, ['web/node_modules/@playwright/test/cli.js', 'test', 'v2-parallel-turn.network.spec.ts', '--config', 'web/playwright.network.config.ts',
       '--project', 'chromium', '--grep', 'isolated Cloudflare Worker']);
   }
   env.WINDSHARE_RELAY_ACCESS_KEY = imported.profiles[0].access_key;
