@@ -241,3 +241,36 @@ func faultPermutations(values []fault.Fault) [][]fault.Fault {
 	}
 	return result
 }
+
+func TestSourceChangedNamesOnlyDriftFaults(t *testing.T) {
+	for _, test := range []struct {
+		build func() (fault.Fault, error)
+		want  bool
+	}{
+		{func() (fault.Fault, error) { return fault.NewSource(fault.ScopeFileLocal, fault.SourceRevisionChanged) }, true},
+		{func() (fault.Fault, error) {
+			return fault.NewSource(fault.ScopeFileLocal, fault.SourceRevisionInvalidated)
+		}, true},
+		{func() (fault.Fault, error) {
+			return fault.NewCatalog(fault.ScopeDirectoryLocal, fault.CatalogDirectoryStale)
+		}, true},
+		{func() (fault.Fault, error) {
+			return fault.NewCatalog(fault.ScopeDirectoryLocal, fault.CatalogUnavailable)
+		}, false},
+		{func() (fault.Fault, error) {
+			return fault.NewSession(fault.ScopeSessionTerminal, fault.SessionTransport)
+		}, false},
+		{func() (fault.Fault, error) { return fault.NewOutput(fault.ScopeFileLocal, fault.OutputStateIO) }, false},
+	} {
+		value, err := test.build()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := value.SourceChanged(); got != test.want {
+			t.Fatalf("%v.SourceChanged() = %t, want %t", value, got, test.want)
+		}
+	}
+	if (fault.Fault{}).SourceChanged() {
+		t.Fatal("zero fault reported a source change")
+	}
+}

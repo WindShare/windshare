@@ -236,7 +236,7 @@ func pauseActions(recovery RecoveryOutcome, idle bool) []RecoveryAction {
 	}
 }
 
-func recoveryReason(class task.FailureClass, failure Failure, result transfer.JobResult, cleanupErr error, onlySourceChanged bool) RecoveryReason {
+func recoveryReason(class task.FailureClass, failure Failure, result transfer.JobResult, cleanupErr error) RecoveryReason {
 	if cleanupErr != nil {
 		return RecoveryNeedsInspection
 	}
@@ -263,7 +263,7 @@ func recoveryReason(class task.FailureClass, failure Failure, result transfer.Jo
 	}
 	// Only a change that leaves nothing else unfinished ends this link's use.
 	// Mixed outcomes stay retryable because retry can still finish other files.
-	if class == task.FailureSourceDrift && onlySourceChanged {
+	if class == task.FailureSourceDrift && onlySourceChanged(result) {
 		return RecoverySourceChanged
 	}
 	outcomes := result.Progress.FileOutcomes

@@ -104,7 +104,7 @@ func settlePreparationFailure(step stepOutcome, failure Failure, contextErr, cle
 		failure = Failure{Cause: cleanupErr}
 		class = task.FailureLocal
 	}
-	value := Result{Recovery: RecoveryOutcome{Reason: recoveryReason(class, failure, transfer.JobResult{}, cleanupErr, false), ShareStop: stop}}
+	value := Result{Recovery: RecoveryOutcome{Reason: recoveryReason(class, failure, transfer.JobResult{}, cleanupErr), ShareStop: stop}}
 	if attention, ok := errors.AsType[*output.AttentionError](cause); ok {
 		value.OutputAttention = attention.Reason
 	}
@@ -175,7 +175,7 @@ func Settle(input SettlementInput) (task.Completion[Result], error) {
 				result.Outcome = task.OutcomeFailed
 			}
 		}
-		result.Value.Recovery = RecoveryOutcome{Reason: recoveryReason(class, failure, r, input.CleanupError, onlySourceChanged(input)), ShareStop: stop}
+		result.Value.Recovery = RecoveryOutcome{Reason: recoveryReason(class, failure, r, input.CleanupError), ShareStop: stop}
 		result.Err = errors.Join(failure, input.diagnosticCauses())
 	}
 	return result, nil
@@ -292,45 +292,26 @@ func resultFailure(input SettlementInput, class task.FailureClass) Failure {
 	return Failure{}
 }
 
-// SourceChanged reports the faults a share raises when content or a directory
-// listing no longer matches what its link committed.
-func SourceChanged(value transferfault.Fault) bool {
-	if code, ok := value.CatalogCode(); ok {
-		return code == transferfault.CatalogDirectoryStale
-	}
-	code, ok := value.SourceCode()
-	return ok && (code == transferfault.SourceRevisionChanged || code == transferfault.SourceRevisionInvalidated)
-}
-
-// onlySourceChanged proves that every unfinished item failed because the source
-// changed. Any interruption, connection loss, output outcome or unattributed
-// failure leaves work that retrying the same link can still finish.
-func onlySourceChanged(input SettlementInput) bool {
-	r, p := input.Result, input.Result.Progress
-	f := p.FileOutcomes
-	if !r.SourceDriftFault.Valid() || input.AdmissionError != nil || input.RuntimeError != nil ||
-		input.ConnectionError != nil || input.ContextError != nil ||
-		r.TerminationInterruption != 0 || r.SettlementInterruption != 0 ||
-		r.TerminationCause != nil && !SourceChanged(r.TerminationFault) ||
-		r.SettlementFailure != nil || r.SettlementFault.Valid() || r.SelectionResolutionFailure != nil ||
+// onlySourceChanged proves that the changed items are all that remains: the
+// complete catalog was counted, every retained failure is a source change, and
+// every other discovered file is published. Anything it cannot attribute, such
+// as omitted failures or an unsettled tree, keeps the retryable reason.
+func onlySourceChanged(r transfer.JobResult) bool {
+	p := r.Progress
+	if !r.SourceDriftFault.Valid() || p.Discovery != transfer.DiscoveryComplete || !p.CountersExact ||
 		r.OmittedDirectoryFailures != 0 || r.OmittedFileFailures != 0 ||
-		p.Discovery != transfer.DiscoveryComplete || !p.CountersExact ||
-		f.PausedFiles != 0 || f.CollisionFiles != 0 || f.ItemBlockedFiles != 0 || f.RevisionConflictFiles != 0 ||
-		f.CheckpointInvalidFiles != 0 || f.OwnedObjectUnknownFiles != 0 {
+		r.SettlementFailure != nil || r.SettlementFault.Valid() {
 		return false
 	}
 	for _, directory := range r.Directories {
-		if !SourceChanged(directory.Fault) {
+		if !directory.Fault.SourceChanged() {
 			return false
 		}
 	}
 	for _, file := range r.Files {
-		if !SourceChanged(file.Fault) || file.SettlementFault.Valid() && !SourceChanged(file.SettlementFault) {
+		if !file.Fault.SourceChanged() || file.SettlementFault.Valid() && !file.SettlementFault.SourceChanged() {
 			return false
 		}
 	}
-	// Every discovered file not listed as changed must already be published, so
-	// no partial progress of an unchanged file remains for a retry to finish.
-	unfinished := p.DiscoveredFiles - min(p.DiscoveredFiles, p.PublishedFiles)
-	return unfinished == uint64(len(r.Files))
+	return p.DiscoveredFiles-min(p.DiscoveredFiles, p.PublishedFiles) == uint64(len(r.Files))
 }

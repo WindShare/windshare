@@ -376,3 +376,66 @@ func TestSourceDriftKeepsRetryWhileOtherWorkCanFinish(t *testing.T) {
 		})
 	}
 }
+
+// Each invariant alone must keep the retryable reason: the predicate only ends
+// the link's use when it can prove changed items are all that remains.
+func TestOnlySourceChangedRequiresEveryInvariant(t *testing.T) {
+	mustFault := func(value transferfault.Fault, err error) transferfault.Fault {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	stale := mustFault(transferfault.NewCatalog(transferfault.ScopeDirectoryLocal, transferfault.CatalogDirectoryStale))
+	unavailable := mustFault(transferfault.NewCatalog(transferfault.ScopeDirectoryLocal, transferfault.CatalogUnavailable))
+	session := mustFault(transferfault.NewSession(transferfault.ScopeSessionTerminal, transferfault.SessionTransport))
+	output := mustFault(transferfault.NewOutput(transferfault.ScopeFileLocal, transferfault.OutputStateIO))
+	// listed adds a second unfinished file so the count still matches and only
+	// the fault itself can decide.
+	listed := func(r *transfer.JobResult, failure transfer.FileJobFailure) {
+		r.Files = append(r.Files, failure)
+		r.Progress.DiscoveredFiles++
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*transfer.JobResult)
+		want   bool
+	}{
+		{"only changed file", func(*transfer.JobResult) {}, true},
+		{"changed file beside stale directory", func(r *transfer.JobResult) {
+			r.Directories = []transfer.DirectoryJobFailure{{Path: "d/sub", Fault: stale}}
+		}, true},
+		{"interruption after everything else published", func(r *transfer.JobResult) {
+			r.TerminationCause, r.TerminationInterruption = context.Canceled, transfer.TransferInterruptionCanceled
+		}, true},
+		{"no drift fault", func(r *transfer.JobResult) { r.SourceDriftFault = transferfault.Fault{} }, false},
+		{"incomplete discovery", func(r *transfer.JobResult) { r.Progress.Discovery = transfer.DiscoveryOpen }, false},
+		{"inexact counters", func(r *transfer.JobResult) { r.Progress.CountersExact = false }, false},
+		{"omitted file failure", func(r *transfer.JobResult) { r.OmittedFileFailures = 1 }, false},
+		{"omitted directory failure", func(r *transfer.JobResult) { r.OmittedDirectoryFailures = 1 }, false},
+		{"tree settlement failure", func(r *transfer.JobResult) { r.SettlementFailure = errors.New("finalize") }, false},
+		{"tree settlement fault", func(r *transfer.JobResult) { r.SettlementFault = output }, false},
+		{"unavailable directory", func(r *transfer.JobResult) {
+			r.Directories = []transfer.DirectoryJobFailure{{Path: "d/sub", Fault: unavailable}}
+		}, false},
+		{"file lost with the connection", func(r *transfer.JobResult) {
+			listed(r, transfer.FileJobFailure{Path: "d/c.bin", Fault: session})
+		}, false},
+		{"file output failure", func(r *transfer.JobResult) {
+			listed(r, transfer.FileJobFailure{Path: "d/c.bin", Fault: output})
+		}, false},
+		{"changed file with output settlement failure", func(r *transfer.JobResult) {
+			r.Files[0].SettlementFault = output
+		}, false},
+		{"unchanged file unfinished", func(r *transfer.JobResult) { r.Progress.DiscoveredFiles++ }, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input, _ := pureSourceDrift(t)
+			test.mutate(&input.Result)
+			if got := onlySourceChanged(input.Result); got != test.want {
+				t.Fatalf("onlySourceChanged = %t, want %t", got, test.want)
+			}
+		})
+	}
+}

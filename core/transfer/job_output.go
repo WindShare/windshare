@@ -440,12 +440,7 @@ func (policy lifecyclePolicy) sourceFileLocal() bool {
 }
 
 func (policy lifecyclePolicy) sourceDrift() bool {
-	if policy.value.Domain() == fault.DomainCatalog {
-		code, ok := policy.value.CatalogCode()
-		return ok && code == fault.CatalogDirectoryStale
-	}
-	code, ok := policy.value.SourceCode()
-	return ok && (code == fault.SourceRevisionChanged || code == fault.SourceRevisionInvalidated)
+	return policy.value.SourceChanged()
 }
 
 func (policy lifecyclePolicy) invalidatedRevision() bool {

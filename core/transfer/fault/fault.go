@@ -147,6 +147,17 @@ func (fault Fault) CheckpointCode() (CheckpointCode, bool) {
 	return code, fault.domain == DomainCheckpoint && fault.scope.valid() && code.valid()
 }
 
+// SourceChanged reports faults raised when shared content or a directory listing
+// no longer matches what the link committed. A share never re-admits such a
+// source, so only a new link can deliver it.
+func (fault Fault) SourceChanged() bool {
+	if code, ok := fault.CatalogCode(); ok {
+		return code == CatalogDirectoryStale
+	}
+	code, ok := fault.SourceCode()
+	return ok && (code == SourceRevisionChanged || code == SourceRevisionInvalidated)
+}
+
 func (fault Fault) Valid() bool {
 	if !fault.domain.valid() || !fault.scope.valid() {
 		return false
