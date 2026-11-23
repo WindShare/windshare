@@ -271,21 +271,33 @@ test('discover_node enforces SSRF, DNS, redirect, size, and role/identity guards
   assert.equal(changedRoles.kind, 'conflict');
   assert.equal(changedRoles.reason, 'node_settings_changed');
 
-  for (const configuration of [null, { ...authority, issuer: 'wrong' }, { ...authority, url: 'https://other.example' }]) {
+  for (const configuration of [
+    null,
+    { ...authority, issuer: 'wrong' },
+    { ...authority, url: 'https://other.example' },
+    { ...authority, url: 'https://origin.example/v1' },
+  ]) {
     customOutbound = (_req, url) => url.hostname === 'relay.example'
       ? Response.json(signedDescriptor('relay.example', descriptorIdentity.privateKey, descriptorIdentity.rawPublic, configuration))
       : undefined;
     const result = await adminPost('/v1/admin/nodes/discover', { url: enrollment.url }, 422);
     assert.equal(result.reason, 'authority_mismatch');
   }
-  customOutbound = (_req, url) => url.hostname === 'relay.example'
-    ? Response.json(signedDescriptor('relay.example', descriptorIdentity.privateKey, descriptorIdentity.rawPublic,
-      { ...authority, url: 'https://origin.example/' })) : undefined;
-  await adminPost('/v1/admin/nodes/discover', { url: enrollment.url });
+  for (const equivalentURL of ['https://origin.example/', 'https://ORIGIN.example:443/', 'https://API.example:443']) {
+    customOutbound = (_req, url) => url.hostname === 'relay.example'
+      ? Response.json(signedDescriptor('relay.example', descriptorIdentity.privateKey, descriptorIdentity.rawPublic,
+        { ...authority, url: equivalentURL })) : undefined;
+    await adminPost('/v1/admin/nodes/discover', { url: enrollment.url });
+  }
 });
 
 test('enrolling and managing a canary publishes signed revisions and coalesces KV updates', async t => {
-  const { worker, mf, enrollment } = await fixture(t, {}, { testControl: true, manualAlarm: true });
+  // Blank optional AUTHORITY_ORIGIN binding must be ignored rather than failing URL parsing with 500.
+  const { worker, mf, enrollment } = await fixture(
+    t,
+    { AUTHORITY_ORIGIN: '   ' },
+    { testControl: true, manualAlarm: true },
+  );
   const admin = await initAdmin(worker);
 
   async function call(path, body, { method = 'POST', status = 200, adminAuth = false, secret, headers = {} } = {}) {

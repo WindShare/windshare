@@ -514,3 +514,51 @@ async fn report_cycle_still_refreshes_status_when_usage_retry_fails() {
     let node = reporter.signing_key.verifying_key().to_bytes();
     assert!(store.next_usage_batch(issuer, node).unwrap().is_some());
 }
+
+#[test]
+fn authority_validation_accepts_origin_spellings_and_rejects_non_origin_urls() {
+    let issuer = URL_SAFE_NO_PAD.encode([1; 32]);
+    for valid in [
+        "https://api.example",
+        "https://api.example/",
+        "https://API.example:443/",
+        "http://localhost",
+        "http://127.0.0.1:8787/",
+    ] {
+        let authority = Authority {
+            url: valid.into(),
+            issuer: issuer.clone(),
+        };
+        assert!(
+            authority.validate().is_ok(),
+            "expected '{valid}' to be valid"
+        );
+    }
+
+    for invalid in [
+        "http://api.example",
+        "https:api.example",
+        "https://foo.workers.dev",
+        "https://api.example/v1",
+        "https://api.example//",
+        "https://api.example/.",
+        "https://api.example:0",
+        "https://api.example?a=1",
+        "https://api.example?",
+        "https://api.example#frag",
+        "https://api.example#",
+        "https://user@api.example",
+        "https://@api.example",
+        " https://api.example ",
+        "https://api.example\n",
+    ] {
+        let authority = Authority {
+            url: invalid.into(),
+            issuer: issuer.clone(),
+        };
+        assert!(
+            authority.validate().is_err(),
+            "expected '{invalid}' to be rejected"
+        );
+    }
+}

@@ -200,3 +200,52 @@ fn missing_or_partial_authority_settings_have_a_distinct_discovery_failure() {
         );
     }
 }
+
+#[test]
+fn authority_url_matches_by_canonical_origin_and_rejects_non_origin_forms() {
+    let (key, node_key, node_id) = node_identity(11);
+    for url in [
+        "https://api.example",
+        "https://api.example/",
+        "https://API.example",
+        "HTTPS://API.example/",
+        "https://api.example:443",
+        "https://API.example:443/",
+    ] {
+        let mut payload = valid_payload(&node_key, &node_id);
+        payload["authority"] = json!({"url": url, "issuer": "issuer"});
+        let raw = sign_envelope(&key, &payload);
+        assert!(
+            inspect(ORIGIN, &raw, NOW, "issuer", &["https://api.example/"]).is_ok(),
+            "expected equivalent origin '{url}' to match"
+        );
+    }
+
+    for rejected in [
+        "http://api.example",
+        "https:api.example",
+        "https://api.example:8443",
+        "https://api.example:0",
+        "https://api.example/v1",
+        "https://api.example//",
+        "https://api.example/.",
+        "https://api.example?foo=1",
+        "https://api.example?",
+        "https://api.example#frag",
+        "https://api.example#",
+        "https://user@api.example",
+        "https://@api.example",
+        " https://api.example ",
+        "https://api.example\n",
+    ] {
+        let mut payload = valid_payload(&node_key, &node_id);
+        payload["authority"] = json!({"url": rejected, "issuer": "issuer"});
+        assert_eq!(
+            inspect_node(ORIGIN, &sign_envelope(&key, &payload), NOW)
+                .unwrap_err()
+                .failure,
+            DiscoveryFailure::AuthorityMismatch,
+            "expected '{rejected}' to be rejected"
+        );
+    }
+}

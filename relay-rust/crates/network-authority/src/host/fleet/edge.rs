@@ -226,7 +226,11 @@ async fn discover_node(
     let release = release(env).map_err(failure)?;
     let api = env.var("API_ORIGIN")?.to_string();
     let own = req.url()?.origin().ascii_serialization();
-    let direct = env.var("AUTHORITY_ORIGIN").ok().map(|v| v.to_string());
+    let direct = env
+        .var("AUTHORITY_ORIGIN")
+        .ok()
+        .map(|v| v.to_string().trim().to_owned())
+        .filter(|v| !v.is_empty());
     let issuer = env.var("AUTHORITY_ROOT")?.to_string();
     let origins: Vec<_> = [Some(api.as_str()), direct.as_deref(), Some(own.as_str())]
         .into_iter()
