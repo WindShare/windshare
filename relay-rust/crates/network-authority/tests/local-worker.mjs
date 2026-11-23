@@ -8,6 +8,12 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const crate = fileURLToPath(new URL('../', import.meta.url));
+export const DEFAULT_TEST_BUILD = 'build/test-release';
+
+export function resolveTestBuild() {
+  return resolve(crate, process.env.AUTHORITY_TEST_BUILD || DEFAULT_TEST_BUILD);
+}
+
 const { Miniflare, Log, LogLevel, convertV4MiniflareOptions } =
   createRequire(new URL('../../relay-cloudflare/package.json', import.meta.url))('miniflare');
 
@@ -87,7 +93,7 @@ export async function fixture(
   t.after(() => rm(keys, { recursive: true, force: true }));
   execFileSync('cargo', ['run', '--quiet', '--locked', '--bin', 'network-authority-keys', '--', keys, '1'], { cwd: crate });
   const trust = JSON.parse(await readFile(join(keys, 'trust-1.json'), 'utf8'));
-  const build = resolve(crate, process.env.AUTHORITY_TEST_BUILD || 'build');
+  const build = resolveTestBuild();
   const nodeKey = generateKeyPairSync('ed25519').privateKey;
   const node = createPublicKey(nodeKey).export({ type: 'spki', format: 'der' }).subarray(-32);
   const activeNodeKey = generateKeyPairSync('ed25519').privateKey;

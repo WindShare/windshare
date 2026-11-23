@@ -5,7 +5,7 @@ use crate::fleet::{
 };
 use windshare_relay_access::usage::REPORT_INTERVAL_SECONDS;
 
-fn draining_node(key: [u8; 32]) -> Node {
+fn node_in_state(key: [u8; 32], state: NodeState) -> Node {
     let encoded_key = URL_SAFE_NO_PAD.encode(key);
     Node::new(
         Spec {
@@ -20,10 +20,14 @@ fn draining_node(key: [u8; 32]) -> Node {
             operator: "official".into(),
             capacity_mbps: 100,
         },
-        NodeState::Draining,
+        state,
         2,
     )
     .unwrap()
+}
+
+fn draining_node(key: [u8; 32]) -> Node {
+    node_in_state(key, NodeState::Draining)
 }
 
 fn sign_report(
@@ -106,6 +110,39 @@ fn skewed_node_clocks_confirm_drain_on_receipt_time_and_survive_ntp_step_back() 
     assert!(
         authority
             .node_by_key(&admin, &node_key)
+            .unwrap()
+            .report_stale
+    );
+
+    // Disabled nodes are intentionally offline and must not surface stale-heartbeat alerts.
+    let disabled_key = [20; 32];
+    save(
+        &mut authority.store,
+        &key("node", &disabled_key),
+        &node_in_state(disabled_key, NodeState::Disabled),
+    )
+    .unwrap();
+    save(
+        &mut authority.store,
+        &key("node-load", &disabled_key),
+        &NodeLoadReport {
+            created_at: slow_created,
+            reported_at: slow_receipt,
+            load: Load {
+                relay_budget: None,
+                applied_policy_version: 2,
+                resident_shares: 0,
+                active_sessions: 0,
+                wire_bytes: 0,
+                forwarded_bytes: 0,
+                admission_refusals: 0,
+            },
+        },
+    )
+    .unwrap();
+    assert!(
+        !authority
+            .node_by_key(&admin, &disabled_key)
             .unwrap()
             .report_stale
     );

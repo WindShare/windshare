@@ -238,4 +238,24 @@ func TestExportGuardsSourcePathSizeAndAuthorityURL(t *testing.T) {
 			t.Fatalf("authority %s err = %v", authority, err)
 		}
 	}
+	for _, rawURL := range []string{
+		"http://api.example",
+		"https://api.example/v1",
+		"https://api.example?query=1",
+		"https://user@api.example",
+	} {
+		rawAuthority, err := json.Marshal(map[string]string{"url": rawURL})
+		if err != nil {
+			t.Fatal(err)
+		}
+		manifest.Authority = rawAuthority
+		if err := writeJSON(path("release.json"), manifest); err != nil {
+			t.Fatal(err)
+		}
+		err = run([]string{"export", "--release", path("release.json"), "--history", path("history"),
+			"--payload", path("payload.json"), "--out", path("mirror.json")})
+		if err == nil || !strings.Contains(err.Error(), "invalid authority HTTPS origin") {
+			t.Fatalf("authority url %q err = %v, want invalid authority HTTPS origin", rawURL, err)
+		}
+	}
 }
