@@ -201,6 +201,12 @@ func (a *Authority) selectByIDLocked(
 	selection transfer.SelectionSpec,
 	opID receivecontract.OperationID,
 ) (ActiveLookup, error) {
+	dirLock, err := acquireDirLock(a.root)
+	if err != nil {
+		return ActiveLookup{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "lock destination directory", err)
+	}
+	defer dirLock.Close()
+
 	ctrlDir, err := openChildDir(a.root, ControlDirName)
 	if errors.Is(err, fs.ErrNotExist) {
 		a.stage = stageStopped
@@ -210,12 +216,6 @@ func (a *Authority) selectByIDLocked(
 		return ActiveLookup{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "open control directory", err)
 	}
 	defer ctrlDir.Close()
-
-	dirLock, _, err := acquireLockFile(ctrlDir, dirLockFileName, false, true)
-	if err != nil {
-		return ActiveLookup{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "lock control directory", err)
-	}
-	defer dirLock.Close()
 
 	opDirName := hex.EncodeToString(opID.Bytes())
 	opDir, err := openChildDir(ctrlDir, opDirName)
@@ -227,7 +227,7 @@ func (a *Authority) selectByIDLocked(
 		return ActiveLookup{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "open operation directory", err)
 	}
 
-	taskLock, _, lockErr := acquireLockFile(opDir, taskLockFileName, false, false)
+	taskLock, _, lockErr := acquireLockFile(opDir, taskLockFileName, false)
 	if errors.Is(lockErr, ErrNamespaceLockBusy) {
 		_ = opDir.Close()
 		a.stage = stageStopped
@@ -245,6 +245,12 @@ func (a *Authority) selectAutomaticLocked(
 	ctx context.Context,
 	selection transfer.SelectionSpec,
 ) (ActiveLookup, error) {
+	dirLock, err := acquireDirLock(a.root)
+	if err != nil {
+		return ActiveLookup{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "lock destination directory", err)
+	}
+	defer dirLock.Close()
+
 	ctrlDir, err := openChildDir(a.root, ControlDirName)
 	if errors.Is(err, fs.ErrNotExist) {
 		adm := &pendingAdmission{selection: selection}
@@ -256,12 +262,6 @@ func (a *Authority) selectAutomaticLocked(
 		return ActiveLookup{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "open control directory", err)
 	}
 	defer ctrlDir.Close()
-
-	dirLock, _, err := acquireLockFile(ctrlDir, dirLockFileName, false, true)
-	if err != nil {
-		return ActiveLookup{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "lock control directory", err)
-	}
-	defer dirLock.Close()
 
 	matches, err := findAutomaticMatchesLocked(ctrlDir, selection.Digest())
 	if err != nil {
@@ -323,7 +323,7 @@ func (a *Authority) reopenMatchLocked(
 	if err != nil {
 		return ActiveLookup{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "open matched operation", err)
 	}
-	taskLock, _, lockErr := acquireLockFile(opDir, taskLockFileName, false, false)
+	taskLock, _, lockErr := acquireLockFile(opDir, taskLockFileName, false)
 	if errors.Is(lockErr, ErrNamespaceLockBusy) {
 		_ = opDir.Close()
 		a.stage = stageStopped

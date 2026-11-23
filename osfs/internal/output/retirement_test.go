@@ -41,15 +41,16 @@ func TestDiscardOperationAcquiresDirLockBeforeProbingTaskLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer rootDir.Close()
+	dirLock, err := acquireDirLock(rootDir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctrlDir, err := openChildDir(rootDir, ControlDirName)
 	if err != nil {
+		_ = dirLock.Close()
 		t.Fatal(err)
 	}
 	defer ctrlDir.Close()
-	dirLock, _, err := acquireLockFile(ctrlDir, dirLockFileName, false, true)
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	type discardOutcome struct {
 		summary RecoverySummary
@@ -69,7 +70,7 @@ func TestDiscardOperationAcquiresDirLockBeforeProbingTaskLock(t *testing.T) {
 		_ = dirLock.Close()
 		t.Fatal(err)
 	}
-	taskLock, _, err := acquireLockFile(opDir, taskLockFileName, false, false)
+	taskLock, _, err := acquireLockFile(opDir, taskLockFileName, false)
 	if err != nil {
 		_ = opDir.Close()
 		_ = dirLock.Close()
@@ -201,7 +202,7 @@ func TestOperationDiscardKeepsTaskLockUntilDirLockHeld(t *testing.T) {
 	// Discard transitions Authority to closed before blocking on dirLock.
 	waitUntil(t, func() bool { return !op.Idle() })
 
-	probe, _, probeErr := acquireLockFile(opDir, taskLockFileName, true, false)
+	probe, _, probeErr := acquireLockFile(opDir, taskLockFileName, true)
 	if !errors.Is(probeErr, ErrNamespaceLockBusy) {
 		if probe != nil {
 			_ = probe.Close()
@@ -209,7 +210,7 @@ func TestOperationDiscardKeepsTaskLockUntilDirLockHeld(t *testing.T) {
 		_ = dirLock.Close()
 		t.Fatalf("task.lock was released before dirLock acquisition: probeErr=%v", probeErr)
 	}
-	if err := errors.Join(opDir.Close(), dirLock.Close(), ctrlDir.Close()); err != nil {
+	if err := errors.Join(opDir.Close(), ctrlDir.Close(), dirLock.Close()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -275,7 +276,7 @@ func TestFinalizeTreeSuccessKeepsTaskLockUntilDirLockHeld(t *testing.T) {
 		return op.completed
 	})
 
-	probe, _, probeErr := acquireLockFile(opDir, taskLockFileName, true, false)
+	probe, _, probeErr := acquireLockFile(opDir, taskLockFileName, true)
 	if !errors.Is(probeErr, ErrNamespaceLockBusy) {
 		if probe != nil {
 			_ = probe.Close()
@@ -283,7 +284,7 @@ func TestFinalizeTreeSuccessKeepsTaskLockUntilDirLockHeld(t *testing.T) {
 		_ = dirLock.Close()
 		t.Fatalf("task.lock was released before FinalizeTree acquired dirLock: probeErr=%v", probeErr)
 	}
-	if err := errors.Join(opDir.Close(), dirLock.Close(), ctrlDir.Close()); err != nil {
+	if err := errors.Join(opDir.Close(), ctrlDir.Close(), dirLock.Close()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -468,25 +469,181 @@ func completeReopenedSingleFile(
 	return err
 }
 
-func holdDirLockAndOpenOpDir(t *testing.T, root string, opID receivecontract.OperationID) (*FileLock, *Dir, *Dir) {
+func TestActiveOperationCreatesNoControlDirLockFile(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	auth, op, intent := openActiveSingleFileOp(t, root, 0xc5)
+
+	entries, err := os.ReadDir(filepath.Join(root, ControlDirName))
+	if err != nil {
+		_ = auth.Close()
+		t.Fatal(err)
+	}
+	wantOpDir := hex.EncodeToString(intent.OperationID().Bytes())
+	for _, entry := range entries {
+		if entry.Name() != authorityIDFile && entry.Name() != wantOpDir {
+			_ = auth.Close()
+			t.Fatalf("unexpected entry inside %s: %q", ControlDirName, entry.Name())
+		}
+	}
+	if err := op.Discard(ctx); err != nil {
+		_ = auth.Close()
+		t.Fatalf("Operation.Discard = %v", err)
+	}
+	if err := auth.Close(); err != nil {
+		t.Fatalf("Authority.Close = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ControlDirName)); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("control dir survived discard: %v", err)
+	}
+}
+
+func TestLastTaskRetirementSerializesConcurrentAdmissions(t *testing.T) {
+	ctx := context.Background()
+	for i := range retirementRaceIterations {
+		root := t.TempDir()
+		retireSeed := byte(0xd0 + i)
+		_, retireIntent, _ := createPausedSingleFileOp(t, root, retireSeed)
+		retireOpID := retireIntent.OperationID()
+
+		newSeed := byte(0xe0 + i)
+		sel := testSelectionSpec(t, newSeed)
+		fileID := testID16[catalog.FileID](newSeed + 2)
+		art, err := receivecontract.NewSingleFileDirectoryTree(fileID, "concurrent.bin", "concurrent.bin")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		selector := receivecontract.AutomaticOperation()
+		redownload := i%2 == 1
+		if redownload {
+			selector = receivecontract.RedownloadOperation()
+		}
+		authA, lookupA := prepareCreateReadyAuthority(t, root, sel, selector)
+		authB, lookupB := prepareCreateReadyAuthority(t, root, sel, selector)
+
+		start := make(chan struct{})
+		var (
+			wg         sync.WaitGroup
+			discardRes RecoverySummary
+			discardErr error
+			opA, opB   *Operation
+			errA, errB error
+		)
+		wg.Add(3)
+		go func() {
+			defer wg.Done()
+			<-start
+			discardRes, discardErr = DiscardOperation(ctx, root, retireOpID)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			opA, errA = authA.CreateOperation(ctx, lookupA, art)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			opB, errB = authB.CreateOperation(ctx, lookupB, art)
+		}()
+
+		close(start)
+		wg.Wait()
+		if discardErr != nil || discardRes.State() != RecoveryOperationDiscarded {
+			_ = errors.Join(authA.Close(), authB.Close())
+			t.Fatalf("iter %d: discard = (%+v, %v), want discarded", i, discardRes, discardErr)
+		}
+
+		if redownload {
+			if errA != nil || errB != nil || opA == nil || opB == nil {
+				_ = errors.Join(authA.Close(), authB.Close())
+				t.Fatalf("iter %d: redownload create errors = (%v, %v)", i, errA, errB)
+			}
+			resA := mustPhysicalReservationName(t, opA)
+			resB := mustPhysicalReservationName(t, opB)
+			if resA == resB {
+				_ = errors.Join(authA.Close(), authB.Close())
+				t.Fatalf("iter %d: concurrent redownload creators reserved the same physical name %q", i, resA)
+			}
+		} else {
+			aCreated := errA == nil && opA != nil
+			bCreated := errB == nil && opB != nil
+			if aCreated == bCreated {
+				_ = errors.Join(authA.Close(), authB.Close())
+				t.Fatalf("iter %d: expected exactly one automatic creator, got (opA=%v errA=%v) (opB=%v errB=%v)", i, opA != nil, errA, opB != nil, errB)
+			}
+			loserErr := errB
+			if !aCreated {
+				loserErr = errA
+			}
+			if !errors.Is(loserErr, ErrAlreadyRunning) {
+				_ = errors.Join(authA.Close(), authB.Close())
+				t.Fatalf("iter %d: losing automatic creator error = %v, want ErrAlreadyRunning", i, loserErr)
+			}
+		}
+
+		if err := errors.Join(authA.Close(), authB.Close()); err != nil {
+			t.Fatalf("iter %d: close authorities = %v", i, err)
+		}
+	}
+}
+
+func prepareCreateReadyAuthority(
+	t *testing.T,
+	root string,
+	sel transfer.SelectionSpec,
+	selector receivecontract.OperationSelection,
+) (*Authority, ActiveLookup) {
+	t.Helper()
+	ctx := context.Background()
+	auth, err := New(Config{RootPath: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := auth.BindDestination(ctx); err != nil {
+		_ = auth.Close()
+		t.Fatal(err)
+	}
+	lookup, err := auth.SelectOperation(ctx, sel, selector)
+	if err != nil || lookup.Kind() != LookupCreateReady {
+		_ = auth.Close()
+		t.Fatalf("SelectOperation = (%v, %v), want LookupCreateReady", lookup.Kind(), err)
+	}
+	return auth, lookup
+}
+
+func mustPhysicalReservationName(t *testing.T, op *Operation) string {
+	t.Helper()
+	intent, ok := op.ReceiveIntent()
+	if !ok {
+		t.Fatal("operation missing receive intent")
+	}
+	res, ok := intent.MaterializationPlan().DestinationReservation()
+	if !ok {
+		t.Fatal("operation missing destination reservation")
+	}
+	return res.PhysicalName()
+}
+
+func holdDirLockAndOpenOpDir(t *testing.T, root string, opID receivecontract.OperationID) (*DirLock, *Dir, *Dir) {
 	t.Helper()
 	rootDir, _, err := OpenContainer(root, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rootDir.Close()
-	ctrlDir, err := openChildDir(rootDir, ControlDirName)
+	dirLock, err := acquireDirLock(rootDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	dirLock, _, err := acquireLockFile(ctrlDir, dirLockFileName, false, true)
+	ctrlDir, err := openChildDir(rootDir, ControlDirName)
 	if err != nil {
-		_ = ctrlDir.Close()
+		_ = dirLock.Close()
 		t.Fatal(err)
 	}
 	opDir, err := openChildDir(ctrlDir, hex.EncodeToString(opID.Bytes()))
 	if err != nil {
-		_ = errors.Join(dirLock.Close(), ctrlDir.Close())
+		_ = errors.Join(ctrlDir.Close(), dirLock.Close())
 		t.Fatal(err)
 	}
 	return dirLock, ctrlDir, opDir

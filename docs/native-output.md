@@ -2,7 +2,7 @@
 
 Windows, Linux, and macOS share one best-effort resume lifecycle in `osfs/internal/output`. All private scratch state lives under `<destination>/.windshare-tmp/<operation-id>/`, keeping user output trees free of sidecar identity files. Platform files supply atomic no-replace publication (`renameat2`/`renameatx_np`/`NtSetInformationFile`), exclusive OS locks (`flock`/`LockFileEx`), no-follow directory traversal, and handle-bound timestamps. Recovery does not require hard links, filesystem-specific object IDs, or extended attributes.
 
-Two-level locking coordinates concurrent receivers: a short-lived `.windshare-tmp/.lock` serializes operation lookup/creation/cleanup, while each active task holds an exclusive `<operation-id>/task.lock` that the kernel releases automatically on crash.
+Two-level locking coordinates concurrent receivers: a short-lived destination-container lock (`flock` on the destination directory on Unix; a container-identity `Local\` named mutex on Windows) serializes `.windshare-tmp` lookup, creation, and removal without leaving lock files behind, while each active task holds an exclusive `<operation-id>/task.lock` that the kernel releases automatically on crash.
 
 Each operation keeps an append-only, CRC32-checksummed `state.log` (automatically compacted as records churn) recording the frozen intent, compatible-name mappings, partial range progress, and delivery receipts. Continuation skips files already delivered by that task even if their public copies were moved, deleted, replaced, or the source changed. Reopening a source file reuses partial ranges when comparison metadata agrees and blocks only affected files on observed change or unavailable evidence.
 

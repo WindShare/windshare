@@ -28,6 +28,7 @@ func entryMatchesSpelling(*Dir, string) (bool, error)            { return false,
 func syncDir(*os.File) error                                     { return ErrUnsupportedOutput }
 func setFileModifiedTime(*os.File, time.Time) error              { return ErrUnsupportedOutput }
 func setDirModifiedTime(*Dir, time.Time) error                   { return ErrUnsupportedOutput }
-func lockFile(*os.File, bool) (func() error, error)              { return nil, ErrUnsupportedOutput }
+func acquireDirLock(*Dir) (*DirLock, error)                      { return nil, ErrUnsupportedOutput }
+func lockFile(*os.File) (func() error, error)                    { return nil, ErrUnsupportedOutput }
 func renameFileNoReplace(*Dir, string, *Dir, string, bool) error { return ErrUnsupportedOutput }
 func classifyPlatformError(error) (NativeErrorClass, bool)       { return 0, false }

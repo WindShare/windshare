@@ -59,17 +59,17 @@ func (a *Authority) CreateOperation(
 		return nil, transfer.ErrInvalidOutputBinding
 	}
 
+	dirLock, err := acquireDirLock(a.root)
+	if err != nil {
+		return nil, wrapOutputFault(ctx, transferfault.OutputOwnership, "lock destination directory", err)
+	}
+	defer dirLock.Close()
+
 	ctrlDir, err := ensureControlDir(a.root)
 	if err != nil {
 		return nil, wrapOutputFault(ctx, transferfault.OutputOwnership, "prepare control directory", err)
 	}
 	defer ctrlDir.Close()
-
-	dirLock, _, err := acquireLockFile(ctrlDir, dirLockFileName, false, true)
-	if err != nil {
-		return nil, wrapOutputFault(ctx, transferfault.OutputOwnership, "lock control directory", err)
-	}
-	defer dirLock.Close()
 
 	// SelectOperation releases dirLock before network shape resolution, so an
 	// automatic admission must re-check uniqueness under dirLock before creating
@@ -211,7 +211,7 @@ func (a *Authority) initializeOperationDirLocked(
 		_ = removeOperationDirectory(ctrlDir, opDirName)
 		return nil, wrapOutputFault(ctx, transferfault.OutputOwnership, "open operation directory", err)
 	}
-	taskLock, _, err := acquireLockFile(opDir, taskLockFileName, false, false)
+	taskLock, _, err := acquireLockFile(opDir, taskLockFileName, false)
 	if err != nil {
 		_ = opDir.Close()
 		_ = removeOperationDirectory(ctrlDir, opDirName)
@@ -511,30 +511,32 @@ func (op *Operation) closeResources() error {
 // directory lock while holding task.lock is deadlock-free because every
 // task.lock acquisition in this package is non-blocking.
 func retireControlDir(root *Dir, opDirName string, beforeRemove func() error) error {
-	ctrlDir, err := openChildDir(root, ControlDirName)
-	if errors.Is(err, fs.ErrNotExist) {
-		if beforeRemove != nil {
-			return beforeRemove()
-		}
-		return nil
-	}
-	if err != nil {
-		if beforeRemove != nil {
-			return errors.Join(err, beforeRemove())
-		}
-		return err
-	}
-	dirLock, _, lockErr := acquireLockFile(ctrlDir, dirLockFileName, false, true)
+	dirLock, lockErr := acquireDirLock(root)
 	if lockErr != nil {
 		var releaseErr error
 		if beforeRemove != nil {
 			releaseErr = beforeRemove()
 		}
-		return errors.Join(lockErr, releaseErr, ctrlDir.Close())
+		return errors.Join(lockErr, releaseErr)
+	}
+	ctrlDir, err := openChildDir(root, ControlDirName)
+	if errors.Is(err, fs.ErrNotExist) {
+		var releaseErr error
+		if beforeRemove != nil {
+			releaseErr = beforeRemove()
+		}
+		return errors.Join(releaseErr, dirLock.Close())
+	}
+	if err != nil {
+		var releaseErr error
+		if beforeRemove != nil {
+			releaseErr = beforeRemove()
+		}
+		return errors.Join(err, releaseErr, dirLock.Close())
 	}
 	if beforeRemove != nil {
 		if releaseErr := beforeRemove(); releaseErr != nil {
-			return errors.Join(releaseErr, dirLock.Close(), ctrlDir.Close())
+			return errors.Join(releaseErr, ctrlDir.Close(), dirLock.Close())
 		}
 	}
 	removeErr, closeErr := removeOperationLocked(root, ctrlDir, dirLock, opDirName)
@@ -542,28 +544,28 @@ func retireControlDir(root *Dir, opDirName string, beforeRemove func() error) er
 }
 
 // removeOperationLocked deletes opDirName while holding ctrlDir and dirLock,
-// removes .windshare-tmp when no other operations remain, and always closes
-// dirLock and ctrlDir.
-func removeOperationLocked(root, ctrlDir *Dir, dirLock *FileLock, opDirName string) (removeErr, closeErr error) {
+// removes .windshare-tmp while still holding dirLock when no other operations
+// remain, and always closes ctrlDir before releasing dirLock.
+func removeOperationLocked(root, ctrlDir *Dir, dirLock *DirLock, opDirName string) (removeErr, closeErr error) {
 	removeErr = removeOperationDirectory(ctrlDir, opDirName)
 	names, listErr := readDirNames(ctrlDir)
 	empty := listErr == nil
 	for _, name := range names {
-		if name != dirLockFileName && name != authorityIDFile {
+		if name != authorityIDFile {
 			empty = false
 			break
 		}
 	}
 	if empty && removeErr == nil {
-		// Release the directory lock before unlinking .lock and .windshare-tmp.
-		closeErr = dirLock.Close()
-		_ = removeChild(ctrlDir, dirLockFileName, false)
+		// Close ctrlDir before unlinking .windshare-tmp (required on Windows)
+		// while keeping dirLock held across removal so concurrent receivers
+		// never observe a half-removed control directory.
 		_ = removeChild(ctrlDir, authorityIDFile, false)
-		closeErr = errors.Join(closeErr, ctrlDir.Close())
+		ctrlCloseErr := ctrlDir.Close()
 		_ = removeChild(root, ControlDirName, true)
-		return nil, closeErr
+		return nil, errors.Join(ctrlCloseErr, dirLock.Close())
 	}
-	return removeErr, errors.Join(dirLock.Close(), ctrlDir.Close())
+	return removeErr, errors.Join(ctrlDir.Close(), dirLock.Close())
 }
 
 func ensureControlDir(root *Dir) (*Dir, error) {

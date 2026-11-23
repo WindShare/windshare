@@ -201,12 +201,41 @@ func syncDir(f *os.File) error {
 	return err
 }
 
-func lockFile(f *os.File, blocking bool) (func() error, error) {
-	how := unix.LOCK_EX
-	if !blocking {
-		how |= unix.LOCK_NB
+func acquireDirLock(root *Dir) (*DirLock, error) {
+	if root == nil || root.handle == nil {
+		return nil, fs.ErrClosed
 	}
-	err := unix.Flock(int(f.Fd()), how)
+	// Open a fresh file description pinned to root's directory inode so
+	// concurrent callers in the same process also serialize under flock(2),
+	// while never creating or unlinking a lock file inside .windshare-tmp.
+	fd, err := unix.Openat(int(root.handle.Fd()), ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	runtime.KeepAlive(root.handle)
+	if err != nil {
+		return nil, &os.PathError{Op: "openat", Path: root.path, Err: err}
+	}
+	f := os.NewFile(uintptr(fd), root.path)
+	for {
+		err = unix.Flock(int(f.Fd()), unix.LOCK_EX)
+		runtime.KeepAlive(f)
+		if errors.Is(err, unix.EINTR) {
+			continue
+		}
+		break
+	}
+	if err != nil {
+		return nil, errors.Join(err, f.Close())
+	}
+	return &DirLock{
+		release: func() error {
+			unlockErr := unix.Flock(int(f.Fd()), unix.LOCK_UN)
+			runtime.KeepAlive(f)
+			return errors.Join(unlockErr, f.Close())
+		},
+	}, nil
+}
+
+func lockFile(f *os.File) (func() error, error) {
+	err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB)
 	runtime.KeepAlive(f)
 	if err != nil {
 		if errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN) {

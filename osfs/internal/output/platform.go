@@ -18,7 +18,6 @@ const (
 	// ControlDirName holds all private WindShare receive state inside the
 	// destination container so user output trees stay clean.
 	ControlDirName   = ".windshare-tmp"
-	dirLockFileName  = ".lock"
 	taskLockFileName = "task.lock"
 	journalFileName  = "state.log"
 	authorityIDFile  = "authority.id"
@@ -254,7 +253,25 @@ func ProbeDestination(root *Dir) (caps DestinationCapabilities, resultErr error)
 	}, nil
 }
 
-// FileLock holds an exclusive OS-level file lock (flock / LockFileEx).
+// DirLock holds an exclusive destination-scoped OS coordination lock anchored
+// to the destination container itself rather than a file inside .windshare-tmp,
+// allowing .windshare-tmp to be created and removed while locked. Callers must
+// release a DirLock on the same goroutine that acquired it.
+type DirLock struct {
+	release func() error
+}
+
+func (l *DirLock) Close() error {
+	if l == nil || l.release == nil {
+		return nil
+	}
+	release := l.release
+	l.release = nil
+	return release()
+}
+
+// FileLock holds a non-blocking exclusive OS-level task file lock
+// (flock / LockFileEx).
 type FileLock struct {
 	file    *os.File
 	release func() error
@@ -274,7 +291,10 @@ func (l *FileLock) Close() error {
 	return err
 }
 
-func acquireLockFile(dir *Dir, name string, existingOnly, blocking bool) (*FileLock, bool, error) {
+// acquireLockFile acquires a non-blocking exclusive task lock. Keeping all
+// task lock acquisitions non-blocking guarantees deadlock-free ordering with
+// blocking DirLock acquisitions.
+func acquireLockFile(dir *Dir, name string, existingOnly bool) (*FileLock, bool, error) {
 	created := false
 	f, err := openChildFile(dir, name, os.O_RDWR, privateFileMode)
 	if errors.Is(err, fs.ErrNotExist) && !existingOnly {
@@ -287,7 +307,7 @@ func acquireLockFile(dir *Dir, name string, existingOnly, blocking bool) (*FileL
 	if err != nil {
 		return nil, false, err
 	}
-	release, err := lockFile(f, blocking)
+	release, err := lockFile(f)
 	if err != nil {
 		return nil, created, errors.Join(err, f.Close())
 	}

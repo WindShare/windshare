@@ -111,6 +111,12 @@ func ListOperations(ctx context.Context, rootPath string) (RecoveryInventory, er
 	}
 	defer root.Close()
 
+	dirLock, err := acquireDirLock(root)
+	if err != nil {
+		return RecoveryInventory{}, DiagnoseFailure(FailureInventory, err)
+	}
+	defer dirLock.Close()
+
 	ctrlDir, err := openChildDir(root, ControlDirName)
 	if errors.Is(err, fs.ErrNotExist) {
 		return RecoveryInventory{status: RecoveryListReady}, nil
@@ -132,7 +138,7 @@ func ListOperations(ctx context.Context, rootPath string) (RecoveryInventory, er
 	var summaries []RecoverySummary
 	unknownEntries := false
 	for _, name := range names {
-		if name == dirLockFileName || name == authorityIDFile {
+		if name == authorityIDFile {
 			continue
 		}
 		opID, ok := isValidOpDirName(name)
@@ -174,7 +180,7 @@ func ListOperations(ctx context.Context, rootPath string) (RecoveryInventory, er
 
 func inspectOperationDir(opID receivecontract.OperationID, opDir *Dir) (RecoverySummary, bool) {
 	busy := false
-	if lock, _, lockErr := acquireLockFile(opDir, taskLockFileName, true, false); errors.Is(lockErr, ErrNamespaceLockBusy) {
+	if lock, _, lockErr := acquireLockFile(opDir, taskLockFileName, true); errors.Is(lockErr, ErrNamespaceLockBusy) {
 		busy = true
 	} else if lock != nil {
 		_ = lock.Close()
@@ -293,40 +299,41 @@ func DiscardOperation(
 	}
 	defer root.Close()
 
+	// Hold the directory lock across control-dir lookup, task-lock
+	// verification, handle release, and directory removal so no concurrent
+	// get or resume retry can reopen opID or observe a half-removed
+	// .windshare-tmp directory.
+	dirLock, lockErr := acquireDirLock(root)
+	if lockErr != nil {
+		return RecoverySummary{}, DiagnoseFailure(FailureOpen, lockErr)
+	}
 	ctrlDir, err := openChildDir(root, ControlDirName)
 	if err != nil {
+		_ = dirLock.Close()
 		return RecoverySummary{}, DiagnoseFailure(FailureLookup, err)
-	}
-	// Hold the directory lock across task-lock verification, handle release, and
-	// directory removal so no concurrent get or resume retry can reopen opID
-	// after task.lock closes (required before deletion on Windows).
-	dirLock, _, lockErr := acquireLockFile(ctrlDir, dirLockFileName, false, true)
-	if lockErr != nil {
-		_ = ctrlDir.Close()
-		return RecoverySummary{}, DiagnoseFailure(FailureOpen, lockErr)
 	}
 
 	opDirName := hex.EncodeToString(opID.Bytes())
 	opDir, err := openChildDir(ctrlDir, opDirName)
 	if err != nil {
-		_ = errors.Join(dirLock.Close(), ctrlDir.Close())
+		_ = errors.Join(ctrlDir.Close(), dirLock.Close())
 		return RecoverySummary{}, DiagnoseFailure(FailureLookup, err)
 	}
 
-	taskLock, _, lockErr := acquireLockFile(opDir, taskLockFileName, false, false)
+	taskLock, _, lockErr := acquireLockFile(opDir, taskLockFileName, false)
 	if errors.Is(lockErr, ErrNamespaceLockBusy) {
-		_ = errors.Join(opDir.Close(), dirLock.Close(), ctrlDir.Close())
+		_ = errors.Join(opDir.Close(), ctrlDir.Close(), dirLock.Close())
 		return RecoverySummary{}, DiagnoseFailure(FailureOpen, ErrBusy)
 	}
 	if lockErr != nil {
-		_ = errors.Join(opDir.Close(), dirLock.Close(), ctrlDir.Close())
+		_ = errors.Join(opDir.Close(), ctrlDir.Close(), dirLock.Close())
 		return RecoverySummary{}, DiagnoseFailure(FailureOpen, lockErr)
 	}
 
 	state, _, readErr := readJournalState(opDir)
 	releaseErr := errors.Join(taskLock.Close(), opDir.Close())
 	if releaseErr != nil {
-		releaseErr = errors.Join(releaseErr, dirLock.Close(), ctrlDir.Close())
+		releaseErr = errors.Join(releaseErr, ctrlDir.Close(), dirLock.Close())
 		return RecoverySummary{}, DiagnoseFailure(FailureClose, releaseErr)
 	}
 

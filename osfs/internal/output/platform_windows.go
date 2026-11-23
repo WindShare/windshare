@@ -3,7 +3,10 @@
 package output
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -18,10 +21,12 @@ import (
 )
 
 const (
-	windowsExtendedPrefix      = `\\?\`
-	windowsExtendedUNCPrefix   = `\\?\UNC\`
-	windowsShortFinalPathLimit = 240
-	initialResolvedPathUnits   = 512
+	windowsExtendedPrefix       = `\\?\`
+	windowsExtendedUNCPrefix    = `\\?\UNC\`
+	windowsShortFinalPathLimit  = 240
+	initialResolvedPathUnits    = 512
+	windowsDirLockPrefix        = `Local\windshare-output-dir-`
+	windowsDirLockPathHashBytes = 16
 
 	windowsShareAll      = windows.FILE_SHARE_READ | windows.FILE_SHARE_WRITE | windows.FILE_SHARE_DELETE
 	windowsDirReadAccess = windows.FILE_LIST_DIRECTORY | windows.FILE_READ_ATTRIBUTES | windows.SYNCHRONIZE
@@ -544,13 +549,84 @@ func setDirModifiedTime(d *Dir, t time.Time) error {
 	return windows.SetFileTime(h, nil, nil, &stamp)
 }
 
-func lockFile(f *os.File, blocking bool) (func() error, error) {
+func windowsDirLockName(root *Dir) (string, error) {
+	var info windows.ByHandleFileInformation
+	err := windows.GetFileInformationByHandle(windows.Handle(root.handle.Fd()), &info)
+	runtime.KeepAlive(root.handle)
+	if err != nil {
+		return "", err
+	}
+	if info.VolumeSerialNumber != 0 || info.FileIndexHigh != 0 || info.FileIndexLow != 0 {
+		return fmt.Sprintf(
+			"%s%08x-%08x%08x",
+			windowsDirLockPrefix,
+			info.VolumeSerialNumber,
+			info.FileIndexHigh,
+			info.FileIndexLow,
+		), nil
+	}
+	// Fallback for virtual filesystems that report zero volume and file indices.
+	finalPath, err := finalPathByHandle(windows.Handle(root.handle.Fd()))
+	runtime.KeepAlive(root.handle)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256([]byte(strings.ToUpper(finalPath)))
+	return windowsDirLockPrefix + "p-" + hex.EncodeToString(sum[:windowsDirLockPathHashBytes]), nil
+}
+
+func acquireDirLock(root *Dir) (*DirLock, error) {
+	if root == nil || root.handle == nil {
+		return nil, fs.ErrClosed
+	}
+	name, err := windowsDirLockName(root)
+	if err != nil {
+		return nil, err
+	}
+	encoded, err := windows.UTF16PtrFromString(name)
+	if err != nil {
+		return nil, err
+	}
+	// Windows cannot LockFileEx a directory handle; a kernel named mutex keyed
+	// by container identity keeps .windshare-tmp free of lock files and is
+	// automatically destroyed when the last handle closes. Pin the goroutine to
+	// its OS thread because Windows mutexes have OS-thread ownership semantics.
+	runtime.LockOSThread()
+	handle, err := windows.CreateMutex(nil, false, encoded)
+	if handle == 0 || (err != nil && !errors.Is(err, windows.ERROR_ALREADY_EXISTS)) {
+		if handle != 0 {
+			_ = windows.CloseHandle(handle)
+		}
+		runtime.UnlockOSThread()
+		return nil, err
+	}
+	waitStatus, err := windows.WaitForSingleObject(handle, windows.INFINITE)
+	if err != nil {
+		_ = windows.CloseHandle(handle)
+		runtime.UnlockOSThread()
+		return nil, err
+	}
+	// WAIT_ABANDONED means the previous owner crashed without releasing the
+	// mutex; Windows still transfers ownership to this caller.
+	if waitStatus != windows.WAIT_OBJECT_0 && waitStatus != windows.WAIT_ABANDONED {
+		_ = windows.CloseHandle(handle)
+		runtime.UnlockOSThread()
+		return nil, fmt.Errorf("wait for directory lock: unexpected status 0x%x", waitStatus)
+	}
+	return &DirLock{
+		release: func() error {
+			releaseErr := windows.ReleaseMutex(handle)
+			closeErr := windows.CloseHandle(handle)
+			runtime.UnlockOSThread()
+			return errors.Join(releaseErr, closeErr)
+		},
+	}, nil
+}
+
+func lockFile(f *os.File) (func() error, error) {
 	overlap := new(windows.Overlapped)
 	h := windows.Handle(f.Fd())
-	flags := uint32(windows.LOCKFILE_EXCLUSIVE_LOCK)
-	if !blocking {
-		flags |= windows.LOCKFILE_FAIL_IMMEDIATELY
-	}
+	flags := uint32(windows.LOCKFILE_EXCLUSIVE_LOCK | windows.LOCKFILE_FAIL_IMMEDIATELY)
 	err := windows.LockFileEx(h, flags, 0, 1, 0, overlap)
 	if errors.Is(err, windows.ERROR_LOCK_VIOLATION) {
 		return nil, errors.Join(ErrNamespaceLockBusy, err)
