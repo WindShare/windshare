@@ -1,5 +1,5 @@
 import type { ByteRange } from '../../content/geometry'
-import type { TransferJobResult } from '../../transfer/job'
+import type { TransferJobResult, TransferJobStatus } from '../../transfer/job'
 import type {
   TransferDirectoryRequest,
   TransferFileRequest,
@@ -235,7 +235,7 @@ export async function saveRetainedOPFSTask(
   }
 }
 
-/** Exports all completed files from a paused OPFS progressive ZIP without modifying its resume state. */
+/** Exports all completed files from a retained OPFS progressive ZIP without modifying its stored state. */
 export async function exportPartialOPFSZip(
   task: ReceiveTaskRecord,
   store: ReceiveStore,
@@ -243,7 +243,7 @@ export async function exportPartialOPFSZip(
   windowPort: BrowserDownloadWindow,
 ): Promise<Blob> {
   if (task.target.kind !== 'opfs' || !task.target.isZip) {
-    throw new TypeError('Partial ZIP export requires a paused OPFS ZIP task')
+    throw new TypeError('Partial ZIP export requires a retained OPFS ZIP task')
   }
   const lock = await acquireTaskLock(task.taskId, env.locks)
   try {
@@ -335,9 +335,13 @@ class OPFSSessionHandle implements OutputSessionHandle {
     if (result.status === 'completed') {
       return this.#settleCompleted(result)
     }
+    // Single-file OPFS can only report `partial` if that file already committed before a late stop/error.
+    if (result.status === 'partial' && this.#zip === undefined && result.completedFiles > 0n) {
+      return this.#settleCompleted(result)
+    }
     await this.#io.flush().catch(() => undefined)
     await this.#closeIO()
-    return this.#settleIncomplete(result)
+    return this.#settleIncomplete(result.status, result)
   }
 
   async close(): Promise<void> {
@@ -398,42 +402,25 @@ class OPFSSessionHandle implements OutputSessionHandle {
     return updated
   }
 
-  async #settleIncomplete(result: TransferJobResult): Promise<ReceiveTaskRecord> {
+  async #settleIncomplete(
+    status: IncompleteOPFSJobStatus,
+    result: TransferJobResult,
+  ): Promise<ReceiveTaskRecord> {
     const files = await this.#store.listTaskFiles(this.taskId)
     let retainedBytes = 0n
-    for (const file of files) retainedBytes += completedTuplesBytes(file.completedRanges)
-
-    const warning = result.contentWarning ?? null
-    let nextLifecycle: ReceiveTaskRecord['lifecycle']
-    if (result.status === 'paused') {
-      nextLifecycle = transitionReceiveState(this.#record.lifecycle, {
-        kind: 'paused',
-        reason: result.pauseReason ?? 'user',
-        completedFiles: result.completedFiles,
-        completedBytes: result.completedBytes,
-        retainedBytes,
-        discoveredFiles: result.discoveredFiles,
-        discoveredBytes: result.discoveredBytes,
-        discoveryComplete: result.discoveryComplete,
-        contentWarning: warning,
-      })
-    } else if (result.status === 'source-changed') {
-      nextLifecycle = transitionReceiveState(this.#record.lifecycle, {
-        kind: 'failed',
-        reason: 'source-changed',
-      })
-    } else if (result.status === 'stopped') {
-      nextLifecycle = transitionReceiveState(this.#record.lifecycle, {
-        kind: 'failed',
-        reason: 'cancelled',
-      })
-    } else {
-      nextLifecycle = transitionReceiveState(this.#record.lifecycle, {
-        kind: 'failed',
-        reason: 'error',
-        ...(result.error instanceof Error ? { detail: result.error.message } : {}),
-      })
+    let storedCompletedFiles = 0n
+    for (const file of files) {
+      retainedBytes += completedTuplesBytes(file.completedRanges)
+      if (file.status === 'completed' && file.zipEntry?.kind !== 'directory') {
+        storedCompletedFiles += 1n
+      }
     }
+
+    const nextLifecycle = nextOPFSIncompleteLifecycle(this.#record.lifecycle, status, result, {
+      isZip: this.#zip !== undefined,
+      retainedBytes,
+      storedCompletedFiles,
+    })
 
     const target: OPFSTargetRecord = Object.freeze({
       ...(this.#record.target as OPFSTargetRecord),
@@ -451,6 +438,14 @@ class OPFSSessionHandle implements OutputSessionHandle {
     })
     this.#record = updated
     await this.#store.putTask(updated)
+    emitOutputTrace(this.#diagnostics?.trace, 'settlement', {
+      backend: 'origin_private',
+      task_id: this.taskId,
+      job_status: result.status,
+      lifecycle: nextLifecycle.kind,
+      completed_files: String(storedCompletedFiles > result.completedFiles ? storedCompletedFiles : result.completedFiles),
+      failed_files: String(result.failedFiles + result.failedDirectories),
+    })
     return updated
   }
 
@@ -540,5 +535,75 @@ class OPFSSessionHandle implements OutputSessionHandle {
     if (this.#closed) return
     this.#closed = true
     await this.#io.close().catch(() => undefined)
+  }
+}
+
+type IncompleteOPFSJobStatus = Exclude<TransferJobStatus, 'completed'>
+
+function nextOPFSIncompleteLifecycle(
+  current: ReceiveTaskRecord['lifecycle'],
+  status: IncompleteOPFSJobStatus,
+  result: TransferJobResult,
+  input: Readonly<{
+    isZip: boolean
+    retainedBytes: bigint
+    storedCompletedFiles: bigint
+  }>,
+): ReceiveTaskRecord['lifecycle'] {
+  const warning = result.contentWarning ?? null
+  const completedFiles = input.storedCompletedFiles > result.completedFiles
+    ? input.storedCompletedFiles
+    : result.completedFiles
+  if (status === 'paused') {
+    return transitionReceiveState(current, {
+      kind: 'paused',
+      reason: result.pauseReason ?? 'user',
+      completedFiles,
+      completedBytes: result.completedBytes,
+      retainedBytes: input.retainedBytes,
+      discoveredFiles: result.discoveredFiles,
+      discoveredBytes: result.discoveredBytes,
+      discoveryComplete: result.discoveryComplete,
+      contentWarning: warning,
+    })
+  }
+
+  const failedCount = result.failedFiles + result.failedDirectories
+  const savedFiles = status === 'partial' ? completedFiles : input.storedCompletedFiles
+  if (input.isZip && savedFiles > 0n) {
+    // Keep completed OPFS ZIP members exportable via zero-copy `buildPartialZipBlob`
+    // instead of sealing in place, which would turn pre-allocated failed slots into dead padding.
+    const reason = status === 'stopped' || (status === 'partial' && failedCount === 0n)
+      ? 'stopped'
+      : 'failures'
+    return transitionReceiveState(current, {
+      kind: 'partial',
+      reason,
+      savedFiles,
+      failedFiles: failedCount,
+      contentWarning: warning,
+    })
+  }
+
+  return failedOPFSLifecycle(current, status, result.error)
+}
+
+function failedOPFSLifecycle(
+  current: ReceiveTaskRecord['lifecycle'],
+  status: Exclude<IncompleteOPFSJobStatus, 'paused'>,
+  error: unknown,
+): ReceiveTaskRecord['lifecycle'] {
+  switch (status) {
+    case 'stopped':
+      return transitionReceiveState(current, { kind: 'failed', reason: 'cancelled' })
+    case 'source-changed':
+      return transitionReceiveState(current, { kind: 'failed', reason: 'source-changed' })
+    case 'partial':
+    case 'failed':
+      return transitionReceiveState(current, {
+        kind: 'failed',
+        reason: 'error',
+        ...(error instanceof Error ? { detail: error.message } : {}),
+      })
   }
 }

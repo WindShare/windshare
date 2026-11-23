@@ -13,7 +13,7 @@ export function activeTaskAction(
 ): TaskAction<ReceiveBlockReason> {
   return Object.freeze({
     id: action,
-    label: actionLabel(action, lifecycleKind, language),
+    label: actionLabel(action, lifecycleKind, backend, language),
     destructive: isDestructiveAction(action),
     disabledReason: null,
     consequence: actionConsequence(action, lifecycleKind, backend, language),
@@ -35,7 +35,7 @@ export function retainedTaskAction(
 
   return Object.freeze({
     id: action,
-    label: actionLabel(action, task.lifecycle.kind, language),
+    label: actionLabel(action, task.lifecycle.kind, task.backend, language),
     destructive: isDestructiveAction(action),
     disabledReason,
     consequence: actionConsequence(action, task.lifecycle.kind, task.backend, language),
@@ -47,13 +47,16 @@ function isDestructiveAction(action: ReceiveAction): boolean {
   return action === 'discard'
 }
 
-function hasSavedBrowserCopy(lifecycleKind: ReceiveLifecycleKind): boolean {
-  return lifecycleKind === 'ready-to-save' || lifecycleKind === 'download-started'
+function hasSavedBrowserCopy(lifecycleKind: ReceiveLifecycleKind, backend: SaveBackendKind): boolean {
+  return lifecycleKind === 'ready-to-save' ||
+    lifecycleKind === 'download-started' ||
+    (lifecycleKind === 'partial' && backend === 'opfs')
 }
 
 function actionLabel(
   action: ReceiveAction,
   lifecycleKind: ReceiveLifecycleKind,
+  backend: SaveBackendKind,
   language: Language,
 ): string {
   const t = receiverCopy[language].actions
@@ -63,7 +66,7 @@ function actionLabel(
     case 'continue': return t.resume
     case 'save': return lifecycleKind === 'download-started' ? t.saveAgain : t.save
     case 'save-partial': return t.savePartial
-    case 'discard': return hasSavedBrowserCopy(lifecycleKind) ? t.deleteSavedCopy : t.discardOutput
+    case 'discard': return hasSavedBrowserCopy(lifecycleKind, backend) ? t.deleteSavedCopy : t.discardOutput
     case 'forget': return t.forget
   }
 }
@@ -81,8 +84,9 @@ function actionConsequence(
       if (backend === 'fsa') return t.stopFolder
       return backend === 'opfs' ? t.stopWorkspace : t.stopPortable
     case 'save': return lifecycleKind === 'download-started' ? t.saveAgainHint : null
-    case 'save-partial': return t.savePartialHint
-    case 'discard': return hasSavedBrowserCopy(lifecycleKind) ? t.deleteSavedCopyHint : t.discardOutputHint
+    // Only paused tasks remain resumable after a partial export.
+    case 'save-partial': return lifecycleKind === 'paused' ? t.savePartialHint : null
+    case 'discard': return hasSavedBrowserCopy(lifecycleKind, backend) ? t.deleteSavedCopyHint : t.discardOutputHint
     case 'forget': return t.forgetHint
     default: return null
   }

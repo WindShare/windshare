@@ -1,7 +1,7 @@
 import type { Language } from '../preferences/model'
 import type { ReceiveAction, ReceiveAdmission, RetainedTaskSnapshot } from '../../application/receive/contracts'
 import { retainedTaskReadiness } from '../../application/receive/admission'
-import type { ReceiveOperationDisplay } from '../../output/model'
+import type { ReceiveOperationDisplay, SaveBackendKind } from '../../output/model'
 import type { ReceiveLifecycleState } from '../../transfer/state'
 import type { ReceiverProgress } from '../model'
 import type { OutputPresentationSnapshot } from '../output'
@@ -34,7 +34,7 @@ export function activeTaskFacts(input: Readonly<{
     blocking: activeBlocking(input.blocking, progress),
     readiness: 'matching-share',
     completeness: completenessFromFacts(state, progress),
-    publication: publicationFromLifecycle(state),
+    publication: publicationFromLifecycle(state, backend),
     progress,
     safeRenamed: output.safeRenamed,
     details: Object.freeze([]),
@@ -65,7 +65,7 @@ export function retainedTaskFacts(
     blocking: execution.blocking ?? null,
     readiness,
     completeness: completenessFromFacts(task.lifecycle, null),
-    publication: publicationFromLifecycle(task.lifecycle),
+    publication: publicationFromLifecycle(task.lifecycle, task.backend),
     progress: null,
     safeRenamed: task.safeRenamed ?? null,
     details: Object.freeze([]),
@@ -100,7 +100,7 @@ function completenessFromFacts(state: ReceiveLifecycleState, progress: ReceiverP
   return 'unknown'
 }
 
-function publicationFromLifecycle(state: ReceiveLifecycleState): TaskPublication {
-  if (state.kind === 'saved' || state.kind === 'partial') return 'saved'
+function publicationFromLifecycle(state: ReceiveLifecycleState, backend: SaveBackendKind): TaskPublication {
+  if (state.kind === 'saved' || (state.kind === 'partial' && backend === 'fsa')) return 'saved'
   return state.kind === 'download-started' ? 'browser-handoff' : 'unpublished'
 }

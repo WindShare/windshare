@@ -11,6 +11,17 @@ export function blockedAdmission(reason: NonNullable<ReceiveAdmission['reason']>
   return Object.freeze({ allowed: false, reason })
 }
 
+export function canSavePartialState(
+  state: ReceiveLifecycleState | null,
+  backend: SaveBackendKind | null,
+  isZipArchive: boolean,
+): boolean {
+  if (state === null || backend !== 'opfs' || !isZipArchive) return false
+  if (state.kind === 'paused') return state.completedFiles > 0n
+  if (state.kind === 'partial') return state.savedFiles > 0n
+  return false
+}
+
 export function actionsForState(
   state: ReceiveLifecycleState,
   backend: SaveBackendKind,
@@ -36,7 +47,16 @@ export function actionsForState(
         ? Object.freeze(['save', 'discard'])
         : Object.freeze(['forget'])
     case 'saved':
+      return Object.freeze(['forget'])
     case 'partial':
+      // OPFS partial members stay inside browser storage until exported or explicitly discarded,
+      // unlike FSA partial results whose completed files already live in the user's folder.
+      if (backend === 'opfs') {
+        return Object.freeze([
+          ...(canSavePartial ? ['save-partial' as const] : []),
+          'discard',
+        ])
+      }
       return Object.freeze(['forget'])
     case 'failed':
       return state.reason === 'source-changed' || backend !== 'portable'

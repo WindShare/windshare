@@ -40,20 +40,27 @@ export function resolveTaskStage(facts: TaskFacts, language: Language = 'en'): S
         state.kind,
       )
     case 'saved':
-    case 'partial': {
-      const description = facts.display?.destinationLabel === undefined
-        ? t.savedHint
-        : t.savedTo(destinationLabel(facts.display.destinationLabel, language))
-      return stage(
-        'saved',
-        state.kind === 'partial' || facts.completeness === 'partial' ? t.partiallySaved : t.saved,
-        description,
-        state.kind,
-      )
-    }
+    case 'partial':
+      return savedOrPartialStage(facts, state, language)
     case 'failed':
       return failedStage(state.reason, language)
   }
+}
+
+function savedOrPartialStage(
+  facts: TaskFacts,
+  state: Extract<TaskFacts['lifecycle'], { kind: 'saved' | 'partial' }>,
+  language: Language,
+): StageCopy {
+  const t = receiverCopy[language].stage
+  if (state.kind === 'partial' && facts.backend === 'opfs') {
+    return stage('ready-to-save', t.readyToSave, t.partialLocal, state.kind)
+  }
+  const description = facts.display?.destinationLabel === undefined
+    ? t.savedHint
+    : t.savedTo(destinationLabel(facts.display.destinationLabel, language))
+  const headline = state.kind === 'partial' || facts.completeness === 'partial' ? t.partiallySaved : t.saved
+  return stage('saved', headline, description, state.kind)
 }
 
 function downloadingStage(

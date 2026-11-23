@@ -38,6 +38,7 @@ import {
   admitRetainedAction,
   blockedAdmission,
   canReleaseCurrentTask,
+  canSavePartialState,
   canStartNewDownload,
 } from './admission'
 import {
@@ -90,6 +91,7 @@ export class ReceiveCoordinator {
   #activeTaskId: string | null = null
   #activeSelectionKey: string | null = null
   #backend: SaveBackendKind | null = null
+  #isZipArchive = false
   #lifecycle: ReceiveLifecycleState | null = null
   #display: ReceiveOperationDisplay | null = null
   #safeRenamed: SafeRenamedSummary | null = null
@@ -157,8 +159,7 @@ export class ReceiveCoordinator {
   activeActionAdmission(action: ReceiveAction): ReceiveAdmission {
     if (this.#lifecycle === null || this.#backend === null) return blockedAdmission('actionUnavailable')
     if (this.#interruption !== null) return blockedAdmission('busy')
-    const canSavePartial = this.#backend === 'opfs' && this.#lifecycle.kind === 'paused' &&
-      this.#lifecycle.completedFiles > 0n
+    const canSavePartial = canSavePartialState(this.#lifecycle, this.#backend, this.#isZipArchive)
     const available = actionsForState(this.#lifecycle, this.#backend, canSavePartial)
     if (!available.includes(action)) return blockedAdmission('actionUnavailable')
     if (action === 'continue') {
@@ -301,6 +302,7 @@ export class ReceiveCoordinator {
     this.#activeTaskId = null
     this.#activeSelectionKey = null
     this.#backend = null
+    this.#isZipArchive = false
     this.#lifecycle = null
     this.#display = null
     this.#safeRenamed = null
@@ -350,6 +352,7 @@ export class ReceiveCoordinator {
       this.#activeTaskId = null
       this.#activeSelectionKey = null
       this.#backend = null
+      this.#isZipArchive = false
       this.#lifecycle = null
       this.#display = null
       this.#safeRenamed = null
@@ -517,6 +520,7 @@ export class ReceiveCoordinator {
     this.#activeTaskId = session.taskId
     this.#activeSelectionKey = activeSelectionKey
     this.#backend = session.backend
+    this.#isZipArchive = false
     this.#lifecycle = downloading
     this.#display = display
     this.#safeRenamed = null
@@ -540,6 +544,7 @@ export class ReceiveCoordinator {
         this.#publish()
       }
       const settled = await session.settle(result)
+      this.#isZipArchive = settled.artifact.kind === 'zip-archive'
       this.#lifecycle = settled.lifecycle
       this.#display = settled.display ?? this.#display
       this.#safeRenamed = settled.safeRenamed ?? null
@@ -673,8 +678,7 @@ export class ReceiveCoordinator {
   }
 
   #buildSnapshot(): ReceiveRuntimeSnapshot {
-    const canSavePartial = this.#backend === 'opfs' && this.#lifecycle?.kind === 'paused' &&
-      this.#lifecycle.completedFiles > 0n
+    const canSavePartial = canSavePartialState(this.#lifecycle, this.#backend, this.#isZipArchive)
     const actions = this.#lifecycle === null || this.#backend === null || this.#interruption !== null
       ? Object.freeze([])
       : actionsForState(this.#lifecycle, this.#backend, canSavePartial)
@@ -707,7 +711,7 @@ export class ReceiveCoordinator {
     const candidates = this.#retained.tasks.filter(task =>
       task.shareInstance === shareInstance &&
       task.selectionKey === offers.selectionKey &&
-      isAdoptableRetainedLifecycle(task.lifecycle))
+      isAdoptableRetainedTask(task))
     if (candidates.length === 0) return
     candidates.sort((left, right) =>
       (right.display?.createdAtMilliseconds ?? 0) - (left.display?.createdAtMilliseconds ?? 0))
@@ -715,6 +719,7 @@ export class ReceiveCoordinator {
     this.#activeTaskId = match.taskId
     this.#activeSelectionKey = match.selectionKey
     this.#backend = match.backend
+    this.#isZipArchive = match.canSavePartial
     this.#lifecycle = match.lifecycle
     this.#display = match.display ?? null
     this.#safeRenamed = match.safeRenamed ?? null
@@ -729,8 +734,10 @@ export class ReceiveCoordinator {
   }
 }
 
-function isAdoptableRetainedLifecycle(lifecycle: ReceiveLifecycleState): boolean {
+function isAdoptableRetainedTask(task: Pick<RetainedTaskSnapshot, 'backend' | 'lifecycle'>): boolean {
+  const { lifecycle } = task
   return lifecycle.kind === 'paused' ||
     lifecycle.kind === 'ready-to-save' ||
-    (lifecycle.kind === 'download-started' && lifecycle.retained)
+    (lifecycle.kind === 'download-started' && lifecycle.retained) ||
+    (task.backend === 'opfs' && lifecycle.kind === 'partial')
 }

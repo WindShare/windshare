@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
-import { actionsForState, admitRetainedAction, retainedTaskReadiness } from '../../src/application/receive/admission'
+import {
+  actionsForState,
+  admitRetainedAction,
+  canSavePartialState,
+  retainedTaskReadiness,
+} from '../../src/application/receive/admission'
+import { presentTask, retainedTaskFacts } from '../../src/ui/tasks'
 import type { RetainedTaskSnapshot } from '../../src/application/receive/contracts'
 import { ReceiveCoordinator } from '../../src/application/receive/coordinator'
 import type { JoinedBrowserShare } from '../../src/application/browser-share/gateway'
@@ -31,6 +37,52 @@ describe('receive admission and coordinator', () => {
       kind: 'download-started', retained: false, fileName: 'photo.jpg',
     })
     expect(actionsForState(portableStarted, 'portable')).toEqual(['forget'])
+
+    const partialState = transitionReceiveState(base, {
+      kind: 'partial', reason: 'failures', savedFiles: 1n, failedFiles: 1n,
+    })
+    expect(canSavePartialState(partialState, 'opfs', true)).toBe(true)
+    expect(canSavePartialState(partialState, 'opfs', false)).toBe(false)
+    expect(canSavePartialState(partialState, 'fsa', true)).toBe(false)
+    expect(actionsForState(partialState, 'opfs', true)).toEqual(['save-partial', 'discard'])
+    expect(actionsForState(partialState, 'opfs', false)).toEqual(['discard'])
+    expect(actionsForState(partialState, 'fsa', false)).toEqual(['forget'])
+
+    const partialOpfsTask: RetainedTaskSnapshot = {
+      taskId: 't-partial-opfs',
+      shareInstance: 'share-a',
+      selectionKey: 'sel-a',
+      backend: 'opfs',
+      lifecycle: partialState,
+      actions: ['save-partial', 'discard'],
+      activeElsewhere: false,
+      canSavePartial: true,
+    }
+    expect(retainedTaskReadiness(partialOpfsTask, null)).toBe('local')
+    expect(admitRetainedAction(partialOpfsTask, 'save-partial', {
+      currentShareInstance: null,
+      hasActiveDownload: false,
+      hasPendingAction: false,
+      connectionUnavailable: true,
+      shareEnded: true,
+    })).toEqual({ allowed: true, reason: null })
+    const presentedOpfsPartial = presentTask(retainedTaskFacts(partialOpfsTask))
+    expect(presentedOpfsPartial.stage).toBe('ready-to-save')
+    expect(presentedOpfsPartial.publication).toBe('unpublished')
+    expect(presentedOpfsPartial.completeness).toBe('partial')
+    expect(presentedOpfsPartial.primaryAction?.id).toBe('save-partial')
+
+    const partialFsaTask: RetainedTaskSnapshot = {
+      ...partialOpfsTask,
+      taskId: 't-partial-fsa',
+      backend: 'fsa',
+      actions: ['forget'],
+      canSavePartial: false,
+    }
+    const presentedFsaPartial = presentTask(retainedTaskFacts(partialFsaTask))
+    expect(presentedFsaPartial.stage).toBe('saved')
+    expect(presentedFsaPartial.publication).toBe('saved')
+    expect(presentedFsaPartial.completeness).toBe('partial')
 
     const task: RetainedTaskSnapshot = {
       taskId: 't1',

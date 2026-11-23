@@ -13,7 +13,7 @@ import type { ReceiveStore } from '../../output/store/database'
 import { isTaskLockedElsewhere } from '../../output/store/tab-lock'
 import { completedTuplesBytes, type ReceiveTaskRecord } from '../../output/store/types'
 import { transitionReceiveState } from '../../transfer/state'
-import { actionsForState } from './admission'
+import { actionsForState, canSavePartialState } from './admission'
 import type { ReceiveAction, RetainedTaskSnapshot } from './contracts'
 
 export interface RetainedTaskEnvironment {
@@ -38,11 +38,11 @@ export async function loadRetainedTasks(
     const normalized = await normalizeAbandonedTask(record, env, activeLocalTaskId)
     const activeElsewhere = normalized.taskId !== activeLocalTaskId &&
       await isTaskLockedElsewhere(normalized.taskId, env.locks)
-    const canSavePartial = normalized.backend === 'opfs' &&
-      normalized.target.kind === 'opfs' &&
-      normalized.target.isZip &&
-      normalized.lifecycle.kind === 'paused' &&
-      normalized.lifecycle.completedFiles > 0n
+    const canSavePartial = canSavePartialState(
+      normalized.lifecycle,
+      normalized.backend,
+      normalized.target.kind === 'opfs' && normalized.target.isZip,
+    )
     const actions = actionsForState(normalized.lifecycle, normalized.backend, canSavePartial)
     snapshots.push(Object.freeze({
       taskId: normalized.taskId,
@@ -98,11 +98,12 @@ async function forgetRetainedTask(
   env: RetainedTaskEnvironment,
   record: ReceiveTaskRecord,
 ): Promise<RetainedActionOutcome> {
-  // Never silently forget an unfinished resumable task; require explicit discard/delete.
+  // Never silently forget an unfinished or unexported browser-retained task; require explicit discard/delete.
   if (
     record.lifecycle.kind === 'paused' ||
     record.lifecycle.kind === 'ready-to-save' ||
-    (record.lifecycle.kind === 'download-started' && record.lifecycle.retained)
+    (record.lifecycle.kind === 'download-started' && record.lifecycle.retained) ||
+    (record.backend === 'opfs' && record.lifecycle.kind === 'partial')
   ) {
     throw new DOMException('Remove retained download data explicitly instead of forgetting history', 'InvalidStateError')
   }
