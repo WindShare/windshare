@@ -54,9 +54,10 @@ export interface AccountDetails extends AccountSummary {
   has_more_shares: boolean
 }
 
+export interface NodeSetup { url: string; issuer: string; certificate: string }
 export interface Publication {
   generation: number; serial: number; expires: number; keys: string[]; digest: string; kv_sync_pending: boolean; expiring_certificates: { ticket: number | null; directory: number | null }
-  setup: { url: string; issuer: string; certificate: string }
+  setup?: NodeSetup
 }
 export type RegistrationMode = 'automatic' | 'proof_of_work' | 'email'
 export interface Settings {
@@ -84,7 +85,7 @@ export interface Snapshot extends PolicySnapshot {
   username: string | null
   csrf: string
   node_page: NodePage
-  directory: Publication | null
+  directory: Publication
   restrictions: Restrictions
   email_configured: boolean
   account_count: number

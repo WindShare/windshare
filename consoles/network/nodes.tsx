@@ -11,7 +11,6 @@ import type { AuthorityClient } from './api'
 import { encode } from './identity'
 import { servesRelay, type LoadReport, type NodeDetails, type NodePage, type NodeSpec, type NodeState, type PolicyChange, type Publication, type RelayNode } from './model'
 
-type Directory = Publication | null | undefined
 type BadgeTone = 'neutral' | 'good' | 'warning' | 'info'
 
 const STATE_TONES = { canary: 'info', active: 'good', draining: 'warning', disabled: 'neutral' } as const
@@ -35,12 +34,11 @@ function RelayPolicyCell({ node }: { node: RelayNode }) {
     <small>{servesRelay(node) ? `${access} · v${node.version}` : `v${node.version}`}</small></>
 }
 
-function DirectoryStatus({ directory, id, state }: { directory: Directory; id: string; state: NodeState }) {
+function DirectoryStatus({ directory, id, state }: { directory: Publication; id: string; state: NodeState }) {
   const t = useCopy(networkCopy)
-  const version = directory?.keys.includes(id) ? t.directoryVersion(directory.generation, directory.serial) : t.notListed
-  const unavailable = directory === undefined ? t.loadingDirectory : t.unverified
+  const version = directory.keys.includes(id) ? t.directoryVersion(directory.generation, directory.serial) : t.notListed
   return <><Badge tone={STATE_TONES[state]}>{t.states[state]}</Badge>
-    <small>{directory ? version : unavailable}</small></>
+    <small>{version}</small></>
 }
 
 function HeartbeatStatus({ node }: { node: NodeDetails }) {
@@ -57,25 +55,25 @@ function Latest({ report }: { report: LoadReport | null }) {
 }
 
 function NodeOverview({ nodes, complete, directory }: {
-  nodes: NodeDetails[]; complete: boolean; directory: Directory
+  nodes: NodeDetails[]; complete: boolean; directory: Publication
 }) {
   const { locale } = useLocale()
   const t = networkCopy[locale]
-  const published = new Set(directory?.keys)
-  const listed = directory ? nodes.filter(node => published.has(encode(node.key))).length : null
-  const metrics: { icon: IconName; label: string; value: number | null }[] = [
+  const published = new Set(directory.keys)
+  const listed = nodes.filter(node => published.has(encode(node.key))).length
+  const metrics: { icon: IconName; label: string; value: number }[] = [
     { icon: 'server', label: complete ? t.enrolledCount : t.loadedNodes, value: nodes.length },
     { icon: 'clock', label: complete ? t.awaitingReport : t.loadedAwaitingReport, value: nodes.filter(node => !node.report).length },
     { icon: 'book', label: complete ? t.listedCount : t.loadedListed, value: listed },
   ]
   return <dl className="panel node-overview">{metrics.map(({ icon, label, value }) => <div key={icon}>
     <dt><span className="metric-icon"><Icon name={icon} /></span>{label}</dt>
-    <dd>{value === null ? <small>{directory === undefined ? t.loadingDirectory : t.unverified}</small> : value.toLocaleString(locale)}</dd>
+    <dd>{value.toLocaleString(locale)}</dd>
   </div>)}</dl>
 }
 
 export function Nodes({ page, directory, loading, loadMore }: {
-  page: NodePage; directory: Directory; loading: boolean; loadMore: () => void
+  page: NodePage; directory: Publication; loading: boolean; loadMore: () => void
 }) {
   const t = useCopy(networkCopy)
   const shared = useCopy(sharedCopy)
@@ -83,11 +81,11 @@ export function Nodes({ page, directory, loading, loadMore }: {
   const enroll = <a className="button" href="#enroll"><Icon name="plus" size={17} />{t.enroll}</a>
   return <div className="view"><div className="page-title"><h1 id="node-heading">{t.nodes}</h1>
     {nodes.length > 0 && enroll}</div>
-    {directory && <div className="actions"><Badge>{t.directoryVersion(directory.generation, directory.serial)}</Badge>
+    <div className="actions"><Badge>{t.directoryVersion(directory.generation, directory.serial)}</Badge>
       {directory.kv_sync_pending && <Badge tone="warning">{t.kvSyncPending}</Badge>}
       {directory.expiring_certificates.directory !== null && <Badge tone="warning">{t.directoryCertExpiry} · <DateStamp millis={directory.expiring_certificates.directory * 1000} /></Badge>}
       {directory.expiring_certificates.ticket !== null && <Badge tone="warning">{t.ticketCertExpiry} · <DateStamp millis={directory.expiring_certificates.ticket * 1000} /></Badge>}
-    </div>}
+    </div>
     {nodes.length === 0 ? <div className="panel"><EmptyState icon="network" title={t.noNodes}>
       <p>{t.registerHint}</p>{enroll}</EmptyState></div>
       : <><NodeOverview nodes={nodes} complete={cursor === null} directory={directory} />
@@ -112,7 +110,7 @@ export function Nodes({ page, directory, loading, loadMore }: {
   </div>
 }
 
-type NodeDetailActions = { refresh: () => Promise<void>; directory: Directory; api: AuthorityClient; saved: (node: NodeDetails) => void }
+type NodeDetailActions = { refresh: () => Promise<void>; directory: Publication; api: AuthorityClient; saved: (node: NodeDetails) => void }
 
 export function LookupNode({ id, api, directory, saved, refresh }: NodeDetailActions & { id: string }) {
   const t = useCopy(networkCopy)
