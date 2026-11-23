@@ -322,36 +322,44 @@ test('enrolling and managing a canary publishes signed revisions and coalesces K
   const kv = await mf.getKVNamespace('DIRECTORY');
   const namespace = await mf.getDurableObjectNamespace('AUTHORITY', 'authority');
   const authority = namespace.get(namespace.idFromName('network-authority-v1'));
+  const getAlarm = async () => (await (await authority.fetch('https://authority/__test/alarm')).json()).alarm;
+  const directory = async () => (await call('/v1/admin/console', undefined, { method: 'GET', adminAuth: true })).value.directory;
+
+  // Keep enroll -> manage adjacent so the second mutation lands inside the 2 s KV write cooldown.
   const enrolled = (await call('/v1/admin/nodes', enrollment, { adminAuth: true })).value;
   assert.equal(enrolled.state, 'canary');
   assert.equal(enrolled.report_stale, false);
-  const directory = async () => (await call('/v1/admin/console', undefined, { method: 'GET', adminAuth: true })).value.directory;
   const head = await directory();
   assert.equal(head.kv_sync_pending, false);
+  const command = { node_key: enrollment.node_key, expected_state: enrolled.state,
+    expected_policy_version: enrolled.version, action: { kind: 'activate' } };
+  await call('/v1/admin/nodes/manage', command, { adminAuth: true });
+  const updated = await directory();
+  assert.equal(updated.serial, head.serial + 1);
+  assert.equal(updated.kv_sync_pending, true);
+  assert.equal(directoryDigest(JSON.parse(await kv.get(KV_DIRECTORY_KEY))), head.digest);
+  assert.ok((await getAlarm()) !== null, 'write cooldown must arm a DO alarm for the deferred KV update');
+  await authority.fetch('https://authority/__test/age-delivery', { method: 'POST', body: JSON.stringify({ ms: 120_000 }) });
+  const alarmResponse = await authority.fetch('https://authority/__test/run-alarm', { method: 'POST' });
+  assert.equal(alarmResponse.status, 200);
+  assert.equal(directoryDigest(JSON.parse(await kv.get(KV_DIRECTORY_KEY))), updated.digest);
+  assert.equal((await directory()).kv_sync_pending, false);
+  assert.equal(await getAlarm(), null, 'flushed KV update must leave no DO alarm armed');
+
   const publicURL = 'https://localhost/.well-known/windshare-network';
   const publicHead = await worker.fetch(publicURL);
   assert.equal(publicHead.status, 200);
-  assert.equal(directoryDigest(await publicHead.json()), head.digest);
-  const command = { node_key: enrollment.node_key, expected_state: enrolled.state,
-    expected_policy_version: enrolled.version, action: { kind: 'activate' } };
+  assert.equal(directoryDigest(await publicHead.json()), updated.digest);
   const badManageCsrf = await call('/v1/admin/nodes/manage', command, {
     adminAuth: true,
     headers: { 'X-CSRF-Token': 'wrong' },
     status: 403,
   });
   assert.equal(badManageCsrf.value.reason, 'csrf');
-  await call('/v1/admin/nodes/manage', command, { adminAuth: true });
   const current = (await call('/v1/admin/nodes', enrollment, { adminAuth: true })).value;
   assert.equal(current.state, 'active');
-  const updated = await directory();
-  assert.equal(updated.serial, head.serial + 1);
-  assert.equal(updated.kv_sync_pending, true);
   const stale = await call('/v1/admin/nodes/manage', command, { adminAuth: true, status: 409 });
   assert.equal(stale.value.reason, 'listing_changed');
-  await authority.fetch('https://authority/__test/age-delivery', { method: 'POST', body: JSON.stringify({ ms: 120_000 }) });
-  await authority.fetch('https://authority/__test/run-alarm', { method: 'POST' });
-  assert.equal(directoryDigest(JSON.parse(await kv.get(KV_DIRECTORY_KEY))), updated.digest);
-  assert.equal((await directory()).kv_sync_pending, false);
   const method = await worker.fetch(publicURL, { method: 'POST' });
   assert.equal(method.status, 405);
   for (const bad of ['{corrupt', ' '.repeat(MAX_DIRECTORY_BYTES + 1)]) {
