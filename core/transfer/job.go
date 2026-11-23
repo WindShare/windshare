@@ -103,6 +103,9 @@ type FileJobFailure struct {
 	Settlement        FileSettlement
 	SettlementFailure error
 	SettlementFault   fault.Fault
+	// Interruption is set only for a paused file whose Cause is the caller ending
+	// the job, so that file is not described as a file failure.
+	Interruption TransferInterruption
 }
 
 // RevisionCleanupFailure is diagnostic ownership settlement, independent of

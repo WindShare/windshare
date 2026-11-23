@@ -2,11 +2,13 @@ package cli
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
 	"github.com/windshare/windshare/core/observationstream"
+	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/engine"
 	appobs "github.com/windshare/windshare/engine/observation"
 )
@@ -52,5 +54,23 @@ func TestReceiveTaskCompletionReportsDroppedObservationsBeforeTerminal(t *testin
 	}
 	if !terminal || protocol != 5 || taskLoss != 7 || recorder.lifecycle != 12 {
 		t.Fatalf("terminal=%v protocol=%d task=%d trace-loss=%d", terminal, protocol, taskLoss, recorder.lifecycle)
+	}
+}
+
+// Pressing Ctrl-C pauses the active file; the report must not call that a
+// transfer or output failure.
+func TestReportBlockedReceiveItemsDoesNotCallAnInterruptionAFailure(t *testing.T) {
+	var stderr bytes.Buffer
+	app := &App{Stderr: &stderr}
+	app.reportBlockedReceiveItems(transfer.JobResult{Files: []transfer.FileJobFailure{
+		{Path: "share/stopped.bin", Interruption: transfer.TransferInterruptionCanceled},
+		{Path: "share/broken.bin"},
+	}})
+	got := stderr.String()
+	if want := `"share/stopped.bin": interrupted`; !strings.Contains(got, want) {
+		t.Fatalf("report %q does not contain %q", got, want)
+	}
+	if want := `"share/broken.bin": transfer or output failure`; !strings.Contains(got, want) {
+		t.Fatalf("report %q does not contain %q", got, want)
 	}
 }

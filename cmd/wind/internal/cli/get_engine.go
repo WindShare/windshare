@@ -271,8 +271,11 @@ func (a *App) promptReceiveRecovery(ctx context.Context, reader *bufio.Reader, p
 func (a *App) reportBlockedReceiveItems(result transfer.JobResult) {
 	for _, item := range result.Files {
 		reason := "transfer or output failure"
-		if item.Settlement.Kind() == transfer.FileCollision {
+		switch {
+		case item.Settlement.Kind() == transfer.FileCollision:
 			reason = "destination collision"
+		case item.Interruption.Valid():
+			reason = "interrupted"
 		}
 		if _, blocked, ok := item.Settlement.ItemBlock(); ok {
 			switch blocked {

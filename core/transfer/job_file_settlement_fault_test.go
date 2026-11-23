@@ -10,10 +10,12 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer/fault"
+	"github.com/windshare/windshare/core/transfer/internal/failurestate"
 )
 
 func TestTransferJobSessionFailureAbortsJob(t *testing.T) {
@@ -817,5 +819,101 @@ func TestTransferJobDirectoryOutputAndCatalogIdentityBranches(t *testing.T) {
 	})
 	if result := job.Run(context.Background()); result.Outcome != DirectTreeOutcomePaused || result.TerminationCause == nil {
 		t.Fatalf("foreign snapshot result=%+v", result)
+	}
+}
+
+// A file paused because the caller stopped the job is not a file failure. The
+// retained record must say so, otherwise a command can only describe it with the
+// generic failure label used for an output error such as a full disk.
+func TestTransferJobPausedFileRecordsCallerInterruption(t *testing.T) {
+	diskFull := fmt.Errorf("write staged data: %w", syscall.ENOSPC)
+	var deadlineDone chan struct{}
+	tests := []struct {
+		name         string
+		script       func(context.CancelFunc) jobTransactionScript
+		interruption TransferInterruption
+	}{
+		{
+			name: "canceled",
+			script: func(cancel context.CancelFunc) jobTransactionScript {
+				return jobTransactionScript{beforeWrite: func() error { cancel(); return context.Canceled }}
+			},
+			interruption: TransferInterruptionCanceled,
+		},
+		{
+			name: "deadline",
+			script: func(cancel context.CancelFunc) jobTransactionScript {
+				return jobTransactionScript{beforeWrite: func() error { <-deadlineDone; return context.DeadlineExceeded }}
+			},
+			interruption: TransferInterruptionDeadline,
+		},
+		{
+			name:         "disk full",
+			script:       func(context.CancelFunc) jobTransactionScript { return jobTransactionScript{writeErr: diskFull} },
+			interruption: 0,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			output := newJobOutput(transferID[catalog.ShareInstance](0x65))
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			deadlineDone = make(chan struct{})
+			if test.interruption == TransferInterruptionDeadline {
+				var stop context.CancelFunc
+				ctx, stop = context.WithDeadline(ctx, time.Now().Add(50*time.Millisecond))
+				defer stop()
+				go func() { <-ctx.Done(); close(deadlineDone) }()
+			}
+			output.transactionScript = test.script(cancel)
+			job, _ := branchJob(t, output, &jobRevisionClient{}, scriptedRangeReader{})
+
+			result := job.Run(ctx)
+			if len(result.Files) != 1 || result.Files[0].Settlement.Kind() != FilePaused ||
+				result.Files[0].Interruption != test.interruption {
+				t.Fatalf("got %d files, want one paused file with interruption %v", len(result.Files), test.interruption)
+			}
+		})
+	}
+}
+
+// Only a paused file is described as interrupted: a failed or item-blocked file
+// keeps its own cause even when the caller also ended the job.
+func TestRecordFileFailureInterruptionOnlyForPausedFile(t *testing.T) {
+	binding, checkpoint := outputLifecycleFixture(t)
+	paused, err := NewVerifiedFileSettlement(FilePaused, checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, err := NewFailedFileSettlement(binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference, err := NewMaterializationStateRef(binding.OutputSessionID(), binding.Locator().Digest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocked, err := NewImmediateItemBlockedFileSettlement(binding.Target(), reference, ItemBlockOwnershipUnknown)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cause := failurestate.FromCancellation(canceledContext(), context.Canceled)
+	tests := []struct {
+		name       string
+		settlement FileSettlement
+		want       TransferInterruption
+	}{
+		{"paused", paused, TransferInterruptionCanceled},
+		{"failed with cancellation", failed, 0},
+		{"item blocked with cancellation", blocked, 0},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			run := &jobRun{}
+			run.recordFileFailure(FileJobFailure{Path: "file.bin", Cause: cause, Settlement: test.settlement})
+			if len(run.files) != 1 || run.files[0].Interruption != test.want {
+				t.Fatalf("files=%+v, want interruption %v", run.files, test.want)
+			}
+		})
 	}
 }

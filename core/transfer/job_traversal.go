@@ -468,6 +468,12 @@ func (r *jobRun) recordFileFailure(failure FileJobFailure) {
 	if !failure.SettlementFault.Valid() {
 		failure.SettlementFault = failurestate.FaultOf(failure.SettlementFailure)
 	}
+	if !failure.Interruption.Valid() && failure.Settlement.Kind() == FilePaused {
+		// Diagnostic flattening below drops the cancellation classification. Only a
+		// paused file is described as interrupted: a failed or blocked file keeps
+		// its own cause even when the caller also stopped the job.
+		failure.Interruption = closedInterruption(failure.Cause)
+	}
 	r.failureMu.Lock()
 	r.retainSourceDriftFailure(failure.Cause)
 	failure.Cause = failurestate.Diagnostic(failure.Cause)
