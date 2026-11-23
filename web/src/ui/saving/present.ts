@@ -1,4 +1,4 @@
-import type { ReceiveBlockReason } from '../../application/receive/contracts'
+import type { ReceiveBlockReason, SaveUnavailableReason } from '../../application/receive/contracts'
 import { presentReceiveReason } from '../experience/receive-reason'
 import type { Language } from '../preferences/model'
 import { receiverCopy } from '../locales/receiver'
@@ -160,18 +160,33 @@ function uniqueChoices(choices: readonly ArtifactChoice[]): readonly ArtifactCho
   })
 }
 
+export function presentSaveUnavailable(
+  reason: SaveUnavailableReason,
+  saving: typeof receiverCopy.en.saving,
+): Readonly<{ description: string; desktopGuidance: string | null }> {
+  if (reason === 'storage-full') {
+    return { description: saving.storageFull, desktopGuidance: saving.desktopGuidance }
+  }
+  if (reason === 'portable-limit-exceeded') {
+    return { description: saving.tooLarge, desktopGuidance: saving.desktopGuidance }
+  }
+  // `no-safe-destination` is not a size or quota limit, so size-based desktop guidance would mislead.
+  return { description: saving.cannotSave, desktopGuidance: null }
+}
+
 function unavailable(input: SavingRequest, language: Language): SavingActionPresentation {
   const t = receiverCopy[language].saving
   const offers = input.offers
   const reason = offers === null ? 'confirming' : offers.kind
-  const copy = unavailableDescription(offers, language)
+  const unavailableOffer = offers?.kind === 'unavailable' ? presentSaveUnavailable(offers.reason, t) : null
+  const copy = unavailableOffer?.description ?? unavailableDescription(offers, language)
   return Object.freeze({
     primary: null,
     alternatives: Object.freeze([]),
     hasAlternatives: false,
     disabledReason: presentReceiveReason(input.blockedBy ?? null, language) ?? copy,
     retry: reason === 'retry-required',
-    desktopGuidance: offers?.kind === 'unavailable' ? t.desktopGuidance : null,
+    desktopGuidance: unavailableOffer?.desktopGuidance ?? null,
     recommendation: null,
     transition: transition(offers, null, reason, input.blockedBy),
   })
@@ -181,10 +196,7 @@ function unavailableDescription(offers: ArtifactOffers | null, language: Languag
   const t = receiverCopy[language].saving
   if (offers?.kind === 'selection-empty') return t.selectToDownload
   if (offers?.kind === 'retry-required') return t.confirmFailed
-  if (offers?.kind !== 'unavailable') return t.preparingOptions
-  if (offers.reason === 'storage-full') return t.storageFull
-  if (offers.reason === 'portable-limit-exceeded') return t.tooLarge
-  return t.cannotSave
+  return t.preparingOptions
 }
 
 function transition(

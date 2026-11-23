@@ -48,6 +48,7 @@ export const browse = {
   selectToDownload: 'Select items to download',
   select: (name: string) => `Select ${name}`,
   downloadItem: (name: string) => `Download ${name}`,
+  previewItem: (name: string) => `Preview ${name}`,
   page: (current: number, total: number) => `Page ${current} of ${total}`,
   omitted: (count: bigint) => `${count} ${count === 1n ? 'item couldn’t be shared and was' : 'items couldn’t be shared and were'} skipped. Available items can still be downloaded.`,
   previewOf: (name: string) => `Preview of ${name}`,

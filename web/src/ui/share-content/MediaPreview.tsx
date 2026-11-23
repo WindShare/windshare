@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from 'react'
+import { useEffect, useRef, type MouseEvent, type ReactNode, type RefObject } from 'react'
 import { FailureNotice } from '../controls/FailureNotice'
 import { receiverCopy } from '../locales/receiver'
 import { useCopy } from '../preferences/use-preferences'
@@ -79,12 +79,18 @@ function previewDownloadPresentation(
 function PreviewModalFooter({
   fileName,
   navigation,
+  previousButtonRef,
+  nextButtonRef,
+  onBoundaryFocus,
   download,
   downloadError,
   statusStrip,
 }: {
   readonly fileName: string
   readonly navigation?: PreviewNavigation
+  readonly previousButtonRef: RefObject<HTMLButtonElement | null>
+  readonly nextButtonRef: RefObject<HTMLButtonElement | null>
+  readonly onBoundaryFocus: (target: 'previous' | 'next') => void
   readonly download?: PreviewDownloadControl
   readonly downloadError: ReceiverFailure | null
   readonly statusStrip?: ReactNode
@@ -95,18 +101,33 @@ function PreviewModalFooter({
     return null
   }
   const button = download === undefined ? null : previewDownloadPresentation(fileName, download, t)
+  const handlePrevious = (event: MouseEvent<HTMLButtonElement>) => {
+    if (navigation === undefined) return
+    // Record keyboard boundary transitions before React disables the button and drops focus to <body>.
+    if (event.detail === 0 && document.activeElement === previousButtonRef.current && navigation.index === 1) {
+      onBoundaryFocus('next')
+    }
+    navigation.previous()
+  }
+  const handleNext = (event: MouseEvent<HTMLButtonElement>) => {
+    if (navigation === undefined) return
+    if (event.detail === 0 && document.activeElement === nextButtonRef.current && navigation.index + 2 >= navigation.total) {
+      onBoundaryFocus('previous')
+    }
+    navigation.next()
+  }
   return <div className="media-preview-modal-footer">
     {(hasNavigation || button !== null) && <div className="media-preview-modal-bar">
       {hasNavigation && navigation !== undefined ? (
         <div className="media-preview-nav">
-          <button type="button" className="quiet-action" disabled={navigation.index <= 0}
-            aria-label={t.previousItem} title={t.previousItem} onClick={navigation.previous}>
+          <button ref={previousButtonRef} type="button" className="quiet-action" disabled={navigation.index <= 0}
+            aria-label={t.previousItem} title={t.previousItem} onClick={handlePrevious}>
             <ReceiverIcon name="chevron-left" />
             <span>{t.previousItem}</span>
           </button>
           <span className="media-preview-counter">{navigation.index + 1} / {navigation.total}</span>
-          <button type="button" className="quiet-action" disabled={navigation.index + 1 >= navigation.total}
-            aria-label={t.nextItem} title={t.nextItem} onClick={navigation.next}>
+          <button ref={nextButtonRef} type="button" className="quiet-action" disabled={navigation.index + 1 >= navigation.total}
+            aria-label={t.nextItem} title={t.nextItem} onClick={handleNext}>
             <span>{t.nextItem}</span>
             <ReceiverIcon name="chevron-right" />
           </button>
@@ -145,23 +166,58 @@ export function MediaPreview({
 }) {
   const t = useCopy(receiverCopy).browse
   const hasNavigation = !inline && navigation !== undefined && navigation.total > 1 && navigation.index >= 0
+  const navigationRef = useRef(navigation)
+  const previousButtonRef = useRef<HTMLButtonElement>(null)
+  const nextButtonRef = useRef<HTMLButtonElement>(null)
+  const pendingNavFocusRef = useRef<'previous' | 'next' | null>(null)
+  const navIndex = navigation?.index ?? -1
+  const navTotal = navigation?.total ?? 0
 
   useEffect(() => {
-    if (!hasNavigation || navigation === undefined) return
+    navigationRef.current = navigation
+  }, [navigation])
+
+  useEffect(() => {
+    const pending = pendingNavFocusRef.current
+    if (pending === null) return
+    pendingNavFocusRef.current = null
+    // Shift focus after commit so the opposite button is already enabled even when total === 2.
+    if (pending === 'next' && navIndex <= 0 && nextButtonRef.current !== null && !nextButtonRef.current.disabled) {
+      nextButtonRef.current.focus()
+    } else if (
+      pending === 'previous' &&
+      navIndex + 1 >= navTotal &&
+      previousButtonRef.current !== null &&
+      !previousButtonRef.current.disabled
+    ) {
+      previousButtonRef.current.focus()
+    }
+  }, [navIndex, navTotal])
+
+  useEffect(() => {
+    if (!hasNavigation) return
     const onKeyDown = (event: KeyboardEvent) => {
+      const current = navigationRef.current
+      if (current === undefined) return
       if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
       if (isEditableOrInteractiveInput(event.target)) return
-      if (event.key === 'ArrowLeft' && navigation.index > 0) {
+      if (event.key === 'ArrowLeft' && current.index > 0) {
         event.preventDefault()
-        navigation.previous()
-      } else if (event.key === 'ArrowRight' && navigation.index + 1 < navigation.total) {
+        if (document.activeElement === previousButtonRef.current && current.index === 1) {
+          pendingNavFocusRef.current = 'next'
+        }
+        current.previous()
+      } else if (event.key === 'ArrowRight' && current.index + 1 < current.total) {
         event.preventDefault()
-        navigation.next()
+        if (document.activeElement === nextButtonRef.current && current.index + 2 >= current.total) {
+          pendingNavFocusRef.current = 'previous'
+        }
+        current.next()
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [hasNavigation, navigation])
+  }, [hasNavigation])
 
   if (preview.state === 'idle') return null
 
@@ -183,6 +239,9 @@ export function MediaPreview({
     </div>}
     {!inline && <PreviewModalFooter
       fileName={preview.name}
+      previousButtonRef={previousButtonRef}
+      nextButtonRef={nextButtonRef}
+      onBoundaryFocus={target => { pendingNavFocusRef.current = target }}
       {...(navigation === undefined ? {} : { navigation })}
       {...(download === undefined ? {} : { download })}
       downloadError={downloadError}

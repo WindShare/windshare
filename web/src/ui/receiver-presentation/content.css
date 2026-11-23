@@ -508,6 +508,10 @@
   border-color: color-mix(in srgb, var(--receiver-accent) 36%, var(--receiver-rule));
   box-shadow: var(--receiver-card-shadow);
 }
+.receiver-shell .explorer-surface[data-view="grid"] .explorer-row[data-downloading="true"] {
+  border-color: color-mix(in srgb, var(--receiver-accent) 32%, var(--receiver-rule));
+  background: color-mix(in srgb, var(--receiver-wash) 44%, var(--receiver-paper));
+}
 .receiver-shell .explorer-surface[data-view="grid"] .explorer-row:is([data-selection="selected"], [data-selection="mixed"]) {
   border-color: var(--receiver-accent);
   background: color-mix(in srgb, var(--receiver-wash) 38%, var(--receiver-paper));
@@ -582,7 +586,7 @@
   color: var(--receiver-accent);
 }
 @media (hover: hover) {
-  .receiver-shell .explorer-surface[data-view="grid"] .entry-row-action:not([data-downloading="true"]) {
+  .receiver-shell .explorer-surface[data-view="grid"] .entry-row-action:not([data-downloading="true"]):not(:disabled) {
     opacity: .72;
   }
   .receiver-shell .explorer-surface[data-view="grid"] .explorer-row:hover .entry-row-action:not(:disabled),
@@ -598,8 +602,19 @@
     height: 36px;
     min-width: 36px;
     min-height: 36px;
+  }
+  .receiver-shell .explorer-surface[data-view="grid"] .entry-row-action:not(:disabled) {
     opacity: 1;
   }
+}
+/* Reassert muted disabled styling after grid surface and pointer rules so disabled cards stay distinct. */
+.receiver-shell .explorer-surface[data-view="grid"] .entry-row-action:disabled:not([data-downloading="true"]) {
+  opacity: .38;
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--receiver-subtle);
+  backdrop-filter: none;
 }
 .receiver-shell .explorer-surface[data-view="grid"] .entry-main {
   display: flex;
@@ -1034,7 +1049,9 @@
   border-color: transparent;
   color: var(--receiver-on-accent);
 }
-:where(.receiver-shell, .detail-sheet) .media-preview-download[data-started="true"] {
+/* Qualify with `button` and `:hover` to outrank controls.css `button:hover:not(:disabled)` (0,2,1). */
+:where(.receiver-shell, .detail-sheet) button.media-preview-download[data-started="true"],
+:where(.receiver-shell, .detail-sheet) button.media-preview-download[data-started="true"]:hover:not(:disabled) {
   background: var(--receiver-success-wash);
   border-color: color-mix(in srgb, var(--receiver-success) 26%, transparent);
   color: var(--receiver-success);
@@ -1123,29 +1140,6 @@
   color: var(--receiver-muted);
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
-}
-:where(.receiver-shell, .detail-sheet) .media-preview-task-progress progress {
-  display: block;
-  width: 100%;
-  height: 4px;
-  border: 0;
-  border-radius: 999px;
-  overflow: hidden;
-  appearance: none;
-  accent-color: var(--receiver-accent);
-}
-:where(.receiver-shell, .detail-sheet) .media-preview-task-progress progress::-webkit-progress-bar {
-  background: var(--receiver-stage);
-  border-radius: 999px;
-}
-:where(.receiver-shell, .detail-sheet) .media-preview-task-progress progress::-webkit-progress-value {
-  background: var(--receiver-accent);
-  border-radius: 999px;
-  transition: width 180ms ease;
-}
-:where(.receiver-shell, .detail-sheet) .media-preview-task-progress progress::-moz-progress-bar {
-  background: var(--receiver-accent);
-  border-radius: 999px;
 }
 :where(.receiver-shell, .detail-sheet) .media-preview-task-action {
   flex: none;
@@ -1271,11 +1265,11 @@
 @container receiver-contents (max-width: 20rem) {
   .receiver-shell .explorer-columns { display: none; }
   .receiver-shell .explorer-surface:not([data-view="grid"]) .explorer-row {
-    grid-template-columns: minmax(0, 1fr) max(38px, 2.25rem);
+    grid-template-columns: minmax(0, 1fr) max(40px, 2.25rem);
     gap: .2rem;
   }
   .receiver-shell .explorer-surface[data-selection-mode="active"]:not([data-view="grid"]) .explorer-row {
-    grid-template-columns: max(40px, 1.25rem) minmax(0, 1fr) max(38px, 2.25rem);
+    grid-template-columns: max(40px, 1.25rem) minmax(0, 1fr) max(40px, 2.25rem);
     gap: 0 .25rem;
   }
   .receiver-shell .explorer-surface[data-selection-mode="active"]:not([data-view="grid"]) .entry-select-trigger {

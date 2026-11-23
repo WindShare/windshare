@@ -133,7 +133,7 @@ function SelectionExplorerRow({ row, previewable, actions, t }: {
       </button>
       {previewable ? (
         <button type="button" className="entry-row-action entry-preview-action"
-          aria-label={t.previewOf(row.name)} title={t.preview}
+          aria-label={t.previewItem(row.name)} title={t.preview}
           onClick={event => actions.preview(row.id, event.currentTarget)}>
           <ReceiverIcon name="eye" />
         </button>

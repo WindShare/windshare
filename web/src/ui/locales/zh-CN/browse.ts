@@ -48,6 +48,7 @@ export const browse: typeof English = {
   selectToDownload: '请选择要下载的项目',
   select: name => `选择 ${name}`,
   downloadItem: name => `下载 ${name}`,
+  previewItem: name => `预览 ${name}`,
   page: (current, total) => `第 ${current} 页，共 ${total} 页`,
   omitted: count => `已跳过 ${count} 个无法分享的项目，其余项目仍可下载。`,
   previewOf: name => `${name} 的预览`,
