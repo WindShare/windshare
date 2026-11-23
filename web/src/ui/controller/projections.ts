@@ -32,8 +32,12 @@ function sameFields<T>(left: T, right: T): boolean {
 }
 
 function browse(snapshot: ReceiverSnapshot) {
-  const { share, rows, breadcrumbs, pageIndex, pageCount, omittedCount, browse, draft, preview } = snapshot
-  return Object.freeze({ share, rows, breadcrumbs, pageIndex, pageCount, omittedCount, browse, draft, preview })
+  const { share, rows, breadcrumbs, pageIndex, pageCount, omittedCount, browse, draft, preview, startAdmission } = snapshot
+  const { capabilitiesState, activeSingleFileId, singleFilePickerPendingFromBytes, language } = snapshot.output
+  return Object.freeze({
+    share, rows, breadcrumbs, pageIndex, pageCount, omittedCount, browse, draft, preview,
+    startAdmission, capabilitiesState, activeSingleFileId, singleFilePickerPendingFromBytes, language,
+  })
 }
 function connection(snapshot: ReceiverSnapshot) {
   const { phase, status, error, connection, pathActivity } = snapshot
@@ -48,7 +52,15 @@ function downloads(snapshot: ReceiverSnapshot, composition: TaskComposition) {
   return Object.freeze({ retained: snapshot.retained, history: composition.history,
     activeId: composition.current?.operationId ?? null, attention: composition.current?.attention ?? false })
 }
+function shareScope(snapshot: ReceiverSnapshot, visitId: number) {
+  return Object.freeze({
+    kind: snapshot.share?.kind ?? ('pending' as const),
+    shareInstance: snapshot.share?.shareInstance ?? null,
+    visitId,
+  })
+}
 export type TaskSnapshot = ReturnType<typeof task>
+export type ShareScopeSnapshot = ReturnType<typeof shareScope>
 
 /** All regions are staged before notifying any reader, so cross-region reads share one revision. */
 export class ReceiverProjections {
@@ -57,21 +69,24 @@ export class ReceiverProjections {
   readonly task: PresentationRegion<TaskSnapshot & TaskComposition>
   readonly downloads: PresentationRegion<ReturnType<typeof downloads>>
   readonly surface: PresentationRegion<boolean>
-  readonly shareKind: PresentationRegion<NonNullable<ReceiverSnapshot['share']>['kind'] | 'pending'>
+  readonly shareScope: PresentationRegion<ShareScopeSnapshot>
   readonly #composer = new TaskComposer()
   readonly #admission: RetainedAdmission
   readonly #activeAdmission: ActiveAdmission
+  #lastShareInstance: string | null
+  #shareVisitId = 0
 
   constructor(snapshot: ReceiverSnapshot, admission: RetainedAdmission, activeAdmission: ActiveAdmission) {
     this.#admission = admission
     this.#activeAdmission = activeAdmission
+    this.#lastShareInstance = snapshot.share?.shareInstance ?? null
     this.browsing = new PresentationRegion(browse(snapshot))
     this.connection = new PresentationRegion(connection(snapshot))
     const composition = this.#composer.compose(snapshot, admission, activeAdmission)
     this.task = new PresentationRegion({ ...task(snapshot), ...composition })
     this.downloads = new PresentationRegion(downloads(snapshot, composition))
     this.surface = new PresentationRegion(this.#receiving(snapshot))
-    this.shareKind = new PresentationRegion(snapshot.share?.kind ?? 'pending')
+    this.shareScope = new PresentationRegion(shareScope(snapshot, this.#shareVisitId))
   }
   commit(snapshot: ReceiverSnapshot): void {
     this.browsing.stage(browse(snapshot))
@@ -80,16 +95,21 @@ export class ReceiverProjections {
     this.task.stage({ ...task(snapshot), ...composition })
     this.downloads.stage(downloads(snapshot, composition))
     this.surface.stage(this.#receiving(snapshot))
-    this.shareKind.stage(snapshot.share?.kind ?? 'pending')
+    const nextShareInstance = snapshot.share?.shareInstance ?? null
+    if (nextShareInstance !== this.#lastShareInstance) {
+      this.#lastShareInstance = nextShareInstance
+      this.#shareVisitId += 1
+    }
+    this.shareScope.stage(shareScope(snapshot, this.#shareVisitId))
     this.browsing.publish()
     this.connection.publish()
     this.task.publish()
     this.downloads.publish()
     this.surface.publish()
-    this.shareKind.publish()
+    this.shareScope.publish()
   }
   close(): void {
-    this.browsing.clear(); this.connection.clear(); this.task.clear(); this.surface.clear(); this.shareKind.clear(); this.downloads.clear()
+    this.browsing.clear(); this.connection.clear(); this.task.clear(); this.surface.clear(); this.shareScope.clear(); this.downloads.clear()
   }
   #receiving(snapshot: ReceiverSnapshot): boolean {
     return snapshot.share !== null || snapshot.breadcrumbs.length > 0 ||

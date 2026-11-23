@@ -240,6 +240,20 @@
   border-color: var(--receiver-rule-strong);
   color: var(--receiver-ink);
 }
+.receiver-shell .share-workspace > .task-card .task-summary > .task-actions > .task-dismiss-action {
+  width: 36px;
+  min-width: 36px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: var(--receiver-subtle);
+}
+.receiver-shell .share-workspace > .task-card .task-summary > .task-actions > .task-dismiss-action:hover:not(:disabled) {
+  background: var(--receiver-wash);
+  border-color: transparent;
+  color: var(--receiver-ink);
+}
 
 :where(.receiver-shell, .detail-sheet) .task-progress {
   display: flex;
@@ -247,7 +261,7 @@
   gap: 7px;
   margin-top: 12px;
 }
-:where(.receiver-shell, .detail-sheet) .task-progress progress {
+:where(.receiver-shell, .detail-sheet) :is(.task-progress, .media-preview-task-progress) progress {
   width: 100%;
   height: 5px;
   accent-color: var(--receiver-accent);
@@ -256,21 +270,25 @@
   overflow: hidden;
   appearance: none;
 }
-:where(.receiver-shell, .detail-sheet) .task-progress progress::-webkit-progress-bar {
+:where(.receiver-shell, .detail-sheet) .media-preview-task-progress progress {
+  display: block;
+  height: 4px;
+}
+:where(.receiver-shell, .detail-sheet) :is(.task-progress, .media-preview-task-progress) progress::-webkit-progress-bar {
   background: var(--receiver-stage);
   border-radius: 999px;
 }
-:where(.receiver-shell, .detail-sheet) .task-progress progress::-webkit-progress-value {
+:where(.receiver-shell, .detail-sheet) :is(.task-progress, .media-preview-task-progress) progress::-webkit-progress-value {
   background: var(--receiver-accent);
   border-radius: 999px;
   transition: width 180ms ease;
 }
-:where(.receiver-shell, .detail-sheet) .task-progress progress::-moz-progress-bar {
+:where(.receiver-shell, .detail-sheet) :is(.task-progress, .media-preview-task-progress) progress::-moz-progress-bar {
   background: var(--receiver-accent);
   border-radius: 999px;
 }
 /* Give indeterminate progress a calm visible pastel sweep so it never reads as an empty 0% bar. */
-:where(.receiver-shell, .detail-sheet) .task-progress progress:indeterminate::-webkit-progress-bar {
+:where(.receiver-shell, .detail-sheet) :is(.task-progress, .media-preview-task-progress) progress:indeterminate::-webkit-progress-bar {
   background-color: var(--receiver-stage);
   background-image: linear-gradient(
     90deg,
@@ -285,7 +303,7 @@
   background-position: 28% 0;
 }
 @media (prefers-reduced-motion: no-preference) {
-  :where(.receiver-shell, .detail-sheet) .task-progress progress:indeterminate::-webkit-progress-bar {
+  :where(.receiver-shell, .detail-sheet) :is(.task-progress, .media-preview-task-progress) progress:indeterminate::-webkit-progress-bar {
     animation: receiver-progress-breeze 1.9s ease-in-out infinite;
   }
   @keyframes receiver-progress-breeze {
@@ -421,5 +439,6 @@
   .receiver-shell .new-operation { padding: 12px 16px; }
 }
 @media (max-width: 360px) {
-  .receiver-shell .share-workspace > .task-card .task-summary > .task-actions > .quiet-action { width: 100%; }
+  .receiver-shell .share-workspace > .task-card .task-summary > .task-actions > .task-action { flex: 1 1 100%; }
+  .receiver-shell .share-workspace > .task-card .task-summary > .task-actions > .quiet-action:not(.task-dismiss-action) { flex: 1 1 auto; }
 }

@@ -48,12 +48,21 @@ export interface PreparedFSAPicker {
   readonly picked: Promise<FileSystemDirectoryHandle>
 }
 
+/** Restricted browser contexts (e.g. private iframes) throw SecurityError on the `indexedDB` getter itself. */
+export function safeIndexedDB(windowPort: BrowserOutputWindow): IDBFactory | undefined {
+  try {
+    return windowPort.indexedDB
+  } catch {
+    return undefined
+  }
+}
+
 export async function probeBrowserOutputCapabilities(
   windowPort: BrowserOutputWindow,
   signal?: AbortSignal,
 ): Promise<BrowserOutputCapabilities> {
   signal?.throwIfAborted()
-  const indexedDb = typeof windowPort.indexedDB?.open === 'function'
+  const indexedDb = typeof safeIndexedDB(windowPort)?.open === 'function'
   const portable = supportsBrowserDownload(windowPort)
   const fsa = indexedDb && typeof windowPort.showDirectoryPicker === 'function'
   const storage = windowPort.navigator?.storage
@@ -66,6 +75,10 @@ export async function probeBrowserOutputCapabilities(
   const availableStorageBytes = opfs ? await estimateAvailableBytes(storage) : null
   signal?.throwIfAborted()
   return Object.freeze({ indexedDb, fsa, opfs, portable, availableStorageBytes })
+}
+
+export function estimateAvailableStorageBytes(windowPort: BrowserOutputWindow): Promise<bigint | null> {
+  return estimateAvailableBytes(windowPort.navigator?.storage)
 }
 
 export function planArtifactOffers(input: Readonly<{

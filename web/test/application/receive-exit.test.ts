@@ -381,16 +381,33 @@ describe('receive session shutdown', () => {
   })
 
   it('holds admission until the output lock is released even if connectivity fails before creating a job', async () => {
-    const f = fixture(), failed = gate(), release = f.holdRelease()
-    const receive = f.coordinator({ onActionError: failed.resolve })
-    f.startConnectivity.mockImplementationOnce(() => { throw new Error('connectivity unavailable') })
+    const f = fixture(), connectivityTried = gate(), failed = gate(), release = f.holdRelease()
+    let activeDuringErrorCallback = true
+    let startBlockedDuringErrorCallback: string | null = 'initial'
+    const receive = f.coordinator({
+      onActionError: () => {
+        activeDuringErrorCallback = receive.active
+        startBlockedDuringErrorCallback = receive.startBlockedReason()
+        failed.resolve()
+      },
+    })
+    f.startConnectivity.mockImplementationOnce(() => {
+      connectivityTried.resolve()
+      throw new Error('connectivity unavailable')
+    })
     await f.start(receive)
-    await failed.promise
+    await connectivityTried.promise
+    await Promise.resolve()
+    // While lock release is still pending, admission stays blocked and error has not dispatched yet.
     expect(receive.active).toBe(true)
     expect(receive.startBlockedReason()).toBe('downloading')
     expect(receive.activeActionAdmission('discard').allowed).toBe(false)
     release.resolve()
-    await vi.waitFor(() => expect(receive.active).toBe(false), { interval: 1 })
+    await failed.promise
+    expect(activeDuringErrorCallback).toBe(false)
+    expect(startBlockedDuringErrorCallback).toBeNull()
+    expect(receive.active).toBe(false)
+    expect(receive.getSnapshot().lifecycle).toBeNull()
     await receive.dispose()
   })
 

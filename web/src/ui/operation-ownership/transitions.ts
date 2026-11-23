@@ -1,7 +1,8 @@
-import type { ReceiverSnapshot } from '../model'
+import type { ReceiverFailure, ReceiverSnapshot } from '../model'
 import type { JoinedBrowserShare } from '../../application/browser-share/gateway'
 import type { ReceiveAction, RetainedTaskSnapshot } from '../../application/receive/contracts'
-import type { ReceiveCoordinator } from '../../application/receive/coordinator'
+import type { ReceiveCoordinator, RetainedActionCallbacks } from '../../application/receive/coordinator'
+import type { TaskActionCallbacks } from '../controller/failures'
 import type { BrowserNavigationCoordinator } from '../controller/navigation'
 import type { PreviewController } from '../preview-controller'
 import type { ReceiverExperienceObservability } from '../experience/observability'
@@ -16,6 +17,7 @@ interface OperationTransitionOptions {
   readonly isDisposed: () => boolean
   readonly snapshot: () => ReceiverSnapshot
   readonly publish: (snapshot: ReceiverSnapshot) => void
+  readonly mapFailure: (error: unknown) => ReceiverFailure
   readonly onActionError: (error: unknown) => void
   readonly recordIntent: (action: string) => void
   readonly beginProjection: (joined: JoinedBrowserShare) => void
@@ -31,12 +33,12 @@ export class ReceiveOperationTransitions {
 
   constructor(options: OperationTransitionOptions) { this.#options = options }
 
-  performLifecycleAction(action: ReceiveAction): void {
+  performLifecycleAction(action: ReceiveAction, callbacks?: TaskActionCallbacks): void {
     this.#options.recordIntent('task-' + action)
     if (action === 'continue' && this.#options.coordinator.activeActionAdmission(action).allowed) {
       this.#options.previews.yieldToReceiving()
     }
-    this.#options.coordinator.performActiveAction(action)
+    this.#options.coordinator.performActiveAction(action, this.#actionCallbacks(callbacks))
   }
 
   retainCurrentOperation(): Promise<boolean> {
@@ -46,13 +48,31 @@ export class ReceiveOperationTransitions {
     return Promise.resolve(true)
   }
 
-  performRetainedAction(task: RetainedTaskSnapshot, action: ReceiveAction): void {
+  performRetainedAction(
+    task: RetainedTaskSnapshot,
+    action: ReceiveAction,
+    callbacks?: TaskActionCallbacks,
+  ): void {
     this.#options.experienceTrace.intent('retained-' + action, this.#options.snapshot(), {
       operationId: task.taskId,
       generation: task.lifecycle.generation,
     })
     if (action === 'continue') this.#options.previews.yieldToReceiving()
-    this.#options.coordinator.performRetainedAction(task, action)
+    this.#options.coordinator.performRetainedAction(task, action, this.#actionCallbacks(callbacks))
+  }
+
+  #actionCallbacks(callbacks?: TaskActionCallbacks): RetainedActionCallbacks | undefined {
+    const onAsyncFailure = callbacks?.onAsyncFailure
+    if (onAsyncFailure === undefined) return undefined
+    return {
+      onError: error => {
+        if (this.#options.isDisposed()) return
+        // Fall back to the global share banner when a modal closed before the error arrived.
+        if (onAsyncFailure(this.#options.mapFailure(error)) === false) {
+          this.#options.onActionError(error)
+        }
+      },
+    }
   }
 
   prepareReplacementDownload(task: RetainedTaskSnapshot, failure: SourceRevisionFailure): void {

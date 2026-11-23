@@ -61,16 +61,25 @@ export function matchingRetainedTask(
  */
 export async function loadRetainedTasks(
   env: RetainedTaskEnvironment,
-  activeLocalTaskId: string | null,
+  isLocalTask: (taskId: string) => boolean = () => false,
 ): Promise<readonly RetainedTaskSnapshot[]> {
   const records = await env.store.listTasks()
+  return resolveRetainedCandidates(env, records, isLocalTask)
+}
+
+/** Normalizes abandoned records and checks cross-tab locks only for the given candidate subset. */
+export async function resolveRetainedCandidates(
+  env: RetainedTaskEnvironment,
+  records: readonly ReceiveTaskRecord[],
+  isLocalTask: (taskId: string) => boolean,
+): Promise<readonly RetainedTaskSnapshot[]> {
   const snapshots: RetainedTaskSnapshot[] = []
   for (const record of records) {
     env.signal?.throwIfAborted()
     try {
-      const normalized = await normalizeAbandonedTask(record, env, activeLocalTaskId)
+      const normalized = await normalizeAbandonedTask(record, env, isLocalTask)
       if (normalized === undefined) continue
-      const activeElsewhere = normalized.taskId !== activeLocalTaskId && await isTaskLockedElsewhere(normalized.taskId, env.locks)
+      const activeElsewhere = !isLocalTask(normalized.taskId) && await isTaskLockedElsewhere(normalized.taskId, env.locks)
       snapshots.push(retainedSnapshot(normalized, activeElsewhere))
     } catch (error) {
       env.signal?.throwIfAborted()
@@ -80,7 +89,7 @@ export async function loadRetainedTasks(
   return Object.freeze(snapshots)
 }
 
-function retainedSnapshot(record: ReceiveTaskRecord, activeElsewhere: boolean): RetainedTaskSnapshot {
+export function retainedSnapshot(record: ReceiveTaskRecord, activeElsewhere: boolean): RetainedTaskSnapshot {
   const canSavePartial = canSavePartialState(record.lifecycle, record.backend, record.target.kind === 'opfs' && record.target.isZip)
   return Object.freeze({
     taskId: record.taskId, shareInstance: record.shareInstance, selectionKey: record.selectionKey,
@@ -244,12 +253,12 @@ function resolveOPFSEnv(env: RetainedTaskEnvironment): OPFSEnvironment {
 async function normalizeAbandonedTask(
   record: ReceiveTaskRecord,
   env: RetainedTaskEnvironment,
-  activeLocalTaskId: string | null,
+  isLocalTask: (taskId: string) => boolean,
 ): Promise<ReceiveTaskRecord | undefined> {
   if (record.lifecycle.kind !== 'downloading' && record.lifecycle.kind !== 'preparing') {
     return record
   }
-  if (record.taskId === activeLocalTaskId) return record
+  if (isLocalTask(record.taskId)) return record
   // Hold the same lock as the writer through the IDB update. A probe alone can race a resume in another tab.
   const lock = await acquireTaskLock(record.taskId, env.locks).catch((error: unknown) => {
     if (error instanceof TaskBusyError) return undefined

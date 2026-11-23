@@ -7,9 +7,15 @@ import type { BrowseRow, Breadcrumb, ReceiverSnapshot } from '../model'
 import { canPreviewFile } from '../../preview/capability'
 import { formatBytes } from '../progress-presentation'
 import { fileDisplayInfo } from './file-presentation'
+import {
+  singleFileDownloadState,
+  type SingleFileDownloadReadiness,
+  type SingleFileDownloadState,
+} from './single-file-admission'
 import { ReceiverIcon } from '../receiver-presentation/ReceiverIcon'
 
 type ExplorerViewMode = 'list' | 'grid'
+type BrowseCopy = typeof receiverCopy.en.browse
 
 const EXPLORER_VIEW_KEY = 'windshare.explorer.view'
 
@@ -33,6 +39,7 @@ export interface ExplorerActions {
   readonly openBreadcrumb: (index: number) => void
   readonly showPage: (page: number) => void
   readonly preview: (id: string, invoker: HTMLButtonElement) => void
+  readonly download: (id: string) => void
   readonly toggle: (id: string) => void
   readonly enterSelection: () => void
   readonly exitSelection: () => void
@@ -41,7 +48,7 @@ export interface ExplorerActions {
   readonly retry: () => void
 }
 
-function SelectionCheckbox({ row, toggle, active, t }: { readonly row: BrowseRow; readonly toggle: () => void; readonly active: boolean; readonly t: typeof receiverCopy.en.browse }) {
+function SelectionCheckbox({ row, toggle, active, t }: { readonly row: BrowseRow; readonly toggle: () => void; readonly active: boolean; readonly t: BrowseCopy }) {
   const input = useRef<HTMLInputElement>(null)
   const mixed = active && row.selection === 'mixed'
   const checked = active && row.selection === 'selected'
@@ -51,15 +58,15 @@ function SelectionCheckbox({ row, toggle, active, t }: { readonly row: BrowseRow
     onChange={toggle} /></label>
 }
 
-function entrySize(row: BrowseRow, t: typeof receiverCopy.en.browse): string {
+function entrySize(row: BrowseRow, t: BrowseCopy): string {
   return row.expectedSize === undefined ? t.sizeUnknown : formatBytes(row.expectedSize)
 }
 
-function EntryBody({ row, isDirectory, previewable, t }: {
+function EntryBody({ row, isDirectory, showPreviewCue, t }: {
   readonly row: BrowseRow
   readonly isDirectory: boolean
-  readonly t: typeof receiverCopy.en.browse
-  readonly previewable: boolean
+  readonly t: BrowseCopy
+  readonly showPreviewCue: boolean
 }) {
   const display = isDirectory ? null : fileDisplayInfo(row.name)
   const icon = display === null ? 'folder' : display.icon
@@ -77,42 +84,123 @@ function EntryBody({ row, isDirectory, previewable, t }: {
       </span>
     </span>
     <span className="entry-metadata">{meta}</span>
-    <span className={`entry-action-indicator${previewable ? ' entry-action-preview' : ''}${isDirectory ? ' entry-action-folder' : ''}`}
+    <span className={`entry-action-indicator${showPreviewCue ? ' entry-action-preview' : ''}${isDirectory ? ' entry-action-folder' : ''}`}
       aria-hidden="true">
       {isDirectory && <><span className="entry-action-label">{t.open}</span><ReceiverIcon name="chevron-right" /></>}
-      {previewable && <><ReceiverIcon name="eye" /><span className="entry-action-label">{t.preview}</span></>}
+      {showPreviewCue && <><ReceiverIcon name="eye" /><span className="entry-action-label">{t.preview}</span></>}
     </span>
   </>
 }
 
-function ExplorerRow({ row, draftMode, actions, t }: {
+function fileDownloadButtonMeta(name: string, state: SingleFileDownloadState, t: BrowseCopy) {
+  const itemLabel = t.downloadItem(name)
+  if (state.downloading) {
+    return { ariaLabel: `${itemLabel} — ${t.downloading}`, title: t.downloading }
+  }
+  if (state.disabledReason !== null) {
+    return { ariaLabel: `${itemLabel} — ${state.disabledReason}`, title: state.disabledReason }
+  }
+  return { ariaLabel: itemLabel, title: itemLabel }
+}
+
+function SelectionExplorerRow({ row, previewable, actions, t }: {
   readonly row: BrowseRow
-  readonly t: typeof receiverCopy.en.browse
-  readonly draftMode: ReceiverSnapshot['draft']['mode']
+  readonly previewable: boolean
   readonly actions: ExplorerActions
+  readonly t: BrowseCopy
 }) {
   const isDirectory = row.kind === 'directory'
-  const previewable = !isDirectory && canPreviewFile(row.name, row.expectedSize)
-  const interactive = isDirectory || previewable
-  return <li className={`explorer-row${interactive ? ' explorer-row-interactive' : ''}`}
-    data-selection={draftMode === 'selection' ? row.selection : 'unselected'}>
-    {draftMode === 'selection' && (
+  const checked = row.selection === 'selected'
+  return <li className={`explorer-row explorer-row-interactive${isDirectory ? '' : ' explorer-row-file-selecting'}`}
+    data-selection={row.selection}>
+    {isDirectory ? <>
       <SelectionCheckbox t={t} row={row} active toggle={() => actions.toggle(row.id)} />
-    )}
+      <button type="button" className="entry-trigger" title={row.name} aria-label={row.name}
+        onClick={() => actions.openDirectory(row.id)}>
+        <EntryBody t={t} row={row} isDirectory showPreviewCue={false} />
+      </button>
+      <span className="entry-row-action-spacer" aria-hidden="true" />
+    </> : <>
+      <button type="button" role="checkbox" aria-checked={checked}
+        aria-label={t.select(row.name)} title={row.name}
+        className="entry-select-trigger" onClick={() => actions.toggle(row.id)}>
+        <span className="entry-selection-box" aria-hidden="true">
+          <span className="entry-checkbox-visual" data-checked={checked ? 'true' : 'false'} />
+        </span>
+        <span className="entry-trigger entry-trigger-inner">
+          <EntryBody t={t} row={row} isDirectory={false} showPreviewCue={false} />
+        </span>
+      </button>
+      {previewable ? (
+        <button type="button" className="entry-row-action entry-preview-action"
+          aria-label={t.previewItem(row.name)} title={t.preview}
+          onClick={event => actions.preview(row.id, event.currentTarget)}>
+          <ReceiverIcon name="eye" />
+        </button>
+      ) : (
+        <span className="entry-row-action-spacer" aria-hidden="true" />
+      )}
+    </>}
+  </li>
+}
+
+function BrowseExplorerRow({ row, previewable, downloadReadiness, actions, t }: {
+  readonly row: BrowseRow
+  readonly previewable: boolean
+  readonly downloadReadiness: SingleFileDownloadReadiness
+  readonly actions: ExplorerActions
+  readonly t: BrowseCopy
+}) {
+  const isDirectory = row.kind === 'directory'
+  const interactive = isDirectory || previewable
+  const fileState = isDirectory ? null : singleFileDownloadState(row.id, row.expectedSize, downloadReadiness)
+  const buttonMeta = fileState === null ? null : fileDownloadButtonMeta(row.name, fileState, t)
+
+  return <li className={`explorer-row${interactive ? ' explorer-row-interactive' : ''}`}
+    data-selection="unselected"
+    data-downloading={fileState?.downloading ? 'true' : undefined}>
     {interactive ? (
       <button type="button" className="entry-trigger" title={row.name} aria-label={row.name}
         onClick={event => isDirectory ? actions.openDirectory(row.id) : actions.preview(row.id, event.currentTarget)}>
-        <EntryBody t={t} row={row} isDirectory={isDirectory} previewable={previewable} />
+        <EntryBody t={t} row={row} isDirectory={isDirectory} showPreviewCue={previewable} />
       </button>
     ) : (
       <div className="entry-trigger entry-trigger-static" title={row.name}>
-        <EntryBody t={t} row={row} isDirectory={false} previewable={false} />
+        <EntryBody t={t} row={row} isDirectory={false} showPreviewCue={false} />
       </div>
+    )}
+    {fileState === null || buttonMeta === null ? (
+      <span className="entry-row-action-spacer" aria-hidden="true" />
+    ) : (
+      <button type="button" className="entry-row-action entry-download-action"
+        disabled={fileState.downloading || fileState.disabledReason !== null}
+        data-downloading={fileState.downloading ? 'true' : undefined}
+        aria-label={buttonMeta.ariaLabel}
+        title={buttonMeta.title}
+        onClick={() => actions.download(row.id)}>
+        <ReceiverIcon name={fileState.downloading ? 'clock' : 'download'} />
+      </button>
     )}
   </li>
 }
 
-export function Explorer({ rows, breadcrumbs, pageIndex, pageCount, omittedCount, browse, draft, actions }: {
+function ExplorerRow({ row, draftMode, downloadReadiness, actions, t }: {
+  readonly row: BrowseRow
+  readonly t: BrowseCopy
+  readonly draftMode: ReceiverSnapshot['draft']['mode']
+  readonly downloadReadiness: SingleFileDownloadReadiness
+  readonly actions: ExplorerActions
+}) {
+  const previewable = row.kind === 'file' && canPreviewFile(row.name, row.expectedSize)
+  if (draftMode === 'selection') {
+    return <SelectionExplorerRow t={t} row={row} previewable={previewable} actions={actions} />
+  }
+  return <BrowseExplorerRow t={t} row={row} previewable={previewable} downloadReadiness={downloadReadiness} actions={actions} />
+}
+
+export function Explorer({
+  rows, breadcrumbs, pageIndex, pageCount, omittedCount, browse, draft, downloadReadiness, actions,
+}: {
   readonly rows: readonly BrowseRow[]
   readonly breadcrumbs: readonly Breadcrumb[]
   readonly pageIndex: number
@@ -120,6 +208,7 @@ export function Explorer({ rows, breadcrumbs, pageIndex, pageCount, omittedCount
   readonly omittedCount: bigint
   readonly browse: ReceiverSnapshot['browse']
   readonly draft: ReceiverSnapshot['draft']
+  readonly downloadReadiness: SingleFileDownloadReadiness
   readonly actions: ExplorerActions
 }) {
   const t = useCopy(receiverCopy).browse
@@ -186,9 +275,17 @@ export function Explorer({ rows, breadcrumbs, pageIndex, pageCount, omittedCount
             <span className="explorer-columns-size">{t.size}</span>
             <span />
           </div>
+          <span />
         </div>
         <ul className="explorer-list" tabIndex={0} aria-label={t.folderContents}>
-          {rows.map(row => <ExplorerRow t={t} key={row.id} row={row} draftMode={draft.mode} actions={actions} />)}
+          {rows.map(row => <ExplorerRow
+            t={t}
+            key={row.id}
+            row={row}
+            draftMode={draft.mode}
+            downloadReadiness={downloadReadiness}
+            actions={actions}
+          />)}
         </ul>
       </>}
       {pageCount > 1 && <nav className="directory-pagination" aria-label={t.directoryPages}>

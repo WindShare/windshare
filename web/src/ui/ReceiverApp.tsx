@@ -28,11 +28,30 @@ function AppearanceToggle() {
   </button>
 }
 
+const EMPTY_DISMISSED_TASKS: ReadonlySet<string> = new Set()
+
 export function ReceiverApp({ controller, report }: { readonly controller: ReceiverController; readonly report?: ShareReportSource }) {
   const t = useCopy(shellCopy)
-  const source = controller.presentation.shareKind
-  const kind = useSyncExternalStore(source.subscribe, source.getSnapshot, source.getSnapshot)
+  const source = controller.presentation.shareScope
+  const { kind, visitId } = useSyncExternalStore(source.subscribe, source.getSnapshot, source.getSnapshot)
   const [downloadsOpen, setDownloadsOpen] = useState(false)
+  // Scope dismissals to each monotonic share visit so A -> B -> A resets immediately with zero effect flash.
+  const [dismissedState, setDismissedState] = useState<Readonly<{
+    visitId: number
+    keys: ReadonlySet<string>
+  }>>(() => ({ visitId, keys: EMPTY_DISMISSED_TASKS }))
+  const dismissedTaskKeys = dismissedState.visitId === visitId
+    ? dismissedState.keys
+    : EMPTY_DISMISSED_TASKS
+  const dismissTask = (taskKey: string) => {
+    setDismissedState(previous => {
+      const current = previous.visitId === visitId ? previous.keys : EMPTY_DISMISSED_TASKS
+      if (current.has(taskKey)) return previous
+      const next = new Set(current)
+      next.add(taskKey)
+      return { visitId, keys: next }
+    })
+  }
   return <main className={`receiver-shell receiver-content-${kind}`}>
     <header className="receiver-header">
       <div className="receiver-header-inner">
@@ -46,8 +65,13 @@ export function ReceiverApp({ controller, report }: { readonly controller: Recei
       </div>
     </header>
     <div className="share-workspace">
-      <ReceiverHeading controller={controller} actions={<ReceiverPrimarySaving controller={controller} />} />
-      <ReceiverActivity controller={controller} openDownloads={() => setDownloadsOpen(true)} />
+      <ReceiverHeading controller={controller} actions={<ReceiverPrimarySaving controller={controller} dismissedTaskKeys={dismissedTaskKeys} />} />
+      <ReceiverActivity
+        controller={controller}
+        openDownloads={() => setDownloadsOpen(true)}
+        dismissedTaskKeys={dismissedTaskKeys}
+        onDismissTask={dismissTask}
+      />
       <ReceiverBrowsing controller={controller} />
     </div>
   </main>

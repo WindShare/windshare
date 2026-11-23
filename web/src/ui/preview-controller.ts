@@ -5,7 +5,7 @@ import {
 } from '../preview/automatic-photo'
 import type { CatalogEntry } from '../catalog/records'
 import { isPositionLocalPreviewFailure } from '../preview/preview'
-import type { JoinedBrowserShare } from '../application/browser-share/gateway'
+import type { BrowseDirectory, JoinedBrowserShare } from '../application/browser-share/gateway'
 import type { FailureReporter } from '../application/diagnostics/receive-trace'
 import type { PreviewTraceEvent } from '../application/receive/contracts'
 import type { TraceSource } from '../diagnostics/runtime'
@@ -39,9 +39,16 @@ export interface PreviewControllerHost {
   readonly trace?: TraceSource<PreviewTraceEvent>
 }
 
+export interface ActivePreviewTarget {
+  readonly entry: Extract<CatalogEntry, { kind: 'file' }>
+  readonly directory: BrowseDirectory
+  readonly imageBlob?: Blob
+}
+
 export class PreviewController {
   readonly #host: PreviewControllerHost
   #active: ScopedActivePreview | undefined
+  #target: Readonly<{ entry: Extract<CatalogEntry, { kind: 'file' }>; directory: BrowseDirectory }> | undefined
   #nextId = 1
 
   constructor(host: PreviewControllerHost) {
@@ -51,22 +58,37 @@ export class PreviewController {
   open(
     joined: JoinedBrowserShare,
     entry: Extract<CatalogEntry, { kind: 'file' }>,
+    directory: BrowseDirectory,
   ): void {
-    this.#open(joined, entry, 'manual')
+    this.#open(joined, entry, directory, 'manual')
   }
 
   openAutomaticPhoto(
     joined: JoinedBrowserShare,
     entry: Extract<CatalogEntry, { kind: 'file' }>,
+    directory: BrowseDirectory,
   ): void {
     if (this.#active !== undefined || !isAutomaticPhotoCandidate(entry)) return
     try {
-      this.#open(joined, entry, 'automatic-photo')
+      this.#open(joined, entry, directory, 'automatic-photo')
     } catch {
       // Optional media admission must not turn an authenticated directory
       // publication into a browse failure if connectivity was replaced.
       try { this.cancel() } catch { /* The browse owner still publishes its page. */ }
     }
+  }
+
+  activeTarget(): ActivePreviewTarget | undefined {
+    const target = this.#target
+    if (target === undefined) return undefined
+    const imageBlob = this.#active?.entry.idText === target.entry.idText
+      ? this.#active.session?.imageBlob
+      : undefined
+    return Object.freeze({
+      entry: target.entry,
+      directory: target.directory,
+      ...(imageBlob === undefined ? {} : { imageBlob }),
+    })
   }
 
   yieldToReceiving(): void {
@@ -78,6 +100,7 @@ export class PreviewController {
   }
 
   cancel(): void {
+    this.#target = undefined
     void this.#closeActive()
     this.#publishPreview(EMPTY_PREVIEW)
   }
@@ -200,12 +223,14 @@ export class PreviewController {
   }
 
   close(): Promise<void> {
+    this.#target = undefined
     return this.#closeActive()
   }
 
   #open(
     joined: JoinedBrowserShare,
     entry: Extract<CatalogEntry, { kind: 'file' }>,
+    directory: BrowseDirectory,
     intent: 'manual' | 'automatic-photo',
   ): void {
     // Connectivity must be the first post-guard action so the user's click
@@ -222,6 +247,7 @@ export class PreviewController {
       localFailureReported: false,
     }
     this.#active = active
+    this.#target = Object.freeze({ entry, directory })
     this.#publishPreview(Object.freeze({
       state: 'loading',
       fileId: entry.idText,

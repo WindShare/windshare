@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   actionsForState,
   admitRetainedAction,
@@ -8,12 +8,33 @@ import {
 import { presentTask, retainedTaskFacts } from '../../src/ui/tasks'
 import type { RetainedTaskSnapshot } from '../../src/application/receive/contracts'
 import { ReceiveCoordinator } from '../../src/application/receive/coordinator'
-import type { JoinedBrowserShare } from '../../src/application/browser-share/gateway'
+import { retainedSnapshot } from '../../src/application/receive/retained'
+import * as sessionOpener from '../../src/application/receive/session-opener'
+import {
+  ReceiveBlockedError,
+  SaveUnavailableError,
+  decideSingleFileReuse,
+  planSingleFileDownload,
+} from '../../src/application/receive/single-file'
+import type { BrowseDirectory, JoinedBrowserShare } from '../../src/application/browser-share/gateway'
 import { SelectionPolicy, type FrozenSelectionPolicy } from '../../src/catalog/selection'
 import { encodeBase64Url } from '../../src/crypto/bytes'
-import type { BrowserOutputWindow } from '../../src/output/backends/contract'
+import type { BrowserOutputWindow, OutputSessionHandle } from '../../src/output/backends/contract'
+import * as outputContract from '../../src/output/backends/contract'
 import type { NativeSupportWorker } from '../../src/output/native-object/support'
+import { ReceiveStore } from '../../src/output/store/database'
+import type { ReceiveTaskRecord } from '../../src/output/store/types'
 import { initialReceiveState, transitionReceiveState } from '../../src/transfer/state'
+import { FakeDirectoryHandle } from '../output/fsa-fixture'
+import { createMemoryOPFSEnv, createMockDownloadWindow, MemoryReceiveStore } from '../output/opfs-fixture'
+import {
+  deferred,
+  makeFileEntry,
+  makeJobResult,
+  makeSubDirectory,
+  singleFileSelectionKey,
+  waitForSnapshot,
+} from './receive-coordinator-fixture'
 
 function createDeferredProbeWorker() {
   const workers: Array<NativeSupportWorker & { terminated: boolean }> = []
@@ -188,7 +209,7 @@ describe('receive admission and coordinator', () => {
       currentJoinedShare: () => joined,
     })
     coordinator.refreshOffers(joined)
-    await vi.waitFor(() => expect(coordinator.getSnapshot().offers?.kind).toBe('ready'))
+    await waitForSnapshot(coordinator, s => s.offers?.kind === 'ready')
 
     const offers = coordinator.getSnapshot().offers
     if (offers?.kind !== 'ready') throw new Error('expected ready offers')
@@ -217,7 +238,7 @@ describe('receive admission and coordinator', () => {
       true,
     )
 
-    let jobSelection: FrozenSelectionPolicy | undefined
+    const jobSelection = deferred<FrozenSelectionPolicy | undefined>()
     const windowPort: BrowserOutputWindow = {
       URL: { createObjectURL: vi.fn(() => 'blob:test'), revokeObjectURL: vi.fn() },
       document: {
@@ -236,10 +257,11 @@ describe('receive admission and coordinator', () => {
       }),
       beginDownloadConnectivity: () => ({ routes: [], close: vi.fn() }),
       createTransferJob: (_output: unknown, _connectivity: unknown, options?: { readonly selection?: FrozenSelectionPolicy }) => {
-        jobSelection = options?.selection
+        jobSelection.resolve(options?.selection)
         return {
           pause: vi.fn(),
           stop: vi.fn(),
+          detach: vi.fn(),
           run: async () => ({
             status: 'completed' as const,
             completedFiles: 1n,
@@ -259,13 +281,13 @@ describe('receive admission and coordinator', () => {
       currentJoinedShare: () => joined,
     })
     coordinator.refreshOffers(joined)
-    await vi.waitFor(() => expect(coordinator.getSnapshot().offers?.kind).toBe('ready'))
+    await waitForSnapshot(coordinator, s => s.offers?.kind === 'ready')
 
     const offers = coordinator.getSnapshot().offers
     if (offers?.kind !== 'ready') throw new Error('expected ready offers')
     expect(coordinator.startDownload(offers.primary.choiceId)).toBe(true)
-    await vi.waitFor(() => expect(jobSelection).toBeDefined())
-    expect(jobSelection?.draftRules?.[0]?.ancestry).toEqual(['root-1', 'sub-1'])
+    const capturedSelection = await jobSelection.promise
+    expect(capturedSelection?.draftRules?.[0]?.ancestry).toEqual(['root-1', 'sub-1'])
 
     await coordinator.dispose()
   })
@@ -305,7 +327,7 @@ describe('receive admission and coordinator', () => {
     expect(workers[0]!.terminated).toBe(false)
 
     workers[0]!.onmessage?.({ data: true } as MessageEvent<unknown>)
-    await vi.waitFor(() => expect(coordinator.getSnapshot().offers?.kind).toBe('ready'))
+    await waitForSnapshot(coordinator, s => s.offers?.kind === 'ready')
 
     const offers = coordinator.getSnapshot().offers
     if (offers?.kind !== 'ready') throw new Error('expected ready offers')
@@ -337,10 +359,10 @@ describe('receive admission and coordinator', () => {
     })
 
     coordinator.refreshOffers(joined)
-    await vi.waitFor(() => expect(coordinator.getSnapshot().offers?.kind).toBe('retry-required'))
+    await waitForSnapshot(coordinator, s => s.offers?.kind === 'retry-required')
 
     coordinator.retryOffers()
-    await vi.waitFor(() => expect(coordinator.getSnapshot().offers?.kind).toBe('ready'))
+    await waitForSnapshot(coordinator, s => s.offers?.kind === 'ready')
     expect(storageReads).toBe(2)
 
     await coordinator.dispose()
@@ -397,6 +419,522 @@ describe('receive admission and coordinator', () => {
     await coordinator.loadRetained()
     expect(open).toHaveBeenCalledTimes(2)
 
+    await coordinator.dispose()
+  })
+})
+
+describe('single-file quick download planning and activation ownership', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('preserves joined.selection, falls back to portable at 32 MiB on low OPFS quota, opens FSA picker synchronously, and fires onActivated after first active publish', async () => {
+    const mib = 1024n * 1024n
+    const entrySmall = makeFileEntry(10, 'clip.bin', 32n * mib)
+    const entryLarge = makeFileEntry(11, 'huge.bin', 80n * mib)
+    const dir = makeSubDirectory('root-1', 2, 'Docs')
+    const draftSelection = new SelectionPolicy(false)
+    draftSelection.set(makeFileEntry(99, 'draft-only.txt', 12n), ['root-1'], true)
+
+    vi.spyOn(outputContract, 'probeBrowserOutputCapabilities').mockResolvedValue(Object.freeze({
+      indexedDb: true,
+      fsa: true,
+      opfs: true,
+      portable: true,
+      availableStorageBytes: 8n * mib,
+    }))
+
+    const { windowPort: baseWin } = createMockDownloadWindow()
+    let pickerSync = false
+    const picker = deferred<FileSystemDirectoryHandle>()
+    const windowPort: BrowserOutputWindow = {
+      ...baseWin,
+      showDirectoryPicker: vi.fn(() => {
+        pickerSync = true
+        return picker.promise
+      }),
+    }
+
+    const jobGate = deferred<ReturnType<typeof makeJobResult>>()
+    const events: string[] = []
+    const joined = {
+      descriptor: { shareInstanceId: 'share-1', syntheticRootId: 'root-1' },
+      selection: draftSelection,
+      inspectSelection: async () => ({
+        kind: 'single-file' as const,
+        file: entrySmall,
+        sourcePath: ['Docs', entrySmall.name],
+        exactBytes: entrySmall.expectedSize,
+      }),
+      beginDownloadConnectivity: () => ({ routes: [], close: vi.fn() }),
+      createTransferJob: () => ({
+        pause: vi.fn(),
+        stop: vi.fn(),
+        run: () => jobGate.promise,
+      }),
+    } as unknown as JoinedBrowserShare
+
+    const coordinator = new ReceiveCoordinator({ windowPort, currentJoinedShare: () => joined })
+    coordinator.refreshOffers(joined)
+    await waitForSnapshot(coordinator, s => s.capabilitiesState === 'ready')
+
+    let publishedActiveBeforeCallback = false
+    const activated = deferred<void>()
+    const outcomeSmall = coordinator.startSingleFileDownload(entrySmall, dir, {
+      onActivated: () => {
+        publishedActiveBeforeCallback =
+          coordinator.getSnapshot().lifecycle?.kind === 'downloading' &&
+          coordinator.getSnapshot().activeSingleFileId === entrySmall.idText
+        events.push('activated')
+        activated.resolve()
+      },
+    })
+    expect(outcomeSmall).toEqual({ kind: 'started' })
+    expect(draftSelection.snapshot().canonicalRules).toHaveLength(1)
+    expect(draftSelection.selected(entrySmall, dir.ancestry)).toBe(false)
+
+    await activated.promise
+    expect(events).toEqual(['activated'])
+    expect(publishedActiveBeforeCallback).toBe(true)
+    expect(coordinator.getSnapshot().backend).toBe('portable')
+
+    jobGate.resolve(makeJobResult('completed', entrySmall.expectedSize))
+    await waitForSnapshot(coordinator, s => s.activeSingleFileId === null)
+
+    // 80 MiB exceeds both 64 MiB portable cap and 8 MiB OPFS quota, leaving only FSA.
+    const outcomeLarge = coordinator.startSingleFileDownload(entryLarge, dir)
+    expect(outcomeLarge).toEqual({ kind: 'waiting-picker' })
+    expect(pickerSync).toBe(true)
+    expect(coordinator.getSnapshot().activation).toMatchObject({
+      kind: 'waiting-picker',
+      singleFileId: entryLarge.idText,
+    })
+    expect(coordinator.getSnapshot().activeSingleFileId).toBe(entryLarge.idText)
+
+    coordinator.cancelActivation()
+    expect(coordinator.getSnapshot().activeSingleFileId).toBeNull()
+    picker.resolve({} as FileSystemDirectoryHandle)
+    await coordinator.dispose()
+  })
+
+  it('tracks activeSingleFileId across top selection, list shortcut, and resume while isolating late cancelled activations', async () => {
+    const fileA = makeFileEntry(21, 'a.bin', 100n * 1024n * 1024n)
+    const fileB = makeFileEntry(22, 'b.bin', 100n * 1024n * 1024n)
+    const dir = makeSubDirectory('root-1', 3, 'Videos')
+    const store = new MemoryReceiveStore()
+    vi.spyOn(ReceiveStore, 'open').mockResolvedValue(Object.assign(store, { close: vi.fn() }) as unknown as ReceiveStore)
+    vi.spyOn(outputContract, 'probeBrowserOutputCapabilities').mockResolvedValue(Object.freeze({
+      indexedDb: true, fsa: true, opfs: false, portable: false, availableStorageBytes: null,
+    }))
+
+    const pickers = [deferred<FileSystemDirectoryHandle>(), deferred<FileSystemDirectoryHandle>()]
+    let pickCall = 0
+    const { windowPort: baseWin } = createMockDownloadWindow()
+    const onActionError = vi.fn()
+    const windowPort: BrowserOutputWindow = {
+      ...baseWin,
+      indexedDB: { open: vi.fn() } as unknown as IDBFactory,
+      showDirectoryPicker: vi.fn(() => pickers[pickCall++]!.promise),
+    }
+
+    const jobGates = [deferred<ReturnType<typeof makeJobResult>>(), deferred<ReturnType<typeof makeJobResult>>()]
+    let jobCall = 0
+    const selection = new SelectionPolicy(false)
+    selection.set(fileA, dir.ancestry, true)
+    const joined = {
+      descriptor: { shareInstanceId: 'share-1', syntheticRootId: 'root-1' },
+      selection,
+      inspectSelection: async () => ({
+        kind: 'single-file' as const,
+        file: fileA,
+        sourcePath: ['Videos', fileA.name],
+        exactBytes: fileA.expectedSize,
+      }),
+      subscribeConnection: () => () => undefined,
+      beginDownloadConnectivity: () => ({ routes: [], close: vi.fn() }),
+      createTransferJob: () => {
+        const gate = jobGates[jobCall++]!
+        return { pause: vi.fn(), stop: vi.fn(), detach: vi.fn(), run: () => gate.promise }
+      },
+    } as unknown as JoinedBrowserShare
+
+    const coordinator = new ReceiveCoordinator({ windowPort, currentJoinedShare: () => joined, onActionError })
+    coordinator.refreshOffers(joined)
+    await waitForSnapshot(coordinator, s => s.offers?.kind === 'ready' && s.singleFilePickerPendingFromBytes === null)
+
+    // Top-level single-file selection exposes activeSingleFileId during waiting-picker.
+    expect(coordinator.startDownload('fsa:file')).toBe(true)
+    expect(coordinator.getSnapshot().activeSingleFileId).toBe(fileA.idText)
+
+    // Cancel A and immediately start B via quick download.
+    coordinator.cancelActivation()
+    expect(coordinator.getSnapshot().activeSingleFileId).toBeNull()
+    expect(coordinator.startSingleFileDownload(fileB, dir)).toEqual({ kind: 'waiting-picker' })
+    expect(coordinator.getSnapshot().activeSingleFileId).toBe(fileB.idText)
+
+    // Late rejection from cancelled picker A must not disturb B or report an error.
+    pickers[0]!.reject(new Error('stale picker A failed'))
+    await Promise.resolve()
+    expect(coordinator.getSnapshot().activeSingleFileId).toBe(fileB.idText)
+    expect(onActionError).not.toHaveBeenCalled()
+
+    // Complete B with a pause, then resume B and verify activeSingleFileId tracks resume too.
+    const events: string[] = []
+    pickers[1]!.resolve(new FakeDirectoryHandle('Downloads', events) as unknown as FileSystemDirectoryHandle)
+    await waitForSnapshot(coordinator, s => s.lifecycle?.kind === 'downloading')
+    expect(coordinator.getSnapshot().activeSingleFileId).toBe(fileB.idText)
+
+    jobGates[0]!.resolve(makeJobResult('paused', fileB.expectedSize))
+    await waitForSnapshot(coordinator, s => s.lifecycle?.kind === 'paused')
+    expect(coordinator.getSnapshot().activeSingleFileId).toBeNull()
+
+    // Resume via quick download (also exercises reusing just-paused task immediately).
+    expect(coordinator.startSingleFileDownload(fileB, dir)).toEqual({ kind: 'resumed' })
+    await waitForSnapshot(coordinator, s => s.lifecycle?.kind === 'downloading')
+    expect(coordinator.getSnapshot().activeSingleFileId).toBe(fileB.idText)
+
+    jobGates[1]!.resolve(makeJobResult('completed', fileB.expectedSize))
+    await waitForSnapshot(coordinator, s => s.activeSingleFileId === null)
+    expect(onActionError).not.toHaveBeenCalled()
+    await coordinator.dispose()
+  })
+
+  it('closes a late session opened for a replaced activation without disturbing the active download', async () => {
+    const fileA = makeFileEntry(23, 'first.bin', 128n)
+    const fileB = makeFileEntry(24, 'second.bin', 128n)
+    const dir = makeSubDirectory('root-1', 3, 'Docs')
+    vi.spyOn(outputContract, 'probeBrowserOutputCapabilities').mockResolvedValue(Object.freeze({
+      indexedDb: false, fsa: false, opfs: false, portable: true, availableStorageBytes: null,
+    }))
+    const firstSessionGate = deferred<OutputSessionHandle>()
+    const firstOpenCalled = deferred<void>()
+    const staleClosed = deferred<void>()
+    const staleClose = vi.fn(async () => { staleClosed.resolve() })
+    const secondJobGate = deferred<ReturnType<typeof makeJobResult>>()
+    let openCalls = 0
+    vi.spyOn(sessionOpener, 'openNewOutputSession').mockImplementation(async input => {
+      openCalls += 1
+      if (openCalls === 1) {
+        firstOpenCalled.resolve()
+        return firstSessionGate.promise
+      }
+      return {
+        taskId: input.task.taskId,
+        backend: 'portable',
+        transferOutput: { capabilities: { resumable: false } } as unknown as OutputSessionHandle['transferOutput'],
+        settle: async () => ({
+          taskId: input.task.taskId,
+          shareInstance: input.task.selection.shareInstance,
+          selectionKey: input.task.selectionKey,
+          selection: input.task.selection,
+          artifact: input.task.artifact,
+          backend: 'portable',
+          lifecycle: transitionReceiveState(input.task.lifecycle, { kind: 'download-started', retained: false, fileName: fileB.name }),
+          target: { kind: 'portable', fileName: fileB.name },
+          discoveryComplete: true,
+          updatedAt: Date.now(),
+        }),
+        close: vi.fn(async () => undefined),
+      }
+    })
+    const { windowPort } = createMockDownloadWindow()
+    const joined = {
+      descriptor: { shareInstanceId: 'share-1', syntheticRootId: 'root-1' },
+      selection: new SelectionPolicy(true),
+      beginDownloadConnectivity: () => ({ routes: [], close: vi.fn() }),
+      createTransferJob: () => ({ pause: vi.fn(), stop: vi.fn(), run: () => secondJobGate.promise }),
+    } as unknown as JoinedBrowserShare
+    const coordinator = new ReceiveCoordinator({ windowPort, currentJoinedShare: () => joined })
+    coordinator.preloadShareTasks('share-1')
+    await waitForSnapshot(coordinator, s => s.capabilitiesState === 'ready')
+
+    expect(coordinator.startSingleFileDownload(fileA, dir)).toEqual({ kind: 'started' })
+    await firstOpenCalled.promise
+    expect(openCalls).toBe(1)
+    // Supersede A (e.g. share switch/cancel) and immediately start B.
+    coordinator.suspendForNewShare()
+    expect(coordinator.startSingleFileDownload(fileB, dir)).toEqual({ kind: 'started' })
+
+    // Resolve stale session A late — it must close immediately and never interfere with B.
+    firstSessionGate.resolve({
+      taskId: 'stale-a',
+      backend: 'portable',
+      transferOutput: { capabilities: { resumable: false } } as unknown as OutputSessionHandle['transferOutput'],
+      settle: vi.fn(),
+      close: staleClose,
+    })
+    await staleClosed.promise
+    expect(staleClose).toHaveBeenCalledTimes(1)
+    await waitForSnapshot(coordinator, s => s.activeSingleFileId === fileB.idText)
+
+    secondJobGate.resolve(makeJobResult('completed', fileB.expectedSize))
+    await waitForSnapshot(coordinator, s => s.activeSingleFileId === null)
+    await coordinator.dispose()
+  })
+})
+
+describe('single-file reuse, errors, and local blob handoff', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('reuses completed OPFS over paused during concurrent index preload, fires onExported after export completes, and reports blocked resume reasons', async () => {
+    const file = makeFileEntry(30, 'report.pdf', 12n)
+    const dir = makeSubDirectory('root-1', 4, 'Reports')
+    const { spec, key } = singleFileSelectionKey('share-1', 'root-1', file, dir)
+
+    const store = new MemoryReceiveStore()
+    const listGate = deferred<readonly ReceiveTaskRecord[]>()
+    vi.spyOn(store, 'listTasksByShare').mockImplementation(() => listGate.promise)
+    vi.spyOn(ReceiveStore, 'open').mockResolvedValue(Object.assign(store, { close: vi.fn() }) as unknown as ReceiveStore)
+
+    const { env, root } = createMemoryOPFSEnv()
+    const tasksDir = await root.getDirectoryHandle('windshare-tasks', { create: true })
+    const opfsFile = await tasksDir.getFileHandle('opfs-new.part', { create: true })
+    opfsFile.bytes = new Uint8Array([1, 2, 3, 4])
+    const opfsOldFile = await tasksDir.getFileHandle('opfs-old.part', { create: true })
+    opfsOldFile.bytes = new Uint8Array([9, 9, 9, 9])
+
+    const makeOpfsReady = (taskId: string, objectName: string, createdAtMilliseconds: number): ReceiveTaskRecord => ({
+      taskId,
+      shareInstance: 'share-1',
+      selectionKey: key,
+      selection: spec,
+      artifact: { kind: 'original-file', name: file.name, singleFileId: file.idText, singleFileSize: 4n },
+      backend: 'opfs',
+      lifecycle: transitionReceiveState(initialReceiveState(taskId), {
+        kind: 'ready-to-save', size: 4n, fileName: file.name,
+      }),
+      target: { kind: 'opfs', objectName, fileName: file.name, isZip: false, allocatedLength: 4n, sealedSize: 4n },
+      display: { objectLabel: file.name, createdAtMilliseconds },
+      discoveryComplete: true,
+      updatedAt: createdAtMilliseconds,
+    })
+    const pausedRecord: ReceiveTaskRecord = {
+      taskId: 'paused-newer',
+      shareInstance: 'share-1',
+      selectionKey: key,
+      selection: spec,
+      artifact: { kind: 'original-file', name: file.name, singleFileId: file.idText, singleFileSize: 4n },
+      backend: 'opfs',
+      lifecycle: transitionReceiveState(initialReceiveState('paused-newer'), {
+        kind: 'paused', reason: 'user',
+        completedFiles: 0n, completedBytes: 0n, retainedBytes: 2n,
+        discoveredFiles: 1n, discoveredBytes: 4n, discoveryComplete: true,
+      }),
+      target: { kind: 'opfs', objectName: 'paused.part', fileName: file.name, isZip: false, allocatedLength: 4n },
+      display: { objectLabel: file.name, createdAtMilliseconds: 9_000 },
+      discoveryComplete: true,
+      updatedAt: 9_000,
+    }
+    const olderReady = makeOpfsReady('opfs-old', 'opfs-old.part', 1_000)
+    const newerReady = makeOpfsReady('opfs-new', 'opfs-new.part', 5_000)
+    await store.putTask(olderReady)
+    await store.putTask(newerReady)
+    await store.putTask(pausedRecord)
+
+    // Verify pure candidate ranking prefers exportable OPFS (newest) over even newer paused task.
+    const pureDecision = decideSingleFileReuse(
+      [
+        retainedSnapshot(pausedRecord, false),
+        retainedSnapshot(olderReady, false),
+        retainedSnapshot(newerReady, false),
+      ],
+      'share-1',
+      key,
+      () => ({ allowed: true, reason: null }),
+    )
+    expect(pureDecision).toMatchObject({ kind: 'export', task: { taskId: 'opfs-new' } })
+
+    const lockedElsewhereDecision = decideSingleFileReuse(
+      [retainedSnapshot(pausedRecord, true)],
+      'share-1',
+      key,
+      (task, action) => admitRetainedAction(task, action, {
+        currentShareInstance: 'share-1',
+        hasActiveDownload: false,
+        hasPendingAction: false,
+        connectionUnavailable: false,
+        shareEnded: false,
+      }),
+    )
+    expect(lockedElsewhereDecision).toMatchObject({ kind: 'blocked', reason: 'activeInAnotherTab' })
+
+    vi.spyOn(outputContract, 'probeBrowserOutputCapabilities').mockResolvedValue(Object.freeze({
+      indexedDb: true, fsa: false, opfs: true, portable: true, availableStorageBytes: 64n * 1024n * 1024n,
+    }))
+    const { windowPort: baseWin, downloads } = createMockDownloadWindow()
+    const windowPort: BrowserOutputWindow = {
+      ...baseWin,
+      indexedDB: { open: vi.fn() } as unknown as IDBFactory,
+    }
+    const joined = {
+      descriptor: { shareInstanceId: 'share-1', syntheticRootId: 'root-1' },
+      selection: new SelectionPolicy(true),
+      inspectSelection: async () => ({ kind: 'single-file' as const, file, sourcePath: ['Reports', file.name], exactBytes: 4n }),
+      beginDownloadConnectivity: vi.fn(),
+      createTransferJob: vi.fn(),
+    } as unknown as JoinedBrowserShare
+
+    const coordinator = new ReceiveCoordinator({
+      windowPort,
+      opfsEnv: env,
+      currentJoinedShare: () => joined,
+    })
+    coordinator.preloadShareTasks('share-1')
+    await waitForSnapshot(coordinator, s => s.capabilitiesState === 'ready')
+
+    // First click arrives while listTasksByShare() is still unresolved.
+    const exported = deferred<void>()
+    let exportedCount = 0
+    const outcome = coordinator.startSingleFileDownload(file, dir, {
+      onExported: () => {
+        exportedCount += 1
+        exported.resolve()
+      },
+    })
+    expect(outcome).toEqual({ kind: 'started' })
+    expect(exportedCount).toBe(0)
+    expect(downloads).toHaveLength(0)
+
+    listGate.resolve([pausedRecord, olderReady, newerReady])
+    await exported.promise
+    expect(exportedCount).toBe(1)
+    expect(downloads).toHaveLength(1)
+    expect(new Uint8Array(await downloads[0]!.blob.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3, 4]))
+    expect(joined.createTransferJob).not.toHaveBeenCalled()
+
+    // Remove OPFS copies so only paused task remains, then verify shareEnded blocks resume explicitly.
+    await store.deleteTask('opfs-new')
+    await store.deleteTask('opfs-old')
+    await coordinator.loadRetained()
+    coordinator.observeConnection('ended')
+    expect(coordinator.startSingleFileDownload(file, dir)).toEqual({
+      kind: 'blocked',
+      reason: 'shareEnded',
+    })
+    await coordinator.dispose()
+  })
+
+  it('retries failed capability probe, reports SaveUnavailableError and path limit synchronously, and separates startup vs transfer errors', async () => {
+    const file = makeFileEntry(40, 'archive.bin', 128n * 1024n * 1024n)
+    const smallFile = makeFileEntry(41, 'note.txt', 32n)
+    const dir = makeSubDirectory('root-1', 5, 'Sub')
+
+    let probeCalls = 0
+    vi.spyOn(outputContract, 'probeBrowserOutputCapabilities').mockImplementation(async () => {
+      probeCalls += 1
+      if (probeCalls === 1) throw new Error('probe failed')
+      return Object.freeze({
+        indexedDb: false, fsa: false, opfs: false, portable: true, availableStorageBytes: null,
+      })
+    })
+    const { windowPort: baseWin } = createMockDownloadWindow()
+    const onActionError = vi.fn()
+    let failConnectivity = true
+    const joined = {
+      descriptor: { shareInstanceId: 'share-1', syntheticRootId: 'root-1' },
+      selection: new SelectionPolicy(true),
+      inspectSelection: async () => ({ kind: 'single-file' as const, file: smallFile, sourcePath: ['Sub', smallFile.name], exactBytes: smallFile.expectedSize }),
+      beginDownloadConnectivity: () => {
+        if (failConnectivity) throw new Error('startup connectivity failed')
+        return { routes: [], close: vi.fn() }
+      },
+      createTransferJob: () => ({
+        pause: vi.fn(),
+        stop: vi.fn(),
+        run: async () => { throw new Error('mid-transfer failure') },
+      }),
+    } as unknown as JoinedBrowserShare
+
+    const coordinator = new ReceiveCoordinator({
+      windowPort: baseWin,
+      currentJoinedShare: () => joined,
+      onActionError,
+    })
+    coordinator.preloadShareTasks('share-1')
+    await waitForSnapshot(coordinator, s => s.capabilitiesState === 'failed')
+
+    // Clicking while failed switches back to probing and recovers.
+    expect(coordinator.startSingleFileDownload(smallFile, dir)).toEqual({ kind: 'probing' })
+    await waitForSnapshot(coordinator, s => s.capabilitiesState === 'ready')
+    expect(probeCalls).toBe(2)
+
+    // Path exceeding 256 depth fails synchronously without calling onActionError.
+    const deepDir: BrowseDirectory = Object.freeze({
+      id: new Uint8Array(16).fill(6),
+      idText: 'deep',
+      path: Object.freeze(Array.from({ length: 256 }, (_, i) => `d${i}`)),
+      ancestry: Object.freeze(['root-1', 'deep']),
+    })
+    const pathFailure = coordinator.startSingleFileDownload(smallFile, deepDir)
+    expect(pathFailure.kind).toBe('failed')
+    expect(onActionError).not.toHaveBeenCalled()
+
+    // 128 MiB with only portable returns structured SaveUnavailableError.
+    const unavailable = coordinator.startSingleFileDownload(file, dir)
+    expect(unavailable.kind).toBe('unavailable')
+    if (unavailable.kind === 'unavailable') {
+      expect(unavailable.error).toBeInstanceOf(SaveUnavailableError)
+      expect(unavailable.error.reason).toBe('portable-limit-exceeded')
+    }
+    expect(onActionError).not.toHaveBeenCalled()
+
+    // Startup failure before first active publish routes to onAsyncError, not onActionError.
+    const asyncErrors: unknown[] = []
+    const startupError = deferred<void>()
+    expect(coordinator.startSingleFileDownload(smallFile, dir, {
+      onAsyncError: error => {
+        asyncErrors.push(error)
+        startupError.resolve()
+      },
+    })).toEqual({ kind: 'started' })
+    await startupError.promise
+    expect(asyncErrors).toHaveLength(1)
+    expect(onActionError).not.toHaveBeenCalled()
+    expect(coordinator.getSnapshot().lifecycle).toBeNull()
+
+    // Post-activation transfer error routes to normal lifecycle failure + onActionError.
+    failConnectivity = false
+    const asyncErrors2: unknown[] = []
+    expect(coordinator.startSingleFileDownload(smallFile, dir, {
+      onAsyncError: error => asyncErrors2.push(error),
+    })).toEqual({ kind: 'started' })
+    await waitForSnapshot(coordinator, s => s.lifecycle?.kind === 'failed')
+    expect(asyncErrors2).toHaveLength(0)
+    expect(onActionError).toHaveBeenCalledTimes(1)
+
+    // Also sanity-check pure plan helper leaves ReceiveBlockedError type intact.
+    expect(new ReceiveBlockedError('shareEnded').reason).toBe('shareEnded')
+    expect(planSingleFileDownload(joined, smallFile, dir, {
+      indexedDb: false, fsa: false, opfs: false, portable: true, availableStorageBytes: null,
+    }).offers.kind).toBe('ready')
+    await coordinator.dispose()
+  })
+
+  it('saveLocalBlob saves synchronously without claiming transfer slot and completeLocalBlobDownload records non-retained handoff', async () => {
+    const { windowPort, downloads } = createMockDownloadWindow()
+    const joined = createSingleFileShare('photo.png')
+    const coordinator = new ReceiveCoordinator({
+      windowPort,
+      currentJoinedShare: () => joined,
+    })
+
+    const blob = new Blob([Uint8Array.of(137, 80, 78, 71)], { type: 'image/png' })
+    expect(coordinator.saveLocalBlob(blob, 'photo.png')).toBe(true)
+    expect(downloads).toHaveLength(1)
+    expect(downloads[0]!.fileName).toBe('photo.png')
+    expect(coordinator.active).toBe(false)
+    expect(coordinator.getSnapshot().lifecycle).toBeNull()
+
+    expect(coordinator.completeLocalBlobDownload(blob, 'photo.png', {
+      objectLabel: 'photo.png',
+      createdAtMilliseconds: 1234,
+    })).toBe(true)
+    expect(downloads).toHaveLength(2)
+    expect(coordinator.getSnapshot().lifecycle).toMatchObject({
+      kind: 'download-started',
+      retained: false,
+      fileName: 'photo.png',
+    })
+    expect(coordinator.getSnapshot().backend).toBe('portable')
+    expect(coordinator.active).toBe(false)
     await coordinator.dispose()
   })
 })

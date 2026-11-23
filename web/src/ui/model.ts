@@ -1,4 +1,8 @@
-import type { ReceiveBlockReason, RetainedInventorySnapshot } from '../application/receive/contracts'
+import type {
+  ReceiveBlockReason,
+  RetainedInventorySnapshot,
+  SaveUnavailableReason,
+} from '../application/receive/contracts'
 import type { OutputPresentationSnapshot } from './output'
 
 export type ReceiverPhase = 'awaiting-key' | 'joining' | 'browsing' | 'failed'
@@ -89,8 +93,12 @@ export interface SelectionDraft {
   readonly empty: boolean
 }
 
-export type ReceiverFailure = string | Readonly<{ kind: 'blocked'; reason: ReceiveBlockReason }> |
-  Readonly<{ kind: 'source-changed' }> | Readonly<{ kind: 'invalidLink' | 'secureContext'; detail: string }>
+export type ReceiverFailure =
+  | string
+  | Readonly<{ kind: 'blocked'; reason: ReceiveBlockReason }>
+  | Readonly<{ kind: 'save-unavailable'; reason: SaveUnavailableReason }>
+  | Readonly<{ kind: 'source-changed' }>
+  | Readonly<{ kind: 'invalidLink' | 'secureContext'; detail: string }>
 
 export interface ReceiverSnapshot {
   readonly connection: import('../receiver/connection-state').ReceiverConnectionSnapshot |

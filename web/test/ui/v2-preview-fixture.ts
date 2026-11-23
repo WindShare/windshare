@@ -21,6 +21,13 @@ export const entry: Extract<CatalogEntry, { kind: 'file' }> = Object.freeze({
   expectedSize: 100n,
 })
 
+export const rootDirectory: BrowseDirectory = Object.freeze({
+  id: identity(1),
+  idText: identityText(1),
+  path: Object.freeze([]),
+  ancestry: Object.freeze([identityText(1)]),
+})
+
 export class FakeJoined {
   readonly descriptor = {
     shareInstance: identity(7),
@@ -207,6 +214,13 @@ export function authenticatedRevisionCapacityError(): RevisionCapacityBusyError 
   }))
 }
 
+export function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej })
+  return { promise, resolve, reject }
+}
+
 export async function turn(): Promise<void> {
   for (let index = 0; index < 8; index += 1) await Promise.resolve()
 }
@@ -217,6 +231,31 @@ export async function waitFor(predicate: () => boolean): Promise<void> {
     await new Promise<void>(resolve => setTimeout(resolve, 1))
   }
   throw new Error('timed out waiting for controller state')
+}
+
+export function waitForController(
+  controller: Readonly<{
+    getSnapshot(): ReceiverSnapshot
+    subscribe(listener: () => void): () => void
+  }>,
+  predicate: (snapshot: ReceiverSnapshot) => boolean,
+): Promise<ReceiverSnapshot> {
+  const current = controller.getSnapshot()
+  if (predicate(current)) return Promise.resolve(current)
+  const timeoutError = new Error('timed out waiting for receiver controller snapshot')
+  return new Promise<ReceiverSnapshot>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      unsubscribe()
+      reject(timeoutError)
+    }, 2_000)
+    const unsubscribe = controller.subscribe(() => {
+      const next = controller.getSnapshot()
+      if (!predicate(next)) return
+      clearTimeout(timer)
+      unsubscribe()
+      resolve(next)
+    })
+  })
 }
 
 export function diagnosticImageJoined(): Readonly<{
