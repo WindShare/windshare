@@ -27,6 +27,7 @@ const (
 	ReceiveRecoverySourceOmitted    = receive.RecoverySourceOmitted
 	ReceiveRecoveryInvalidRequest   = receive.RecoveryInvalidRequest
 	ReceiveRecoveryNeedsInspection  = receive.RecoveryNeedsInspection
+	ReceiveRecoverySourceChanged    = receive.RecoverySourceChanged
 	ReceiveShareStopUnconfirmed     = receive.ShareStopUnconfirmed
 	ReceiveShareStopSender          = receive.ShareStopSender
 	ReceiveShareStopRelays          = receive.ShareStopRelays

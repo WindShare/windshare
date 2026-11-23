@@ -128,6 +128,9 @@ func (a *App) reportReceiveRecovery(result engine.ReceiveResult, selection recei
 		a.writeCompleteLine("Correct the request before starting another download.")
 	case engine.ReceiveRecoveryNeedsInspection:
 		a.writeCompleteLine("Inspect the reported failure before retrying.")
+	case engine.ReceiveRecoverySourceChanged:
+		a.writeCompleteLine(changedSourceGuidance)
+		a.reportRetainedOperationCleanup(result)
 	default:
 		if recovery.Retention == engine.ReceiveRetentionCheckpoints && recovery.Retryable() {
 			a.writeCompleteLine("Retry with wind resume retry -o <original-directory> --operation %x and the same link and selection.", result.Operation.Bytes())
@@ -140,6 +143,14 @@ func (a *App) reportStoppedReceiveRecovery(result engine.ReceiveResult) {
 		a.writeCompleteLine("The share has stopped. Inspect the reported failure before removing saved progress.")
 		return
 	}
+	a.reportRetainedOperationCleanup(result)
+}
+
+// changedSourceGuidance replaces a retry hint: the sender never re-admits a
+// changed source under the same link, so retrying it repeats the failure.
+const changedSourceGuidance = "The shared source changed after this link was created; this link cannot finish the download. Ask the sender to share it again and use the new link."
+
+func (a *App) reportRetainedOperationCleanup(result engine.ReceiveResult) {
 	if result.Recovery.Retention != engine.ReceiveRetentionCheckpoints || result.Operation.IsZero() {
 		return
 	}
@@ -238,9 +249,12 @@ func (a *App) promptReceiveRecovery(ctx context.Context, reader *bufio.Reader, p
 	case engine.ReceiveRecoveryRevisionChanged:
 		reason = "a changed source revision; prior verified progress remains isolated"
 	}
-	if pause.Recovery.ShareStopped() {
+	switch {
+	case pause.Recovery.ShareStopped():
 		a.writeCompleteLine("Download stopped. The share has ended. Discard unfinished output or keep it for manual cleanup.")
-	} else {
+	case pause.Recovery.Reason == engine.ReceiveRecoverySourceChanged:
+		a.writeCompleteLine("Download stopped. %s Discard unfinished output or keep it for manual cleanup.", changedSourceGuidance)
+	default:
 		a.writeCompleteLine("Download paused: %s. Saved partials: %d bytes. Previously delivered: %d files (%d bytes).", reason, pause.Transfer.Progress.RestartReusableBytes, pause.Transfer.Progress.FileOutcomes.PreviouslyPublishedFiles, pause.Transfer.Progress.PreviouslyPublishedBytes)
 	}
 	a.reportBlockedReceiveItems(pause.Transfer)

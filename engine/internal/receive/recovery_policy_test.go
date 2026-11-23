@@ -213,3 +213,63 @@ func TestStoppedShareRecoveryUsesRetainedOutputAuthority(t *testing.T) {
 		})
 	}
 }
+
+// A share never re-admits a changed source under its link, so the same request
+// cannot finish; offering retry would only repeat the drift failure.
+func TestSourceDriftOffersDiscardInsteadOfSameLinkRetry(t *testing.T) {
+	drift, err := transferfault.NewSource(transferfault.ScopeFileLocal, transferfault.SourceRevisionChanged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name      string
+		collision bool
+		action    RecoveryAction
+		retention ProgressRetention
+		discards  int
+	}{
+		{name: "unattended", retention: RetentionCheckpoints},
+		{name: "exit keeps partials", action: RecoveryExit, retention: RetentionCheckpoints},
+		{name: "discard", action: RecoveryDiscard, retention: RetentionDiscarded, discards: 1},
+		{name: "drift outranks a movable collision", collision: true, action: RecoveryExit, retention: RetentionCheckpoints},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prepared, authority := recoveryTestPreparation(t, OutputResumable)
+			attempts, prompts := 0, 0
+			request := Request{Capability: link.Link{Suite: link.SuiteSenderAuthenticated}, Connectivity: ConnectivityRelayOnly}
+			if test.action != 0 {
+				request.OnPause = func(_ context.Context, pause Pause) (RecoveryAction, error) {
+					prompts++
+					if pause.Recovery.Reason != RecoverySourceChanged || pause.Allows(RecoveryRetry) ||
+						!pause.Allows(RecoveryDiscard) || !pause.Allows(RecoveryExit) {
+						t.Fatalf("source drift pause = %+v", pause)
+					}
+					return test.action, nil
+				}
+			}
+			completed := runOperation(t.Context(), request, Dependencies{}, func(_ context.Context, _ preparedRequest, _ Dependencies, retained *getOutputPreparation) task.Completion[Result] {
+				attempts++
+				*retained = prepared
+				job := transfer.JobResult{Outcome: transfer.DirectTreeOutcomePartial, SourceDriftFault: drift}
+				if test.collision {
+					job.Progress.FileOutcomes.CollisionFiles = 1
+				}
+				result, err := Settle(SettlementInput{Result: job})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return result
+			})
+			wantPrompts := 0
+			if test.action != 0 {
+				wantPrompts = 1
+			}
+			recovery := completed.Value.Recovery
+			if attempts != 1 || prompts != wantPrompts || authority.discards != test.discards ||
+				completed.FailureClass != task.FailureSourceDrift || recovery.Reason != RecoverySourceChanged ||
+				recovery.Retryable() || recovery.ShareStopped() || recovery.Retention != test.retention {
+				t.Fatalf("recovery=%+v class=%d attempts=%d prompts=%d discards=%d", recovery, completed.FailureClass, attempts, prompts, authority.discards)
+			}
+		})
+	}
+}

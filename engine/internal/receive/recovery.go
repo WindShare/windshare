@@ -32,6 +32,9 @@ const (
 	RecoverySourceOmitted
 	RecoveryInvalidRequest
 	RecoveryNeedsInspection
+	// The sender's files no longer match the revision this link committed. A
+	// share never re-admits drifted content, so only a new link can finish.
+	RecoverySourceChanged
 )
 
 type ShareStopSource uint8
@@ -226,7 +229,7 @@ func pauseActions(recovery RecoveryOutcome, idle bool) []RecoveryAction {
 		return nil
 	case recovery.Retryable():
 		return []RecoveryAction{RecoveryRetry, RecoveryDiscard, RecoveryExit}
-	case recovery.ShareStopped() && recovery.Retention == RetentionCheckpoints:
+	case (recovery.ShareStopped() || recovery.Reason == RecoverySourceChanged) && recovery.Retention == RetentionCheckpoints:
 		return []RecoveryAction{RecoveryDiscard, RecoveryExit}
 	default:
 		return nil
@@ -257,6 +260,11 @@ func recoveryReason(class task.FailureClass, failure Failure, result transfer.Jo
 	}
 	if code, ok := failure.Fault.SessionCode(); ok && code == transferfault.SessionDependencyContract {
 		return RecoveryNeedsInspection
+	}
+	// Drift outranks per-file outcomes: moving a collision or repairing output
+	// cannot make the same link serve the changed source again.
+	if class == task.FailureSourceDrift {
+		return RecoverySourceChanged
 	}
 	outcomes := result.Progress.FileOutcomes
 	switch {
