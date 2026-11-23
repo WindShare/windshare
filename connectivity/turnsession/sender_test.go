@@ -5,29 +5,33 @@ import (
 	"testing"
 	"time"
 
+	"github.com/windshare/windshare/core/session/turngrant"
+
 	p "github.com/windshare/windshare/core/session/protocolsession"
 )
 
-type issueFunc func(context.Context, IssueRequest) IssueResult
+type issueFunc func(context.Context, turngrant.IssueRequest) turngrant.IssueResult
 
-func (f issueFunc) Issue(ctx context.Context, r IssueRequest) IssueResult { return f(ctx, r) }
+func (f issueFunc) Issue(ctx context.Context, r turngrant.IssueRequest) turngrant.IssueResult {
+	return f(ctx, r)
+}
 
 func TestSessionCoalescesDemandAndRenewsOneGrantAtATime(t *testing.T) {
 	clock := time.Unix(200, 0)
 	calls := 0
 	entered, release := make(chan struct{}), make(chan struct{})
-	provider := issueFunc(func(_ context.Context, r IssueRequest) IssueResult {
+	provider := issueFunc(func(_ context.Context, r turngrant.IssueRequest) turngrant.IssueResult {
 		calls++
 		if calls == 1 {
 			close(entered)
 			<-release
 		}
 		if r.Reusable["a"] {
-			return IssueResult{Status: p.TURNOK, Retained: []string{"a"}}
+			return turngrant.IssueResult{Status: p.TURNOK, Retained: []string{"a"}}
 		}
-		return IssueResult{Status: p.TURNOK, Credentials: []Credential{{ServiceID: "a", URLs: []string{"turn:one"}, Username: "u", Password: "p", ValidFor: time.Minute}}}
+		return turngrant.IssueResult{Status: p.TURNOK, Credentials: []turngrant.Credential{{ServiceID: "a", URLs: []string{"turn:one"}, Username: "u", Password: "p", ValidFor: time.Minute}}}
 	})
-	s := NewSender(Trace{Session: p.ProtocolSessionID{1}}, provider, func() time.Time { return clock })
+	s := NewSender(turngrant.Trace{Session: p.ProtocolSessionID{1}}, provider, func() time.Time { return clock })
 	defer s.Close()
 	responses := make(chan p.TURNGrants, 2)
 	send := func(_ context.Context, b []byte) error { g, err := p.DecodeTURNGrants(b); responses <- g; return err }

@@ -124,6 +124,12 @@ try {
   const imported = JSON.parse(await readFile(savedConfig, 'utf8'));
   assert.equal(imported.profiles[0].url, before.endpoint);
   assert.equal(imported.profiles[0].managed_turn === true, managedTURN || bindingFixture);
+  if (managedTURN || bindingFixture) {
+    env.WINDSHARE_TURN_SMOKE_CONFIG = savedConfig;
+    env.WINDSHARE_TURN_SMOKE_SOURCE = managedTURN ? 'managed' : 'local';
+    command(process.execPath, ['web/node_modules/@playwright/test/cli.js', 'test', '--config', 'web/playwright.network.config.ts',
+      '--project', 'chromium', '--grep', 'isolated Cloudflare Worker']);
+  }
   env.WINDSHARE_RELAY_ACCESS_KEY = imported.profiles[0].access_key;
   const probe = phase => command('go', ['run', './relay-rust/tests/_goclient',
     '-endpoint', before.endpoint + '/v2/ws', '-deployment-phase', phase, '-deployment-state', stateFile]);

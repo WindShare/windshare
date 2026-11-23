@@ -12,9 +12,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/windshare/windshare/core/session/turngrant"
+
 	d "github.com/windshare/windshare/core/diagnostics"
 
-	"github.com/windshare/windshare/connectivity/turnsession"
 	p "github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relayprofile"
@@ -97,7 +98,7 @@ func New(manual []relayconfig.TURNService, selected []relayprofile.Registration,
 
 // Discovery never delays publication. Concurrent sessions share just the
 // capability result, while issued credentials stay scoped to their own session.
-func (r *Resolver) Discover(ctx context.Context, trace turnsession.Trace) <-chan struct{} {
+func (r *Resolver) Discover(ctx context.Context, trace turngrant.Trace) <-chan struct{} {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.discovering != nil {
@@ -141,7 +142,7 @@ func (r *Resolver) Discover(ctx context.Context, trace turnsession.Trace) <-chan
 	return done
 }
 
-func (r *Resolver) Issue(ctx context.Context, request turnsession.IssueRequest) turnsession.IssueResult {
+func (r *Resolver) Issue(ctx context.Context, request turngrant.IssueRequest) turngrant.IssueResult {
 	ctx, cancel := context.WithTimeout(ctx, issueTimeout)
 	defer cancel()
 	available, unknown := r.availability()
@@ -149,7 +150,7 @@ func (r *Resolver) Issue(ctx context.Context, request turnsession.IssueRequest) 
 	if request.Mode == p.TURNAll && len(unknown) > 0 {
 		discovered = r.Discover(ctx, request.Trace)
 	}
-	var result turnsession.IssueResult
+	var result turngrant.IssueResult
 	var targets []source
 	for _, s := range activeServices(available, request.ServiceIDs) {
 		if s.EffectiveRole() == relayconfig.RoleFallback && request.Mode == p.TURNParallel {
@@ -161,7 +162,7 @@ func (r *Resolver) Issue(ctx context.Context, request turnsession.IssueRequest) 
 		}
 		targets = append(targets, s)
 	}
-	issued := make([]turnsession.Credential, len(targets))
+	issued := make([]turngrant.Credential, len(targets))
 	var wg sync.WaitGroup
 	for i, s := range targets {
 		wg.Go(func() {

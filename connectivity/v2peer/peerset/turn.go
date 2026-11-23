@@ -5,6 +5,8 @@ import (
 	"io"
 	"time"
 
+	"github.com/windshare/windshare/core/session/turngrant"
+
 	"github.com/windshare/windshare/connectivity/turnsession"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	diag "github.com/windshare/windshare/core/diagnostics"
@@ -69,7 +71,7 @@ type requestState struct {
 }
 type turnManager struct {
 	owner         *ReceiverSession
-	trace         turnsession.Trace
+	trace         turngrant.Trace
 	negotiate     func(context.Context, v2signal.Binding, p.TURNGrant) (Attempt, error)
 	runtime       turnRuntime
 	pool          *peerslot.Pool
@@ -92,7 +94,7 @@ func newTURNManager(s *ReceiverSession, r turnRuntime) *turnManager {
 	s.owner.mu.Unlock()
 	config := s.config
 	m := &turnManager{
-		owner: s, trace: turnsession.Trace{Sink: config.Trace, Session: id}, runtime: r, pool: pool,
+		owner: s, trace: turngrant.Trace{Sink: config.Trace, Session: id}, runtime: r, pool: pool,
 		in: make(chan p.TURNGrants, 16), wait: make(map[uint64]requestState), services: make(map[string]*turnService),
 		negotiate: func(ctx context.Context, binding v2signal.Binding, grant p.TURNGrant) (Attempt, error) {
 			return config.Factory.StartTURNBinding(ctx, config.Signaling, config.Lanes, binding, grant)

@@ -1,5 +1,5 @@
 // Runs the native receive workflow with direct interface discovery unavailable.
-package main
+package engine_test
 
 import (
 	"bytes"
@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/pprof"
+	"testing"
 	"time"
 
 	"github.com/windshare/windshare/adapters/filesystem"
@@ -42,7 +43,7 @@ func pionWorkers() int {
 	return count
 }
 
-func run() error {
+func runTURNNetworkReceive(destination string, resume bool) error {
 	baseline := pionWorkers()
 	capability, err := link.Parse(os.Getenv("WINDSHARE_TEST_CAPABILITY"))
 	if err != nil {
@@ -55,10 +56,9 @@ func run() error {
 	defer capacity.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
-	destination := os.Args[1]
 	request := receive.Request{Capability: capability, Connectivity: receive.ConnectivityAuto, Destination: destination,
 		Output: filesystem.FilesystemOutput{RootPath: destination, CreateRoot: true}}
-	if len(os.Args) > 2 && os.Args[2] == "resume" {
+	if resume {
 		// Let the ordinary recovery window expire while the relay is offline so
 		// the test can exercise an explicit retry from the filesystem checkpoint.
 		request.WaitTimeout = 4 * time.Second
@@ -98,9 +98,13 @@ func run() error {
 		downloadmetrics.Snapshot
 	}{finished.Value.Transfer.Progress.FileOutcomes.ResumedFiles, finished.Value.Connectivity})
 }
-func main() {
-	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+
+func TestTURNNetworkReceive(t *testing.T) {
+	destination := os.Getenv("WINDSHARE_TURN_TEST_DESTINATION")
+	if destination == "" {
+		t.Skip("launched in an isolated process by the parallel TURN network scenario")
+	}
+	if err := runTURNNetworkReceive(destination, os.Getenv("WINDSHARE_TURN_TEST_RESUME") == "true"); err != nil {
+		t.Fatal(err)
 	}
 }

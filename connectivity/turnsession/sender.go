@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/windshare/windshare/core/session/turngrant"
+
 	diag "github.com/windshare/windshare/core/diagnostics"
 	p "github.com/windshare/windshare/core/session/protocolsession"
 )
@@ -22,7 +24,7 @@ type Sender struct {
 	mu       sync.Mutex
 	provider Provider
 	now      func() time.Time
-	trace    Trace
+	trace    turngrant.Trace
 	issued   map[p.TURNGrantID]entry
 	latest   map[string]p.TURNGrantID
 	previous map[string]p.TURNGrantID
@@ -33,7 +35,7 @@ type Sender struct {
 	work     sync.WaitGroup
 }
 
-func NewSender(trace Trace, provider Provider, now func() time.Time) *Sender {
+func NewSender(trace turngrant.Trace, provider Provider, now func() time.Time) *Sender {
 	return &Sender{trace: trace, provider: provider, now: now, issued: make(map[p.TURNGrantID]entry), latest: make(map[string]p.TURNGrantID), previous: make(map[string]p.TURNGrantID), refresh: make(map[string]time.Time), full: make(map[p.TURNMode][]uint64)}
 }
 func (s *Sender) Close() { s.mu.Lock(); s.closed = true; s.mu.Unlock(); s.work.Wait() }
@@ -120,7 +122,7 @@ func (s *Sender) resolve(ctx context.Context, d p.TURNDemand) p.TURNGrants {
 	if s.provider == nil {
 		return reply
 	}
-	request := IssueRequest{Trace: s.trace, Mode: d.Mode, ServiceIDs: d.ServiceIDs}
+	request := turngrant.IssueRequest{Trace: s.trace, Mode: d.Mode, ServiceIDs: d.ServiceIDs}
 	s.mu.Lock()
 	if len(d.ServiceIDs) == 0 {
 		request.Reusable = make(map[string]bool, len(s.latest))
