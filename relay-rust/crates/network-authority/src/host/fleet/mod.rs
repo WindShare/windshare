@@ -68,6 +68,12 @@ impl DirectoryMirror for KvMirror {
             .map_err(|error| anyhow::anyhow!("{error}"))
     }
 }
+
+// Keep TEST_DIRECTORY_RELEASE overrides out of release Worker deployments so
+// production binaries stay pinned to the compiled offline root keys.
+#[cfg(all(feature = "test-release", not(debug_assertions)))]
+compile_error!("`test-release` feature must not be enabled in release Worker builds");
+
 fn release(#[allow(unused_variables)] env: &Env) -> Result<Release> {
     #[cfg(feature = "test-release")]
     if let Ok(value) = env.var("TEST_DIRECTORY_RELEASE") {
