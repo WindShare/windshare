@@ -58,7 +58,7 @@ func (l providerLogger) Error(message string) {
 	// Late packets arriving while a shared UDP mux connection is closing trigger
 	// io.ErrClosedPipe in upstream pion/ice; downgrade routine shutdown drops here.
 	if strings.Contains(message, "Failed to write packet:") && strings.Contains(message, io.ErrClosedPipe.Error()) {
-		l.LeveledLogger.Trace(message)
+		l.Trace(message)
 		return
 	}
 	l.observe(Diagnostic{Scope: l.scope, Severity: "error", Message: message})

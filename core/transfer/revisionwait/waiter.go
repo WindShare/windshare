@@ -86,7 +86,7 @@ func (s *CapacitySignal) valid() bool {
 // MatchCapacitySignal accepts only a direct *CapacitySignal value; wrapping a
 // signal in fmt.Errorf or errors.Join intentionally strips retry authority.
 func MatchCapacitySignal(err error) (*CapacitySignal, bool) {
-	signal, ok := err.(*CapacitySignal)
+	signal, ok := err.(*CapacitySignal) //nolint:errorlint // Intentionally rejects wrapped signals.
 	return signal, ok && signal.valid()
 }
 

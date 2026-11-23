@@ -217,7 +217,7 @@ func (dependencies receiverLeaseDependencies) OpenLease(
 	opened, err := dependencies.runtime.revisions.OpenRevision(ctx, file)
 	// Direct type assertion rejects diagnostic wrappers so only an authenticated
 	// remote response can produce capacity retry authority.
-	if remote, ok := err.(*RemoteRevisionError); ok && remote != nil {
+	if remote, ok := err.(*RemoteRevisionError); ok && remote != nil { //nolint:errorlint // Intentionally rejects wrapped errors.
 		if dependencies.emitCapacitySignal {
 			if capacity, recognized := dependencies.authenticatedCapacitySignal(remote); recognized {
 				return opened, capacity

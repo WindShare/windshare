@@ -70,7 +70,7 @@ func isClosedPipeMuxWrite(message string) bool {
 
 func (l closedPipeDropLogger) Error(message string) {
 	if isClosedPipeMuxWrite(message) {
-		l.LeveledLogger.Trace(message)
+		l.Trace(message)
 		return
 	}
 	l.LeveledLogger.Error(message)

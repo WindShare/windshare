@@ -570,8 +570,14 @@ func TestCatalogStoreCloseUnblocksQueuedExclusiveRetry(t *testing.T) {
 	})
 
 	done := make(chan error, 2)
-	go func() { _, listErr := store.ListChildren(context.Background(), dirA, session, ScanOptions{}, scanner); done <- listErr }()
-	go func() { _, listErr := store.ListChildren(context.Background(), dirB, session, ScanOptions{}, scanner); done <- listErr }()
+	go func() {
+		_, listErr := store.ListChildren(context.Background(), dirA, session, ScanOptions{}, scanner)
+		done <- listErr
+	}()
+	go func() {
+		_, listErr := store.ListChildren(context.Background(), dirB, session, ScanOptions{}, scanner)
+		done <- listErr
+	}()
 
 	for {
 		store.mu.RLock()

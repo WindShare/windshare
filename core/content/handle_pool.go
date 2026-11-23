@@ -306,45 +306,47 @@ func (s *RevisionStore) reserveNewRevisionLocked(
 		busy, trace := pool.denyLocked(s, session, revisionID, CapacityResourceStableHandle, CapacityScopeSession)
 		return newRevisionReservation{}, nil, trace, busy
 	}
-	var evicted *evictedRevision
-	var decisionID CapacityDecisionID
-	handleHold, ok := s.handleLedger.Reserve(1)
-	if !ok {
-		shareBlocked := s.handleLedger.Snapshot().Used >= s.handleLedger.Limit()
-		var victim *revisionState
-		if shareBlocked {
-			victim = s.idle.head
-		} else {
-			victim = pool.idle.head
-		}
-		if victim == nil {
-			fileHold.Release()
-			leaseHold.Release()
-			scope := CapacityScopeProcess
-			if shareBlocked {
-				scope = CapacityScopeShare
-			}
-			busy, trace := pool.denyLocked(s, session, revisionID, CapacityResourceStableHandle, scope)
-			return newRevisionReservation{}, nil, trace, busy
-		}
-		decisionID = pool.nextDecisionIDLocked()
-		evicted = pool.detachIdleVictimLocked(victim, decisionID, s, session)
-		handleHold, ok = s.handleLedger.Reserve(1)
-		if !ok {
-			fileHold.Release()
-			leaseHold.Release()
-			busy, trace := pool.denyLocked(s, session, revisionID, CapacityResourceStableHandle, CapacityScopeProcess)
-			return newRevisionReservation{}, evicted, trace, busy
-		}
-	}
-	if decisionID == "" {
-		decisionID = pool.nextDecisionIDLocked()
+	attempt := s.reserveHandleWithEvictionLocked(session)
+	if !attempt.admitted {
+		fileHold.Release()
+		leaseHold.Release()
+		busy, trace := pool.denyLocked(s, session, revisionID, CapacityResourceStableHandle, attempt.blockedScope)
+		return newRevisionReservation{}, attempt.evicted, trace, busy
 	}
 	session.pending++
-	trace := pool.makeTraceLocked(CapacityTraceAdmitted, decisionID, s, session, revisionID, nil)
+	trace := pool.makeTraceLocked(CapacityTraceAdmitted, attempt.decisionID, s, session, revisionID, nil)
 	return newRevisionReservation{
-		session: session, handleHold: handleHold, leaseHold: leaseHold, fileHold: fileHold, decisionID: decisionID,
-	}, evicted, trace, nil
+		session: session, handleHold: attempt.hold, leaseHold: leaseHold, fileHold: fileHold, decisionID: attempt.decisionID,
+	}, attempt.evicted, trace, nil
+}
+
+type handleReservationAttempt struct {
+	hold         capacityledger.Hold
+	evicted      *evictedRevision
+	decisionID   CapacityDecisionID
+	blockedScope CapacityScope
+	admitted     bool
+}
+
+func (s *RevisionStore) reserveHandleWithEvictionLocked(session *RevisionSession) handleReservationAttempt {
+	if hold, ok := s.handleLedger.Reserve(1); ok {
+		return handleReservationAttempt{hold: hold, decisionID: s.pool.nextDecisionIDLocked(), admitted: true}
+	}
+	shareBlocked := s.handleLedger.Snapshot().Used >= s.handleLedger.Limit()
+	victim, scope := s.pool.idle.head, CapacityScopeProcess
+	if shareBlocked {
+		victim, scope = s.idle.head, CapacityScopeShare
+	}
+	if victim == nil {
+		return handleReservationAttempt{blockedScope: scope}
+	}
+	decisionID := s.pool.nextDecisionIDLocked()
+	evicted := s.pool.detachIdleVictimLocked(victim, decisionID, s, session)
+	hold, ok := s.handleLedger.Reserve(1)
+	if !ok {
+		return handleReservationAttempt{evicted: evicted, blockedScope: CapacityScopeProcess}
+	}
+	return handleReservationAttempt{hold: hold, evicted: evicted, decisionID: decisionID, admitted: true}
 }
 
 func (p *HandlePool) detachIdleVictimLocked(
@@ -413,29 +415,25 @@ func (l *idleList) insert(r *revisionState) {
 	if link.linked {
 		return
 	}
-	cur := l.tail
-	for cur != nil && idleBefore(r, cur) {
-		cur = l.linkOf(cur).prev
+	prev := l.tail
+	for prev != nil && idleBefore(r, prev) {
+		prev = l.linkOf(prev).prev
 	}
-	if cur == nil {
-		link.prev = nil
-		link.next = l.head
-		if l.head != nil {
-			l.linkOf(l.head).prev = r
-		} else {
-			l.tail = r
-		}
+	var next *revisionState
+	if prev == nil {
+		next = l.head
 		l.head = r
 	} else {
-		curLink := l.linkOf(cur)
-		link.prev = cur
-		link.next = curLink.next
-		if curLink.next != nil {
-			l.linkOf(curLink.next).prev = r
-		} else {
-			l.tail = r
-		}
-		curLink.next = r
+		prevLink := l.linkOf(prev)
+		next = prevLink.next
+		prevLink.next = r
+	}
+	link.prev = prev
+	link.next = next
+	if next != nil {
+		l.linkOf(next).prev = r
+	} else {
+		l.tail = r
 	}
 	link.linked = true
 	l.count++
