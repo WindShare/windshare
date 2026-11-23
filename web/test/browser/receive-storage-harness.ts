@@ -273,6 +273,132 @@ export async function verifyFSABackendOverNativeHandles(databaseName: string) {
   }
 }
 
+export async function verifyFSADiscardSafetyOverNativeHandles(databaseName: string) {
+  const store = await ReceiveStore.open(databaseName)
+  const root = await navigator.storage.getDirectory()
+  const sandboxName = `fsa-discard-safety-${crypto.randomUUID()}`
+  const parent = await root.getDirectoryHandle(sandboxName, { create: true })
+
+  try {
+    // Case 1: 0 completed files + foreign user file placed in result directory -> preserve user file & directory.
+    const foreignTaskId = `fsa-foreign-${crypto.randomUUID()}`
+    const foreignSession = await openNewFSASession({
+      task: {
+        taskId: foreignTaskId,
+        selection: { shareInstance: 'share-fsa', syntheticRoot: 'root', defaultSelected: true, rules: [] },
+        selectionKey: 'sel-foreign',
+        artifact: { kind: 'directory-tree', name: 'Trip' },
+        lifecycle: initialReceiveState(foreignTaskId),
+      },
+      parentHandle: parent,
+      store,
+    })
+    const draft = await foreignSession.transferOutput.openFile({
+      fileId: 'f1', path: ['sub', 'draft.bin'], sourcePath: ['Trip', 'sub', 'draft.bin'], revision: 'r1', exactSize: 16n,
+    }, new AbortController().signal)
+    await draft.writeAt(0n, new Uint8Array([1, 2, 3, 4]))
+    await draft.pause([byteRange(0n, 4n)])
+    const foreignPaused = await foreignSession.settle({
+      status: 'paused', pauseReason: 'user',
+      completedFiles: 0n, completedBytes: 0n, discoveredFiles: 1n, discoveredBytes: 16n,
+      discoveryComplete: true, failedFiles: 0n, failedDirectories: 0n,
+    })
+    await foreignSession.close()
+
+    const tripDir = await parent.getDirectoryHandle('Trip')
+    const userHandle = await tripDir.getFileHandle('user-note.txt', { create: true })
+    const userWriter = await userHandle.createWritable()
+    await userWriter.write('do-not-delete')
+    await userWriter.close()
+
+    await discardFSATask(foreignPaused, store)
+    const tripNames = await listDirectoryKeys(tripDir)
+    const preservedText = await (await (await tripDir.getFileHandle('user-note.txt')).getFile()).text()
+
+    // Case 2: 0 completed files + no foreign files -> unfinished file, empty subdir, and empty root removed.
+    const cleanTaskId = `fsa-clean-${crypto.randomUUID()}`
+    const cleanSession = await openNewFSASession({
+      task: {
+        taskId: cleanTaskId,
+        selection: { shareInstance: 'share-fsa', syntheticRoot: 'root', defaultSelected: true, rules: [] },
+        selectionKey: 'sel-clean',
+        artifact: { kind: 'directory-tree', name: 'EmptyAfterDiscard' },
+        lifecycle: initialReceiveState(cleanTaskId),
+      },
+      parentHandle: parent,
+      store,
+    })
+    const part = await cleanSession.transferOutput.openFile({
+      fileId: 'f1', path: ['nested', 'part.bin'], sourcePath: ['EmptyAfterDiscard', 'nested', 'part.bin'], revision: 'r1', exactSize: 16n,
+    }, new AbortController().signal)
+    await part.writeAt(0n, new Uint8Array([9, 8, 7, 6]))
+    await part.pause([byteRange(0n, 4n)])
+    const cleanPaused = await cleanSession.settle({
+      status: 'paused', pauseReason: 'user',
+      completedFiles: 0n, completedBytes: 0n, discoveredFiles: 1n, discoveredBytes: 16n,
+      discoveryComplete: true, failedFiles: 0n, failedDirectories: 0n,
+    })
+    await cleanSession.close()
+
+    await discardFSATask(cleanPaused, store)
+    const cleanRootRemoved = await parent.getDirectoryHandle('EmptyAfterDiscard').then(() => false, () => true)
+
+    // Case 3: Unfinished file externally overwritten at the same path -> preserved on discard.
+    const replacedTaskId = `fsa-replaced-${crypto.randomUUID()}`
+    const replacedSession = await openNewFSASession({
+      task: {
+        taskId: replacedTaskId,
+        selection: { shareInstance: 'share-fsa', syntheticRoot: 'root', defaultSelected: true, rules: [] },
+        selectionKey: 'sel-replaced',
+        artifact: { kind: 'directory-tree', name: 'Replaced' },
+        lifecycle: initialReceiveState(replacedTaskId),
+      },
+      parentHandle: parent,
+      store,
+    })
+    const clip = await replacedSession.transferOutput.openFile({
+      fileId: 'f1', path: ['clip.bin'], sourcePath: ['Replaced', 'clip.bin'], revision: 'r1', exactSize: 16n,
+    }, new AbortController().signal)
+    await clip.writeAt(0n, new Uint8Array([1, 2, 3, 4]))
+    await clip.pause([byteRange(0n, 4n)])
+    const replacedPaused = await replacedSession.settle({
+      status: 'paused', pauseReason: 'user',
+      completedFiles: 0n, completedBytes: 0n, discoveredFiles: 1n, discoveredBytes: 16n,
+      discoveryComplete: true, failedFiles: 0n, failedDirectories: 0n,
+    })
+    await replacedSession.close()
+
+    const replacedDir = await parent.getDirectoryHandle('Replaced')
+    const replacedHandle = await replacedDir.getFileHandle('clip.bin')
+    const replaceWriter = await replacedHandle.createWritable()
+    await replaceWriter.write('user-owned-replacement')
+    await replaceWriter.close()
+
+    await discardFSATask(replacedPaused, store)
+    const replacedText = await (await (await replacedDir.getFileHandle('clip.bin')).getFile()).text()
+
+    return {
+      tripNames,
+      preservedText,
+      cleanRootRemoved,
+      replacedText,
+      allTasksDeleted: (await store.listTasks()).length === 0,
+    }
+  } finally {
+    store.close()
+    await root.removeEntry(sandboxName, { recursive: true }).catch(() => undefined)
+    await deleteDatabase(databaseName)
+  }
+}
+
+async function listDirectoryKeys(dir: FileSystemDirectoryHandle): Promise<string[]> {
+  const names: string[] = []
+  for await (const name of (dir as FileSystemDirectoryHandle & { keys(): AsyncIterableIterator<string> }).keys()) {
+    names.push(name)
+  }
+  return names.sort()
+}
+
 export async function verifyPortableStreamingZip() {
   const downloads: Array<{ name: string; blob: Blob }> = []
   const captureWindow = createCaptureDownloadWindow(downloads)

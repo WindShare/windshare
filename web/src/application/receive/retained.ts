@@ -117,7 +117,7 @@ async function removeRetainedTask(
   if (record.backend === 'opfs') {
     await deleteOPFSTask(record, env.store, resolveOPFSEnv(env))
   } else if (record.backend === 'fsa') {
-    await discardFSATask(record, env.store, env.locks)
+    await discardFSATask(record, env.store, env.locks, env.diagnostics)
   } else {
     await env.store.deleteTask(record.taskId)
   }

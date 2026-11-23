@@ -120,6 +120,27 @@ test('FSA backend reserves collision names, verifies physical files on resume, a
   })
 })
 
+test('FSA discard preserves foreign and replaced files and removes the result directory only when empty', async ({
+  page,
+  browserName,
+}) => {
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
+  await requireOriginPrivateStorage(page, browserName)
+
+  const result = await page.evaluate(async ({ path, db }) => {
+    const harness = await import(path) as typeof import('./receive-storage-harness')
+    return harness.verifyFSADiscardSafetyOverNativeHandles(db)
+  }, { path: HARNESS_PATH, db: `windshare-fsa-discard-test-${crypto.randomUUID()}` })
+
+  expect(result).toEqual({
+    tripNames: ['user-note.txt'],
+    preservedText: 'do-not-delete',
+    cleanRootRemoved: true,
+    replacedText: 'user-owned-replacement',
+    allTasksDeleted: true,
+  })
+})
+
 test('portable backend streams valid Store-mode ZIP archives to browser download', async ({ page }) => {
   await page.goto(BROWSER_CONTRACT_HOST_PATH)
   const result = await page.evaluate(async path => {

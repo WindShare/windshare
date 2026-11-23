@@ -29,6 +29,12 @@ import {
   type ReceiveTaskRecord,
 } from '../store/types'
 import type { BrowserOutputWindow, OutputSessionHandle, StartBackendTaskInput } from './contract'
+import {
+  cleanupFSATaskEntries,
+  pruneEmptySubdirectories,
+  readPhysicalFileStat,
+  removeFreshEmptyFile,
+} from './fsa-cleanup'
 import { SafeNameRegistry, decideCollisionName, deterministicSafeComponent } from './safe-name'
 
 const FSA_MAX_CONCURRENT_FILES = 4
@@ -84,6 +90,7 @@ export async function openNewFSASession(input: Readonly<{
     const target: FSATargetRecord = Object.freeze({
       kind: 'fsa',
       parentHandle: input.parentHandle,
+      ...(singleFile ? {} : { rootHandle }),
       reservedName,
       collisionIndex,
       singleFile,
@@ -152,12 +159,16 @@ export async function reopenFSASession(input: Readonly<{
     const rootHandle = target.singleFile
       ? target.parentHandle
       : await target.parentHandle.getDirectoryHandle(target.reservedName, { create: true })
+    const updatedTarget: FSATargetRecord = target.singleFile
+      ? target
+      : Object.freeze({ ...target, rootHandle })
     const downloading = transitionReceiveState(input.task.lifecycle, {
       kind: 'downloading',
       phase: 'receiving',
     })
     const updated: ReceiveTaskRecord = Object.freeze({
       ...input.task,
+      target: updatedTarget,
       lifecycle: downloading,
       updatedAt: Date.now(),
     })
@@ -181,6 +192,7 @@ export async function discardFSATask(
   task: ReceiveTaskRecord,
   store: ReceiveStore,
   locks?: LockManager,
+  diagnostics?: OutputDiagnosticsPorts,
 ): Promise<void> {
   if (task.target.kind !== 'fsa') {
     await store.deleteTask(task.taskId)
@@ -191,30 +203,11 @@ export async function discardFSATask(
     const files = await store.listTaskFiles(task.taskId)
     const perm = await ensureFSAPermission(task.target.parentHandle, true).catch(() => 'denied' as const)
     if (perm === 'granted') {
-      await cleanupFSATaskEntries(task.target, files)
+      await cleanupFSATaskEntries(task.taskId, task.target, files, diagnostics)
     }
     await store.deleteTask(task.taskId)
   } finally {
     await lock.release()
-  }
-}
-
-async function cleanupFSATaskEntries(
-  target: FSATargetRecord,
-  files: readonly ReceiveFileRecord[],
-): Promise<void> {
-  if (!files.some(file => file.status === 'completed')) {
-    await target.parentHandle.removeEntry(target.reservedName, { recursive: true }).catch(() => undefined)
-    return
-  }
-  const rootDir = target.singleFile
-    ? target.parentHandle
-    : await target.parentHandle.getDirectoryHandle(target.reservedName).catch(() => undefined)
-  if (rootDir === undefined) return
-  for (const file of files) {
-    if (file.status !== 'completed') {
-      await removeUnfinishedFile(rootDir, file).catch(() => undefined)
-    }
   }
 }
 
@@ -264,6 +257,9 @@ class FSASessionHandle implements OutputSessionHandle {
   }
 
   async settle(result: TransferJobResult): Promise<ReceiveTaskRecord> {
+    if (result.status === 'stopped' && this.#record.target.kind === 'fsa' && !this.#record.target.singleFile) {
+      await pruneEmptySubdirectories(this.#rootHandle, [...this.#dirCache.values()]).catch(() => undefined)
+    }
     const files = await this.#store.listTaskFiles(this.taskId)
     let retainedBytes = 0n
     for (const file of files) retainedBytes += completedTuplesBytes(file.completedRanges)
@@ -318,8 +314,10 @@ class FSASessionHandle implements OutputSessionHandle {
     return new FSAOutputFile({
       taskId: this.taskId,
       request,
+      parentDir,
       handle,
       physicalName,
+      freshUnpersisted: existing === undefined,
       store: this.#store,
       initialRanges,
       ...(verified?.revision === undefined ? {} : { savedRevision: verified.revision }),
@@ -366,10 +364,12 @@ class FSAOutputFile implements TransferOutputFile {
   readonly savedSize?: bigint
   readonly #taskId: string
   readonly #request: TransferFileRequest
+  readonly #parentDir: FileSystemDirectoryHandle
   readonly #handle: FileSystemFileHandle
   readonly #physicalName: string
   readonly #store: ReceiveStore
   readonly #diagnostics: OutputDiagnosticsPorts | undefined
+  #freshUnpersisted: boolean
   #writer: FileSystemWritableFileStream | undefined
   #writerDirty = false
   #hasCommittedData: boolean
@@ -377,8 +377,10 @@ class FSAOutputFile implements TransferOutputFile {
   constructor(input: Readonly<{
     taskId: string
     request: TransferFileRequest
+    parentDir: FileSystemDirectoryHandle
     handle: FileSystemFileHandle
     physicalName: string
+    freshUnpersisted: boolean
     store: ReceiveStore
     initialRanges: readonly ByteRange[]
     savedRevision?: string
@@ -388,8 +390,10 @@ class FSAOutputFile implements TransferOutputFile {
   }>) {
     this.#taskId = input.taskId
     this.#request = input.request
+    this.#parentDir = input.parentDir
     this.#handle = input.handle
     this.#physicalName = input.physicalName
+    this.#freshUnpersisted = input.freshUnpersisted
     this.#store = input.store
     this.#diagnostics = input.diagnostics
     this.completedRanges = input.initialRanges
@@ -412,11 +416,13 @@ class FSAOutputFile implements TransferOutputFile {
   async checkpoint(ranges: readonly ByteRange[]): Promise<void> {
     // Flush physical bytes to disk BEFORE recording ranges in IndexedDB.
     await this.#closeWriter()
+    this.#freshUnpersisted = false
     await this.#persist('receiving', ranges)
   }
 
   async commit(ranges: readonly ByteRange[]): Promise<void> {
     await this.#closeWriter()
+    this.#freshUnpersisted = false
     await this.#persist('completed', ranges)
     emitOutputTrace(this.#diagnostics?.trace, 'output_write', {
       backend: 'file_system_access',
@@ -425,8 +431,7 @@ class FSAOutputFile implements TransferOutputFile {
   }
 
   async pause(ranges: readonly ByteRange[]): Promise<void> {
-    await this.#closeWriter()
-    await this.#persist('receiving', ranges)
+    return this.checkpoint(ranges)
   }
 
   async abort(reason?: unknown): Promise<void> {
@@ -435,6 +440,10 @@ class FSAOutputFile implements TransferOutputFile {
     this.#writerDirty = false
     if (writer !== undefined) {
       await writer.abort(reason).catch(() => undefined)
+    }
+    if (this.#freshUnpersisted) {
+      this.#freshUnpersisted = false
+      await removeFreshEmptyFile(this.#parentDir, this.#physicalName, this.#handle)
     }
   }
 
@@ -456,6 +465,11 @@ class FSAOutputFile implements TransferOutputFile {
   }
 
   async #persist(status: 'receiving' | 'completed', ranges: readonly ByteRange[]): Promise<void> {
+    // Capture physical stat only for unfinished checkpoints/pauses so discard can verify
+    // the file was not replaced externally without adding stat calls to completed small files.
+    const physicalStat = status === 'receiving'
+      ? await readPhysicalFileStat(this.#handle)
+      : undefined
     const row: ReceiveFileRecord = Object.freeze({
       id: fileRecordId(this.#taskId, this.#request.fileId),
       taskId: this.#taskId,
@@ -468,6 +482,7 @@ class FSAOutputFile implements TransferOutputFile {
       completedRanges: toRangeTuples(ranges),
       status,
       handle: this.#handle,
+      ...(physicalStat === undefined ? {} : physicalStat),
     })
     await this.#store.putFile(row)
   }
@@ -624,18 +639,6 @@ async function probeHandle(open: () => Promise<unknown>): Promise<'missing' | 'e
     if (isPermissionDeniedError(error)) throw error
     return 'missing'
   }
-}
-
-async function removeUnfinishedFile(
-  rootDir: FileSystemDirectoryHandle,
-  file: ReceiveFileRecord,
-): Promise<void> {
-  let dir = rootDir
-  for (let index = 0; index < file.path.length - 1; index++) {
-    dir = await dir.getDirectoryHandle(file.path[index]!)
-  }
-  const name = file.physicalName ?? file.path.at(-1)
-  if (name !== undefined) await dir.removeEntry(name)
 }
 
 function nextFSALifecycle(

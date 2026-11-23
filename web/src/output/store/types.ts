@@ -14,6 +14,7 @@ export type CompletedRangeTuple = readonly [bigint, bigint]
 export interface FSATargetRecord {
   readonly kind: 'fsa'
   readonly parentHandle: FileSystemDirectoryHandle
+  readonly rootHandle?: FileSystemDirectoryHandle
   readonly reservedName: string
   readonly collisionIndex: number
   readonly singleFile: boolean
@@ -80,6 +81,8 @@ export interface ReceiveFileRecord {
   readonly completedRanges: readonly CompletedRangeTuple[]
   readonly status: 'receiving' | 'completed' | 'failed'
   readonly handle?: FileSystemFileHandle
+  readonly physicalSize?: bigint
+  readonly physicalLastModified?: number
   readonly zipEntry?: ZipEntryLayoutRecord
 }
 

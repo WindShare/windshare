@@ -5,10 +5,18 @@ import type { FileRevisionDescriptor } from '../../src/content/records'
 import type { RevisionReader } from '../../src/content/session-services'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import { discardFSATask, openNewFSASession, reopenFSASession } from '../../src/output/backends/fsa'
+import type { OutputTraceEvent } from '../../src/output/diagnostics'
 import type { ReceiveStore } from '../../src/output/store/database'
 import type { ReceiveFileRecord, ReceiveTaskRecord } from '../../src/output/store/types'
 import { transferSingleFile } from '../../src/transfer/file-transfer'
 import { initialReceiveState } from '../../src/transfer/state'
+
+let fakeClockMs = 1_700_000_000_000
+
+function nextFakeTimestamp(): number {
+  fakeClockMs += 1_000
+  return fakeClockMs
+}
 
 class MemoryReceiveStore {
   readonly tasks = new Map<string, ReceiveTaskRecord>()
@@ -54,6 +62,7 @@ class FakeFileHandle {
   readonly name: string
   bytes = new Uint8Array(0)
   readonly writableCalls: boolean[] = []
+  lastModified = nextFakeTimestamp()
   readonly #events: string[]
 
   constructor(name: string, events: string[]) {
@@ -61,8 +70,17 @@ class FakeFileHandle {
     this.#events = events
   }
 
+  async isSameEntry(other: FileSystemHandle): Promise<boolean> {
+    return other === (this as unknown as FileSystemHandle)
+  }
+
   async getFile(): Promise<File> {
-    return new File([this.bytes], this.name)
+    return new File([this.bytes], this.name, { lastModified: this.lastModified })
+  }
+
+  overwriteExternally(bytes: Uint8Array): void {
+    this.bytes = new Uint8Array(bytes)
+    this.lastModified = nextFakeTimestamp()
   }
 
   async createWritable(options?: { keepExistingData?: boolean }) {
@@ -81,6 +99,7 @@ class FakeFileHandle {
       },
       close: async () => {
         this.bytes = buffer
+        this.lastModified = nextFakeTimestamp()
         this.#events.push(`writer.close:${this.name}`)
       },
       abort: async () => undefined,
@@ -104,6 +123,26 @@ class FakeDirectoryHandle {
   async queryPermission(): Promise<'granted'> { return 'granted' }
   async requestPermission(): Promise<'granted'> { return 'granted' }
 
+  async isSameEntry(other: FileSystemHandle): Promise<boolean> {
+    return other === (this as unknown as FileSystemHandle)
+  }
+
+  async *keys(): AsyncIterableIterator<string> {
+    for (const key of this.children.keys()) yield key
+  }
+
+  async resolve(target: FileSystemHandle): Promise<string[] | null> {
+    if (target === (this as unknown as FileSystemHandle)) return []
+    for (const [name, child] of this.children) {
+      if (child === (target as unknown)) return [name]
+      if (child instanceof FakeDirectoryHandle) {
+        const nested = await child.resolve(target)
+        if (nested !== null) return [name, ...nested]
+      }
+    }
+    return null
+  }
+
   async getDirectoryHandle(name: string, options?: { create?: boolean }): Promise<FakeDirectoryHandle> {
     if (this.#rejectNames.has(name)) throw new TypeError(`Invalid name ${name}`)
     const existing = this.children.get(name)
@@ -126,7 +165,12 @@ class FakeDirectoryHandle {
     return created
   }
 
-  async removeEntry(name: string): Promise<void> {
+  async removeEntry(name: string, options?: { recursive?: boolean }): Promise<void> {
+    const existing = this.children.get(name)
+    if (existing === undefined) throw new DOMException('missing', 'NotFoundError')
+    if (existing instanceof FakeDirectoryHandle && existing.children.size > 0 && !options?.recursive) {
+      throw new DOMException('Directory is not empty', 'InvalidModificationError')
+    }
     this.children.delete(name)
   }
 }
@@ -173,9 +217,16 @@ describe('FSA backend safety boundaries', () => {
     await fileB.writeAt(0n, new Uint8Array([9, 8, 7, 6]))
     await fileB.pause([byteRange(0n, 4n)])
 
+    // Write partial third file to test external truncation rejection separately from unmodified discard.
+    const fileC = await session.transferOutput.openFile({
+      fileId: 'f3', path: ['truncated.bin'], sourcePath: ['Photos', 'truncated.bin'], revision: 'rev3', exactSize: 8n,
+    }, new AbortController().signal)
+    await fileC.writeAt(0n, new Uint8Array([5, 6, 7, 8]))
+    await fileC.pause([byteRange(0n, 4n)])
+
     const pausedTask = await session.settle({
       status: 'paused', pauseReason: 'user',
-      completedFiles: 1n, completedBytes: 4n, discoveredFiles: 2n, discoveredBytes: 12n,
+      completedFiles: 1n, completedBytes: 4n, discoveredFiles: 3n, discoveredBytes: 20n,
       discoveryComplete: true, failedFiles: 0n, failedDirectories: 0n,
     })
     await session.close()
@@ -189,19 +240,20 @@ describe('FSA backend safety boundaries', () => {
     }, new AbortController().signal)
     expect(resumedA.alreadyCompleted).toBe(true)
 
-    // Simulate external truncation of f2 -> verification MUST reject stale IDB ranges!
-    const physicalB = reserved.children.get('big.bin') as FakeFileHandle
-    physicalB.bytes = new Uint8Array(2)
-    const resumedB = await reopened.transferOutput.openFile({
-      fileId: 'f2', path: ['big.bin'], sourcePath: ['Photos', 'big.bin'], revision: 'rev2', exactSize: 8n,
+    // Simulate external truncation of f3 -> verification MUST reject stale IDB ranges!
+    const physicalC = reserved.children.get('truncated.bin') as FakeFileHandle
+    physicalC.overwriteExternally(new Uint8Array(2))
+    const resumedC = await reopened.transferOutput.openFile({
+      fileId: 'f3', path: ['truncated.bin'], sourcePath: ['Photos', 'truncated.bin'], revision: 'rev3', exactSize: 8n,
     }, new AbortController().signal)
-    expect(resumedB.completedRanges).toEqual([])
+    expect(resumedC.completedRanges).toEqual([])
     await reopened.close()
 
-    // Discard preserves completed file f1 and removes unfinished file f2.
+    // Discard preserves completed file f1, removes verified unfinished f2, and preserves externally modified f3.
     await discardFSATask(pausedTask, store as unknown as ReceiveStore)
     expect(reserved.children.has('big.bin')).toBe(false)
-    expect(reserved.children.size).toBe(1)
+    expect(reserved.children.has('truncated.bin')).toBe(true)
+    expect(reserved.children.size).toBe(2)
     expect(await store.getTask('fsa-task-1')).toBeUndefined()
   })
 
@@ -311,5 +363,197 @@ describe('FSA backend safety boundaries', () => {
     expect(physical.bytes[chunkBytes]).toBe(12)
     expect(physical.bytes[chunkBytes * 2]).toBe(13)
     expect(physical.bytes[chunkBytes * 3 - 1]).toBe(23)
+  })
+
+  it('preserves foreign user files when discarding a directory download with zero completed files', async () => {
+    const store = new MemoryReceiveStore()
+    const parent = new FakeDirectoryHandle('Downloads', store.events)
+    const traces: OutputTraceEvent[] = []
+    const session = await openNewFSASession({
+      task: {
+        taskId: 'fsa-foreign',
+        selection: { shareInstance: 's1', syntheticRoot: 'r1', defaultSelected: true, rules: [] },
+        selectionKey: 'sel-foreign',
+        artifact: { kind: 'directory-tree', name: 'Trip' },
+        lifecycle: initialReceiveState('fsa-foreign'),
+      },
+      parentHandle: parent as unknown as FileSystemDirectoryHandle,
+      store: store as unknown as ReceiveStore,
+    })
+
+    const file = await session.transferOutput.openFile({
+      fileId: 'f1', path: ['sub', 'draft.bin'], sourcePath: ['Trip', 'sub', 'draft.bin'], revision: 'rev1', exactSize: 16n,
+    }, new AbortController().signal)
+    await file.writeAt(0n, new Uint8Array([1, 2, 3, 4]))
+    await file.pause([byteRange(0n, 4n)])
+    const paused = await session.settle({
+      status: 'paused', pauseReason: 'user',
+      completedFiles: 0n, completedBytes: 0n, discoveredFiles: 1n, discoveredBytes: 16n,
+      discoveryComplete: true, failedFiles: 0n, failedDirectories: 0n,
+    })
+    await session.close()
+
+    // User places their own file inside the result directory before discarding.
+    const reserved = parent.children.get('Trip') as FakeDirectoryHandle
+    const userFile = await reserved.getFileHandle('user-notes.txt', { create: true })
+    userFile.overwriteExternally(new TextEncoder().encode('keep me'))
+
+    await discardFSATask(paused, store as unknown as ReceiveStore, undefined, {
+      backend: 'file_system_access',
+      trace: { current: event => traces.push(event) },
+    })
+
+    expect(parent.children.has('Trip')).toBe(true)
+    expect(reserved.children.has('sub')).toBe(false)
+    expect(reserved.children.has('user-notes.txt')).toBe(true)
+    expect(await store.getTask('fsa-foreign')).toBeUndefined()
+    expect(traces.at(-1)).toEqual({
+      eventName: 'cleanup',
+      payload: {
+        backend: 'file_system_access',
+        task_id: 'fsa-foreign',
+        transition: 'completed',
+        removed_files: 1,
+        skipped_unverified_files: 0,
+        removed_root: false,
+      },
+    })
+  })
+
+  it('cleans unfinished files under safe-renamed subdirectories and removes the result directory only when empty', async () => {
+    const store = new MemoryReceiveStore()
+    const parent = new FakeDirectoryHandle('Downloads', store.events, ['CON'])
+    const session = await openNewFSASession({
+      task: {
+        taskId: 'fsa-safe-dir',
+        selection: { shareInstance: 's1', syntheticRoot: 'r1', defaultSelected: true, rules: [] },
+        selectionKey: 'sel-safe',
+        artifact: { kind: 'directory-tree', name: 'Bundle' },
+        lifecycle: initialReceiveState('fsa-safe-dir'),
+      },
+      parentHandle: parent as unknown as FileSystemDirectoryHandle,
+      store: store as unknown as ReceiveStore,
+    })
+
+    const file = await session.transferOutput.openFile({
+      fileId: 'f1', path: ['CON', 'part.bin'], sourcePath: ['Bundle', 'CON', 'part.bin'], revision: 'rev1', exactSize: 10n,
+    }, new AbortController().signal)
+    await file.writeAt(0n, new Uint8Array([7, 8]))
+    await file.pause([byteRange(0n, 2n)])
+    const paused = await session.settle({
+      status: 'paused', pauseReason: 'user',
+      completedFiles: 0n, completedBytes: 0n, discoveredFiles: 1n, discoveredBytes: 10n,
+      discoveryComplete: true, failedFiles: 0n, failedDirectories: 0n,
+    })
+    await session.close()
+
+    await discardFSATask(paused, store as unknown as ReceiveStore)
+    expect(parent.children.has('Bundle')).toBe(false)
+    expect(await store.getTask('fsa-safe-dir')).toBeUndefined()
+  })
+
+  it('refuses to touch a replaced root directory whose handle identity no longer matches', async () => {
+    const store = new MemoryReceiveStore()
+    const parent = new FakeDirectoryHandle('Downloads', store.events)
+    const session = await openNewFSASession({
+      task: {
+        taskId: 'fsa-replaced-root',
+        selection: { shareInstance: 's1', syntheticRoot: 'r1', defaultSelected: true, rules: [] },
+        selectionKey: 'sel-root',
+        artifact: { kind: 'directory-tree', name: 'Docs' },
+        lifecycle: initialReceiveState('fsa-replaced-root'),
+      },
+      parentHandle: parent as unknown as FileSystemDirectoryHandle,
+      store: store as unknown as ReceiveStore,
+    })
+    const paused = await session.settle({
+      status: 'paused', pauseReason: 'user',
+      completedFiles: 0n, completedBytes: 0n, discoveredFiles: 0n, discoveredBytes: 0n,
+      discoveryComplete: false, failedFiles: 0n, failedDirectories: 0n,
+    })
+    await session.close()
+
+    // User deletes empty Docs and creates a brand-new Docs directory of their own.
+    await parent.removeEntry('Docs')
+    const userDocs = await parent.getDirectoryHandle('Docs', { create: true })
+    const userFile = await userDocs.getFileHandle('tax.pdf', { create: true })
+    userFile.overwriteExternally(new Uint8Array([1, 2, 3]))
+
+    await discardFSATask(paused, store as unknown as ReceiveStore)
+    expect(parent.children.get('Docs')).toBe(userDocs)
+    expect(userDocs.children.has('tax.pdf')).toBe(true)
+    expect(await store.getTask('fsa-replaced-root')).toBeUndefined()
+  })
+
+  it('verifies identity before deleting single-file FSA downloads and preserves replaced files', async () => {
+    const store = new MemoryReceiveStore()
+    const parent = new FakeDirectoryHandle('Downloads', store.events)
+    const session = await openNewFSASession({
+      task: {
+        taskId: 'fsa-single',
+        selection: { shareInstance: 's1', syntheticRoot: 'r1', defaultSelected: true, rules: [] },
+        selectionKey: 'sel-single',
+        artifact: { kind: 'directory-tree', name: 'report.pdf', singleFileId: 'f1' },
+        lifecycle: initialReceiveState('fsa-single'),
+      },
+      parentHandle: parent as unknown as FileSystemDirectoryHandle,
+      store: store as unknown as ReceiveStore,
+    })
+
+    const file = await session.transferOutput.openFile({
+      fileId: 'f1', path: ['report.pdf'], sourcePath: ['report.pdf'], revision: 'rev1', exactSize: 12n,
+    }, new AbortController().signal)
+    await file.writeAt(0n, new Uint8Array([1, 2, 3, 4]))
+    await file.pause([byteRange(0n, 4n)])
+    const paused = await session.settle({
+      status: 'paused', pauseReason: 'user',
+      completedFiles: 0n, completedBytes: 0n, discoveredFiles: 1n, discoveredBytes: 12n,
+      discoveryComplete: true, failedFiles: 0n, failedDirectories: 0n,
+    })
+    await session.close()
+
+    // Replace report.pdf in-place with user content (same handle object, mimicking Chromium path-based isSameEntry).
+    const physical = parent.children.get('report.pdf') as FakeFileHandle
+    physical.overwriteExternally(new TextEncoder().encode('real report'))
+
+    await discardFSATask(paused, store as unknown as ReceiveStore)
+    expect(parent.children.has('report.pdf')).toBe(true)
+    expect(await store.getTask('fsa-single')).toBeUndefined()
+  })
+
+  it('cleans fresh 0-byte files and empty subdirectories on stop while preserving foreign files', async () => {
+    const store = new MemoryReceiveStore()
+    const parent = new FakeDirectoryHandle('Downloads', store.events)
+    const session = await openNewFSASession({
+      task: {
+        taskId: 'fsa-stop',
+        selection: { shareInstance: 's1', syntheticRoot: 'r1', defaultSelected: true, rules: [] },
+        selectionKey: 'sel-stop',
+        artifact: { kind: 'directory-tree', name: 'CancelMe' },
+        lifecycle: initialReceiveState('fsa-stop'),
+      },
+      parentHandle: parent as unknown as FileSystemDirectoryHandle,
+      store: store as unknown as ReceiveStore,
+    })
+
+    await session.transferOutput.ensureDirectory?.({ directoryId: 'd1', path: ['empty-sub'] }, new AbortController().signal)
+    const file = await session.transferOutput.openFile({
+      fileId: 'f1', path: ['nested', 'video.bin'], sourcePath: ['CancelMe', 'nested', 'video.bin'], revision: 'rev1', exactSize: 100n,
+    }, new AbortController().signal)
+    await file.writeAt(0n, new Uint8Array([1, 2, 3]))
+    await file.abort(new DOMException('stopped', 'AbortError'))
+
+    const stopped = await session.settle({
+      status: 'stopped',
+      completedFiles: 0n, completedBytes: 0n, discoveredFiles: 1n, discoveredBytes: 100n,
+      discoveryComplete: false, failedFiles: 0n, failedDirectories: 0n,
+    })
+    await session.close()
+
+    const reserved = parent.children.get('CancelMe') as FakeDirectoryHandle
+    expect(reserved.children.size).toBe(0)
+
+    await discardFSATask(stopped, store as unknown as ReceiveStore)
+    expect(parent.children.has('CancelMe')).toBe(false)
   })
 })
