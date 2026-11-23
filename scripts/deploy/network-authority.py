@@ -21,6 +21,12 @@ PEPPER_ID = re.compile(r"[a-z0-9_-]{1,16}\Z")
 PEPPER_KEY = re.compile(r"[A-Za-z0-9_-]{43}\Z")
 
 
+def dns_host(value, label="hostname"):
+    if not isinstance(value, str) or not HOST.fullmatch(value):
+        raise ValueError(f"Expected a lowercase DNS hostname for {label}")
+    return value
+
+
 def https_origin(address):
     url = urlsplit(address)
     if url.scheme != "https" or not HOST.fullmatch(url.netloc) or url.query or url.fragment or url.path not in ("", "/"):
@@ -87,6 +93,7 @@ def prepare_pepper(path):
 def prepare_token(path, host):
     if os.environ.get("CI"):
         raise ValueError("Prepare the administrator link on the operator machine")
+    host = dns_host(host, "--api-host")
     if not path.exists():
         fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as output:
@@ -118,16 +125,15 @@ def deploy(args):
         return
     if not args.api_host:
         raise ValueError("--api-host or AUTHORITY_API_HOST is required")
-    host = args.api_host
-    api = https_origin("https://" + host)
+    host = dns_host(args.api_host, "--api-host")
+    api = "https://" + host
     if args.prepare_initialization:
         prepare_token(args.prepare_initialization, host)
         return
     worker = args.worker_name
     if not WORKER.fullmatch(worker):
         raise ValueError("Invalid worker name")
-    origin = args.origin_host or host
-    https_origin("https://" + origin)
+    origin = dns_host(args.origin_host, "--origin-host") if args.origin_host else host
     if origin != host and (not args.zone or not HOST.fullmatch(args.zone) or not origin.endswith("." + args.zone)):
         raise ValueError("The SaaS origin must belong to the selected zone")
     trust = json.loads(args.trust.read_text(encoding="utf-8") if args.trust else os.environ["AUTHORITY_TRUST"])
@@ -158,7 +164,7 @@ def deploy(args):
         "PASSWORD_PEPPER": pepper,
     }
     if origin != host:
-        values["AUTHORITY_ORIGIN"] = https_origin("https://" + origin)
+        values["AUTHORITY_ORIGIN"] = "https://" + origin
     mail_url = os.environ.get("EMAIL_WEBHOOK_URL", "").strip()
     mail_token = os.environ.get("EMAIL_WEBHOOK_TOKEN", "").strip()
     if mail_url or mail_token:

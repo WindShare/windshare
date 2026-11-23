@@ -76,7 +76,16 @@ class VerifyReleaseAuthorityTests(unittest.TestCase):
 
 
 class DeployReleaseConsistencyTests(unittest.TestCase):
-    def _stage_deploy(self, root_dir, *, api_host="api.ourworld.top", trust_root="prod-root", release_data=None):
+    def _stage_deploy(
+        self,
+        root_dir,
+        *,
+        api_host="api.ourworld.top",
+        origin_host=None,
+        zone=None,
+        trust_root="prod-root",
+        release_data=None,
+    ):
         crate = root_dir / "crate"
         crate.mkdir()
         (crate / "wrangler.toml").write_text('name = "windshare-network-authority"\n', encoding="utf-8")
@@ -93,8 +102,8 @@ class DeployReleaseConsistencyTests(unittest.TestCase):
         args = argparse.Namespace(
             api_host=api_host,
             worker_name="windshare-network-authority",
-            origin_host=None,
-            zone=None,
+            origin_host=origin_host,
+            zone=zone,
             trusted_proxy_ips="",
             allowed_origins="https://ws.ourworld.top",
             trust=trust_path,
@@ -159,12 +168,105 @@ class DeployReleaseConsistencyTests(unittest.TestCase):
             )
             self.assertIn("deploy", commands[-1])
             [config] = generated_configs
+            self.assertEqual(
+                config["routes"],
+                [
+                    {"pattern": "origin.ourworld.top", "custom_domain": True},
+                    {"pattern": "api.ourworld.top/*", "zone_name": "ourworld.top"},
+                ],
+            )
             self.assertEqual(config["vars"]["AUTHORITY_ROOT"], "prod-root")
             self.assertEqual(config["vars"]["API_ORIGIN"], "https://api.ourworld.top")
             self.assertEqual(config["vars"]["AUTHORITY_ORIGIN"], "https://origin.ourworld.top")
             self.assertEqual(config["kv_namespaces"], [{"binding": "DIRECTORY", "id": DIRECTORY_ENV["DIRECTORY_KV_ID"]}])
             self.assertNotIn("DIRECTORY_PUBLICATION", config["vars"])
             self.assertNotIn("DIRECTORY_ORIGIN", config["vars"])
+
+    def test_same_origin_and_host_omits_authority_origin_and_saas_route(self):
+        for origin_host in (None, "", "api.ourworld.top"):
+            with self.subTest(origin_host=origin_host):
+                with tempfile.TemporaryDirectory() as tmp:
+                    crate, args = self._stage_deploy(
+                        Path(tmp),
+                        api_host="api.ourworld.top",
+                        origin_host=origin_host,
+                    )
+                    generated_configs = []
+
+                    def fake_run(cmd, **kwargs):
+                        if "--config" in cmd:
+                            config_path = Path(cmd[cmd.index("--config") + 1])
+                            generated_configs.append(tomllib.loads(config_path.read_text(encoding="utf-8")))
+
+                    with (
+                        patch.object(DEPLOY, "CRATE", crate),
+                        patch.dict(os.environ, DIRECTORY_ENV, clear=True),
+                        patch.object(DEPLOY.subprocess, "run", side_effect=fake_run),
+                        patch("builtins.print"),
+                    ):
+                        DEPLOY.deploy(args)
+                    [config] = generated_configs
+                    self.assertEqual(
+                        config["routes"],
+                        [{"pattern": "api.ourworld.top", "custom_domain": True}],
+                    )
+                    self.assertEqual(config["vars"]["API_ORIGIN"], "https://api.ourworld.top")
+                    self.assertNotIn("AUTHORITY_ORIGIN", config["vars"])
+
+    def test_rejects_non_bare_api_and_origin_hosts(self):
+        invalid_hosts = (
+            "api.ourworld.top/",
+            "api.ourworld.top?",
+            "api.ourworld.top#",
+            "api.ourworld.top\n",
+            "api.ourworld.top\t",
+            "https://api.ourworld.top",
+            "API.ourworld.top",
+        )
+        for bad in invalid_hosts:
+            with self.subTest(flag="--api-host", value=bad):
+                with tempfile.TemporaryDirectory() as tmp:
+                    crate, args = self._stage_deploy(
+                        Path(tmp),
+                        api_host=bad,
+                        origin_host="api.ourworld.top",
+                        zone="ourworld.top",
+                    )
+                    with (
+                        patch.object(DEPLOY, "CRATE", crate),
+                        patch.dict(os.environ, DIRECTORY_ENV, clear=True),
+                        patch.object(DEPLOY.subprocess, "run") as run,
+                    ):
+                        with self.assertRaisesRegex(ValueError, "--api-host"):
+                            DEPLOY.deploy(args)
+                        run.assert_not_called()
+            with self.subTest(flag="--prepare-initialization", value=bad):
+                with tempfile.TemporaryDirectory() as tmp:
+                    token_file = Path(tmp) / "prepared.token"
+                    crate, args = self._stage_deploy(Path(tmp), api_host=bad)
+                    args.prepare_initialization = token_file
+                    with patch.object(DEPLOY, "CRATE", crate), patch.dict(os.environ, {}, clear=True):
+                        with self.assertRaisesRegex(ValueError, "--api-host"):
+                            DEPLOY.deploy(args)
+                        with self.assertRaisesRegex(ValueError, "--api-host"):
+                            DEPLOY.prepare_token(token_file, bad)
+                    self.assertFalse(token_file.exists())
+            with self.subTest(flag="--origin-host", value=bad):
+                with tempfile.TemporaryDirectory() as tmp:
+                    crate, args = self._stage_deploy(
+                        Path(tmp),
+                        api_host="api.ourworld.top",
+                        origin_host=bad,
+                        zone="ourworld.top",
+                    )
+                    with (
+                        patch.object(DEPLOY, "CRATE", crate),
+                        patch.dict(os.environ, DIRECTORY_ENV, clear=True),
+                        patch.object(DEPLOY.subprocess, "run") as run,
+                    ):
+                        with self.assertRaisesRegex(ValueError, "--origin-host"):
+                            DEPLOY.deploy(args)
+                        run.assert_not_called()
 
     def test_deploy_without_network_release_skips_manifest_checks(self):
         with tempfile.TemporaryDirectory() as tmp:
