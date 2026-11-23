@@ -170,60 +170,63 @@ test('Go and Chromium download over two TURN servers and the application relay',
   }
 })
 
-test('Chromium downloads in parallel through an isolated Cloudflare Worker and TURN', async ({ page }) => {
-  const configuration = process.env.WINDSHARE_TURN_SMOKE_CONFIG
-  test.skip(!configuration, 'requires an isolated Worker provisioned by the deployment smoke')
-  test.setTimeout(180_000)
-  const saved = JSON.parse(await readFile(configuration!, 'utf8')) as {
-    profiles: { url: string; access_key: string; managed_turn: boolean }[]
-  }
-  const profile = saved.profiles[0]!
-  const managed = process.env.WINDSHARE_TURN_SMOKE_SOURCE === 'managed'
-  const dir = await mkdtemp(join(tmpdir(), 'windshare-real-turn-'))
-  const stack = new DirectProductStack('cloudflare-parallel-turn')
-  let fixture: Awaited<ReturnType<typeof startTURNFixture>> | undefined
-  try {
-    await stack.start()
-    if (!managed) fixture = await startTURNFixture(dir)
-    const bytes = randomBytes(16 * 1024 * 1024),
-      digest = hash(bytes)
-    const share = await stack.share(await stack.createFile('cloud.bin', bytes), {
-      relayProfile: profile,
-      turnServices: fixture?.services ?? [],
-      blockSizeBytes: 256 * 1024,
-    })
-    // Only the application relay is shaped. Standard browser ICE uses the actual TURN servers.
-    await page.routeWebSocket(
-      (url) => url.host === new URL(profile.url).host,
-      (route) => {
-        const upstream = route.connectToServer()
-        let delivery = Promise.resolve()
-        upstream.onMessage((message) => {
-          const size = typeof message === 'string' ? Buffer.byteLength(message) : message.byteLength
-          delivery = delivery
-            .then(async () => {
-              if (size > 4096)
-                await new Promise((resolve) => setTimeout(resolve, Math.ceil((size * 1000) / (512 * 1024))))
-              route.send(message)
+const configuration = process.env.WINDSHARE_TURN_SMOKE_CONFIG
+if (configuration) {
+  test('Chromium downloads in parallel through an isolated Cloudflare Worker and TURN', async ({ page }) => {
+    test.setTimeout(180_000)
+    const saved = JSON.parse(await readFile(configuration, 'utf8')) as {
+      profiles: { url: string; access_key: string; managed_turn: boolean }[]
+    }
+    const profile = saved.profiles[0]!
+    const managed = process.env.WINDSHARE_TURN_SMOKE_SOURCE === 'managed'
+    const dir = await mkdtemp(join(tmpdir(), 'windshare-real-turn-'))
+    const stack = new DirectProductStack('cloudflare-parallel-turn')
+    let fixture: Awaited<ReturnType<typeof startTURNFixture>> | undefined
+    try {
+      await stack.start()
+      if (!managed) fixture = await startTURNFixture(dir)
+      const bytes = randomBytes(16 * 1024 * 1024),
+        digest = hash(bytes)
+      const share = await stack.share(await stack.createFile('cloud.bin', bytes), {
+        relayProfile: profile,
+        turnServices: fixture?.services ?? [],
+        blockSizeBytes: 256 * 1024,
+      })
+      if (managed) {
+        // Only the application relay is shaped. Standard browser ICE uses the actual TURN servers.
+        await page.routeWebSocket(
+          (url) => url.host === new URL(profile.url).host,
+          (route) => {
+            const upstream = route.connectToServer()
+            let delivery = Promise.resolve()
+            upstream.onMessage((message) => {
+              const size = typeof message === 'string' ? Buffer.byteLength(message) : message.byteLength
+              delivery = delivery
+                .then(async () => {
+                  if (size > 4096)
+                    await new Promise((resolve) => setTimeout(resolve, Math.ceil((size * 1000) / (512 * 1024))))
+                  route.send(message)
+                })
+                .catch(() => {})
             })
-            .catch(() => {})
-        })
-      },
-    )
-    const lanes = await browserDownload(page, share, share.bareLink, bytes.length, digest, 120_000)
-    expect(lanes.size).toBe(managed ? 1 : 2)
-    if (fixture) expect((await fixture.counters()).every((server) => server.bytes > 256 * 1024)).toBe(true)
-    console.info(
-      JSON.stringify({
-        event: 'cloudflare_parallel_download',
-        turnSource: managed ? 'cloudflare' : 'local',
-        bytes: bytes.length,
-        turnLanes: lanes.size,
-        sha256: digest,
-      }),
-    )
-  } finally {
-    await Promise.allSettled([stack.dispose(), fixture?.processOwner.stop(5000)])
-    await rm(dir, { recursive: true, force: true })
-  }
-})
+          },
+        )
+      }
+      const lanes = await browserDownload(page, share, share.bareLink, bytes.length, digest, 120_000)
+      expect(lanes.size).toBe(managed ? 1 : 2)
+      if (fixture) expect((await fixture.counters()).every((server) => server.bytes > 256 * 1024)).toBe(true)
+      console.info(
+        JSON.stringify({
+          event: 'cloudflare_parallel_download',
+          turnSource: managed ? 'cloudflare' : 'local',
+          bytes: bytes.length,
+          turnLanes: lanes.size,
+          sha256: digest,
+        }),
+      )
+    } finally {
+      await Promise.allSettled([stack.dispose(), fixture?.processOwner.stop(5000)])
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+}
