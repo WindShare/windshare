@@ -3,18 +3,18 @@ import type { BrowserOutputWindow, OutputSessionHandle, StartBackendTaskInput } 
 import { openNewFSASession } from '../../output/backends/fsa'
 import { browserOPFSEnvironment, openNewOPFSSession, type OPFSEnvironment } from '../../output/backends/opfs'
 import { openPortableSession } from '../../output/backends/portable'
-import { diagnosticBackendName, type OutputTraceSource } from '../../output/diagnostics'
-import type { ReceiveStore } from '../../output/store/database'
+import { diagnosticBackendName, emitOutputTrace, type OutputTraceSource } from '../../output/diagnostics'
+import { classifyNativeError } from '../../transfer/fault'
+import type { ReceiveStoreAccess } from './receive-storage'
 
-export interface OpenNewOutputSessionInput {
+export interface OpenNewOutputSessionInput extends ReceiveStoreAccess {
+  readonly signal: AbortSignal
   readonly backend: SaveBackendKind
   readonly task: StartBackendTaskInput
   readonly parentHandle: FileSystemDirectoryHandle | undefined
   readonly windowPort: BrowserOutputWindow
   readonly opfsEnv?: OPFSEnvironment
   readonly outputTrace?: OutputTraceSource
-  readonly openStoreOptional: () => Promise<ReceiveStore | undefined>
-  readonly requireStore: () => Promise<ReceiveStore>
 }
 
 export async function openNewOutputSession(input: OpenNewOutputSessionInput): Promise<OutputSessionHandle> {
@@ -25,6 +25,7 @@ export async function openNewOutputSession(input: OpenNewOutputSessionInput): Pr
 
   if (input.backend === 'portable') {
     const store = await input.openStoreOptional()
+    input.signal.throwIfAborted()
     return openPortableSession({
       task: input.task,
       windowPort: input.windowPort,
@@ -34,6 +35,7 @@ export async function openNewOutputSession(input: OpenNewOutputSessionInput): Pr
   }
 
   const store = await input.requireStore()
+  input.signal.throwIfAborted()
   if (input.backend === 'fsa') {
     if (input.parentHandle === undefined) {
       throw new DOMException('No folder was selected', 'AbortError')
@@ -55,4 +57,15 @@ export async function openNewOutputSession(input: OpenNewOutputSessionInput): Pr
     windowPort: input.windowPort,
     ...(diagnostics === undefined ? {} : { diagnostics }),
   })
+}
+
+export async function closeOutputSession(session: OutputSessionHandle, trace: OutputTraceSource | undefined): Promise<void> {
+  try {
+    await session.close()
+  } catch (error) {
+    emitOutputTrace(trace, 'settlement', {
+      task_id: session.taskId, backend: diagnosticBackendName(session.backend),
+      transition: 'close_failed', error_class: classifyNativeError(error),
+    })
+  }
 }

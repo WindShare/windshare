@@ -1,17 +1,19 @@
 import { bigintToSafeNumber, type ByteRange } from '../../content/geometry'
+import { FaultScope, SourceFaultCode, TransferFaultError, sourceFault } from '../../transfer/fault'
+import type { OutputTraceSource } from '../diagnostics'
 import type { CompletedOutputFile } from '../../transfer/output-port'
 import type { ObjectCheckpointCoordinator } from '../native-object/coordinator'
 import type { ReceiveStore } from '../store/database'
 import {
   fileRecordId,
   fromRangeTuples,
-  maxRangeEnd,
   toRangeTuples,
   type ReceiveFileRecord,
   type ZipEntryLayoutRecord,
 } from '../store/types'
 import { completeZipEntryCrc, insertZipCrcRange, zipBytesCrc32, type ZipCrcRange } from './crc-ranges'
 import { completeZipMember, zipMemberCoordinates } from './member'
+import { completedZipMembers, hasZipPayload, planStoredZipMember, recoverZipMembers, type StoredZipMember } from './stored-members'
 import {
   checkedZipAdd,
   encodeZipCentralDirectoryRecord,
@@ -38,7 +40,7 @@ export interface ProgressiveZipEntryInput {
 
 export interface OpenedProgressiveZipFile {
   /** Previously persisted record exposed for source-change verification on reopen. */
-  readonly record: ReceiveFileRecord
+  readonly record: StoredZipMember
   /** Revision identity authorized for the current write attempt. */
   readonly activeRevision: string
   readonly activeSourceMetadata?: string
@@ -62,27 +64,26 @@ export class ProgressiveZipWriter {
   readonly #taskId: string
   readonly #store: ReceiveStore
   readonly #io: ObjectCheckpointCoordinator
-  readonly #entries = new Map<string, ReceiveFileRecord>()
+  readonly #entries = new Map<string, StoredZipMember>()
   readonly #pendingDirectories = new Map<string, Promise<void>>()
   readonly #pendingFiles = new Map<string, Promise<OpenedProgressiveZipFile>>()
-  #allocatedLength: bigint
+  #allocatedLength = 0n
   #nextSequence: number
 
   private constructor(
     taskId: string,
     store: ReceiveStore,
     io: ObjectCheckpointCoordinator,
-    existing: readonly ReceiveFileRecord[],
-    allocatedLength: bigint,
+    existing: readonly StoredZipMember[],
   ) {
     this.#taskId = taskId
     this.#store = store
     this.#io = io
-    this.#allocatedLength = allocatedLength
     let maxSeq = 0
     for (const row of existing) {
       this.#entries.set(row.fileId, row)
-      const seq = row.zipEntry?.sequence ?? 0
+      if (row.zipEntry.endOffset > this.#allocatedLength) this.#allocatedLength = row.zipEntry.endOffset
+      const seq = row.zipEntry.sequence
       if (seq > maxSeq) maxSeq = seq
     }
     this.#nextSequence = maxSeq + 1
@@ -92,35 +93,12 @@ export class ProgressiveZipWriter {
     taskId: string,
     store: ReceiveStore,
     io: ObjectCheckpointCoordinator,
+    trace?: OutputTraceSource,
   ): Promise<ProgressiveZipWriter> {
     const existing = await store.listTaskFiles(taskId)
     const physicalSize = await io.size()
-    let allocated = 0n
-    const valid: ReceiveFileRecord[] = []
-
-    for (const row of existing) {
-      const zip = row.zipEntry
-      if (zip === undefined) continue
-      // Verify physical OPFS file actually contains every claimed completed range.
-      const requiredPhysical = row.status === 'completed'
-        ? zip.endOffset
-        : zip.payloadOffset + maxRangeEnd(row.completedRanges)
-      if (physicalSize < requiredPhysical) {
-        // Truncated/corrupted range: reset coverage for this entry while preserving its slot if within physical bounds.
-        const resetRow: ReceiveFileRecord = Object.freeze({
-          ...row,
-          completedRanges: Object.freeze([]),
-          status: 'receiving',
-          zipEntry: Object.freeze({ ...zip, crcRanges: Object.freeze([]) }),
-        })
-        valid.push(resetRow)
-      } else {
-        valid.push(row)
-      }
-      if (zip.endOffset > allocated) allocated = zip.endOffset
-    }
-
-    return new ProgressiveZipWriter(taskId, store, io, valid, allocated)
+    const members = await recoverZipMembers(existing, physicalSize, io, store, trace)
+    return new ProgressiveZipWriter(taskId, store, io, members)
   }
 
   get allocatedLength(): bigint {
@@ -129,7 +107,7 @@ export class ProgressiveZipWriter {
 
   completedFile(fileId: string): CompletedOutputFile | undefined {
     const existing = this.#entries.get(fileId)
-    if (existing?.zipEntry === undefined || existing.zipEntry.kind !== 'file' || existing.status !== 'completed') {
+    if (existing?.zipEntry.kind !== 'file' || existing.status !== 'completed') {
       return undefined
     }
     return Object.freeze({ size: existing.size })
@@ -154,7 +132,7 @@ export class ProgressiveZipWriter {
 
   async openFile(input: ProgressiveZipEntryInput): Promise<OpenedProgressiveZipFile> {
     const existing = this.#entries.get(input.fileId)
-    if (existing?.zipEntry !== undefined) {
+    if (existing !== undefined) {
       return this.#reopenFile(existing, input)
     }
     const pending = this.#pendingFiles.get(input.fileId)
@@ -213,7 +191,7 @@ export class ProgressiveZipWriter {
       crc32: 0,
       ...(modifiedTimeMilliseconds === undefined ? {} : { modifiedTimeMilliseconds }),
     })
-    const row: ReceiveFileRecord = Object.freeze({
+    const row: StoredZipMember = Object.freeze({
       id: fileRecordId(this.#taskId, key),
       taskId: this.#taskId,
       fileId: key,
@@ -229,19 +207,16 @@ export class ProgressiveZipWriter {
   }
 
   #reopenFile(
-    existing: ReceiveFileRecord,
+    existing: StoredZipMember,
     input: ProgressiveZipEntryInput,
   ): OpenedProgressiveZipFile {
-    const zip = existing.zipEntry!
-    const normalized = normalizeZipEntry({
-      kind: 'file',
-      path: existing.path,
-      exactSize: existing.size,
-      ...(zip.modifiedTimeMilliseconds === undefined
-        ? {}
-        : { modifiedTimeMilliseconds: zip.modifiedTimeMilliseconds }),
-    })
-    const plan = planZipEntry(normalized, zip.localHeaderOffset)
+    // A slot's neighbours stay at their original offsets even if its entire payload was evicted.
+    if (existing.size !== input.exactSize) {
+      throw new TransferFaultError(sourceFault(FaultScope.FileLocal, SourceFaultCode.RevisionChanged),
+        'Source size changed after the ZIP member was allocated')
+    }
+    const zip = existing.zipEntry
+    const plan = planStoredZipMember(existing, zip.localHeaderOffset)
     return {
       record: existing,
       activeRevision: input.revision,
@@ -276,7 +251,7 @@ export class ProgressiveZipWriter {
         ? {}
         : { modifiedTimeMilliseconds: input.modifiedTimeMilliseconds }),
     })
-    const row: ReceiveFileRecord = Object.freeze({
+    const row: StoredZipMember = Object.freeze({
       id: fileRecordId(this.#taskId, input.fileId),
       taskId: this.#taskId,
       fileId: input.fileId,
@@ -307,9 +282,14 @@ export class ProgressiveZipWriter {
   ): Promise<void> {
     if (data.byteLength === 0) return
     const end = offset + BigInt(data.byteLength)
+    if (offset < 0n || end > opened.plan.exactSize) throw new RangeError('Write exceeds the ZIP member payload')
     const crc32 = zipBytesCrc32(data)
-    await this.#io.writeAt(opened.record.zipEntry!.payloadOffset + offset, data)
-    opened.crcRanges = insertZipCrcRange(opened.crcRanges, { start: offset, end, crc32 })
+    await this.#io.mutate(async io => {
+      const coverage = insertZipCrcRange(opened.crcRanges, { start: offset, end, crc32 })
+      if (coverage === opened.crcRanges) return
+      await io.writeAt(opened.record.zipEntry.payloadOffset + offset, data)
+      opened.crcRanges = coverage
+    })
   }
 
   async checkpointFile(
@@ -330,7 +310,7 @@ export class ProgressiveZipWriter {
       throw new Error('ZIP file payload CRC ranges are incomplete at commit')
     }
     const descriptor = encodeZipDataDescriptor(opened.plan, crc32)
-    await this.#io.writeAt(opened.record.zipEntry!.descriptorOffset, descriptor)
+    await this.#io.writeAt(opened.record.zipEntry.descriptorOffset, descriptor)
     const updated = buildUpdatedZipFileRecord(opened, ranges, 'completed', crc32)
     await this.#io.checkpoint('zip-file-commit', () => this.#store.putFile(updated))
     this.#entries.set(updated.fileId, updated)
@@ -338,36 +318,16 @@ export class ProgressiveZipWriter {
 
   /** Appends Central Directory + EOCD records to the OPFS file and returns its exact sealed length. */
   async finalize(): Promise<bigint> {
-    const ordered = [...this.#entries.values()]
-      .filter(entry => entry.status === 'completed' && entry.zipEntry !== undefined)
-      .sort((left, right) => left.zipEntry!.sequence - right.zipEntry!.sequence)
+    const ordered = completedZipMembers(this.#entries.values())
 
     let offset = this.#allocatedLength
     const centralStart = offset
     let centralBytes = 0n
 
     for (const entry of ordered) {
-      const zip = entry.zipEntry!
-      const normalized = normalizeZipEntry(
-        zip.kind === 'directory'
-          ? {
-              kind: 'directory',
-              path: entry.path,
-              ...(zip.modifiedTimeMilliseconds === undefined
-                ? {}
-                : { modifiedTimeMilliseconds: zip.modifiedTimeMilliseconds }),
-            }
-          : {
-              kind: 'file',
-              path: entry.path,
-              exactSize: entry.size,
-              ...(zip.modifiedTimeMilliseconds === undefined
-                ? {}
-                : { modifiedTimeMilliseconds: zip.modifiedTimeMilliseconds }),
-            },
-      )
-      const plan = planZipEntry(normalized, zip.localHeaderOffset)
-      const record = encodeZipCentralDirectoryRecord(plan, zip.crc32 ?? 0)
+      const zip = entry.zipEntry
+      const plan = planStoredZipMember(entry, zip.localHeaderOffset)
+      const record = encodeZipCentralDirectoryRecord(plan, zip.crc32!)
       await this.#io.writeAt(offset, record)
       const len = BigInt(record.byteLength)
       offset = checkedZipAdd(offset, len)
@@ -396,7 +356,7 @@ function buildUpdatedZipFileRecord(
   ranges: readonly ByteRange[],
   status: 'receiving' | 'completed',
   crc32?: number,
-): ReceiveFileRecord {
+): StoredZipMember {
   const prev = opened.record
   return Object.freeze({
     id: prev.id,
@@ -409,7 +369,7 @@ function buildUpdatedZipFileRecord(
     completedRanges: toRangeTuples(ranges),
     status,
     zipEntry: Object.freeze({
-      ...prev.zipEntry!,
+      ...prev.zipEntry,
       crcRanges: opened.crcRanges,
       ...(crc32 === undefined ? {} : { crc32 }),
     }),
@@ -424,9 +384,11 @@ export function buildPartialZipBlob(
   sourceFile: File,
   files: readonly ReceiveFileRecord[],
 ): Blob {
-  const completed = files
-    .filter(entry => entry.status === 'completed' && entry.zipEntry !== undefined)
-    .sort((left, right) => left.zipEntry!.sequence - right.zipEntry!.sequence)
+  const physicalSize = BigInt(sourceFile.size)
+  const completed = completedZipMembers(files).filter(row => hasZipPayload(row, physicalSize))
+  if (!completed.some(row => row.zipEntry.kind === 'file')) {
+    throw new DOMException('No completed files remain in browser storage', 'NotFoundError')
+  }
 
   const parts: BlobPart[] = []
   const centralRecords: Uint8Array<ArrayBuffer>[] = []
@@ -434,26 +396,8 @@ export function buildPartialZipBlob(
   let centralBytes = 0n
 
   for (const entry of completed) {
-    const zip = entry.zipEntry!
-    const normalized = normalizeZipEntry(
-      zip.kind === 'directory'
-        ? {
-            kind: 'directory',
-            path: entry.path,
-            ...(zip.modifiedTimeMilliseconds === undefined
-              ? {}
-              : { modifiedTimeMilliseconds: zip.modifiedTimeMilliseconds }),
-          }
-        : {
-            kind: 'file',
-            path: entry.path,
-            exactSize: entry.size,
-            ...(zip.modifiedTimeMilliseconds === undefined
-              ? {}
-              : { modifiedTimeMilliseconds: zip.modifiedTimeMilliseconds }),
-          },
-    )
-    const plan = planZipEntry(normalized, offset)
+    const zip = entry.zipEntry
+    const plan = planStoredZipMember(entry, offset)
     const header = encodeZipLocalHeader(plan)
     parts.push(header)
     if (zip.kind === 'file' && entry.size > 0n) {
@@ -461,7 +405,7 @@ export function buildPartialZipBlob(
       const end = bigintToSafeNumber(zip.payloadOffset + entry.size, 'partial ZIP slice end')
       parts.push(sourceFile.slice(start, end))
     }
-    const done = completeZipMember(plan, entry.size, zip.crc32 ?? 0)
+    const done = completeZipMember(plan, entry.size, zip.crc32!)
     parts.push(done.descriptor)
     centralRecords.push(done.centralRecord)
     offset = checkedZipAdd(offset, plan.entryStreamBytes)

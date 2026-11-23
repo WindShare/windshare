@@ -83,6 +83,6 @@ function progressDetails(facts: TaskFacts, language: Language): string[] {
     details.push(t.newBytes(formatBytes(progress.writtenBytes)))
     if (progress.discovery === 'failed') details.push(t.failedDirectories(progress.failedDirectories))
   }
-  details.push(t.receivedHint)
+  if (facts.lifecycle.kind === 'downloading' && facts.backend !== 'portable') details.push(t.receivedHint)
   return details
 }

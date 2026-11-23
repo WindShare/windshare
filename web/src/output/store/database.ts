@@ -99,6 +99,14 @@ export class ReceiveStore {
     })
   }
 
+  async deleteFiles(ids: readonly string[]): Promise<void> {
+    if (ids.length === 0) return
+    await this.#run(FILES_STORE, 'readwrite', tx => {
+      const files = tx.objectStore(FILES_STORE)
+      for (const id of ids) files.delete(id)
+    })
+  }
+
   async deleteTask(taskId: string): Promise<void> {
     await this.#run([TASKS_STORE, FILES_STORE, ZIP_SPOOL_STORE], 'readwrite', async tx => {
       tx.objectStore(TASKS_STORE).delete(taskId)

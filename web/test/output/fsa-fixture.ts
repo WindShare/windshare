@@ -34,6 +34,10 @@ export class MemoryReceiveStore {
     return [...this.files.values()].filter(file => file.taskId === taskId)
   }
 
+  async deleteFiles(ids: readonly string[]): Promise<void> {
+    for (const id of ids) this.files.delete(id)
+  }
+
   async deleteTask(taskId: string): Promise<void> {
     this.tasks.delete(taskId)
     for (const [id, file] of this.files) {
@@ -126,8 +130,8 @@ export class FakeDirectoryHandle {
     this.stats = stats
   }
 
-  async queryPermission(): Promise<'granted'> { return 'granted' }
-  async requestPermission(): Promise<'granted'> { return 'granted' }
+  async queryPermission(): Promise<PermissionState> { return 'granted' }
+  async requestPermission(): Promise<PermissionState> { return 'granted' }
 
   async isSameEntry(other: FileSystemHandle): Promise<boolean> {
     return other instanceof FakeDirectoryHandle && other.path === this.path

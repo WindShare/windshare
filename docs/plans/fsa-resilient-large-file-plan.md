@@ -29,17 +29,18 @@
 ### 2.1 传输契约、退出语义与写入安全（`web/src/transfer/` & `web/src/output/backends/`）
 
 1. **退出语义与取消解耦（[job.ts](../../web/src/transfer/job.ts)、[file-transfer.ts](../../web/src/transfer/file-transfer.ts)、[contract.ts](../../web/src/output/backends/contract.ts)、[coordinator.ts](../../web/src/application/receive/coordinator.ts)、[retained.ts](../../web/src/application/receive/retained.ts)）**
-   - `TransferJob.detach()` 中止仍在运行的网络读取，文件循环通过 `FileTransferContext.isDetached()` 放弃未提交写入并返回 `'detached'`。已受理的用户暂停或停止按原意结算。
+   - `TransferJob.detach()` 中止仍在运行的网络读取，文件循环从 `FileTransferContext.getExit()` 读取退出意图，放弃未提交写入并返回 `'detached'`。已受理的用户暂停或停止按原意结算。
    - 将 `OutputSessionHandle.settle()` 的参数类型收窄为 `SettledTransferJobResult`（排除 `'detached'`），由类型系统静态阻止 `fsa.ts` / `opfs.ts` / `portable.ts` 收到 `'detached'`。
    - `ReceiveCoordinator.dispose()` 分离运行中的 job，等待已开始的后端打开、恢复和写盘收尾，最后关闭 IndexedDB。销毁后才返回的 session 就地关闭。
-   - `#runSession` 仅对 `'detached'` 跳过 `settle()`，由同一流程在写盘结束后关闭 session、释放 Web Lock 和连接。重新打开时，[retained.ts](../../web/src/application/receive/retained.ts) 将失去锁的 `downloading` / `preparing` 任务归为 `paused (interrupted)`，从持久化 ranges 恢复。统计完成文件数时排除 ZIP 目录项。
+   - `#runSession` 仅对 `'detached'` 跳过 `settle()`，由同一流程在写盘结束后关闭 session、释放 Web Lock 和连接。重新打开时，[retained.ts](../../web/src/application/receive/retained.ts) 将失去锁的 `downloading` / `preparing` 任务归为 `paused (interrupted)`，从持久化 ranges 恢复。统计完成文件数时排除 ZIP 目录项。恢复状态写回失败时，列表仍按已持久化的文件记录展示进度，允许用户丢弃暂存数据。
 2. **远端租约与本地落盘并行解耦（[file-transfer.ts](../../web/src/transfer/file-transfer.ts)）**
    - `streamMissingRanges` 结束即发起一次 `opened.release()`，与 `writer.commit()` 并行。`finally` 等待已发起的释放，尚未发起时补做。网络释放失败仍允许本地提交已收全的文件。
+   - 新文件首次最终提交遇到原生 `InvalidStateError` 时，只有在确认并删除原空占位后才可重取。单文件上限 128 KiB，核对源版本，最多重试一次。
 3. **Checkpoint 原因与结果契约（[output-port.ts](../../web/src/transfer/output-port.ts)、`fsa-file.ts`、[fsa.ts](../../web/src/output/backends/fsa.ts)、[opfs.ts](../../web/src/output/backends/opfs.ts)、[portable.ts](../../web/src/output/backends/portable.ts)）**
    - 定义 `CheckpointReason = 'periodic' | 'disconnect' | 'retry'` 与 `CheckpointOutcome = 'saved' | 'skipped'`，使 `TransferOutputFile.checkpoint(ranges, reason)` 显式表达触发原因与执行结果。
    - `FSAOutputFile` 从已验证的 `completedRanges` 初始化已保存字节数。仅对 `disconnect` 按增量决策。首个有数据的断点即保存，后续只有新增覆盖量达到上次已保存量才再次提交，否则保留写入流并返回 `'skipped'`。例如，首次长断连时已收 50 GiB 就保存，已有 50 GiB 断点、仅新增 20 MiB 时跳过。用户暂停、`retry` 与最终提交沿用原有规则。
-   - FSA 建立断点时依次关闭写入流、读取磁盘指纹、提交 IndexedDB，全部成功才更新已保存量。失败后该 writer 仅允许 `abort()` 清理。OPFS 原位 flush 并提交 IndexedDB 后返回 `'saved'`，portable 返回 `'skipped'`。
-   - FSA 仅在复用已提交范围前核对文件大小和修改时间，覆盖同会话重开流和跨会话续写。无法确认时保留原件并报告冲突。`partial` / `failed` 结算或显式丢弃时，在遗忘记录前清理归属与指纹均匹配的未完成文件。[fsa-cleanup.ts](../../web/src/output/backends/fsa-cleanup.ts)
+   - FSA 建立断点时先记录可验证的旧版本，再关闭写入流、读取新指纹并提交 IndexedDB。确认新版本后才更新已保存量。普通新文件直接完成时只写一次文件记录。失败后该 writer 仅允许 `abort()` 清理。OPFS 原位 flush 并提交 IndexedDB 后返回 `'saved'`，portable 返回 `'skipped'`。
+   - FSA 在复用已提交范围前核对文件大小和修改时间，覆盖同会话重开流和跨会话续写。无法确认时保留原件并报告冲突。`partial` / `failed` 结算先持久化终态。结算和显式丢弃只清理归属与指纹均匹配的未完成文件。「从下载列表移除」只删除历史记录。[fsa-cleanup.ts](../../web/src/output/backends/fsa-cleanup.ts)
 4. **单文件写入与外部 checkpoint 互斥串行化（[file-transfer.ts](../../web/src/transfer/file-transfer.ts)、[job.ts](../../web/src/transfer/job.ts)）**
    - 每个文件串行写入、更新 ranges、保存断点和收尾，文件间继续并发。提交中的文件跟踪到 `commit()` 完成。单文件取消监听任务信号，外部断点失败时保留原始写盘错误，避免将其误判为用户停止。
    - `TransferJob.checkpointActive(signal)` 只处理有新增覆盖的可续传文件。在文件锁内读取最新 ranges，仅在 `'saved'` 后清零 `dirtyBytes`。轮次失效或任务退出时结束后续遍历，已开始的写盘安全收尾。摘要返回本轮是否已确认全部接收进度，以及 `savedFiles`、`skippedFiles`、`failedFiles`、`savedBytes`。
@@ -57,7 +58,7 @@
 
 沿用现有保存路线和操作。活跃下载显示「已接收」，暂停后按 `retainedBytes` 显示可续传字节。[进度展示](../../web/src/ui/tasks/progress.ts)
 
-- `outageCheckpointed` 随 `ReceiveRuntimeSnapshot` 经 `presentReceiveOutput`、`activeTaskFacts` 传到等待提示。仅在本轮确认落盘后显示「已保存当前进度，正在等待重新连接」。切换任务、分享或结束会话时清空。[ui/output.ts](../../web/src/ui/output.ts) · [adapters.ts](../../web/src/ui/tasks/adapters.ts) · [stage.ts](../../web/src/ui/tasks/stage.ts)
+- `outageCheckpointed` 随 `ReceiveRuntimeSnapshot` 经 `presentReceiveOutput`、`activeTaskFacts` 传到等待提示。本轮确认落盘后，任务卡同时显示已保存进度和当前等待原因（重连或中转带宽）。切换任务、分享或结束会话时清空。[ui/output.ts](../../web/src/ui/output.ts) · [adapters.ts](../../web/src/ui/tasks/adapters.ts) · [stage.ts](../../web/src/ui/tasks/stage.ts)
 - 同步更新中英文进度、等待提示和保存须知。直写保留「请在暂停完成后再离开」的提示，长时间下载可选择浏览器存储或原生客户端。[现有文案](../../web/src/ui/locales/zh-CN/saving.ts)
 
 ---

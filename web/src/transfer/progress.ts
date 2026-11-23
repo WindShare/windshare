@@ -113,10 +113,10 @@ export class TransferProgressTracker {
     this.#emit()
   }
 
-  observeWritten(bytes: bigint): void {
-    if (bytes <= 0n) return
-    this.#writtenBytes += bytes
-    this.#materializedBytes += bytes
+  observeWriteCoverageChange(delta: bigint): void {
+    if (delta === 0n) return
+    this.#writtenBytes += delta
+    this.#materializedBytes += delta
     this.#emit()
   }
 

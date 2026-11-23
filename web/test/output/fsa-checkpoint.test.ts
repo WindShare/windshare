@@ -13,17 +13,22 @@ describe('FSA durable coverage', () => {
     let mtime = 0
     const handle = {
       getFile: async () => ({ size: Number(length), lastModified: mtime }),
-      createWritable: vi.fn(async () => ({
-        write: async (chunk: { position: number }) => { length = BigInt(chunk.position + 1) },
-        close: async () => { mtime++ },
-      })),
+      createWritable: vi.fn(async () => {
+        let staged = length
+        return {
+          write: async (chunk: { position: number }) => { staged = BigInt(chunk.position + 1) },
+          close: async () => { length = staged; mtime++ },
+        }
+      }),
     }
     const putFile = vi.fn(async () => undefined)
     const trace = vi.fn()
     const writer = new FSAOutputFile({
       taskId: 'large', request: { fileId: 'f', path: ['f'], sourcePath: ['f'], exactSize: 120n * gib, revision: 'r' },
-      handle: handle as unknown as FileSystemFileHandle, parentDir: {} as FileSystemDirectoryHandle,
-      physicalName: 'f', openedAtMs: 0, existing: undefined, store: { putFile } as unknown as ReceiveStore,
+      handle: handle as unknown as FileSystemFileHandle,
+      parentDir: { getFileHandle: async () => handle } as unknown as FileSystemDirectoryHandle,
+      physicalPath: ['f'], displayPath: 'f', signal: new AbortController().signal,
+      openedAtMs: 0, existing: undefined, store: { putFile } as unknown as ReceiveStore,
       diagnostics: { backend: 'file_system_access', trace: { current: trace } },
     })
     // The sparse fake tracks the highest offset and physical timestamp without allocating the logical prefix.
@@ -32,7 +37,7 @@ describe('FSA durable coverage', () => {
     expect(await writer.checkpoint([byteRange(0n, first)], 'disconnect')).toBe('saved')
     await writer.writeAt(small - 1n, Uint8Array.of(2))
     expect(await writer.checkpoint([byteRange(0n, small)], 'disconnect')).toBe('skipped')
-    expect(putFile).toHaveBeenCalledTimes(1)
+    expect(putFile).toHaveBeenCalledTimes(2)
     expect(trace).toHaveBeenCalledWith(expect.objectContaining({ payload: expect.objectContaining({
       outcome: 'skipped', file_id: 'f', previous_saved_bytes: String(first), added_bytes: String(20n * mib),
     }) }))
@@ -48,11 +53,25 @@ describe('FSA durable coverage', () => {
     const cause = new Error('failed ' + stage)
     const abort = vi.fn(async () => undefined)
     if (stage === 'close') {
-      const stream = await handle.createWritable()
-      vi.spyOn(handle, 'createWritable').mockResolvedValueOnce({ ...stream, close: async () => { throw cause }, abort })
+      const create = handle.createWritable.bind(handle)
+      vi.spyOn(handle, 'createWritable').mockImplementationOnce(async options => ({
+        ...await create(options), close: async () => { throw cause }, abort,
+      }))
     }
-    if (stage === 'fingerprint') vi.spyOn(handle, 'getFile').mockRejectedValueOnce(cause)
-    if (stage === 'database') vi.spyOn(memory, 'putFile').mockRejectedValueOnce(cause)
+    if (stage === 'fingerprint') {
+      const read = handle.getFile.bind(handle)
+      vi.spyOn(handle, 'getFile').mockImplementation(async () => {
+        if (handle.bytes.length > 0) throw cause
+        return read()
+      })
+    }
+    if (stage === 'database') {
+      const put = memory.putFile.bind(memory)
+      vi.spyOn(memory, 'putFile').mockImplementation(async row => {
+        if (row.fsaPendingPublish === undefined) throw cause
+        await put(row)
+      })
+    }
     await file.writeAt(0n, Uint8Array.of(1, 2))
     const ranges = [byteRange(0n, 2n)]
     await expect(file.checkpoint(ranges, 'disconnect')).rejects.toMatchObject({ cause, fault: { scope: 'file-local' } })
@@ -62,7 +81,15 @@ describe('FSA durable coverage', () => {
     await file.abort()
     if (stage === 'close') expect(abort).toHaveBeenCalledOnce()
     expect(handle.writableCalls).toEqual([false])
-    expect(await memory.getFile(session.taskId, 'large')).toBeUndefined()
+    const remaining = await memory.getFile(session.taskId, 'large')
+    if (stage === 'fingerprint') {
+      expect(root.children.get('large')).toBe(handle)
+      expect([...handle.bytes]).toEqual([1, 2])
+      expect(remaining).toMatchObject({ completedRanges: [], fsaPendingPublish: { fingerprint: { size: 0 } } })
+    } else {
+      expect(root.children.has('large')).toBe(false)
+      expect(remaining).toBeUndefined()
+    }
     await session.close()
   })
 
@@ -94,12 +121,16 @@ describe('FSA durable coverage', () => {
     const file = await open('large')
     await file.writeAt(0n, Uint8Array.of(1, 2))
     const handle = await root.getFileHandle('large')
-    vi.spyOn(handle, 'getFile').mockResolvedValueOnce(new File([Uint8Array.of(1)], 'large'))
+    const read = handle.getFile.bind(handle)
+    vi.spyOn(handle, 'getFile').mockImplementation(async () =>
+      handle.bytes.length === 0 ? read() : new File([Uint8Array.of(1)], 'large'))
     await expect(file.checkpoint([byteRange(0n, 2n)], 'disconnect')).rejects.toMatchObject({
       fault: { scope: 'file-local', code: 'target-collision' },
     })
-    expect(await store.getFile(session.taskId, 'large')).toBeUndefined()
+    expect(await store.getFile(session.taskId, 'large')).toMatchObject({ completedRanges: [], fsaPendingPublish: { ranges: [] } })
     await file.abort()
+    expect(root.children.get('large')).toBe(handle)
+    expect([...handle.bytes]).toEqual([1, 2])
     await session.close()
   })
 
@@ -117,8 +148,8 @@ describe('FSA durable coverage', () => {
     await session.close()
   })
 
-  it('cleans verified unfinished files before partial settlement and preserves completed and edited files', async () => {
-    const { open, session, root } = await openFolderFixture()
+  it('cleans verified unfinished files after partial settlement and preserves completed and edited files', async () => {
+    const { open, session, root, memory } = await openFolderFixture()
     for (const name of ['finished', 'incomplete', 'changed']) {
       const file = await open(name)
       await file.writeAt(0n, Uint8Array.of(1, 2))
@@ -134,6 +165,7 @@ describe('FSA durable coverage', () => {
     expect(record.lifecycle.kind).toBe('partial')
     expect([...root.children.keys()]).toEqual(['finished', 'changed'])
     expect([...changed.bytes]).toEqual([7, 8])
+    expect((await memory.listTaskFiles(session.taskId)).map(row => row.fileId)).toEqual(['finished', 'changed'])
     await session.close()
   })
 })

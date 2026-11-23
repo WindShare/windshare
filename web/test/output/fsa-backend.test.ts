@@ -57,6 +57,7 @@ describe('FSA backend safety boundaries', () => {
     expect(completedRow?.fsaDiskFingerprint).toBeUndefined()
     const physicalA = [...reserved.children.values()].find(entry => entry instanceof FakeFileHandle) as FakeFileHandle
     expect(physicalA.getFileCalls).toBe(0)
+    expect(store.events.filter(event => event.startsWith('putFile:f1:'))).toEqual(['putFile:f1:completed'])
 
     const closeIdx = store.events.findIndex(e => e.startsWith('writer.close:'))
     const putIdx = store.events.findIndex(e => e === 'putFile:f1:completed')
@@ -198,9 +199,7 @@ describe('FSA backend safety boundaries', () => {
       broker,
       output: session.transferOutput,
       signal: new AbortController().signal,
-      isPaused: () => false,
-      isStopped: () => false,
-      isDetached: () => false,
+      getExit: () => undefined,
     }, {
       kind: 'file',
       entry: Object.freeze({ kind: 'file', id: fileId, idText: fileIdText, name: 'clip.bin', expectedSize: totalSize }),
@@ -478,8 +477,8 @@ describe('FSA discard safety', () => {
     })
     await session.close()
 
-    const reserved = parent.children.get('CancelMe') as FakeDirectoryHandle
-    expect(reserved.children.size).toBe(0)
+    expect(parent.children.has('CancelMe')).toBe(false)
+    expect(await store.listTaskFiles(stopped.taskId)).toEqual([])
 
     await discardFSATask(stopped, store as unknown as ReceiveStore)
     expect(parent.children.has('CancelMe')).toBe(false)
@@ -509,10 +508,9 @@ describe('FSA discard safety', () => {
     const reopened = await reopenFSASession({
       task: pausedReopen, store: store as unknown as ReceiveStore, allowPermissionPrompt: true,
     })
-    const abortedUserFile = await reopened.transferOutput.openFile({
+    await expect(reopened.transferOutput.openFile({
       fileId: 'f2', path: ['.gitkeep'], sourcePath: ['Existing', '.gitkeep'], revision: 'rev2', exactSize: 10n,
-    }, new AbortController().signal)
-    await abortedUserFile.abort(new DOMException('stopped', 'AbortError'))
+    }, new AbortController().signal)).rejects.toMatchObject({ fault: { code: 'target-collision' } })
     await reopened.close()
 
     expect(existingDir.children.has('.gitkeep')).toBe(true)

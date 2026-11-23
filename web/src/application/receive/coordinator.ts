@@ -11,7 +11,7 @@ import { startFSADirectoryPicker } from '../../output/backends/fsa'
 import type { OPFSEnvironment } from '../../output/backends/opfs'
 import { emitOutputTrace, type OutputTraceSource } from '../../output/diagnostics'
 import { DisconnectCheckpointGuard } from './disconnect-checkpoint-guard'
-import { ReceiveStorage } from './receive-storage'
+import { ReceiveStorage, type ReceiveStoreAccess } from './receive-storage'
 import type { FrozenSelectionPolicy } from '../../catalog/selection'
 import type { TransferJob, TransferJobResult } from '../../transfer/job'
 import { EMPTY_TRANSFER_PROGRESS, type TransferProgress } from '../../transfer/progress'
@@ -53,8 +53,8 @@ import {
   type RetainedInventorySnapshot,
   type RetainedTaskSnapshot,
 } from './contracts'
-import { executeRetainedTaskAction, loadRetainedTasks, matchingRetainedTask, retainedTaskEnvironment } from './retained'
-import { openNewOutputSession } from './session-opener'
+import { executeRetainedTaskAction, loadRetainedTasks, matchingRetainedTask, reopenRetainedTask, retainedTaskEnvironment } from './retained'
+import { closeOutputSession, openNewOutputSession } from './session-opener'
 import { BeforeUnloadGuard, type BeforeUnloadEventTarget } from './unload-guard'
 import { ScreenWakeLockGuard, type ScreenWakeLockWindowTarget } from './wake-lock-guard'
 
@@ -74,6 +74,11 @@ export interface ReceiveCoordinatorOptions extends ReceiveRuntimePorts {
   readonly windowPort: ReceiveWindowPort
   readonly currentJoinedShare: () => JoinedBrowserShare | undefined
   readonly onActionError?: (error: unknown) => void
+}
+
+interface ActiveReceiveSession {
+  readonly taskId: string
+  job?: TransferJob
 }
 
 interface DownloadRequest {
@@ -105,7 +110,7 @@ export class ReceiveCoordinator {
   #selectionSpec: SelectionSpec | null = null
   #selectionPolicy: FrozenSelectionPolicy | null = null
   #activation: ActiveActivationSnapshot | null = null
-  #activeJob: TransferJob | null = null
+  #session: ActiveReceiveSession | null = null
   #disconnectGuard: DisconnectCheckpointGuard | undefined
   #activeTaskId: string | null = null
   #activeSelectionKey: string | null = null
@@ -141,7 +146,7 @@ export class ReceiveCoordinator {
   readonly getSnapshot = (): ReceiveRuntimeSnapshot => this.#snapshot
 
   get active(): boolean {
-    return this.#activeJob !== null || this.#activation !== null
+    return this.#session !== null || this.#activation !== null
   }
 
   get activeTaskId(): string | null {
@@ -149,11 +154,11 @@ export class ReceiveCoordinator {
   }
 
   get canReleaseCurrent(): boolean {
-    return canReleaseCurrentTask(this.#lifecycle)
+    return this.#session === null && canReleaseCurrentTask(this.#lifecycle)
   }
 
   get canRetainCurrent(): boolean {
-    return this.#activeJob === null && this.#lifecycle?.kind === 'paused'
+    return this.#session === null && this.#lifecycle?.kind === 'paused'
   }
 
   observeConnection(kind: 'idle' | 'connected' | 'reconnecting' | 'unavailable' | 'ended'): void {
@@ -168,22 +173,22 @@ export class ReceiveCoordinator {
   startBlockedReason(): ReceiveBlockReason | null {
     if (this.#options.currentJoinedShare() === undefined) return 'connectFirst'
     if (this.#activation !== null || this.#retained.pending !== null) return 'busy'
-    if (this.#activeJob !== null || !canStartNewDownload(this.#lifecycle)) return 'downloading'
+    if (this.#session !== null || !canStartNewDownload(this.#lifecycle)) return 'downloading'
     return null
   }
 
   shareNavigationBlockedReason(): ReceiveBlockReason | null {
-    if (this.#activeJob !== null || this.#activation !== null) return 'downloading'
+    if (this.#session !== null || this.#activation !== null) return 'downloading'
     if (this.#retained.pending !== null) return 'busy'
     return null
   }
 
   activeActionAdmission(action: ReceiveAction): ReceiveAdmission {
     if (this.#lifecycle === null || this.#backend === null) return blockedAdmission('actionUnavailable')
-    if (this.#interruption !== null) return blockedAdmission('busy')
-    const canSavePartial = canSavePartialState(this.#lifecycle, this.#backend, this.#isZipArchive)
-    const available = actionsForState(this.#lifecycle, this.#backend, canSavePartial)
-    if (!available.includes(action)) return blockedAdmission('actionUnavailable')
+    if (this.#interruption !== null || (this.#retained.pending !== null && action !== 'pause' && action !== 'stop')) {
+      return blockedAdmission('busy')
+    }
+    if (!this.#activeActions().includes(action)) return blockedAdmission('actionUnavailable')
     if (action === 'continue') {
       if (this.#shareEnded) return blockedAdmission('shareEnded')
       if (this.#connectionUnavailable) return blockedAdmission('connectionUnavailable')
@@ -192,6 +197,7 @@ export class ReceiveCoordinator {
   }
 
   retainedActionAdmission(task: RetainedTaskSnapshot, action: ReceiveAction): ReceiveAdmission {
+    if (this.#session?.taskId === task.taskId) return blockedAdmission('busy')
     const shareInstance = this.#options.currentJoinedShare()?.descriptor.shareInstanceId ?? null
     return admitRetainedAction(task, action, {
       currentShareInstance: shareInstance,
@@ -230,12 +236,13 @@ export class ReceiveCoordinator {
   }
 
   loadRetained(): Promise<void> {
-    return this.#storage.run(() => this.#loadRetained())
+    return this.#storage.run(access => this.#loadRetained(access))
   }
 
-  async #loadRetained(): Promise<void> {
+  async #loadRetained(access: ReceiveStoreAccess): Promise<void> {
     if (this.#disposed) return
-    const store = await this.#storage.optional()
+    const store = await access.openStoreOptional()
+    if (this.#disposed) return
     if (store === undefined) {
       this.#retained = Object.freeze({ kind: 'empty', tasks: Object.freeze([]), pending: null })
       this.#publish()
@@ -244,7 +251,8 @@ export class ReceiveCoordinator {
     this.#retained = Object.freeze({ ...this.#retained, kind: 'loading' })
     this.#publish()
     try {
-      const tasks = await loadRetainedTasks(retainedTaskEnvironment(store, this.#options), this.#activeTaskId)
+      const env = retainedTaskEnvironment(store, this.#options, this.#lifetimeAbort.signal)
+      const tasks = await loadRetainedTasks(env, this.#session?.taskId ?? null)
       if (this.#disposed) return
       this.#retained = Object.freeze({
         kind: tasks.length === 0 ? 'empty' : 'available',
@@ -316,7 +324,7 @@ export class ReceiveCoordinator {
   }
 
   startNewDownload(): void {
-    if (this.#activeJob !== null || this.#activation !== null) return
+    if (this.#session !== null || this.#activation !== null) return
     this.#dismissedShareInstance = this.#options.currentJoinedShare()?.descriptor.shareInstanceId ?? null
     this.#activeTaskId = null
     this.#activeSelectionKey = null
@@ -333,10 +341,11 @@ export class ReceiveCoordinator {
 
   performActiveAction(action: ReceiveAction): void {
     if (!this.activeActionAdmission(action).allowed) return
-    if ((action === 'pause' || action === 'stop') && this.#activeJob !== null) {
+    const job = this.#session?.job
+    if ((action === 'pause' || action === 'stop') && job !== undefined) {
       this.#interruption = action
-      if (action === 'pause') this.#activeJob.pause('user')
-      else this.#activeJob.stop()
+      if (action === 'pause') job.pause('user')
+      else job.stop()
       this.#closeDisconnectGuard()
       this.#publish()
       return
@@ -358,14 +367,13 @@ export class ReceiveCoordinator {
   }
 
   suspendForNewShare(): void {
-    this.#closeDisconnectGuard()
     this.#offerAbort?.abort()
     this.#offers = null
     this.#selectionSpec = null
     this.#selectionPolicy = null
     this.#activation = null
     this.#dismissedShareInstance = null
-    if (this.#activeJob === null) {
+    if (this.#session === null) {
       this.#activeTaskId = null
       this.#activeSelectionKey = null
       this.#backend = null
@@ -387,7 +395,7 @@ export class ReceiveCoordinator {
     this.#unloadGuard.dispose()
     this.#wakeLockGuard.dispose()
     this.#offerAbort?.abort()
-    this.#activeJob?.detach()
+    this.#session?.job?.detach()
     this.#closeDisconnectGuard()
     if (this.#progressTimer !== undefined) {
       clearTimeout(this.#progressTimer)
@@ -447,10 +455,11 @@ export class ReceiveCoordinator {
       this.#publish()
     }
 
-    await this.#storage.run(() => this.#openDownload(request, committing, parentHandle))
+    await this.#storage.run(access => this.#openDownload(access, request, committing, parentHandle))
   }
 
   async #openDownload(
+    access: ReceiveStoreAccess,
     request: DownloadRequest,
     activation: ActiveActivationSnapshot,
     parentHandle: FileSystemDirectoryHandle | undefined,
@@ -477,8 +486,7 @@ export class ReceiveCoordinator {
         windowPort: this.#options.windowPort,
         ...(this.#options.opfsEnv === undefined ? {} : { opfsEnv: this.#options.opfsEnv }),
         ...(this.#options.outputTrace === undefined ? {} : { outputTrace: this.#options.outputTrace }),
-        openStoreOptional: () => this.#storage.optional(),
-        requireStore: () => this.#storage.require(),
+        ...access, signal: this.#lifetimeAbort.signal,
       })
     } catch (error) {
       if (!this.#ownsActivation(activation)) return
@@ -515,6 +523,9 @@ export class ReceiveCoordinator {
     const downloading = initialLifecycle.kind === 'downloading'
       ? initialLifecycle
       : transitionReceiveState(initialLifecycle, { kind: 'downloading', phase: 'receiving' })
+    // Local actions must wait for the output lock even when connectivity or job creation fails.
+    const owner: ActiveReceiveSession = { taskId: session.taskId }
+    this.#session = owner
     this.#activeTaskId = session.taskId
     this.#activeSelectionKey = activeSelectionKey
     this.#backend = session.backend
@@ -533,7 +544,7 @@ export class ReceiveCoordinator {
         onProgress: progress => this.#observeProgress(progress),
         onUncheckpointedWrite: () => this.#disconnectGuard?.invalidate(),
       })
-      this.#activeJob = job
+      owner.job = job
       if (session.transferOutput.capabilities.resumable) {
         this.#disconnectGuard = new DisconnectCheckpointGuard(joined, {
           job, taskId: session.taskId, changed: () => this.#publish(),
@@ -552,9 +563,9 @@ export class ReceiveCoordinator {
       this.#closeDisconnectGuard()
       this.#unloadGuard.setArmed(false)
       this.#wakeLockGuard.setArmed(false)
-      await session.close().catch(() => undefined)
+      await closeOutputSession(session, this.#options.outputTrace)
       try { connectivity?.close() } catch { /* Best-effort connectivity release. */ }
-      this.#activeJob = null
+      this.#session = null
       this.#publish()
       if (!this.#disposed) void this.loadRetained()
     }
@@ -566,7 +577,7 @@ export class ReceiveCoordinator {
       this.#traceDetached(session)
       return
     }
-    if (result.status === 'completed' && this.#lifecycle?.kind === 'downloading') {
+    if (this.#lifecycle?.kind === 'downloading') {
       this.#lifecycle = transitionReceiveState(this.#lifecycle, { kind: 'downloading', phase: 'finalizing' })
       this.#publish()
     }
@@ -598,7 +609,7 @@ export class ReceiveCoordinator {
 
   #closeDetachedSession(session: OutputSessionHandle): Promise<void> {
     this.#traceDetached(session)
-    return session.close()
+    return closeOutputSession(session, this.#options.outputTrace)
   }
 
   #traceDetached(session: OutputSessionHandle): void {
@@ -610,52 +621,37 @@ export class ReceiveCoordinator {
     const pending: PendingRetainedAction = Object.freeze({ taskId, action })
     this.#retained = Object.freeze({ ...this.#retained, pending })
     this.#publish()
-    return this.#storage.run(() => this.#executeRetainedAction(taskId, action))
+    return this.#storage.run(access => this.#executeRetainedAction(access, taskId, action))
   }
 
-  async #executeRetainedAction(taskId: string, action: ReceiveAction): Promise<void> {
+  async #executeRetainedAction(access: ReceiveStoreAccess, taskId: string, action: ReceiveAction): Promise<void> {
     try {
-      const store = await this.#storage.require()
-      const outcome = await executeRetainedTaskAction(retainedTaskEnvironment(store, this.#options), taskId, action)
-
+      const store = await access.requireStore()
+      if (this.#disposed) return
+      const env = retainedTaskEnvironment(store, this.#options, this.#lifetimeAbort.signal)
+      if (action === 'continue') {
+        const { joined, task, session } = await reopenRetainedTask(env, taskId, this.#options.currentJoinedShare)
+        this.#retained = Object.freeze({ ...this.#retained, pending: null })
+        await this.#runSession(joined, session, policyFromSelectionSpec(task.selection), task.selectionKey,
+          artifactRootPath(task.artifact), task.display ?? null, task.lifecycle)
+        return
+      }
+      const outcome = await executeRetainedTaskAction(env, taskId, action)
+      if (this.#disposed) return
       this.#retained = Object.freeze({ ...this.#retained, pending: null })
-      if (outcome.kind === 'completed') {
-        if (this.#activeTaskId === taskId) {
-          if (action === 'forget' || action === 'discard') {
-            this.startNewDownload()
-          } else if (outcome.updated !== undefined) {
-            this.#lifecycle = outcome.updated.lifecycle
-            this.#publish()
-          }
+      if (this.#activeTaskId === taskId) {
+        if (action === 'forget' || action === 'discard') this.startNewDownload()
+        else if (outcome.updated !== undefined) {
+          this.#lifecycle = outcome.updated.lifecycle
+          this.#publish()
         }
-        await this.loadRetained()
-        return
       }
-
-      if (this.#disposed) {
-        this.#traceDetached(outcome.session)
-        await outcome.session.close()
-        return
-      }
-      const joined = this.#options.currentJoinedShare()
-      if (joined === undefined || joined.descriptor.shareInstanceId !== outcome.task.shareInstance) {
-        await outcome.session.close()
-        throw new DOMException('Open the matching share link to continue this download', 'InvalidStateError')
-      }
-      const selection = policyFromSelectionSpec(outcome.task.selection)
-      await this.#runSession(
-        joined,
-        outcome.session,
-        selection,
-        outcome.task.selectionKey,
-        artifactRootPath(outcome.task.artifact),
-        outcome.task.display ?? null,
-        outcome.task.lifecycle,
-      )
+      await this.loadRetained()
     } catch (error) {
+      if (this.#disposed) return
       this.#retained = Object.freeze({ ...this.#retained, pending: null })
-      if (isPermissionDeniedError(error)) {
-        // Keep paused with clear permission-needed state rather than losing progress.
+      if (action === 'continue' || isPermissionDeniedError(error)) {
+        // Re-read durable state after a failed open or a lost permission.
         await this.loadRetained()
       }
       this.#publish()
@@ -701,15 +697,19 @@ export class ReceiveCoordinator {
     if (!this.#disposed) this.#options.onActionError?.(error)
   }
 
-  #buildSnapshot(): ReceiveRuntimeSnapshot {
+  #activeActions(): readonly ReceiveAction[] {
+    if (this.#session !== null && (this.#session.job === undefined || this.#lifecycle?.kind !== 'downloading')) return []
     const canSavePartial = canSavePartialState(this.#lifecycle, this.#backend, this.#isZipArchive)
-    const actions = this.#lifecycle === null || this.#backend === null || this.#interruption !== null
+    return this.#lifecycle === null || this.#backend === null || this.#interruption !== null
       ? Object.freeze([])
       : actionsForState(this.#lifecycle, this.#backend, canSavePartial)
+  }
+
+  #buildSnapshot(): ReceiveRuntimeSnapshot {
     return Object.freeze({
       offers: this.#offers,
       activation: this.#activation,
-      activeTaskId: isActiveReceiveState(this.#lifecycle ?? { kind: 'failed', taskId: '', generation: 0n, reason: 'error' })
+      activeTaskId: this.#lifecycle !== null && isActiveReceiveState(this.#lifecycle)
         ? this.#activeTaskId
         : null,
       activeSelectionKey: this.#activeSelectionKey,
@@ -720,14 +720,14 @@ export class ReceiveCoordinator {
       sourceRevisionFailures: this.#sourceRevisionFailures,
       outageCheckpointed: this.#disconnectGuard?.checkpointed ?? false,
       progress: this.#progress,
-      actions,
+      actions: this.#activeActions(),
       interruption: this.#interruption,
       retained: this.#retained,
     })
   }
 
   #adoptMatchingRetained(): void {
-    if (this.#lifecycle !== null || this.#activeJob !== null || this.#activation !== null) return
+    if (this.#lifecycle !== null || this.#session !== null || this.#activation !== null) return
     const joined = this.#options.currentJoinedShare()
     const offers = this.#offers
     if (joined === undefined || offers === null) return

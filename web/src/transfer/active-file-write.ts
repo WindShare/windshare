@@ -1,5 +1,5 @@
 import { ByteRangeSet, byteRange, coveredBytes } from '../content/geometry'
-import type { CheckpointOutcome, PeriodicCheckpointPolicy, TransferOutputFile } from './output-port'
+import type { CheckpointOutcome, CheckpointReason, PeriodicCheckpointPolicy, TransferOutputFile } from './output-port'
 
 export interface DisconnectFileCheckpoint {
   readonly outcome: CheckpointOutcome
@@ -41,7 +41,11 @@ export class ActiveFileWrite {
         const size = this.#ranges.fileSize
         const span = byteRange(offset, offset + BigInt(data.byteLength))
         const next = this.#ranges.union(new ByteRangeSet(size, [span]))
-        await this.#writer.writeAt(offset, data)
+        try {
+          await this.#writer.writeAt(offset, data)
+        } catch (error) {
+          this.#rejectWrite(error)
+        }
         this.#ranges = next
         const coverage = coveredBytes(next.ranges)
         const gained = coverage - this.#coverage
@@ -70,35 +74,68 @@ export class ActiveFileWrite {
     })
   }
 
-  commit(): Promise<void> {
-    return this.finish(async () => {
-      this.signal.throwIfAborted()
-      await this.#writer.commit(this.#ranges.ranges)
-      this.#dirtyBytes = 0n
-      this.#finishing = false
-    })
-  }
-
-  finish<T>(operation: () => Promise<T>): Promise<T> {
+  /** Let any admitted cut finish before deciding whether this writer can still preserve progress. */
+  finishWrites(): Promise<unknown> {
     this.#finishing = true
-    return this.#serialize(operation)
+    return this.#tail
   }
 
-  async #checkpoint(reason: 'periodic' | 'disconnect'): Promise<DisconnectFileCheckpoint> {
+  async commit(): Promise<void> {
+    await this.finishWrites()
+    this.signal.throwIfAborted()
+    try {
+      await this.#writer.commit(this.#ranges.ranges)
+    } catch (error) {
+      this.#rejectWrite(error)
+    }
+    this.#dirtyBytes = 0n
+    this.#finishing = false
+  }
+
+  async checkpointForRetry(): Promise<void> {
+    if (this.#dirtyBytes > 0n) {
+      if ((await this.#checkpoint('retry')).outcome !== 'saved') throw new Error('Cannot reopen without a durable file checkpoint')
+    } else if (this.#ranges.empty) {
+      await this.#writer.abort().catch(() => undefined)
+    }
+    // Lease retirement can outlive local I/O. The next reader opens against this durable prefix.
+    this.#finishing = false
+  }
+
+  async pause(reason: unknown): Promise<void> {
+    if (this.#dirtyBytes === 0n) {
+      // A cancelled reopen can own an unused stream or empty placeholder. Its prior ranges are already durable.
+      await this.#writer.abort(reason).catch(() => undefined)
+    } else {
+      await this.#writer.pause(this.#ranges.ranges)
+      this.#dirtyBytes = 0n
+    }
+    this.#finishing = false
+  }
+
+  async #checkpoint(reason: CheckpointReason): Promise<DisconnectFileCheckpoint> {
     const bytes = this.#dirtyBytes
-    const outcome = await this.#writer.checkpoint(this.#ranges.ranges, reason)
+    let outcome: CheckpointOutcome
+    try {
+      outcome = await this.#writer.checkpoint(this.#ranges.ranges, reason)
+    } catch (error) {
+      this.#rejectWrite(error)
+    }
     if (outcome === 'skipped') return { outcome, savedBytes: 0n }
     this.#dirtyBytes = 0n
     this.#lastCheckpointAt = Date.now()
     return { outcome, savedBytes: bytes }
   }
 
+  #rejectWrite(error: unknown): never {
+    // A broker can translate its cancellation, so keep the original I/O failure that woke it.
+    if (!this.signal.aborted || error !== this.signal.reason) this.#failed.abort(error)
+    throw error
+  }
+
   #serialize<T>(operation: () => Promise<T>): Promise<T> {
     const result = this.#tail.then(operation)
-    this.#tail = result.catch((cause: unknown) => {
-      // Wake a blocked reader without losing the storage error if the broker translates cancellation.
-      this.#failed.abort(cause)
-    })
+    this.#tail = result.catch(() => undefined)
     return result
   }
 }

@@ -84,7 +84,10 @@ export interface ReceiveFileRecord {
   readonly revision: string
   readonly sourceMetadata?: string
   readonly path: readonly string[]
-  readonly physicalName?: string
+  /** Physical components under the reserved root, including OS-safe names. */
+  readonly fsaPath?: readonly string[]
+  /** While close and IndexedDB disagree, only the previous on-disk version has a known fingerprint. */
+  readonly fsaPendingPublish?: Readonly<{ fingerprint: FSADiskFingerprint; ranges: readonly CompletedRangeTuple[] }>
   readonly size: bigint
   readonly completedRanges: readonly CompletedRangeTuple[]
   readonly status: 'receiving' | 'completed' | 'failed'

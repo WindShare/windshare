@@ -1,5 +1,5 @@
 import type { ByteRange } from '../../content/geometry'
-import { storagePauseReason } from '../../transfer/fault'
+import { classifyNativeError, storagePauseReason } from '../../transfer/fault'
 import type { SettledTransferJobResult } from '../../transfer/job'
 import type {
   CompletedOutputFile,
@@ -25,6 +25,7 @@ import {
   type ReceiveFileRecord,
   type ReceiveTaskRecord,
 } from '../store/types'
+import { hasZipLayout, survivingZipCoverage } from '../zip/stored-members'
 import { buildPartialZipBlob, ProgressiveZipWriter } from '../zip/progressive-zip'
 import {
   artifactDownloadMediaType,
@@ -58,146 +59,87 @@ export function browserOPFSEnvironment(
   })
 }
 
-async function openTasksDirectory(env: OPFSEnvironment): Promise<FileSystemDirectoryHandle> {
+async function openTasksDirectory(env: OPFSEnvironment, create = false): Promise<FileSystemDirectoryHandle> {
   const root = await env.getRootDirectory()
-  return root.getDirectoryHandle(OPFS_ROOT_DIR, { create: true })
+  return root.getDirectoryHandle(OPFS_ROOT_DIR, { create })
 }
 
-export async function openNewOPFSSession(input: Readonly<{
-  task: StartBackendTaskInput
-  store: ReceiveStore
-  env: OPFSEnvironment
-  windowPort: BrowserDownloadWindow
-  diagnostics?: OutputDiagnosticsPorts
-}>): Promise<OutputSessionHandle> {
-  const lock = await acquireTaskLock(input.task.taskId, input.env.locks)
-  try {
-    const isZip = input.task.artifact.kind === 'zip-archive'
-    const objectName = `${input.task.taskId}.part`
-    const dir = await openTasksDirectory(input.env)
-    const fileHandle = await dir.getFileHandle(objectName, { create: true })
-    const nativeFactory = input.env.openNativeObject ?? openNativeObject
-    const io = new ObjectCheckpointCoordinator({
-      io: await nativeFactory(fileHandle),
-      operationId: input.task.taskId,
-      objectId: objectName,
-    })
+interface OPFSSessionPorts {
+  readonly store: ReceiveStore
+  readonly env: OPFSEnvironment
+  readonly windowPort: BrowserDownloadWindow
+  readonly diagnostics?: OutputDiagnosticsPorts
+}
 
-    const target: OPFSTargetRecord = Object.freeze({
-      kind: 'opfs',
-      objectName,
-      fileName: input.task.artifact.name,
-      isZip,
-      allocatedLength: 0n,
-    })
-    const display = input.task.display === undefined
-      ? undefined
-      : Object.freeze({
-          ...input.task.display,
-          destinationLabel: Object.freeze({ kind: 'browser-downloads' as const }),
-        })
-    const downloading = transitionReceiveState(input.task.lifecycle, {
-      kind: 'downloading',
-      phase: 'receiving',
-    })
-    const record: ReceiveTaskRecord = Object.freeze({
-      taskId: input.task.taskId,
-      shareInstance: input.task.selection.shareInstance,
-      selectionKey: input.task.selectionKey,
-      selection: input.task.selection,
-      artifact: input.task.artifact,
-      backend: 'opfs',
-      lifecycle: downloading,
-      target,
-      ...(display === undefined ? {} : { display }),
-      discoveryComplete: false,
-      updatedAt: Date.now(),
-    })
-    await input.store.putTask(record)
-    const zip = isZip ? await ProgressiveZipWriter.open(record.taskId, input.store, io) : undefined
-    emitOutputTrace(input.diagnostics?.trace, 'output_reservation', {
-      backend: 'origin_private',
-      transition: 'acquired',
-    })
-    return new OPFSSessionHandle({
-      record,
-      fileHandle,
-      io,
-      ...(zip === undefined ? {} : { zip }),
-      reopened: false,
-      store: input.store,
-      lock,
-      windowPort: input.windowPort,
-      ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
-    })
-  } catch (error) {
-    await lock.release()
-    throw error
+export function openNewOPFSSession(
+  input: OPFSSessionPorts & { readonly task: StartBackendTaskInput },
+): Promise<OutputSessionHandle> {
+  const { task } = input
+  const target: OPFSTargetRecord = {
+    kind: 'opfs', objectName: `${task.taskId}.part`, fileName: task.artifact.name,
+    isZip: task.artifact.kind === 'zip-archive', allocatedLength: 0n,
   }
+  const record: ReceiveTaskRecord = {
+    taskId: task.taskId, shareInstance: task.selection.shareInstance, selectionKey: task.selectionKey,
+    selection: task.selection, artifact: task.artifact, backend: 'opfs', lifecycle: task.lifecycle, target,
+    ...(task.display === undefined ? {} : {
+      display: { ...task.display, destinationLabel: { kind: 'browser-downloads' } },
+    }),
+    discoveryComplete: false, updatedAt: Date.now(),
+  }
+  return openOPFSSession(input, record, target, false)
 }
 
-export async function reopenOPFSSession(input: Readonly<{
-  task: ReceiveTaskRecord
-  store: ReceiveStore
-  env: OPFSEnvironment
-  windowPort: BrowserDownloadWindow
-  diagnostics?: OutputDiagnosticsPorts
-}>): Promise<OutputSessionHandle> {
+export function reopenOPFSSession(
+  input: OPFSSessionPorts & { readonly task: ReceiveTaskRecord },
+): Promise<OutputSessionHandle> {
   if (input.task.target.kind !== 'opfs') {
-    throw new TypeError('Cannot reopen a non-OPFS task with the OPFS backend')
+    return Promise.reject(new TypeError('Cannot reopen a non-OPFS task with the OPFS backend'))
   }
-  let lock: TaskLock
+  return openOPFSSession(input, input.task, input.task.target, true)
+}
+
+async function openOPFSSession(
+  ports: OPFSSessionPorts, task: ReceiveTaskRecord, target: OPFSTargetRecord, reopened: boolean,
+): Promise<OutputSessionHandle> {
+  let lock: TaskLock | undefined
+  let io: ObjectCheckpointCoordinator | undefined
+  let directory: FileSystemDirectoryHandle | undefined
+  let fileHandle: FileSystemFileHandle | undefined
   try {
-    lock = await acquireTaskLock(input.task.taskId, input.env.locks)
-  } catch (error) {
-    emitOutputTrace(input.diagnostics?.trace, 'reopen', {
-      backend: 'origin_private',
-      transition: 'failed',
+    lock = await acquireTaskLock(task.taskId, ports.env.locks)
+    directory = await openTasksDirectory(ports.env, true)
+    fileHandle = await directory.getFileHandle(target.objectName, { create: true })
+    const nativeFactory = ports.env.openNativeObject ?? openNativeObject
+    io = new ObjectCheckpointCoordinator({
+      io: await nativeFactory(fileHandle), operationId: task.taskId, objectId: target.objectName,
     })
-    throw error
-  }
-  try {
-    const target = input.task.target
-    const dir = await openTasksDirectory(input.env)
-    const fileHandle = await dir.getFileHandle(target.objectName, { create: true })
-    const nativeFactory = input.env.openNativeObject ?? openNativeObject
-    const io = new ObjectCheckpointCoordinator({
-      io: await nativeFactory(fileHandle),
-      operationId: input.task.taskId,
-      objectId: target.objectName,
-    })
-    const downloading = transitionReceiveState(input.task.lifecycle, {
-      kind: 'downloading',
-      phase: 'receiving',
-    })
-    const updated: ReceiveTaskRecord = Object.freeze({
-      ...input.task,
-      lifecycle: downloading,
+    const zip = target.isZip ? await ProgressiveZipWriter.open(task.taskId, ports.store, io, ports.diagnostics?.trace) : undefined
+    const record: ReceiveTaskRecord = Object.freeze({
+      ...task,
+      lifecycle: transitionReceiveState(task.lifecycle, { kind: 'downloading', phase: 'receiving' }),
       updatedAt: Date.now(),
     })
-    await input.store.putTask(updated)
-    const zip = target.isZip ? await ProgressiveZipWriter.open(updated.taskId, input.store, io) : undefined
-    emitOutputTrace(input.diagnostics?.trace, 'reopen', {
-      backend: 'origin_private',
-      transition: 'authorized',
+    const session = new OPFSSessionHandle({
+      ...ports, record, fileHandle, directory, io, zip, reopened, lock,
     })
-    return new OPFSSessionHandle({
-      record: updated,
-      fileHandle,
-      io,
-      ...(zip === undefined ? {} : { zip }),
-      reopened: true,
-      store: input.store,
-      lock,
-      windowPort: input.windowPort,
-      ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
+    await ports.store.putTask(record)
+    emitOutputTrace(ports.diagnostics?.trace, reopened ? 'reopen' : 'output_reservation', {
+      backend: 'origin_private', task_id: task.taskId, transition: reopened ? 'authorized' : 'acquired',
     })
+    return session
   } catch (error) {
-    emitOutputTrace(input.diagnostics?.trace, 'reopen', {
-      backend: 'origin_private',
-      transition: 'failed',
+    // A successor holding the Web Lock must be able to acquire the exclusive SyncAccessHandle.
+    await io?.close().catch(() => undefined)
+    if (!reopened && directory !== undefined && fileHandle !== undefined) {
+      try {
+        if (await ports.store.getTask(task.taskId) === undefined) await removePrivateObject(directory, target.objectName)
+      } catch { /* Preserve the opening error if storage itself is unavailable. */ }
+    }
+    await lock?.release()
+    emitOutputTrace(ports.diagnostics?.trace, reopened ? 'reopen' : 'output_reservation', {
+      backend: 'origin_private', task_id: task.taskId, transition: 'failed', error_class: classifyNativeError(error),
     })
-    await lock.release()
     throw error
   }
 }
@@ -208,6 +150,7 @@ export async function saveRetainedOPFSTask(
   store: ReceiveStore,
   env: OPFSEnvironment,
   windowPort: BrowserDownloadWindow,
+  signal?: AbortSignal,
 ): Promise<ReceiveTaskRecord> {
   if (task.target.kind !== 'opfs') {
     throw new TypeError('Only OPFS tasks can be exported from browser storage')
@@ -217,10 +160,11 @@ export async function saveRetainedOPFSTask(
     const dir = await openTasksDirectory(env)
     const handle = await dir.getFileHandle(task.target.objectName)
     const file = await handle.getFile()
-    if (task.target.sealedSize !== undefined && BigInt(file.size) !== task.target.sealedSize) {
+    if (BigInt(file.size) !== task.target.sealedSize) {
       throw new DOMException('Retained browser file is missing or incomplete', 'NotFoundError')
     }
     const mediaType = artifactDownloadMediaType(task.artifact.kind)
+    signal?.throwIfAborted()
     triggerBrowserDownload(windowPort, file, task.target.fileName, mediaType)
     const nextLifecycle = transitionReceiveState(task.lifecycle, {
       kind: 'download-started',
@@ -245,6 +189,7 @@ export async function exportPartialOPFSZip(
   store: ReceiveStore,
   env: OPFSEnvironment,
   windowPort: BrowserDownloadWindow,
+  signal?: AbortSignal,
 ): Promise<Blob> {
   if (task.target.kind !== 'opfs' || !task.target.isZip) {
     throw new TypeError('Partial ZIP export requires a retained OPFS ZIP task')
@@ -257,6 +202,7 @@ export async function exportPartialOPFSZip(
     const files = await store.listTaskFiles(task.taskId)
     const blob = buildPartialZipBlob(file, files)
     const partialName = task.target.fileName.replace(/\.zip$/iu, '') + '-partial.zip'
+    signal?.throwIfAborted()
     triggerBrowserDownload(windowPort, blob, partialName, 'application/zip')
     return blob
   } finally {
@@ -264,17 +210,37 @@ export async function exportPartialOPFSZip(
   }
 }
 
+function isNotFound(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'NotFoundError'
+}
+
+async function removePrivateObject(directory: FileSystemDirectoryHandle, name: string): Promise<boolean> {
+  try {
+    await directory.removeEntry(name)
+    return true
+  } catch (error) {
+    if (isNotFound(error)) return false
+    throw error
+  }
+}
+
 export async function deleteOPFSTask(
   task: ReceiveTaskRecord,
   store: ReceiveStore,
   env: OPFSEnvironment,
+  signal?: AbortSignal,
 ): Promise<void> {
+  if (task.target.kind !== 'opfs') throw new TypeError('Only OPFS tasks own browser storage objects')
   const lock = await acquireTaskLock(task.taskId, env.locks)
   try {
-    if (task.target.kind === 'opfs') {
-      const dir = await openTasksDirectory(env).catch(() => undefined)
-      await dir?.removeEntry(task.target.objectName).catch(() => undefined)
-    }
+    const dir = await openTasksDirectory(env).catch((error: unknown) => {
+      if (isNotFound(error)) return undefined
+      throw error
+    })
+    signal?.throwIfAborted()
+    const removed = dir !== undefined && await removePrivateObject(dir, task.target.objectName)
+    // Once deletion starts reclaiming bytes, finish removing the matching metadata.
+    if (!removed) signal?.throwIfAborted()
     await store.deleteTask(task.taskId)
   } finally {
     await lock.release()
@@ -286,6 +252,7 @@ class OPFSSessionHandle implements OutputSessionHandle {
   readonly backend = 'opfs' as const
   readonly transferOutput: TransferOutputSession
   #record: ReceiveTaskRecord
+  readonly #directory: FileSystemDirectoryHandle
   readonly #fileHandle: FileSystemFileHandle
   readonly #io: ObjectCheckpointCoordinator
   readonly #zip: ProgressiveZipWriter | undefined
@@ -293,13 +260,14 @@ class OPFSSessionHandle implements OutputSessionHandle {
   readonly #lock: TaskLock
   readonly #windowPort: BrowserDownloadWindow
   readonly #diagnostics: OutputDiagnosticsPorts | undefined
-  #closed = false
+  #closingIO: Promise<void> | undefined
 
   constructor(input: Readonly<{
     record: ReceiveTaskRecord
+    directory: FileSystemDirectoryHandle
     fileHandle: FileSystemFileHandle
     io: ObjectCheckpointCoordinator
-    zip?: ProgressiveZipWriter
+    zip: ProgressiveZipWriter | undefined
     reopened: boolean
     store: ReceiveStore
     lock: TaskLock
@@ -308,6 +276,7 @@ class OPFSSessionHandle implements OutputSessionHandle {
   }>) {
     this.taskId = input.record.taskId
     this.#record = input.record
+    this.#directory = input.directory
     this.#fileHandle = input.fileHandle
     this.#io = input.io
     this.#zip = input.zip
@@ -337,23 +306,39 @@ class OPFSSessionHandle implements OutputSessionHandle {
       } : {}),
       openFile: (request: TransferFileRequest, signal: AbortSignal) => this.#openFile(request, signal),
       markDiscoveryComplete: async () => {
-        this.#record = Object.freeze({ ...this.#record, discoveryComplete: true, updatedAt: Date.now() })
-        await this.#store.putTask(this.#record)
+        const updated = Object.freeze({ ...this.#record, discoveryComplete: true, updatedAt: Date.now() })
+        await this.#store.putTask(updated)
+        this.#record = updated
       },
     })
   }
 
   async settle(result: SettledTransferJobResult): Promise<ReceiveTaskRecord> {
-    if (result.status === 'completed') {
-      return this.#settleCompleted(result)
+    if (result.status === 'completed' && this.#zip !== undefined) {
+      let size: bigint
+      try {
+        size = await this.#zip.finalize()
+      } catch (error) {
+        await this.#closeIO()
+        const pauseReason = storagePauseReason(error)
+        if (pauseReason !== undefined) return this.#settleIncomplete('paused', { ...result, pauseReason, error })
+        return this.#settleIncomplete('failed', { ...result, error })
+      }
+      await this.#closeIO()
+      return this.#publishCompleted(size, result)
     }
-    // Single-file OPFS can only report `partial` if that file already committed before a late stop/error.
-    if (result.status === 'partial' && this.#zip === undefined && result.completedFiles > 0n) {
-      return this.#settleCompleted(result)
-    }
-    await this.#io.flush().catch(() => undefined)
+
     await this.#closeIO()
-    return this.#settleIncomplete(result.status, result)
+    const files = await this.#store.listTaskFiles(this.taskId)
+    if (this.#zip === undefined && result.status !== 'paused') {
+      // The file commit already truncated and flushed. Its durable row also survives a late stop.
+      const committed = files.find(file => file.status === 'completed')
+      if (committed !== undefined) return this.#publishCompleted(committed.size, result)
+    }
+    if (result.status === 'completed') {
+      return this.#settleIncomplete('failed', { ...result, error: new Error('Missing committed browser file') }, files)
+    }
+    return this.#settleIncomplete(result.status, result, files)
   }
 
   async close(): Promise<void> {
@@ -361,54 +346,41 @@ class OPFSSessionHandle implements OutputSessionHandle {
     await this.#lock.release()
   }
 
-  async #seal(): Promise<bigint> {
-    if (this.#zip !== undefined) return this.#zip.finalize()
-    await this.#io.flush()
-    return this.#io.size()
-  }
-
-  async #settleCompleted(result: SettledTransferJobResult): Promise<ReceiveTaskRecord> {
-    let sealedSize: bigint
+  async #publishCompleted(sealedSize: bigint, result: SettledTransferJobResult): Promise<ReceiveTaskRecord> {
+    let file: File | undefined
     try {
-      sealedSize = await this.#seal()
+      file = await this.#fileHandle.getFile()
     } catch (error) {
-      // The directory can fail to seal after every member is already durable and exportable.
-      await this.#closeIO()
-      const pauseReason = storagePauseReason(error)
-      if (pauseReason !== undefined) return this.#settleIncomplete('paused', { ...result, pauseReason, error })
-      return this.#settleIncomplete('failed', { ...result, error })
+      if (isNotFound(error)) return this.#interruptTruncatedOutput(0n, result)
+      // A transient failure to read a committed object can be retried from Downloads.
     }
-    await this.#closeIO()
-
+    if (file !== undefined && BigInt(file.size) !== sealedSize) {
+      return this.#interruptTruncatedOutput(BigInt(file.size), result)
+    }
     const target: OPFSTargetRecord = Object.freeze({
       ...(this.#record.target as OPFSTargetRecord),
       allocatedLength: this.#zip?.allocatedLength ?? sealedSize,
       sealedSize,
     })
 
-    // Try handing off immediately to browser downloads; if blocked or unavailable,
-    // keep the task in `ready-to-save` so the user can export it with one click.
     let nextLifecycle = transitionReceiveState(this.#record.lifecycle, {
       kind: 'ready-to-save',
       size: sealedSize,
       fileName: target.fileName,
       contentWarning: result.contentWarning ?? null,
     })
-    try {
-      const file = await this.#fileHandle.getFile()
-      const mediaType = artifactDownloadMediaType(this.#record.artifact.kind)
-      triggerBrowserDownload(this.#windowPort, file, target.fileName, mediaType)
-      nextLifecycle = transitionReceiveState(nextLifecycle, {
-        kind: 'download-started',
-        retained: true,
-        fileName: target.fileName,
-      })
-      emitOutputTrace(this.#diagnostics?.trace, 'publication', {
-        backend: 'origin_private',
-        transition: 'committed',
-      })
-    } catch {
-      // Browser handoff needs a fresh user gesture; `ready-to-save` preserves the result safely.
+    // A late stop can leave a complete file for the user to save at their discretion.
+    if (result.status === 'completed' && file !== undefined) {
+      try {
+        const mediaType = artifactDownloadMediaType(this.#record.artifact.kind)
+        triggerBrowserDownload(this.#windowPort, file, target.fileName, mediaType)
+        nextLifecycle = transitionReceiveState(nextLifecycle, {
+          kind: 'download-started', retained: true, fileName: target.fileName,
+        })
+        emitOutputTrace(this.#diagnostics?.trace, 'publication', {
+          backend: 'origin_private', task_id: this.taskId, transition: 'committed',
+        })
+      } catch { /* Downloads can retry a handoff that needs a fresh user gesture. */ }
     }
 
     const updated: ReceiveTaskRecord = Object.freeze({
@@ -418,29 +390,46 @@ class OPFSSessionHandle implements OutputSessionHandle {
       discoveryComplete: true,
       updatedAt: Date.now(),
     })
-    this.#record = updated
     await this.#store.putTask(updated)
+    this.#record = updated
     return updated
+  }
+
+  async #interruptTruncatedOutput(physicalSize: bigint, result: SettledTransferJobResult): Promise<ReceiveTaskRecord> {
+    emitOutputTrace(this.#diagnostics?.trace, 'publication', {
+      backend: 'origin_private', task_id: this.taskId, transition: 'incomplete', physical_bytes: String(physicalSize),
+    })
+    const files = await this.#store.listTaskFiles(this.taskId)
+    const verified: ReceiveFileRecord[] = []
+    for (const row of files) {
+      const recovered = hasZipLayout(row) ? survivingZipCoverage(row, physicalSize) : survivingFileCoverage(row, physicalSize)
+      if (recovered !== row) await this.#store.putFile(recovered)
+      verified.push(recovered)
+    }
+    return this.#settleIncomplete('paused', { ...result, pauseReason: 'interrupted' }, verified)
   }
 
   async #settleIncomplete(
     status: IncompleteOPFSJobStatus,
     result: SettledTransferJobResult,
+    knownFiles?: readonly ReceiveFileRecord[],
   ): Promise<ReceiveTaskRecord> {
-    const files = await this.#store.listTaskFiles(this.taskId)
+    const files = knownFiles ?? await this.#store.listTaskFiles(this.taskId)
     let retainedBytes = 0n
     let storedCompletedFiles = 0n
+    let storedCompletedBytes = 0n
     for (const file of files) {
       retainedBytes += completedTuplesBytes(file.completedRanges)
       if (file.status === 'completed' && file.zipEntry?.kind !== 'directory') {
         storedCompletedFiles += 1n
+        storedCompletedBytes += file.size
       }
     }
 
     const nextLifecycle = nextOPFSIncompleteLifecycle(this.#record.lifecycle, status, result, {
       isZip: this.#zip !== undefined,
       retainedBytes,
-      storedCompletedFiles,
+      storedCompletedFiles, storedCompletedBytes,
     })
 
     const target: OPFSTargetRecord = Object.freeze({
@@ -457,14 +446,25 @@ class OPFSSessionHandle implements OutputSessionHandle {
         : { sourceRevisionFailures: result.sourceRevisionFailures }),
       updatedAt: Date.now(),
     })
-    this.#record = updated
     await this.#store.putTask(updated)
+    this.#record = updated
+    if (nextLifecycle.kind === 'failed' && storedCompletedFiles === 0n) {
+      // Persist the terminal decision before reclaiming bytes; Discard retries any interrupted removal.
+      try {
+        await removePrivateObject(this.#directory, target.objectName)
+      } catch (error) {
+        emitOutputTrace(this.#diagnostics?.trace, 'cleanup', {
+          backend: 'origin_private', task_id: this.taskId, transition: 'failed',
+          error_class: classifyNativeError(error),
+        })
+      }
+    }
     emitOutputTrace(this.#diagnostics?.trace, 'settlement', {
       backend: 'origin_private',
       task_id: this.taskId,
       job_status: status,
       lifecycle: nextLifecycle.kind,
-      completed_files: String(storedCompletedFiles > result.completedFiles ? storedCompletedFiles : result.completedFiles),
+      completed_files: String(storedCompletedFiles),
       failed_files: String(result.failedFiles + result.failedDirectories),
     })
     return updated
@@ -478,7 +478,7 @@ class OPFSSessionHandle implements OutputSessionHandle {
     const existing = await this.#store.getFile(this.taskId, fileId)
     if (existing === undefined || existing.status !== 'completed') return undefined
     const physicalSize = await this.#io.size()
-    return physicalSize >= existing.size ? Object.freeze({ size: existing.size }) : undefined
+    return physicalSize === existing.size ? Object.freeze({ size: existing.size }) : undefined
   }
 
   async #openFile(request: TransferFileRequest, signal: AbortSignal): Promise<TransferOutputFile> {
@@ -522,14 +522,8 @@ class OPFSSessionHandle implements OutputSessionHandle {
 
   async #openSingleFile(request: TransferFileRequest): Promise<TransferOutputFile> {
     const existing = await this.#store.getFile(this.taskId, request.fileId)
-    const physicalSize = await this.#io.size()
-    let validExisting: ReceiveFileRecord | undefined
-    if (existing !== undefined) {
-      const needed = existing.status === 'completed'
-        ? existing.size
-        : maxRangeEnd(existing.completedRanges)
-      if (physicalSize >= needed) validExisting = existing
-    }
+    const validExisting = existing === undefined ? undefined : survivingFileCoverage(existing, await this.#io.size())
+    if (validExisting !== undefined && validExisting !== existing) await this.#store.putFile(validExisting)
 
     const persist = (status: 'receiving' | 'completed', ranges: readonly ByteRange[]) => {
       const row: ReceiveFileRecord = Object.freeze({
@@ -565,11 +559,17 @@ class OPFSSessionHandle implements OutputSessionHandle {
     })
   }
 
-  async #closeIO(): Promise<void> {
-    if (this.#closed) return
-    this.#closed = true
-    await this.#io.close().catch(() => undefined)
+  #closeIO(): Promise<void> {
+    this.#closingIO ??= this.#io.close().catch(() => undefined)
+    return this.#closingIO
   }
+}
+
+function survivingFileCoverage(row: ReceiveFileRecord, physicalSize: bigint): ReceiveFileRecord {
+  if (row.status === 'completed' ? physicalSize === row.size : maxRangeEnd(row.completedRanges) <= physicalSize) return row
+  const completedRanges = row.completedRanges.flatMap(([start, end]) =>
+    start < physicalSize ? [[start, end < physicalSize ? end : physicalSize] as const] : [])
+  return { ...row, status: 'receiving', completedRanges }
 }
 
 type IncompleteOPFSJobStatus = Exclude<SettledTransferJobResult['status'], 'completed'>
@@ -582,18 +582,16 @@ function nextOPFSIncompleteLifecycle(
     isZip: boolean
     retainedBytes: bigint
     storedCompletedFiles: bigint
+    storedCompletedBytes: bigint
   }>,
 ): ReceiveTaskRecord['lifecycle'] {
   const warning = result.contentWarning ?? null
-  const completedFiles = input.storedCompletedFiles > result.completedFiles
-    ? input.storedCompletedFiles
-    : result.completedFiles
   if (status === 'paused') {
     return transitionReceiveState(current, {
       kind: 'paused',
       reason: result.pauseReason ?? 'user',
-      completedFiles,
-      completedBytes: result.completedBytes,
+      completedFiles: input.storedCompletedFiles,
+      completedBytes: input.storedCompletedBytes,
       retainedBytes: input.retainedBytes,
       discoveredFiles: result.discoveredFiles,
       discoveredBytes: result.discoveredBytes,
@@ -603,7 +601,7 @@ function nextOPFSIncompleteLifecycle(
   }
 
   const failedCount = result.failedFiles + result.failedDirectories
-  const savedFiles = status === 'partial' ? completedFiles : input.storedCompletedFiles
+  const savedFiles = input.storedCompletedFiles
   if (input.isZip && savedFiles > 0n) {
     // Keep completed OPFS ZIP members exportable via zero-copy `buildPartialZipBlob`
     // instead of sealing in place, which would turn pre-allocated failed slots into dead padding.

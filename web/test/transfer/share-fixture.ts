@@ -6,6 +6,21 @@ import { FileGeometry, type ByteRange } from '../../src/content/geometry'
 import type { FileRevisionDescriptor } from '../../src/content/records'
 import type { RevisionReader } from '../../src/content/session-services'
 import { encodeBase64Url } from '../../src/crypto/bytes'
+import type { TransferOutputFile } from '../../src/transfer/output-port'
+
+export function gate() {
+  let resolve!: () => void
+  const promise = new Promise<void>(done => { resolve = done })
+  return { promise, resolve }
+}
+
+export function outputFile(overrides: Partial<TransferOutputFile>): TransferOutputFile {
+  return {
+    completedRanges: [], writeAt: async () => undefined, checkpoint: async () => 'saved',
+    pause: async () => undefined, commit: async () => undefined, abort: async () => undefined,
+    ...overrides,
+  }
+}
 
 export function id(seed: number): Uint8Array<ArrayBuffer> {
   return new Uint8Array(16).fill(seed)

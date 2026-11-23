@@ -106,6 +106,26 @@ export class TransferFaultError extends Error {
   }
 }
 
+/** The failed initial commit left no bytes or file reservation. Replaying the whole file is safe. */
+export class RetryableFilePublishError extends TransferFaultError {
+  constructor(cause: unknown) {
+    super(outputFault(FaultScope.FileLocal, OutputFaultCode.CommitFailed),
+      cause instanceof Error ? cause.message : String(cause), { cause })
+    this.name = 'RetryableFilePublishError'
+  }
+}
+
+export class FileDestinationConflictError extends TransferFaultError {
+  readonly destinationPath: string
+
+  constructor(destinationPath: string, options?: ErrorOptions) {
+    super(outputFault(FaultScope.FileLocal, OutputFaultCode.TargetCollision),
+      `WindShare could not verify "${destinationPath}". Check the file in your folder and move it aside before retrying.`, options)
+    this.name = 'FileDestinationConflictError'
+    this.destinationPath = destinationPath
+  }
+}
+
 /** A failed shared object invalidates every member, while an independent writer owns its failure. */
 export function outputFailure(scope: FaultScope, cause: unknown, fallback: OutputFaultCode): TransferFaultError {
   if (cause instanceof TransferFaultError && cause.fault.scope === scope) return cause

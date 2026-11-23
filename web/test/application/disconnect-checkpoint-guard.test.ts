@@ -68,6 +68,25 @@ describe('disconnect checkpoint rounds', () => {
     expect(guard.checkpointed).toBe(false)
   })
 
+  it('contains a rejected round, allows the next outage, and closes without publishing an intermediate state', async () => {
+    vi.useFakeTimers()
+    const checkpoint = vi.fn(async (signal: AbortSignal) => { signal.throwIfAborted(); return saved })
+      .mockRejectedValueOnce(new DOMException('disk', 'InvalidStateError'))
+    const { state, guard, changed, trace } = fixture(checkpoint)
+    await vi.advanceTimersByTimeAsync(delay)
+    expect(guard.checkpointed).toBe(false)
+    expect(trace).toHaveBeenCalledWith({ eventName: 'checkpoint', payload: expect.objectContaining({
+      task_id: 'task-a', round: 1, outcome: 'failed', error_class: 'invalid_state',
+    }) })
+    state.connected()
+    state.reconnecting({ kind: 'connecting' })
+    await vi.advanceTimersByTimeAsync(delay)
+    expect(guard.checkpointed).toBe(true)
+    guard.close()
+    expect(guard.checkpointed).toBe(false)
+    expect(changed).toHaveBeenCalledOnce()
+  })
+
   it('requires a fully durable cut at publication and clears it when the share ends', async () => {
     vi.useFakeTimers()
     let notify!: (snapshot: { kind: 'connected' | 'reconnecting' | 'ended' }) => void

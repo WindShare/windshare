@@ -1,5 +1,6 @@
 import { emitOutputTrace, type OutputTraceSource } from '../../output/diagnostics'
 import { systemReconnectClock, type ReconnectClock } from '../../receiver/recovery-clock'
+import { classifyNativeError } from '../../transfer/fault'
 import type { TransferJob } from '../../transfer/job'
 import type { JoinedBrowserShare } from '../browser-share/gateway'
 
@@ -27,10 +28,18 @@ export class DisconnectCheckpointGuard {
     this.#options = options
     this.#unsubscribe = connection.subscribeConnection(snapshot => {
       if (snapshot.kind !== 'reconnecting') {
-        this.#endRound()
+        this.#cancelRound()
+        this.invalidate()
       } else if (this.#round === undefined) {
         this.#round = new AbortController()
-        void this.#checkpoint(++this.#sequence, this.#round.signal)
+        const round = ++this.#sequence
+        const { signal } = this.#round
+        void this.#checkpoint(round, signal).catch((error: unknown) => {
+          if (!signal.aborted) emitOutputTrace(options.trace, 'checkpoint', {
+            task_id: options.taskId, round, trigger: 'disconnect_timeout', outcome: 'failed',
+            all_received_saved: false, error_class: classifyNativeError(error),
+          })
+        })
       }
     })
   }
@@ -45,17 +54,17 @@ export class DisconnectCheckpointGuard {
 
   close(): void {
     this.#unsubscribe()
-    this.#endRound()
+    this.#cancelRound()
+    this.#checkpointed = false
   }
 
-  #endRound(): void {
+  #cancelRound(): void {
     this.#round?.abort()
     this.#round = undefined
-    this.invalidate()
   }
 
   async #checkpoint(round: number, signal: AbortSignal): Promise<void> {
-    try { await (this.#options.clock ?? systemReconnectClock).sleep(DISCONNECT_CHECKPOINT_DELAY_MS, signal) } catch { return }
+    await (this.#options.clock ?? systemReconnectClock).sleep(DISCONNECT_CHECKPOINT_DELAY_MS, signal)
     if (signal.aborted) return
     const summary = await this.#options.job.checkpointActive(signal)
     // A write or reconnect can arrive between completing the traversal and publishing its result.

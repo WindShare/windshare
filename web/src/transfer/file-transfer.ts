@@ -1,5 +1,5 @@
 import { BLOCK_BROKER_PARALLEL_READS, type BlockRangeReader } from '../content/broker'
-import { ByteRangeSet, byteRange, coveredBytes } from '../content/geometry'
+import { ByteRangeSet, byteRange } from '../content/geometry'
 import type { FileRevisionDescriptor } from '../content/records'
 import { compareRevisionDescriptors, compareRevisionMetadata } from '../content/revision-comparison'
 import {
@@ -16,6 +16,7 @@ import { ActiveFileWrite } from './active-file-write'
 import type { DiscoveredFile } from './discovery'
 import {
   FaultScope,
+  RetryableFilePublishError,
   SourceFaultCode,
   TransferFaultError,
   TransferPauseError,
@@ -39,31 +40,38 @@ export interface FileTransferContext {
   readonly broker: BlockRangeReader
   readonly output: TransferOutputSession
   readonly signal: AbortSignal
-  readonly isDetached: () => boolean
+  readonly getExit: () => TransferExit | undefined
   readonly trackWrite?: (file: ActiveFileWrite | undefined) => void
   readonly onUncheckpointedWrite?: () => void
   readonly onOutputFailure?: (error: unknown) => void
-  readonly isPaused: () => boolean
-  readonly isStopped: () => boolean
   readonly onInitialCoverage?: (bytes: bigint) => void
   readonly onObjectBytes?: (bytes: number) => void
-  readonly onWritten?: (bytes: bigint) => void
+  readonly onWriteCoverageChange?: (delta: bigint) => void
   readonly onCapacityWait?: (deltaWaiting: number, addedWaitMs: number, addedAttempt: number) => void
   readonly remainingWork?: () => { readonly bytes: number; readonly known: boolean }
 }
 
-export type SingleFileTransferOutcome =
-  | Readonly<{ kind: 'completed'; size: bigint }>
-  | Readonly<{ kind: 'paused'; reason: ReceivePauseReason }>
+export type TransferPause = Readonly<{
+  kind: 'paused'
+  reason: ReceivePauseReason
+  sharedOutputFailure?: TransferFaultError
+}>
+
+export type TransferExit =
+  | TransferPause
   | Readonly<{ kind: 'stopped' | 'detached' }>
+  | Readonly<{ kind: 'failed'; error: unknown }>
+
+export type SingleFileTransferOutcome = TransferExit
+  | Readonly<{ kind: 'completed'; size: bigint }>
   | Readonly<{ kind: 'source-changed' }>
   | Readonly<{ kind: 'source-unavailable'; error: unknown }>
-  | Readonly<{ kind: 'failed'; error: unknown }>
 
 interface FileTransferAttemptState {
   readonly attemptIndex: number
   readonly leaseRetries: number
   readonly stalledReopens: number
+  readonly retriedPublication: boolean
   readonly reopenedFrom?: FileRevisionDescriptor
 }
 
@@ -83,9 +91,10 @@ export async function transferSingleFile(
     attemptIndex: 0,
     leaseRetries: 0,
     stalledReopens: 0,
+    retriedPublication: false,
   }
   for (;;) {
-    const preflight = preflightOutcome(ctx)
+    const preflight = ctx.getExit()
     if (preflight !== undefined) return preflight
     if (ctx.signal.aborted) return { kind: 'failed', error: ctx.signal.reason }
 
@@ -97,13 +106,6 @@ export async function transferSingleFile(
     }
     return attempt
   }
-}
-
-function preflightOutcome(ctx: FileTransferContext): SingleFileTransferOutcome | undefined {
-  if (ctx.isDetached()) return { kind: 'detached' }
-  if (ctx.isPaused()) return { kind: 'paused', reason: 'user' }
-  if (ctx.isStopped()) return { kind: 'stopped' }
-  return undefined
 }
 
 async function attemptSingleFileTransfer(
@@ -132,8 +134,7 @@ async function attemptSingleFileTransfer(
     writer = await openOutputFile(ctx, file, opened, revisionText)
 
     if (hasObservedRevisionChange(writer, opened, revisionText)) {
-      await abortChangedWriter(writer)
-      return { kind: 'source-changed' }
+      throw new TransferFaultError(sourceFault(FaultScope.FileLocal, SourceFaultCode.RevisionChanged), 'Source file changed')
     }
 
     active = new ActiveFileWrite(writer, desc.exactSize, ctx.signal, ctx.output.capabilities.periodicCheckpoint)
@@ -144,13 +145,37 @@ async function attemptSingleFileTransfer(
     await streamMissingRanges(ctx, opened, active)
     release = releaseLease(opened)
     ctx.onUncheckpointedWrite?.()
-    await active.commit()
+    try {
+      await active.commit()
+    } catch (error) {
+      if (!(error instanceof RetryableFilePublishError) || initialBytes !== 0n) throw error
+      return retryDiscardedPublication(ctx, active.coverage, desc, state, error)
+    }
     return { kind: 'completed', size: desc.exactSize }
   } catch (error) {
-    const finish = () => handleFileError(ctx, writer, active?.ranges, initialBytes, active?.failure ?? error, state)
-    return await (active === undefined ? finish() : active.finish(finish))
+    await active?.finishWrites()
+    return await handleFileError(ctx, writer, active, initialBytes, active?.failure ?? error, state)
   } finally {
     await (release ?? releaseLease(opened))
+  }
+}
+
+function retryDiscardedPublication(
+  ctx: FileTransferContext,
+  discardedBytes: bigint,
+  revision: FileRevisionDescriptor,
+  state: FileTransferAttemptState,
+  error: RetryableFilePublishError,
+): AttemptResult {
+  // The backend has already removed this attempt's entire output, even if a pending exit or the retry limit wins.
+  ctx.trackWrite?.(undefined)
+  ctx.onWriteCoverageChange?.(-discardedBytes)
+  const exit = ctx.getExit()
+  if (exit !== undefined) return exit
+  if (ctx.signal.aborted || !ctx.output.capabilities.resumable || state.retriedPublication) return { kind: 'failed', error }
+  return {
+    kind: 'retry',
+    next: { ...state, attemptIndex: state.attemptIndex + 1, retriedPublication: true, reopenedFrom: revision },
   }
 }
 
@@ -224,13 +249,6 @@ function hasObservedRevisionChange(
   return comparison.kind !== 'metadata-agreement'
 }
 
-async function abortChangedWriter(writer: TransferOutputFile): Promise<void> {
-  await writer.abort(new TransferFaultError(
-    sourceFault(FaultScope.FileLocal, SourceFaultCode.RevisionChanged),
-    'Source file changed',
-  )).catch(() => undefined)
-}
-
 async function streamMissingRanges(
   ctx: FileTransferContext,
   opened: OpenedRevision,
@@ -250,7 +268,7 @@ async function streamMissingRanges(
       active.signal.throwIfAborted()
       if (slice.data.byteLength === 0) continue
       ctx.onUncheckpointedWrite?.()
-      await active.write(slice.offset, slice.data, ctx.onWritten)
+      await active.write(slice.offset, slice.data, ctx.onWriteCoverageChange)
     }
   }
 }
@@ -282,56 +300,85 @@ async function openRevisionWithBackoff(
 async function handleFileError(
   ctx: FileTransferContext,
   writer: TransferOutputFile | undefined,
-  ranges: ByteRangeSet | undefined,
+  active: ActiveFileWrite | undefined,
   initialBytes: bigint,
   error: unknown,
   state: FileTransferAttemptState,
 ): Promise<AttemptResult> {
-  if (ctx.isDetached()) {
-    await writer?.abort(error).catch(() => undefined)
-    return { kind: 'detached' }
+  const exit = ctx.getExit()
+  if (exit !== undefined && exit.kind !== 'paused') return abortFile(writer, error, exit)
+  if (error instanceof TransferStopError) return abortFile(writer, error, { kind: 'stopped' })
+  if (isSourceChangedError(error)) return abortFile(writer, error, { kind: 'source-changed' })
+  if (exit?.sharedOutputFailure !== undefined) return abortFile(writer, exit.sharedOutputFailure, exit)
+  if (active?.failure !== undefined || error instanceof TransferFaultError || storagePauseReason(error) !== undefined) {
+    return abortFile(writer, error, outputFailureOutcome(ctx, error))
   }
-  ctx.onOutputFailure?.(error)
-  const pauseReason = pauseReasonFor(ctx, error)
-  if (pauseReason !== undefined) {
-    return pauseWriter(ctx, writer, ranges, error, pauseReason)
-  }
-  if (error instanceof TransferStopError || ctx.isStopped()) {
-    await writer?.abort(error).catch(() => undefined)
-    return { kind: 'stopped' }
-  }
-  if (isSourceChangedError(error)) {
-    await writer?.abort(error).catch(() => undefined)
-    return { kind: 'source-changed' }
-  }
-  const nextRetry = nextRetryStateFor(ctx, ranges, initialBytes, error, state)
-  if (nextRetry !== undefined) {
-    const checkpointOutcome = await checkpointForRetry(ctx, writer, ranges)
-    return checkpointOutcome ?? { kind: 'retry', next: nextRetry }
+
+  const pauseReason = exit?.reason ?? (error instanceof TransferPauseError ? error.reason : undefined)
+  if (pauseReason !== undefined) return pauseFile(ctx, writer, active, error, pauseReason)
+  const next = nextRetryStateFor(ctx, (active?.coverage ?? 0n) > initialBytes, error, state)
+  if (next !== undefined) {
+    try {
+      await active?.checkpointForRetry()
+      return { kind: 'retry', next }
+    } catch (cause) {
+      return abortFile(writer, cause, outputFailureOutcome(ctx, cause))
+    }
   }
   if (ctx.output.capabilities.resumable && !ctx.signal.aborted && isRecoverableTransferInterruption(error)) {
-    return pauseWriter(ctx, writer, ranges, error, 'interrupted')
+    return pauseFile(ctx, writer, active, error, 'interrupted')
   }
-  await writer?.abort(error).catch(() => undefined)
-  if (ctx.signal.aborted) return preflightOutcome(ctx) ?? { kind: 'failed', error: ctx.signal.reason }
-  return error instanceof RemoteRevisionError
+  return abortFile(writer, error, error instanceof RemoteRevisionError
     ? { kind: 'source-unavailable', error }
-    : { kind: 'failed', error }
+    : { kind: 'failed', error })
+}
+
+/** A storage failure retires its writer. Healthy siblings can still save their own ranges when the job pauses. */
+function outputFailureOutcome(ctx: FileTransferContext, error: unknown): TransferExit {
+  const exit = ctx.getExit()
+  if (exit !== undefined && exit.kind !== 'paused') return exit
+  ctx.onOutputFailure?.(error)
+  const reason = storagePauseReason(error)
+  return ctx.output.capabilities.resumable && reason !== undefined ? { kind: 'paused', reason } : { kind: 'failed', error }
+}
+
+async function abortFile(
+  writer: TransferOutputFile | undefined,
+  cause: unknown,
+  outcome: SingleFileTransferOutcome,
+): Promise<SingleFileTransferOutcome> {
+  try { await writer?.abort(cause) } catch { /* Cleanup cannot replace the cause that retired this writer. */ }
+  return outcome
+}
+
+async function pauseFile(
+  ctx: FileTransferContext,
+  writer: TransferOutputFile | undefined,
+  active: ActiveFileWrite | undefined,
+  error: unknown,
+  reason: ReceivePauseReason,
+): Promise<SingleFileTransferOutcome> {
+  if (active === undefined) return abortFile(writer, error, { kind: 'paused', reason })
+  try {
+    await active.pause(error)
+    return { kind: 'paused', reason }
+  } catch (cause) {
+    return abortFile(writer, cause, outputFailureOutcome(ctx, cause))
+  }
 }
 
 function nextRetryStateFor(
   ctx: FileTransferContext,
-  ranges: ByteRangeSet | undefined,
-  initialBytes: bigint,
+  madeProgress: boolean,
   error: unknown,
   state: FileTransferAttemptState,
 ): FileTransferAttemptState | undefined {
   if (!ctx.output.capabilities.resumable || ctx.signal.aborted) return undefined
-  const madeProgress = ranges !== undefined && coveredBytes(ranges.ranges) > initialBytes
   if (isReusableReopenedRevisionError(error)) {
     const stalledReopens = madeProgress ? 0 : state.stalledReopens + 1
     if (stalledReopens > MAX_STALLED_REOPEN_RETRIES) return undefined
     return {
+      ...state,
       attemptIndex: state.attemptIndex + 1,
       leaseRetries: madeProgress ? 0 : state.leaseRetries,
       stalledReopens,
@@ -340,10 +387,10 @@ function nextRetryStateFor(
   }
   if (requiresRevisionLeaseReplacement(error) && state.leaseRetries < MAX_LEASE_RETRIES) {
     return {
+      ...state,
       attemptIndex: state.attemptIndex + 1,
       leaseRetries: state.leaseRetries + 1,
       stalledReopens: madeProgress ? 0 : state.stalledReopens,
-      ...(state.reopenedFrom === undefined ? {} : { reopenedFrom: state.reopenedFrom }),
     }
   }
   return undefined
@@ -352,66 +399,6 @@ function nextRetryStateFor(
 function isReusableReopenedRevisionError(error: unknown): error is RevisionReopenedDuringRecoveryError {
   return error instanceof RevisionReopenedDuringRecoveryError &&
     error.comparison.kind === 'metadata-agreement'
-}
-
-function pauseReasonFor(
-  ctx: FileTransferContext,
-  error: unknown,
-): ReceivePauseReason | undefined {
-  if (error instanceof TransferPauseError) return error.reason
-  return storagePauseReason(error) ?? (ctx.isPaused() ? 'user' : undefined)
-}
-
-async function pauseWriter(
-  ctx: FileTransferContext,
-  writer: TransferOutputFile | undefined,
-  ranges: ByteRangeSet | undefined,
-  reason: unknown,
-  pauseReason: ReceivePauseReason,
-): Promise<SingleFileTransferOutcome> {
-  if (writer !== undefined) {
-    if (ranges === undefined || ranges.empty) {
-      await writer.abort(reason).catch(() => undefined)
-    } else {
-      try {
-        await writer.pause(ranges.ranges)
-      } catch (cause) {
-        await writer.abort(cause).catch(() => undefined)
-        ctx.onOutputFailure?.(cause)
-        const storageReason = storagePauseReason(cause)
-        return storageReason === undefined ? { kind: 'failed', error: cause } : { kind: 'paused', reason: storageReason }
-      }
-    }
-  }
-  return { kind: 'paused', reason: pauseReason }
-}
-
-async function checkpointForRetry(
-  ctx: FileTransferContext,
-  writer: TransferOutputFile | undefined,
-  ranges: ByteRangeSet | undefined,
-): Promise<SingleFileTransferOutcome | undefined> {
-  if (writer === undefined) return undefined
-  if (ranges === undefined || ranges.empty) {
-    // No bytes need preservation; aborting clears any empty FSA placeholder
-    // before the retry attempt opens a fresh revision.
-    await writer.abort().catch(() => undefined)
-    return undefined
-  }
-  try {
-    const outcome = await writer.checkpoint(ranges.ranges, 'retry')
-    if (outcome !== 'saved') throw new Error('Cannot reopen without a durable file checkpoint')
-    return undefined
-  } catch (checkpointError) {
-    await writer.abort(checkpointError).catch(() => undefined)
-    ctx.onOutputFailure?.(checkpointError)
-    const pauseReason = pauseReasonFor(ctx, checkpointError)
-    if (pauseReason !== undefined) {
-      return { kind: 'paused', reason: pauseReason }
-    }
-    if (ctx.signal.aborted) return preflightOutcome(ctx) ?? { kind: 'failed', error: ctx.signal.reason }
-    return { kind: 'failed', error: checkpointError }
-  }
 }
 
 const REVISION_CODE_STALE = 0x3001
