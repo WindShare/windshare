@@ -41,7 +41,7 @@ export interface RetainedTaskInventoryOptions {
   readonly outputTrace?: OutputTraceSource
   readonly signal: AbortSignal
   readonly isDisposed: () => boolean
-  readonly activeTaskId: () => string | null
+  readonly isLocalTask: (taskId: string) => boolean
   readonly onFullLoaded: () => void
   readonly onChange: () => void
 }
@@ -61,7 +61,7 @@ export class RetainedTaskInventory {
   readonly #outputTrace: OutputTraceSource | undefined
   readonly #signal: AbortSignal
   readonly #isDisposed: () => boolean
-  readonly #activeTaskId: () => string | null
+  readonly #isLocalTask: (taskId: string) => boolean
   readonly #onFullLoaded: () => void
   readonly #onChange: () => void
 
@@ -84,7 +84,7 @@ export class RetainedTaskInventory {
     this.#outputTrace = options.outputTrace
     this.#signal = options.signal
     this.#isDisposed = options.isDisposed
-    this.#activeTaskId = options.activeTaskId
+    this.#isLocalTask = options.isLocalTask
     this.#onFullLoaded = options.onFullLoaded
     this.#onChange = options.onChange
   }
@@ -232,7 +232,7 @@ export class RetainedTaskInventory {
           fetched.push(record)
         }
       }
-      const normalized = await resolveRetainedCandidates(env, fetched, this.#activeTaskId())
+      const normalized = await resolveRetainedCandidates(env, fetched, this.#isLocalTask)
       if (this.#isDisposed()) return
 
       const normalizedById = new Map(normalized.map(snapshot => [snapshot.taskId, snapshot]))
@@ -296,7 +296,7 @@ export class RetainedTaskInventory {
       const env = retainedTaskEnvironment(store, this.#envPorts(), this.#signal)
       const records = await store.listTasks()
       if (this.#isDisposed() || epoch !== this.#fullLoadEpoch) return
-      const snapshots = await resolveRetainedCandidates(env, records, this.#activeTaskId())
+      const snapshots = await resolveRetainedCandidates(env, records, this.#isLocalTask)
       if (this.#isDisposed() || epoch !== this.#fullLoadEpoch) return
       const updatedAtById = new Map(records.map(record => [record.taskId, record.updatedAt]))
       const entries = new Map<string, ResolvedInventoryEntry>()

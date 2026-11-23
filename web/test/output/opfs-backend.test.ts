@@ -209,7 +209,7 @@ describe('OPFS partial settlement and export', () => {
       windowPort: windowPort as unknown as BrowserOutputWindow,
       opfsEnv: env,
     }
-    const retained = await loadRetainedTasks(retainedEnv, null)
+    const retained = await loadRetainedTasks(retainedEnv)
     expect(retained).toHaveLength(1)
     expect(retained[0]?.canSavePartial).toBe(true)
     expect(retained[0]?.actions).toEqual(['save-partial', 'discard'])
@@ -679,7 +679,7 @@ describe('OPFS abandoned and failed output', () => {
     const { session, store, windowPort } = await zipFixture()
     await session.transferOutput.ensureDirectory!({ directoryId: 'd', path: ['empty'] }, new AbortController().signal)
     await session.close()
-    const [task] = await loadRetainedTasks({ store, windowPort }, null)
+    const [task] = await loadRetainedTasks({ store, windowPort })
     expect(task?.lifecycle).toMatchObject({
       kind: 'paused', reason: 'interrupted', completedFiles: 0n, discoveredFiles: 0n, retainedBytes: 0n,
     })

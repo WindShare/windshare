@@ -66,15 +66,16 @@ export class ExecutionState {
     return this.#transfer.kind === 'running'
   }
 
-  get runningTaskId(): string | null {
-    return this.#transfer.kind === 'running' ? this.#transfer.taskId : null
-  }
-
   get activeTransferTaskId(): string | null {
     if (this.#transfer.kind === 'running' || this.#transfer.kind === 'resuming') {
       return this.#transfer.taskId
     }
     return null
+  }
+
+  /** True while this tab owns an active transfer, resume, or local retained action on `taskId`. */
+  ownsTask(taskId: string): boolean {
+    return this.activeTransferTaskId === taskId || this.#localAction?.taskId === taskId
   }
 
   get runningJob(): TransferJob | undefined {

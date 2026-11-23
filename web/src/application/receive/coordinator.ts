@@ -118,7 +118,7 @@ export class ReceiveCoordinator {
       ...(options.outputTrace === undefined ? {} : { outputTrace: options.outputTrace }),
       signal: this.#lifetimeAbort.signal,
       isDisposed: () => this.#disposed,
-      activeTaskId: () => this.#execution.runningTaskId,
+      isLocalTask: taskId => this.#execution.ownsTask(taskId),
       onFullLoaded: () => this.#adoptMatchingRetained(),
       onChange: () => this.#publish(),
     })

@@ -17,7 +17,6 @@ import {
   planSingleFileDownload,
 } from '../../src/application/receive/single-file'
 import type { BrowseDirectory, JoinedBrowserShare } from '../../src/application/browser-share/gateway'
-import type { CatalogEntry } from '../../src/catalog/records'
 import { SelectionPolicy, type FrozenSelectionPolicy } from '../../src/catalog/selection'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import type { BrowserOutputWindow, OutputSessionHandle } from '../../src/output/backends/contract'
@@ -25,10 +24,17 @@ import * as outputContract from '../../src/output/backends/contract'
 import type { NativeSupportWorker } from '../../src/output/native-object/support'
 import { ReceiveStore } from '../../src/output/store/database'
 import type { ReceiveTaskRecord } from '../../src/output/store/types'
-import { selectionKey, selectionSpecFromPolicy } from '../../src/transfer/selection'
 import { initialReceiveState, transitionReceiveState } from '../../src/transfer/state'
 import { FakeDirectoryHandle } from '../output/fsa-fixture'
 import { createMemoryOPFSEnv, createMockDownloadWindow, MemoryReceiveStore } from '../output/opfs-fixture'
+import {
+  deferred,
+  makeFileEntry,
+  makeJobResult,
+  makeSubDirectory,
+  singleFileSelectionKey,
+  waitForSnapshot,
+} from './receive-coordinator-fixture'
 
 function createDeferredProbeWorker() {
   const workers: Array<NativeSupportWorker & { terminated: boolean }> = []
@@ -203,7 +209,7 @@ describe('receive admission and coordinator', () => {
       currentJoinedShare: () => joined,
     })
     coordinator.refreshOffers(joined)
-    await vi.waitFor(() => expect(coordinator.getSnapshot().offers?.kind).toBe('ready'))
+    await waitForSnapshot(coordinator, s => s.offers?.kind === 'ready')
 
     const offers = coordinator.getSnapshot().offers
     if (offers?.kind !== 'ready') throw new Error('expected ready offers')
@@ -232,7 +238,7 @@ describe('receive admission and coordinator', () => {
       true,
     )
 
-    let jobSelection: FrozenSelectionPolicy | undefined
+    const jobSelection = deferred<FrozenSelectionPolicy | undefined>()
     const windowPort: BrowserOutputWindow = {
       URL: { createObjectURL: vi.fn(() => 'blob:test'), revokeObjectURL: vi.fn() },
       document: {
@@ -251,10 +257,11 @@ describe('receive admission and coordinator', () => {
       }),
       beginDownloadConnectivity: () => ({ routes: [], close: vi.fn() }),
       createTransferJob: (_output: unknown, _connectivity: unknown, options?: { readonly selection?: FrozenSelectionPolicy }) => {
-        jobSelection = options?.selection
+        jobSelection.resolve(options?.selection)
         return {
           pause: vi.fn(),
           stop: vi.fn(),
+          detach: vi.fn(),
           run: async () => ({
             status: 'completed' as const,
             completedFiles: 1n,
@@ -274,13 +281,13 @@ describe('receive admission and coordinator', () => {
       currentJoinedShare: () => joined,
     })
     coordinator.refreshOffers(joined)
-    await vi.waitFor(() => expect(coordinator.getSnapshot().offers?.kind).toBe('ready'))
+    await waitForSnapshot(coordinator, s => s.offers?.kind === 'ready')
 
     const offers = coordinator.getSnapshot().offers
     if (offers?.kind !== 'ready') throw new Error('expected ready offers')
     expect(coordinator.startDownload(offers.primary.choiceId)).toBe(true)
-    await vi.waitFor(() => expect(jobSelection).toBeDefined())
-    expect(jobSelection?.draftRules?.[0]?.ancestry).toEqual(['root-1', 'sub-1'])
+    const capturedSelection = await jobSelection.promise
+    expect(capturedSelection?.draftRules?.[0]?.ancestry).toEqual(['root-1', 'sub-1'])
 
     await coordinator.dispose()
   })
@@ -320,7 +327,7 @@ describe('receive admission and coordinator', () => {
     expect(workers[0]!.terminated).toBe(false)
 
     workers[0]!.onmessage?.({ data: true } as MessageEvent<unknown>)
-    await vi.waitFor(() => expect(coordinator.getSnapshot().offers?.kind).toBe('ready'))
+    await waitForSnapshot(coordinator, s => s.offers?.kind === 'ready')
 
     const offers = coordinator.getSnapshot().offers
     if (offers?.kind !== 'ready') throw new Error('expected ready offers')
@@ -352,10 +359,10 @@ describe('receive admission and coordinator', () => {
     })
 
     coordinator.refreshOffers(joined)
-    await vi.waitFor(() => expect(coordinator.getSnapshot().offers?.kind).toBe('retry-required'))
+    await waitForSnapshot(coordinator, s => s.offers?.kind === 'retry-required')
 
     coordinator.retryOffers()
-    await vi.waitFor(() => expect(coordinator.getSnapshot().offers?.kind).toBe('ready'))
+    await waitForSnapshot(coordinator, s => s.offers?.kind === 'ready')
     expect(storageReads).toBe(2)
 
     await coordinator.dispose()
@@ -416,66 +423,6 @@ describe('receive admission and coordinator', () => {
   })
 })
 
-function deferred<T>() {
-  let resolve!: (value: T) => void
-  let reject!: (reason?: unknown) => void
-  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej })
-  return { promise, resolve, reject }
-}
-
-function makeFileEntry(seed: number, name: string, expectedSize: bigint): Extract<CatalogEntry, { kind: 'file' }> {
-  const id = new Uint8Array(16).fill(seed)
-  return Object.freeze({ kind: 'file', id, idText: encodeBase64Url(id), name, expectedSize })
-}
-
-function makeSubDirectory(rootId: string, dirSeed: number, name: string): BrowseDirectory {
-  const id = new Uint8Array(16).fill(dirSeed)
-  const idText = encodeBase64Url(id)
-  return Object.freeze({
-    id,
-    idText,
-    path: Object.freeze([name]),
-    ancestry: Object.freeze([rootId, idText]),
-  })
-}
-
-function singleFileSelectionKey(
-  shareInstance: string,
-  syntheticRoot: string,
-  entry: Extract<CatalogEntry, { kind: 'file' }>,
-  directory: BrowseDirectory,
-) {
-  const policy = new SelectionPolicy(false)
-  policy.set(entry, directory.ancestry, true)
-  const spec = selectionSpecFromPolicy(shareInstance, syntheticRoot, policy.snapshot())
-  return { spec, key: selectionKey(spec) }
-}
-
-function makeJobResult(status: 'completed' | 'paused' = 'completed', size = 16n) {
-  return status === 'paused'
-    ? {
-        status: 'paused' as const,
-        pauseReason: 'user' as const,
-        completedFiles: 0n,
-        completedBytes: 0n,
-        discoveredFiles: 1n,
-        discoveredBytes: size,
-        discoveryComplete: true,
-        failedFiles: 0n,
-        failedDirectories: 0n,
-      }
-    : {
-        status: 'completed' as const,
-        completedFiles: 1n,
-        completedBytes: size,
-        discoveredFiles: 1n,
-        discoveredBytes: size,
-        discoveryComplete: true,
-        failedFiles: 0n,
-        failedDirectories: 0n,
-      }
-}
-
 describe('single-file quick download planning and activation ownership', () => {
   afterEach(() => vi.restoreAllMocks())
 
@@ -527,27 +474,30 @@ describe('single-file quick download planning and activation ownership', () => {
 
     const coordinator = new ReceiveCoordinator({ windowPort, currentJoinedShare: () => joined })
     coordinator.refreshOffers(joined)
-    await vi.waitFor(() => expect(coordinator.getSnapshot().capabilitiesState).toBe('ready'))
+    await waitForSnapshot(coordinator, s => s.capabilitiesState === 'ready')
 
     let publishedActiveBeforeCallback = false
+    const activated = deferred<void>()
     const outcomeSmall = coordinator.startSingleFileDownload(entrySmall, dir, {
       onActivated: () => {
         publishedActiveBeforeCallback =
           coordinator.getSnapshot().lifecycle?.kind === 'downloading' &&
           coordinator.getSnapshot().activeSingleFileId === entrySmall.idText
         events.push('activated')
+        activated.resolve()
       },
     })
     expect(outcomeSmall).toEqual({ kind: 'started' })
     expect(draftSelection.snapshot().canonicalRules).toHaveLength(1)
     expect(draftSelection.selected(entrySmall, dir.ancestry)).toBe(false)
 
-    await vi.waitFor(() => expect(events).toEqual(['activated']))
+    await activated.promise
+    expect(events).toEqual(['activated'])
     expect(publishedActiveBeforeCallback).toBe(true)
     expect(coordinator.getSnapshot().backend).toBe('portable')
 
     jobGate.resolve(makeJobResult('completed', entrySmall.expectedSize))
-    await vi.waitFor(() => expect(coordinator.getSnapshot().activeSingleFileId).toBeNull())
+    await waitForSnapshot(coordinator, s => s.activeSingleFileId === null)
 
     // 80 MiB exceeds both 64 MiB portable cap and 8 MiB OPFS quota, leaving only FSA.
     const outcomeLarge = coordinator.startSingleFileDownload(entryLarge, dir)
@@ -602,13 +552,13 @@ describe('single-file quick download planning and activation ownership', () => {
       beginDownloadConnectivity: () => ({ routes: [], close: vi.fn() }),
       createTransferJob: () => {
         const gate = jobGates[jobCall++]!
-        return { pause: vi.fn(), stop: vi.fn(), run: () => gate.promise }
+        return { pause: vi.fn(), stop: vi.fn(), detach: vi.fn(), run: () => gate.promise }
       },
     } as unknown as JoinedBrowserShare
 
     const coordinator = new ReceiveCoordinator({ windowPort, currentJoinedShare: () => joined, onActionError })
     coordinator.refreshOffers(joined)
-    await vi.waitFor(() => expect(coordinator.getSnapshot().offers?.kind).toBe('ready'))
+    await waitForSnapshot(coordinator, s => s.offers?.kind === 'ready' && s.singleFilePickerPendingFromBytes === null)
 
     // Top-level single-file selection exposes activeSingleFileId during waiting-picker.
     expect(coordinator.startDownload('fsa:file')).toBe(true)
@@ -629,20 +579,21 @@ describe('single-file quick download planning and activation ownership', () => {
     // Complete B with a pause, then resume B and verify activeSingleFileId tracks resume too.
     const events: string[] = []
     pickers[1]!.resolve(new FakeDirectoryHandle('Downloads', events) as unknown as FileSystemDirectoryHandle)
-    await vi.waitFor(() => expect(coordinator.getSnapshot().lifecycle?.kind).toBe('downloading'))
+    await waitForSnapshot(coordinator, s => s.lifecycle?.kind === 'downloading')
     expect(coordinator.getSnapshot().activeSingleFileId).toBe(fileB.idText)
 
     jobGates[0]!.resolve(makeJobResult('paused', fileB.expectedSize))
-    await vi.waitFor(() => expect(coordinator.getSnapshot().lifecycle?.kind).toBe('paused'))
+    await waitForSnapshot(coordinator, s => s.lifecycle?.kind === 'paused')
     expect(coordinator.getSnapshot().activeSingleFileId).toBeNull()
 
     // Resume via quick download (also exercises reusing just-paused task immediately).
     expect(coordinator.startSingleFileDownload(fileB, dir)).toEqual({ kind: 'resumed' })
-    await vi.waitFor(() => expect(coordinator.getSnapshot().lifecycle?.kind).toBe('downloading'))
+    await waitForSnapshot(coordinator, s => s.lifecycle?.kind === 'downloading')
     expect(coordinator.getSnapshot().activeSingleFileId).toBe(fileB.idText)
 
     jobGates[1]!.resolve(makeJobResult('completed', fileB.expectedSize))
-    await vi.waitFor(() => expect(coordinator.getSnapshot().activeSingleFileId).toBeNull())
+    await waitForSnapshot(coordinator, s => s.activeSingleFileId === null)
+    expect(onActionError).not.toHaveBeenCalled()
     await coordinator.dispose()
   })
 
@@ -654,12 +605,17 @@ describe('single-file quick download planning and activation ownership', () => {
       indexedDb: false, fsa: false, opfs: false, portable: true, availableStorageBytes: null,
     }))
     const firstSessionGate = deferred<OutputSessionHandle>()
-    const staleClose = vi.fn(async () => undefined)
+    const firstOpenCalled = deferred<void>()
+    const staleClosed = deferred<void>()
+    const staleClose = vi.fn(async () => { staleClosed.resolve() })
     const secondJobGate = deferred<ReturnType<typeof makeJobResult>>()
     let openCalls = 0
     vi.spyOn(sessionOpener, 'openNewOutputSession').mockImplementation(async input => {
       openCalls += 1
-      if (openCalls === 1) return firstSessionGate.promise
+      if (openCalls === 1) {
+        firstOpenCalled.resolve()
+        return firstSessionGate.promise
+      }
       return {
         taskId: input.task.taskId,
         backend: 'portable',
@@ -688,10 +644,11 @@ describe('single-file quick download planning and activation ownership', () => {
     } as unknown as JoinedBrowserShare
     const coordinator = new ReceiveCoordinator({ windowPort, currentJoinedShare: () => joined })
     coordinator.preloadShareTasks('share-1')
-    await vi.waitFor(() => expect(coordinator.getSnapshot().capabilitiesState).toBe('ready'))
+    await waitForSnapshot(coordinator, s => s.capabilitiesState === 'ready')
 
     expect(coordinator.startSingleFileDownload(fileA, dir)).toEqual({ kind: 'started' })
-    await vi.waitFor(() => expect(openCalls).toBe(1))
+    await firstOpenCalled.promise
+    expect(openCalls).toBe(1)
     // Supersede A (e.g. share switch/cancel) and immediately start B.
     coordinator.suspendForNewShare()
     expect(coordinator.startSingleFileDownload(fileB, dir)).toEqual({ kind: 'started' })
@@ -704,11 +661,12 @@ describe('single-file quick download planning and activation ownership', () => {
       settle: vi.fn(),
       close: staleClose,
     })
-    await vi.waitFor(() => expect(staleClose).toHaveBeenCalledTimes(1))
-    await vi.waitFor(() => expect(coordinator.getSnapshot().activeSingleFileId).toBe(fileB.idText))
+    await staleClosed.promise
+    expect(staleClose).toHaveBeenCalledTimes(1)
+    await waitForSnapshot(coordinator, s => s.activeSingleFileId === fileB.idText)
 
     secondJobGate.resolve(makeJobResult('completed', fileB.expectedSize))
-    await vi.waitFor(() => expect(coordinator.getSnapshot().activeSingleFileId).toBeNull())
+    await waitForSnapshot(coordinator, s => s.activeSingleFileId === null)
     await coordinator.dispose()
   })
 })
@@ -820,19 +778,24 @@ describe('single-file reuse, errors, and local blob handoff', () => {
       currentJoinedShare: () => joined,
     })
     coordinator.preloadShareTasks('share-1')
-    await vi.waitFor(() => expect(coordinator.getSnapshot().capabilitiesState).toBe('ready'))
+    await waitForSnapshot(coordinator, s => s.capabilitiesState === 'ready')
 
     // First click arrives while listTasksByShare() is still unresolved.
+    const exported = deferred<void>()
     let exportedCount = 0
     const outcome = coordinator.startSingleFileDownload(file, dir, {
-      onExported: () => { exportedCount += 1 },
+      onExported: () => {
+        exportedCount += 1
+        exported.resolve()
+      },
     })
     expect(outcome).toEqual({ kind: 'started' })
     expect(exportedCount).toBe(0)
     expect(downloads).toHaveLength(0)
 
     listGate.resolve([pausedRecord, olderReady, newerReady])
-    await vi.waitFor(() => expect(exportedCount).toBe(1))
+    await exported.promise
+    expect(exportedCount).toBe(1)
     expect(downloads).toHaveLength(1)
     expect(new Uint8Array(await downloads[0]!.blob.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3, 4]))
     expect(joined.createTransferJob).not.toHaveBeenCalled()
@@ -886,11 +849,11 @@ describe('single-file reuse, errors, and local blob handoff', () => {
       onActionError,
     })
     coordinator.preloadShareTasks('share-1')
-    await vi.waitFor(() => expect(coordinator.getSnapshot().capabilitiesState).toBe('failed'))
+    await waitForSnapshot(coordinator, s => s.capabilitiesState === 'failed')
 
     // Clicking while failed switches back to probing and recovers.
     expect(coordinator.startSingleFileDownload(smallFile, dir)).toEqual({ kind: 'probing' })
-    await vi.waitFor(() => expect(coordinator.getSnapshot().capabilitiesState).toBe('ready'))
+    await waitForSnapshot(coordinator, s => s.capabilitiesState === 'ready')
     expect(probeCalls).toBe(2)
 
     // Path exceeding 256 depth fails synchronously without calling onActionError.
@@ -915,10 +878,15 @@ describe('single-file reuse, errors, and local blob handoff', () => {
 
     // Startup failure before first active publish routes to onAsyncError, not onActionError.
     const asyncErrors: unknown[] = []
+    const startupError = deferred<void>()
     expect(coordinator.startSingleFileDownload(smallFile, dir, {
-      onAsyncError: error => asyncErrors.push(error),
+      onAsyncError: error => {
+        asyncErrors.push(error)
+        startupError.resolve()
+      },
     })).toEqual({ kind: 'started' })
-    await vi.waitFor(() => expect(asyncErrors).toHaveLength(1))
+    await startupError.promise
+    expect(asyncErrors).toHaveLength(1)
     expect(onActionError).not.toHaveBeenCalled()
     expect(coordinator.getSnapshot().lifecycle).toBeNull()
 
@@ -928,7 +896,7 @@ describe('single-file reuse, errors, and local blob handoff', () => {
     expect(coordinator.startSingleFileDownload(smallFile, dir, {
       onAsyncError: error => asyncErrors2.push(error),
     })).toEqual({ kind: 'started' })
-    await vi.waitFor(() => expect(coordinator.getSnapshot().lifecycle?.kind).toBe('failed'))
+    await waitForSnapshot(coordinator, s => s.lifecycle?.kind === 'failed')
     expect(asyncErrors2).toHaveLength(0)
     expect(onActionError).toHaveBeenCalledTimes(1)
 
