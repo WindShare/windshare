@@ -186,6 +186,10 @@ class PortableSessionHandle implements OutputSessionHandle {
       const zipFile = this.#zip.beginFile(request.path, request.exactSize, request.modifiedTimeMilliseconds)
       let expectedOffset = 0n
       const outOfOrder = new Map<bigint, Uint8Array>()
+      const discard = async () => {
+        outOfOrder.clear()
+        zipFile.abort()
+      }
       return Object.freeze({
         completedRanges: Object.freeze([]),
         alreadyCompleted: false,
@@ -207,8 +211,8 @@ class PortableSessionHandle implements OutputSessionHandle {
         commit: async () => {
           await zipFile.close()
         },
-        pause: () => Promise.resolve(),
-        abort: () => Promise.resolve(),
+        pause: discard,
+        abort: discard,
       })
     }
 

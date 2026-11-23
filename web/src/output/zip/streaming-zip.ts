@@ -9,6 +9,7 @@ import {
   normalizeZipEntry,
   planZipEntry,
   requiresZip64End,
+  type NormalizedZipEntry,
   type ZipEntryPlanV1,
 } from './policy'
 
@@ -92,6 +93,13 @@ export interface StreamingZipWriterOptions {
   readonly maxBytes: bigint
 }
 
+type StreamingZipState = 'idle' | 'file-open' | 'finalized' | 'aborted'
+
+interface PendingZipDirectory {
+  readonly entry: NormalizedZipEntry
+  readonly minimumBytes: bigint
+}
+
 /**
  * Simple Store-mode ZIP64 writer assembling into bounded Blob parts for portable downloads.
  * Spools central directory entries into the unified `zip-spool` IndexedDB store when available.
@@ -100,9 +108,13 @@ export class StreamingZipWriter {
   readonly #parts: Uint8Array<ArrayBuffer>[] = []
   readonly #spool: SpoolSink
   readonly #maxBytes: bigint
+  readonly #pendingDirectories: PendingZipDirectory[] = []
   #offset = 0n
   #entryCount = 0n
   #centralBytes = 0n
+  #pendingDirectoryBytes = 0n
+  #state: StreamingZipState = 'idle'
+  #activeFile: StreamingZipFileWriter | undefined
 
   constructor(options: StreamingZipWriterOptions) {
     this.#maxBytes = options.maxBytes
@@ -112,16 +124,19 @@ export class StreamingZipWriter {
   }
 
   async addDirectory(path: readonly string[], modifiedTimeMilliseconds?: bigint): Promise<void> {
+    this.#requireWritable('add a directory')
     const normalized = normalizeZipEntry({
       kind: 'directory',
       path,
       ...(modifiedTimeMilliseconds === undefined ? {} : { modifiedTimeMilliseconds }),
     })
-    const plan = planZipEntry(normalized, this.#offset)
-    this.#push(encodeZipLocalHeader(plan))
-    const done = completeZipMember(plan, 0n, 0)
-    this.#push(done.descriptor)
-    await this.#recordCentral(done.centralRecord)
+    if (this.#activeFile !== undefined) {
+      // Defer directory headers until the active file finishes its payload and descriptor
+      // so sequential stream bytes never interleave.
+      this.#queueDirectory(normalized)
+      return
+    }
+    await this.#writeDirectory(normalized)
   }
 
   beginFile(
@@ -129,6 +144,10 @@ export class StreamingZipWriter {
     exactSize: bigint,
     modifiedTimeMilliseconds?: bigint,
   ): StreamingZipFileWriter {
+    this.#requireWritable('open a file')
+    if (this.#activeFile !== undefined) {
+      throw new Error('Cannot open a new ZIP file while another file is still open')
+    }
     const normalized = normalizeZipEntry({
       kind: 'file',
       path,
@@ -137,14 +156,23 @@ export class StreamingZipWriter {
     })
     const plan = planZipEntry(normalized, this.#offset)
     this.#push(encodeZipLocalHeader(plan))
-    return new StreamingZipFileWriter(
+    this.#state = 'file-open'
+    const writer: StreamingZipFileWriter = new StreamingZipFileWriter(
       plan,
-      chunk => this.#push(chunk),
-      crc32 => this.#finishFile(plan, crc32),
+      chunk => this.#writeActiveChunk(writer, chunk),
+      crc32 => this.#finishFile(writer, plan, crc32),
+      () => this.#abortActiveFile(writer),
     )
+    this.#activeFile = writer
+    return writer
   }
 
   async finalize(): Promise<Blob> {
+    this.#requireWritable('finalize the archive')
+    if (this.#activeFile !== undefined) {
+      throw new Error('Cannot finalize ZIP while a file entry is still open')
+    }
+    this.#state = 'finalized'
     try {
       const centralOffset = this.#offset
       for await (const chunk of this.#spool.readAll()) {
@@ -166,26 +194,104 @@ export class StreamingZipWriter {
   }
 
   async abort(): Promise<void> {
-    this.#parts.length = 0
+    this.#markAborted()
     await this.#spool.clear()
   }
 
-  async #finishFile(plan: ZipEntryPlanV1, crc32: number): Promise<void> {
-    const done = completeZipMember(plan, plan.exactSize, crc32)
+  #requireWritable(action: string): void {
+    if (this.#state === 'aborted') {
+      throw new Error(`Cannot ${action} after ZIP writer was aborted`)
+    }
+    if (this.#state === 'finalized') {
+      throw new Error(`Cannot ${action} after ZIP writer was finalized`)
+    }
+  }
+
+  #queueDirectory(entry: NormalizedZipEntry): void {
+    const estimate = planZipEntry(entry, 0n)
+    const minimumBytes = checkedZipAdd(estimate.entryStreamBytes, estimate.centralRecordBytes)
+    const nextPending = checkedZipAdd(this.#pendingDirectoryBytes, minimumBytes)
+    this.#checkBudget(checkedZipAdd(this.#offset, this.#centralBytes, nextPending))
+    this.#pendingDirectoryBytes = nextPending
+    this.#pendingDirectories.push({ entry, minimumBytes })
+  }
+
+  async #writeDirectory(entry: NormalizedZipEntry): Promise<void> {
+    const plan = planZipEntry(entry, this.#offset)
+    this.#push(encodeZipLocalHeader(plan))
+    const done = completeZipMember(plan, 0n, 0)
     this.#push(done.descriptor)
     await this.#recordCentral(done.centralRecord)
   }
 
+  #writeActiveChunk(writer: StreamingZipFileWriter, chunk: Uint8Array): void {
+    if (this.#state !== 'file-open' || this.#activeFile !== writer) {
+      throw new Error('ZIP entry is no longer active')
+    }
+    this.#push(chunk)
+  }
+
+  async #finishFile(
+    writer: StreamingZipFileWriter,
+    plan: ZipEntryPlanV1,
+    crc32: number,
+  ): Promise<void> {
+    if (this.#state !== 'file-open' || this.#activeFile !== writer) {
+      throw new Error('ZIP entry is no longer active')
+    }
+    try {
+      const done = completeZipMember(plan, plan.exactSize, crc32)
+      this.#push(done.descriptor)
+      await this.#recordCentral(done.centralRecord)
+      await this.#flushPendingDirectories()
+    } catch (error) {
+      this.#markAborted()
+      throw error
+    }
+    if (this.#state !== 'file-open' || this.#activeFile !== writer) {
+      throw new Error('ZIP writer was aborted before entry committed')
+    }
+    this.#activeFile = undefined
+    this.#state = 'idle'
+  }
+
+  async #flushPendingDirectories(): Promise<void> {
+    while (this.#pendingDirectories.length > 0) {
+      if (this.#state !== 'file-open') return
+      const pending = this.#pendingDirectories.shift()!
+      this.#pendingDirectoryBytes -= pending.minimumBytes
+      await this.#writeDirectory(pending.entry)
+    }
+  }
+
+  #abortActiveFile(writer: StreamingZipFileWriter): void {
+    if (this.#activeFile !== writer) return
+    // A sequential ZIP stream cannot rewind a partially written local header/payload.
+    this.#markAborted()
+  }
+
+  #markAborted(): void {
+    this.#state = 'aborted'
+    this.#activeFile = undefined
+    this.#parts.length = 0
+    this.#pendingDirectories.length = 0
+    this.#pendingDirectoryBytes = 0n
+  }
+
   async #recordCentral(record: Uint8Array): Promise<void> {
-    this.#centralBytes = checkedZipAdd(this.#centralBytes, BigInt(record.byteLength))
+    const nextCentral = checkedZipAdd(this.#centralBytes, BigInt(record.byteLength))
+    this.#checkBudget(checkedZipAdd(this.#offset, nextCentral, this.#pendingDirectoryBytes))
+    this.#centralBytes = nextCentral
     this.#entryCount += 1n
-    this.#checkBudget(checkedZipAdd(this.#offset, this.#centralBytes))
     await this.#spool.append(record)
   }
 
   #push(chunk: Uint8Array): void {
     const next = checkedZipAdd(this.#offset, BigInt(chunk.byteLength))
-    this.#checkBudget(next)
+    const projected = this.#state === 'finalized'
+      ? next
+      : checkedZipAdd(next, this.#centralBytes, this.#pendingDirectoryBytes)
+    this.#checkBudget(projected)
     const copy = new Uint8Array(chunk.byteLength)
     copy.set(chunk)
     this.#parts.push(copy)
@@ -206,34 +312,59 @@ export class StreamingZipFileWriter {
   readonly #plan: ZipEntryPlanV1
   readonly #writeChunk: (chunk: Uint8Array) => void
   readonly #commit: (crc32: number) => Promise<void>
+  readonly #onAbort: () => void
   readonly #crc = new ZipCrc32()
   #written = 0n
+  #state: 'open' | 'closing' | 'closed' | 'aborted' = 'open'
 
   constructor(
     plan: ZipEntryPlanV1,
     writeChunk: (chunk: Uint8Array) => void,
     commit: (crc32: number) => Promise<void>,
+    onAbort: () => void = () => undefined,
   ) {
     this.#plan = plan
     this.#writeChunk = writeChunk
     this.#commit = commit
+    this.#onAbort = onAbort
   }
 
   write(data: Uint8Array): void {
+    this.#requireOpen()
     if (data.byteLength === 0) return
     const next = checkedZipAdd(this.#written, BigInt(data.byteLength))
     if (next > this.#plan.exactSize) {
       throw new RangeError('ZIP entry received more bytes than declared')
     }
-    this.#crc.update(data)
     this.#writeChunk(data)
+    this.#crc.update(data)
     this.#written = next
   }
 
   async close(): Promise<void> {
+    this.#requireOpen()
     if (this.#written !== this.#plan.exactSize) {
       throw new Error('ZIP entry closed before reaching its expected size')
     }
-    await this.#commit(this.#crc.digest())
+    this.#state = 'closing'
+    try {
+      await this.#commit(this.#crc.digest())
+      this.#state = 'closed'
+    } catch (error) {
+      this.#state = 'aborted'
+      throw error
+    }
+  }
+
+  abort(): void {
+    if (this.#state === 'closed' || this.#state === 'aborted') return
+    this.#state = 'aborted'
+    this.#onAbort()
+  }
+
+  #requireOpen(): void {
+    if (this.#state !== 'open') {
+      throw new Error('ZIP entry is no longer open')
+    }
   }
 }
