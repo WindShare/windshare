@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { assert, describe, expect, it } from 'vitest'
 import type { CatalogClient } from '../../src/catalog/client'
 import type { CommittedDirectory } from '../../src/catalog/page-store'
 import type { CatalogEntry, CatalogPage, ShareDescriptor } from '../../src/catalog/records'
@@ -13,197 +13,14 @@ import { planArtifactOffers } from '../../src/output/backends/contract'
 import { discardFSATask, openNewFSASession, reopenFSASession } from '../../src/output/backends/fsa'
 import type { OutputTraceEvent } from '../../src/output/diagnostics'
 import type { ReceiveStore } from '../../src/output/store/database'
-import type { ReceiveFileRecord, ReceiveTaskRecord } from '../../src/output/store/types'
+import type { ReceiveFileRecord } from '../../src/output/store/types'
 import { inspectSelectionShape } from '../../src/transfer/discovery'
 import { transferSingleFile } from '../../src/transfer/file-transfer'
 import { TransferJob } from '../../src/transfer/job'
 import { artifactRootPath, selectionKey, selectionSpecFromPolicy } from '../../src/transfer/selection'
 import { initialReceiveState } from '../../src/transfer/state'
 
-class MemoryReceiveStore {
-  readonly tasks = new Map<string, ReceiveTaskRecord>()
-  readonly files = new Map<string, ReceiveFileRecord>()
-  readonly events: string[] = []
-
-  async putTask(record: ReceiveTaskRecord): Promise<void> {
-    this.tasks.set(record.taskId, record)
-    this.events.push(`putTask:${record.lifecycle.kind}`)
-  }
-
-  async getTask(taskId: string): Promise<ReceiveTaskRecord | undefined> {
-    return this.tasks.get(taskId)
-  }
-
-  async listTasks(): Promise<readonly ReceiveTaskRecord[]> {
-    return [...this.tasks.values()]
-  }
-
-  async putFile(record: ReceiveFileRecord): Promise<void> {
-    this.files.set(record.id, record)
-    this.events.push(`putFile:${record.fileId}:${record.status}`)
-  }
-
-  async getFile(taskId: string, fileId: string): Promise<ReceiveFileRecord | undefined> {
-    return this.files.get(`${taskId}:${fileId}`)
-  }
-
-  async listTaskFiles(taskId: string): Promise<readonly ReceiveFileRecord[]> {
-    return [...this.files.values()].filter(file => file.taskId === taskId)
-  }
-
-  async deleteTask(taskId: string): Promise<void> {
-    this.tasks.delete(taskId)
-    for (const [id, file] of this.files) {
-      if (file.taskId === taskId) this.files.delete(id)
-    }
-  }
-}
-
-interface FakeFsStats {
-  recursiveRemoveCalls: number
-}
-
-class FakeFileHandle {
-  readonly kind = 'file' as const
-  readonly name: string
-  readonly path: string
-  bytes = new Uint8Array(0)
-  readonly writableCalls: boolean[] = []
-  lastModified = Date.now()
-  getFileCalls = 0
-  readonly #events: string[]
-
-  constructor(name: string, path: string, events: string[], lastModified = Date.now()) {
-    this.name = name
-    this.path = path
-    this.#events = events
-    this.lastModified = lastModified
-  }
-
-  // Matches Chromium's path-based FSA handle equality (not inode-based), ensuring
-  // tests prove same-name swaps are stopped by fingerprints rather than isSameEntry.
-  async isSameEntry(other: FileSystemHandle): Promise<boolean> {
-    return other instanceof FakeFileHandle && other.path === this.path
-  }
-
-  async getFile(): Promise<File> {
-    this.getFileCalls += 1
-    return new File([this.bytes], this.name, { lastModified: this.lastModified })
-  }
-
-  overwriteExternally(bytes: Uint8Array, lastModified = Math.max(Date.now() + 10_000, this.lastModified + 1_000)): void {
-    this.bytes = new Uint8Array(bytes)
-    this.lastModified = lastModified
-  }
-
-  async createWritable(options?: { keepExistingData?: boolean }) {
-    const keepExistingData = Boolean(options?.keepExistingData)
-    this.writableCalls.push(keepExistingData)
-    let buffer = keepExistingData ? this.bytes.slice() : new Uint8Array(0)
-    return {
-      write: async (chunk: { type: 'write'; position: number; data: Uint8Array }) => {
-        const end = chunk.position + chunk.data.byteLength
-        if (end > buffer.byteLength) {
-          const grown = new Uint8Array(end)
-          grown.set(buffer)
-          buffer = grown
-        }
-        buffer.set(chunk.data, chunk.position)
-      },
-      close: async () => {
-        this.bytes = buffer
-        this.lastModified = Math.max(Date.now(), this.lastModified + 1)
-        this.#events.push(`writer.close:${this.name}`)
-      },
-      abort: async () => undefined,
-    }
-  }
-}
-
-class FakeDirectoryHandle {
-  readonly kind = 'directory' as const
-  readonly name: string
-  readonly path: string
-  readonly children = new Map<string, FakeDirectoryHandle | FakeFileHandle>()
-  readonly stats: FakeFsStats
-  readonly #events: string[]
-  readonly #rejectNames: Set<string>
-
-  constructor(
-    name: string,
-    events: string[],
-    rejectNames: readonly string[] = [],
-    path = `/${name}`,
-    stats: FakeFsStats = { recursiveRemoveCalls: 0 },
-  ) {
-    this.name = name
-    this.path = path
-    this.#events = events
-    this.#rejectNames = new Set(rejectNames)
-    this.stats = stats
-  }
-
-  async queryPermission(): Promise<'granted'> { return 'granted' }
-  async requestPermission(): Promise<'granted'> { return 'granted' }
-
-  async isSameEntry(other: FileSystemHandle): Promise<boolean> {
-    return other instanceof FakeDirectoryHandle && other.path === this.path
-  }
-
-  async resolve(target: FileSystemHandle): Promise<string[] | null> {
-    const candidate = target as FakeDirectoryHandle | FakeFileHandle
-    if (typeof candidate.path !== 'string') return null
-    if (candidate.path === this.path) return []
-    const prefix = `${this.path}/`
-    if (!candidate.path.startsWith(prefix)) return null
-    return candidate.path.slice(prefix.length).split('/')
-  }
-
-  async getDirectoryHandle(name: string, options?: { create?: boolean }): Promise<FakeDirectoryHandle> {
-    if (this.#rejectNames.has(name)) throw new TypeError(`Invalid name ${name}`)
-    const existing = this.children.get(name)
-    if (existing instanceof FakeDirectoryHandle) return existing
-    if (existing instanceof FakeFileHandle) throw new DOMException('type mismatch', 'TypeMismatchError')
-    if (!options?.create) throw new DOMException('missing', 'NotFoundError')
-    const created = new FakeDirectoryHandle(
-      name,
-      this.#events,
-      [...this.#rejectNames],
-      `${this.path}/${name}`,
-      this.stats,
-    )
-    this.children.set(name, created)
-    return created
-  }
-
-  async getFileHandle(name: string, options?: { create?: boolean }): Promise<FakeFileHandle> {
-    if (this.#rejectNames.has(name)) throw new TypeError(`Invalid name ${name}`)
-    const existing = this.children.get(name)
-    if (existing instanceof FakeFileHandle) return existing
-    if (existing instanceof FakeDirectoryHandle) throw new DOMException('type mismatch', 'TypeMismatchError')
-    if (!options?.create) throw new DOMException('missing', 'NotFoundError')
-    const created = new FakeFileHandle(name, `${this.path}/${name}`, this.#events)
-    this.children.set(name, created)
-    return created
-  }
-
-  async removeEntry(name: string, options?: { recursive?: boolean }): Promise<void> {
-    if (options?.recursive) this.stats.recursiveRemoveCalls += 1
-    const existing = this.children.get(name)
-    if (existing === undefined) throw new DOMException('missing', 'NotFoundError')
-    if (existing instanceof FakeDirectoryHandle && existing.children.size > 0 && !options?.recursive) {
-      throw new DOMException('Directory is not empty', 'InvalidModificationError')
-    }
-    this.children.delete(name)
-  }
-
-  putUserFile(name: string, bytes: Uint8Array, lastModified = Date.now() - 86_400_000): FakeFileHandle {
-    const file = new FakeFileHandle(name, `${this.path}/${name}`, this.#events, lastModified)
-    file.bytes = new Uint8Array(bytes)
-    this.children.set(name, file)
-    return file
-  }
-}
+import { FakeDirectoryHandle, FakeFileHandle, MemoryReceiveStore } from './fsa-fixture'
 
 describe('FSA backend safety boundaries', () => {
   it('allocates collision names, flushes before IDB checkpoint, skips fingerprint I/O on commit, verifies physical files on resume, and keeps completed and modified files on discard', async () => {
@@ -280,10 +97,10 @@ describe('FSA backend safety boundaries', () => {
 
     const physicalC = reserved.children.get('truncated.bin') as FakeFileHandle
     physicalC.overwriteExternally(new Uint8Array(2))
-    const resumedC = await reopened.transferOutput.openFile({
+    await expect(reopened.transferOutput.openFile({
       fileId: 'f3', path: ['truncated.bin'], sourcePath: ['Photos', 'truncated.bin'], revision: 'rev3', exactSize: 8n,
-    }, new AbortController().signal)
-    expect(resumedC.completedRanges).toEqual([])
+    }, new AbortController().signal)).rejects.toMatchObject({ fault: { code: 'target-collision' } })
+    expect(physicalC.writableCalls).toEqual([false])
     await reopened.close()
 
     // Discard preserves completed file f1, removes verified unfinished f2, and preserves externally modified f3.
@@ -317,7 +134,7 @@ describe('FSA backend safety boundaries', () => {
       fileId: 'f1', path: ['archive.bin'], sourcePath: ['archive.bin'], revision: 'rev1', exactSize: 8n,
     }, new AbortController().signal)
     await file.writeAt(0n, new Uint8Array([0x53, 0x54, 0x55, 0x56]))
-    await file.checkpoint([byteRange(0n, 4n)])
+    await file.checkpoint([byteRange(0n, 4n)], 'retry')
     await file.writeAt(4n, new Uint8Array([0x57, 0x58, 0x59, 0x5a]))
     await file.commit([byteRange(0n, 8n)])
 
@@ -383,6 +200,7 @@ describe('FSA backend safety boundaries', () => {
       signal: new AbortController().signal,
       isPaused: () => false,
       isStopped: () => false,
+      isDetached: () => false,
     }, {
       kind: 'file',
       entry: Object.freeze({ kind: 'file', id: fileId, idText: fileIdText, name: 'clip.bin', expectedSize: totalSize }),
@@ -854,7 +672,7 @@ describe('FSA result-root layout integration', () => {
         output: session.transferOutput,
         rootPath: artifactRootPath(offers.primary.artifact),
       }).run()
-      expect(result.status).toBe('completed')
+      assert(result.status === 'completed')
       await session.settle(result)
       await session.close()
       return listTreePaths(parent)
@@ -908,7 +726,7 @@ describe('FSA result-root layout integration', () => {
 })
 
 describe('FSA resume completion skip', () => {
-  it('skips remote revision opens for intact completed files on FSA resume and redownloads truncated ones', async () => {
+  it('skips remote revision opens for intact completed files on FSA resume and preserves externally truncated files', async () => {
     const store = new MemoryReceiveStore()
     const parent = new FakeDirectoryHandle('Downloads', store.events)
     const shareInstance = new Uint8Array(16).fill(3)
@@ -1012,7 +830,7 @@ describe('FSA resume completion skip', () => {
     expect(resumedResult.completedFiles).toBe(3n)
     expect(openedRevisions).toEqual([idCText])
 
-    // Resume 2: externally truncating completed b.bin forces checkCompleted to miss and redownload b.bin.
+    // An externally truncated file belongs to the user. Resume reports the conflict and preserves the edit.
     const docsDir = parent.children.get('Docs') as FakeDirectoryHandle
     const physicalB = docsDir.children.get('b.bin') as FakeFileHandle
     physicalB.overwriteExternally(new Uint8Array(2))
@@ -1021,15 +839,16 @@ describe('FSA resume completion skip', () => {
     const reopenedAfterEdit = await reopenFSASession({
       task: pausedTask, store: store as unknown as ReceiveStore, allowPermissionPrompt: true,
     })
-    const repairedResult = await new TransferJob({
+    const conflict = await new TransferJob({
       descriptor, catalog, selection: new SelectionPolicy(true).snapshot(),
       revisions, broker, output: reopenedAfterEdit.transferOutput,
     }).run()
     await reopenedAfterEdit.close()
 
-    expect(repairedResult.status).toBe('completed')
-    expect(openedRevisions).toEqual([idBText])
-    expect([...physicalB.bytes]).toEqual([...payloadB])
+    expect(conflict.status).toBe('partial')
+    expect(conflict.error).toMatchObject({ fault: { code: 'target-collision' } })
+    expect(openedRevisions).toEqual([])
+    expect([...physicalB.bytes]).toEqual([0, 0])
   })
 
   it('commits written FSA bytes and settles to paused(interrupted) on transport stall, then resumes cleanly', async () => {
@@ -1098,6 +917,7 @@ describe('FSA resume completion skip', () => {
       descriptor, catalog, selection: new SelectionPolicy(true).snapshot(),
       revisions, broker, output: first.transferOutput,
     }).run()
+    assert(firstResult.status !== 'detached')
     const pausedRecord = await first.settle(firstResult)
     await first.close()
 
@@ -1114,6 +934,7 @@ describe('FSA resume completion skip', () => {
       descriptor, catalog, selection: new SelectionPolicy(true).snapshot(),
       revisions, broker, output: reopened.transferOutput,
     }).run()
+    assert(resumedResult.status !== 'detached')
     const completedRecord = await reopened.settle(resumedResult)
     await reopened.close()
 

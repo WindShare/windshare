@@ -1,5 +1,5 @@
 import { BlobReader, Uint8ArrayWriter, ZipReader, type FileEntry } from '@zip.js/zip.js'
-import { describe, expect, it } from 'vitest'
+import { assert, describe, expect, it } from 'vitest'
 import { executeRetainedTaskAction, loadRetainedTasks } from '../../src/application/receive/retained'
 import type { CatalogClient } from '../../src/catalog/client'
 import type { CommittedDirectory } from '../../src/catalog/page-store'
@@ -339,7 +339,7 @@ describe('OPFS partial settlement and export', () => {
       broker: fixture.broker,
       output: session.transferOutput,
     }).run()
-    expect(result.status).toBe('partial')
+    assert(result.status === 'partial')
 
     const settled = await session.settle(result)
     await session.close()
@@ -651,6 +651,7 @@ describe('OPFS resume completion skip', () => {
       broker: fixture.broker,
       output: reopened.transferOutput,
     }).run()
+    assert(result.status !== 'detached')
     const settled = await reopened.settle(result)
     await reopened.close()
 
@@ -773,6 +774,7 @@ describe('OPFS resume completion skip', () => {
       broker: interruptingBroker,
       output: first.transferOutput,
     }).run()
+    assert(firstResult.status !== 'detached')
     const pausedRecord = await first.settle(firstResult)
     await first.close()
 
@@ -798,6 +800,7 @@ describe('OPFS resume completion skip', () => {
       broker: fixture.broker,
       output: reopened.transferOutput,
     }).run()
+    assert(resumedResult.status !== 'detached')
     const settled = await reopened.settle(resumedResult)
     await reopened.close()
 
@@ -806,5 +809,91 @@ describe('OPFS resume completion skip', () => {
     const entries = await readZipFiles(downloads[0]!.blob)
     expect(entries.get('readme.txt')).toEqual(smallPayload)
     expect(entries.get('movie.bin')).toEqual(largePayload)
+  })
+})
+
+describe('OPFS abandoned and failed output', () => {
+  async function zipFixture(beforeFlush?: () => void) {
+    const memory = new MemoryReceiveStore(), store = memory as unknown as ReceiveStore
+    const { env } = createMemoryOPFSEnv()
+    const { windowPort } = createMockDownloadWindow()
+    const session = await openNewOPFSSession({
+      task: {
+        taskId: 'zip-outage', selection: { shareInstance: 'share', syntheticRoot: 'root', defaultSelected: true, rules: [] },
+        selectionKey: 'key', artifact: { kind: 'zip-archive', name: 'Folder.zip' }, lifecycle: initialReceiveState('zip-outage'),
+      },
+      store, windowPort, env: { ...env, openNativeObject: async handle => {
+        const io = await env.openNativeObject!(handle)
+        return { ...io, flush: async () => {
+          beforeFlush?.()
+          await io.flush()
+        } }
+      } },
+    })
+    return { session, store, env, windowPort }
+  }
+
+  it('recovers a ZIP with only directory rows as zero downloadable files', async () => {
+    const { session, store, windowPort } = await zipFixture()
+    await session.transferOutput.ensureDirectory!({ directoryId: 'd', path: ['empty'] }, new AbortController().signal)
+    await session.close()
+    const [task] = await loadRetainedTasks({ store, windowPort }, null)
+    expect(task?.lifecycle).toMatchObject({
+      kind: 'paused', reason: 'interrupted', completedFiles: 0n, discoveredFiles: 0n, retainedBytes: 0n,
+    })
+    expect(task?.canSavePartial).toBe(false)
+  })
+
+  it.each([
+    [new DOMException('full', 'QuotaExceededError'), { kind: 'paused', reason: 'storage-full', retainedBytes: 2n }],
+    [new DOMException('denied', 'NotAllowedError'), { kind: 'paused', reason: 'permission-needed', retainedBytes: 2n }],
+    [new Error('final flush failed'), { kind: 'partial', reason: 'failures', savedFiles: 1n }],
+  ] as const)('preserves committed members when sealing fails with %s', async (cause, expected) => {
+    let sealing = false
+    const { session, store, env, windowPort } = await zipFixture(() => { if (sealing) throw cause })
+    const file = await session.transferOutput.openFile({
+      fileId: 'a', path: ['a.txt'], sourcePath: ['a.txt'], revision: 'r', exactSize: 2n,
+    }, new AbortController().signal)
+    const bytes = Uint8Array.of(1, 2)
+    await file.writeAt(0n, bytes)
+    await file.commit([byteRange(0n, 2n)])
+    sealing = true
+    const task = await session.settle({
+      status: 'completed', completedFiles: 1n, completedBytes: 2n, discoveredFiles: 1n, discoveredBytes: 2n,
+      discoveryComplete: true, failedFiles: 0n, failedDirectories: 0n,
+    })
+    await session.close()
+    expect((await store.getTask(task.taskId))?.lifecycle).toMatchObject(expected)
+    const exported = await exportPartialOPFSZip(task, store, env, windowPort)
+    expect((await readZipFiles(exported)).get('a.txt')).toEqual(bytes)
+  })
+
+  it('ends all stalled ZIP readers when the shared output fails during a disconnect flush', async () => {
+    let writers = 0
+    let ready!: () => void
+    const waiting = new Promise<void>(resolve => { ready = resolve })
+    const { session } = await zipFixture(() => {
+      if (writers === 2) throw new Error('shared object flush failed')
+    })
+    const fixture = makeShareFixture([
+      { seed: 10, name: 'a.txt', bytes: new Uint8Array(8) }, { seed: 11, name: 'b.txt', bytes: new Uint8Array(8) },
+    ])
+    const job = new TransferJob({
+      ...fixture, selection: new SelectionPolicy(true).snapshot(), output: session.transferOutput,
+      broker: { readRange: async function* (_revision, _lease, _span, options) {
+        yield { offset: 0n, data: Uint8Array.of(42) }
+        if (++writers === 2) ready()
+        const signal = options!.signal!
+        await new Promise<void>((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }))
+      } },
+    })
+    const run = job.run()
+    await waiting
+    expect(await job.checkpointActive(new AbortController().signal)).toMatchObject({ allReceivedSaved: false, failedFiles: 1 })
+    const result = await run
+    assert(result.status === 'failed')
+    expect(result.error).toMatchObject({ fault: { scope: 'job' }, cause: { message: 'shared object flush failed' } })
+    expect((await session.settle(result)).lifecycle).toMatchObject({ kind: 'failed', reason: 'error' })
+    await session.close()
   })
 })

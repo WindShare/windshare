@@ -317,8 +317,8 @@ export class ProgressiveZipWriter {
     ranges: readonly ByteRange[],
   ): Promise<void> {
     const updated = buildUpdatedZipFileRecord(opened, ranges, 'receiving')
-    this.#entries.set(updated.fileId, updated)
     await this.#io.checkpoint('zip-file-checkpoint', () => this.#store.putFile(updated))
+    this.#entries.set(updated.fileId, updated)
   }
 
   async commitFile(
@@ -332,8 +332,8 @@ export class ProgressiveZipWriter {
     const descriptor = encodeZipDataDescriptor(opened.plan, crc32)
     await this.#io.writeAt(opened.record.zipEntry!.descriptorOffset, descriptor)
     const updated = buildUpdatedZipFileRecord(opened, ranges, 'completed', crc32)
-    this.#entries.set(updated.fileId, updated)
     await this.#io.checkpoint('zip-file-commit', () => this.#store.putFile(updated))
+    this.#entries.set(updated.fileId, updated)
   }
 
   /** Appends Central Directory + EOCD records to the OPFS file and returns its exact sealed length. */

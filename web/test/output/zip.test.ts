@@ -1,5 +1,5 @@
 import { BlobReader, Uint8ArrayWriter, ZipReader, type FileEntry } from '@zip.js/zip.js'
-import { describe, expect, it } from 'vitest'
+import { assert, describe, expect, it } from 'vitest'
 import type { CatalogClient } from '../../src/catalog/client'
 import type { CommittedDirectory } from '../../src/catalog/page-store'
 import type { CatalogEntry, CatalogPage, ShareDescriptor } from '../../src/catalog/records'
@@ -377,7 +377,7 @@ describe('ZIP writers (portable streaming & OPFS progressive)', () => {
       output: wrappedOutput,
     }).run()
 
-    expect(result.status).toBe('completed')
+    assert(result.status === 'completed')
     const settled = await session.settle(result)
     expect(settled.lifecycle.kind).toBe('download-started')
     expect(blobs).toHaveLength(1)
@@ -556,7 +556,7 @@ describe('ZIP result-root layout integration', () => {
       output: portableSession.transferOutput,
       rootPath: artifactRootPath(tripOffers.zip.artifact),
     }).run()
-    expect(portableResult.status).toBe('completed')
+    assert(portableResult.status === 'completed')
     await portableSession.settle(portableResult)
     const tripArchive = await readZipArchive(portableWindow.blobs[0]!)
     expect(tripArchive.directories).toEqual(new Set(['Trip/']))
@@ -641,7 +641,7 @@ describe('ZIP result-root layout integration', () => {
       output: reopenedOpfs.transferOutput,
       rootPath: artifactRootPath(pausedTask.artifact),
     }).run()
-    expect(opfsResult.status).toBe('completed')
+    assert(opfsResult.status === 'completed')
     await reopenedOpfs.settle(opfsResult)
     await reopenedOpfs.close()
 

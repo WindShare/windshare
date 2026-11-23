@@ -45,5 +45,6 @@ export const stage: typeof English = {
   sessionEnded: '传输会话已结束，请打开新的分享链接重试。',
   restart: '无法从已保存的进度继续，请重新开始下载。',
   savedTo: name => `已保存到 ${name}。`,
+  reconnectProgressSaved: '已保存当前进度，正在等待重新连接。',
   reconnectKeepOpen: '将自动重新连接。请保持页面打开，以保留当前下载进度。',
 }

@@ -1,5 +1,5 @@
 import { BLOCK_BROKER_PARALLEL_READS, type BlockRangeReader } from '../content/broker'
-import { ByteRangeSet, byteRange, type ByteRange } from '../content/geometry'
+import { ByteRangeSet, byteRange, coveredBytes } from '../content/geometry'
 import type { FileRevisionDescriptor } from '../content/records'
 import { compareRevisionDescriptors, compareRevisionMetadata } from '../content/revision-comparison'
 import {
@@ -12,6 +12,7 @@ import {
 } from '../content/session-services'
 import { RemoteOperationError } from '../content/session-operations'
 import { encodeBase64Url } from '../crypto/bytes'
+import { ActiveFileWrite } from './active-file-write'
 import type { DiscoveredFile } from './discovery'
 import {
   FaultScope,
@@ -19,11 +20,9 @@ import {
   TransferFaultError,
   TransferPauseError,
   TransferStopError,
-  isAbortError,
-  isPermissionDeniedError,
-  isQuotaExceededError,
   isRecoverableTransferInterruption,
   sourceFault,
+  storagePauseReason,
 } from './fault'
 import type { CompletedOutputFile, TransferOutputFile, TransferOutputSession } from './output-port'
 import type { ReceivePauseReason } from './state'
@@ -40,6 +39,10 @@ export interface FileTransferContext {
   readonly broker: BlockRangeReader
   readonly output: TransferOutputSession
   readonly signal: AbortSignal
+  readonly isDetached: () => boolean
+  readonly trackWrite?: (file: ActiveFileWrite | undefined) => void
+  readonly onUncheckpointedWrite?: () => void
+  readonly onOutputFailure?: (error: unknown) => void
   readonly isPaused: () => boolean
   readonly isStopped: () => boolean
   readonly onInitialCoverage?: (bytes: bigint) => void
@@ -52,7 +55,7 @@ export interface FileTransferContext {
 export type SingleFileTransferOutcome =
   | Readonly<{ kind: 'completed'; size: bigint }>
   | Readonly<{ kind: 'paused'; reason: ReceivePauseReason }>
-  | Readonly<{ kind: 'stopped' }>
+  | Readonly<{ kind: 'stopped' | 'detached' }>
   | Readonly<{ kind: 'source-changed' }>
   | Readonly<{ kind: 'source-unavailable'; error: unknown }>
   | Readonly<{ kind: 'failed'; error: unknown }>
@@ -84,10 +87,11 @@ export async function transferSingleFile(
   for (;;) {
     const preflight = preflightOutcome(ctx)
     if (preflight !== undefined) return preflight
-    ctx.signal.throwIfAborted()
+    if (ctx.signal.aborted) return { kind: 'failed', error: ctx.signal.reason }
 
     const attempt = await attemptSingleFileTransfer(ctx, file, state)
     if (attempt.kind === 'retry') {
+      ctx.trackWrite?.(undefined)
       state = attempt.next
       continue
     }
@@ -96,6 +100,7 @@ export async function transferSingleFile(
 }
 
 function preflightOutcome(ctx: FileTransferContext): SingleFileTransferOutcome | undefined {
+  if (ctx.isDetached()) return { kind: 'detached' }
   if (ctx.isPaused()) return { kind: 'paused', reason: 'user' }
   if (ctx.isStopped()) return { kind: 'stopped' }
   return undefined
@@ -109,7 +114,8 @@ async function attemptSingleFileTransfer(
   let opened: OpenedRevision | undefined
   let writer: TransferOutputFile | undefined
   let initialBytes = 0n
-  const rangeState: { current: ByteRangeSet | undefined } = { current: undefined }
+  let active: ActiveFileWrite | undefined
+  let release: Promise<void> | undefined
   try {
     const completed = await checkAlreadyCompleted(ctx, file, state.attemptIndex)
     if (completed !== undefined) {
@@ -130,22 +136,26 @@ async function attemptSingleFileTransfer(
       return { kind: 'source-changed' }
     }
 
-    rangeState.current = new ByteRangeSet(desc.exactSize, writer.completedRanges)
-    initialBytes = rangesBytes(rangeState.current.ranges)
-    // Only report initial disk coverage once per file; retry attempts reuse
-    // bytes already counted in earlier attempts' initial coverage and writes.
-    if (state.attemptIndex === 0 && initialBytes > 0n) {
-      ctx.onInitialCoverage?.(initialBytes)
-    }
+    active = new ActiveFileWrite(writer, desc.exactSize, ctx.signal, ctx.output.capabilities.periodicCheckpoint)
+    ctx.trackWrite?.(active)
+    initialBytes = active.coverage
+    if (state.attemptIndex === 0 && initialBytes > 0n) ctx.onInitialCoverage?.(initialBytes)
 
-    await streamMissingRanges(ctx, opened, writer, rangeState)
-    await writer.commit(rangeState.current.ranges)
+    await streamMissingRanges(ctx, opened, active)
+    release = releaseLease(opened)
+    ctx.onUncheckpointedWrite?.()
+    await active.commit()
     return { kind: 'completed', size: desc.exactSize }
   } catch (error) {
-    return handleFileError(ctx, writer, rangeState.current, initialBytes, error, state)
+    const finish = () => handleFileError(ctx, writer, active?.ranges, initialBytes, active?.failure ?? error, state)
+    return await (active === undefined ? finish() : active.finish(finish))
   } finally {
-    await opened?.release().catch(() => undefined)
+    await (release ?? releaseLease(opened))
   }
+}
+
+async function releaseLease(opened: OpenedRevision | undefined): Promise<void> {
+  try { await opened?.release() } catch { /* Received bytes can be committed independently of the sender. */ }
 }
 
 function checkAlreadyCompleted(
@@ -221,83 +231,28 @@ async function abortChangedWriter(writer: TransferOutputFile): Promise<void> {
   )).catch(() => undefined)
 }
 
-interface CheckpointClock {
-  pendingBytes: bigint
-  lastCheckpointAt: number
-}
-
 async function streamMissingRanges(
   ctx: FileTransferContext,
   opened: OpenedRevision,
-  writer: TransferOutputFile,
-  rangeState: { current: ByteRangeSet | undefined },
+  active: ActiveFileWrite,
 ): Promise<void> {
-  const exactSize = opened.descriptor.exactSize
-  const initial = rangeState.current
-  if (exactSize === 0n || initial === undefined) return
-
-  const missing = initial.missingFrom(new ByteRangeSet(exactSize, [byteRange(0n, exactSize)]))
-  if (missing.empty) return
-
-  const clock: CheckpointClock = { pendingBytes: 0n, lastCheckpointAt: Date.now() }
+  const size = opened.descriptor.exactSize
+  const missing = active.ranges.missingFrom(new ByteRangeSet(size, [byteRange(0n, size)]))
   for (const span of missing.ranges) {
-    throwIfInterrupted(ctx)
-    await streamSingleSpan(ctx, opened, writer, span, exactSize, rangeState, clock)
+    active.signal.throwIfAborted()
+    const stream = ctx.broker.readRange(opened.descriptor, opened.leaseId, span, {
+      signal: active.signal,
+      maximumParallel: BLOCK_BROKER_PARALLEL_READS,
+      ...(ctx.onObjectBytes === undefined ? {} : { onReceive: ctx.onObjectBytes }),
+      ...(ctx.remainingWork === undefined ? {} : { remainingWork: ctx.remainingWork }),
+    })
+    for await (const slice of stream) {
+      active.signal.throwIfAborted()
+      if (slice.data.byteLength === 0) continue
+      ctx.onUncheckpointedWrite?.()
+      await active.write(slice.offset, slice.data, ctx.onWritten)
+    }
   }
-}
-
-async function streamSingleSpan(
-  ctx: FileTransferContext,
-  opened: OpenedRevision,
-  writer: TransferOutputFile,
-  span: ByteRange,
-  exactSize: bigint,
-  rangeState: { current: ByteRangeSet | undefined },
-  clock: CheckpointClock,
-): Promise<void> {
-  const stream = ctx.broker.readRange(opened.descriptor, opened.leaseId, span, {
-    signal: ctx.signal,
-    maximumParallel: BLOCK_BROKER_PARALLEL_READS,
-    ...(ctx.onObjectBytes === undefined ? {} : { onReceive: ctx.onObjectBytes }),
-    ...(ctx.remainingWork === undefined ? {} : { remainingWork: ctx.remainingWork }),
-  })
-  for await (const slice of stream) {
-    throwIfInterrupted(ctx)
-    if (slice.data.byteLength === 0) continue
-    const len = BigInt(slice.data.byteLength)
-    await writer.writeAt(slice.offset, slice.data)
-    const next = rangeState.current!.union(new ByteRangeSet(exactSize, [byteRange(slice.offset, slice.offset + len)]))
-    rangeState.current = next
-    ctx.onWritten?.(len)
-    await maybeCheckpoint(ctx, writer, next, len, clock)
-  }
-}
-
-async function maybeCheckpoint(
-  ctx: FileTransferContext,
-  writer: TransferOutputFile,
-  current: ByteRangeSet,
-  writtenBytes: bigint,
-  clock: CheckpointClock,
-): Promise<void> {
-  const policy = ctx.output.capabilities.periodicCheckpoint
-  if (policy === undefined) return
-  clock.pendingBytes += writtenBytes
-  if (
-    clock.pendingBytes < policy.intervalBytes &&
-    Date.now() - clock.lastCheckpointAt < policy.intervalMilliseconds
-  ) {
-    return
-  }
-  await writer.checkpoint(current.ranges)
-  clock.pendingBytes = 0n
-  // Stamp completion time rather than start time so slow flushes cannot spin into back-to-back checkpoints.
-  clock.lastCheckpointAt = Date.now()
-}
-
-function throwIfInterrupted(ctx: FileTransferContext): void {
-  if (ctx.isPaused()) throw new TransferPauseError('user')
-  if (ctx.isStopped()) throw new TransferStopError()
 }
 
 async function openRevisionWithBackoff(
@@ -332,10 +287,14 @@ async function handleFileError(
   error: unknown,
   state: FileTransferAttemptState,
 ): Promise<AttemptResult> {
+  if (ctx.isDetached()) {
+    await writer?.abort(error).catch(() => undefined)
+    return { kind: 'detached' }
+  }
+  ctx.onOutputFailure?.(error)
   const pauseReason = pauseReasonFor(ctx, error)
   if (pauseReason !== undefined) {
-    await pauseWriterSafely(writer, ranges, error)
-    return { kind: 'paused', reason: pauseReason }
+    return pauseWriter(ctx, writer, ranges, error, pauseReason)
   }
   if (error instanceof TransferStopError || ctx.isStopped()) {
     await writer?.abort(error).catch(() => undefined)
@@ -351,13 +310,10 @@ async function handleFileError(
     return checkpointOutcome ?? { kind: 'retry', next: nextRetry }
   }
   if (ctx.output.capabilities.resumable && !ctx.signal.aborted && isRecoverableTransferInterruption(error)) {
-    await pauseWriterSafely(writer, ranges, error)
-    return { kind: 'paused', reason: 'interrupted' }
+    return pauseWriter(ctx, writer, ranges, error, 'interrupted')
   }
   await writer?.abort(error).catch(() => undefined)
-  if (isAbortError(error) && ctx.signal.aborted) {
-    return ctx.isPaused() ? { kind: 'paused', reason: 'user' } : { kind: 'stopped' }
-  }
+  if (ctx.signal.aborted) return preflightOutcome(ctx) ?? { kind: 'failed', error: ctx.signal.reason }
   return error instanceof RemoteRevisionError
     ? { kind: 'source-unavailable', error }
     : { kind: 'failed', error }
@@ -371,7 +327,7 @@ function nextRetryStateFor(
   state: FileTransferAttemptState,
 ): FileTransferAttemptState | undefined {
   if (!ctx.output.capabilities.resumable || ctx.signal.aborted) return undefined
-  const madeProgress = ranges !== undefined && rangesBytes(ranges.ranges) > initialBytes
+  const madeProgress = ranges !== undefined && coveredBytes(ranges.ranges) > initialBytes
   if (isReusableReopenedRevisionError(error)) {
     const stalledReopens = madeProgress ? 0 : state.stalledReopens + 1
     if (stalledReopens > MAX_STALLED_REOPEN_RETRIES) return undefined
@@ -403,25 +359,31 @@ function pauseReasonFor(
   error: unknown,
 ): ReceivePauseReason | undefined {
   if (error instanceof TransferPauseError) return error.reason
-  if (ctx.isPaused()) return 'user'
-  if (isQuotaExceededError(error)) return 'storage-full'
-  if (isPermissionDeniedError(error)) return 'permission-needed'
-  return undefined
+  return storagePauseReason(error) ?? (ctx.isPaused() ? 'user' : undefined)
 }
 
-async function pauseWriterSafely(
+async function pauseWriter(
+  ctx: FileTransferContext,
   writer: TransferOutputFile | undefined,
   ranges: ByteRangeSet | undefined,
-  reason?: unknown,
-): Promise<void> {
-  if (writer === undefined) return
-  if (ranges !== undefined && !ranges.empty) {
-    await writer.pause(ranges.ranges).catch(() => undefined)
-    return
+  reason: unknown,
+  pauseReason: ReceivePauseReason,
+): Promise<SingleFileTransferOutcome> {
+  if (writer !== undefined) {
+    if (ranges === undefined || ranges.empty) {
+      await writer.abort(reason).catch(() => undefined)
+    } else {
+      try {
+        await writer.pause(ranges.ranges)
+      } catch (cause) {
+        await writer.abort(cause).catch(() => undefined)
+        ctx.onOutputFailure?.(cause)
+        const storageReason = storagePauseReason(cause)
+        return storageReason === undefined ? { kind: 'failed', error: cause } : { kind: 'paused', reason: storageReason }
+      }
+    }
   }
-  // No bytes need preservation; aborting clears any empty FSA placeholder
-  // instead of recording a 0-byte resumable checkpoint.
-  await writer.abort(reason).catch(() => undefined)
+  return { kind: 'paused', reason: pauseReason }
 }
 
 async function checkpointForRetry(
@@ -437,17 +399,17 @@ async function checkpointForRetry(
     return undefined
   }
   try {
-    await writer.checkpoint(ranges.ranges)
+    const outcome = await writer.checkpoint(ranges.ranges, 'retry')
+    if (outcome !== 'saved') throw new Error('Cannot reopen without a durable file checkpoint')
     return undefined
   } catch (checkpointError) {
+    await writer.abort(checkpointError).catch(() => undefined)
+    ctx.onOutputFailure?.(checkpointError)
     const pauseReason = pauseReasonFor(ctx, checkpointError)
     if (pauseReason !== undefined) {
       return { kind: 'paused', reason: pauseReason }
     }
-    await writer.abort(checkpointError).catch(() => undefined)
-    if (isAbortError(checkpointError) && ctx.signal.aborted) {
-      return ctx.isPaused() ? { kind: 'paused', reason: 'user' } : { kind: 'stopped' }
-    }
+    if (ctx.signal.aborted) return preflightOutcome(ctx) ?? { kind: 'failed', error: ctx.signal.reason }
     return { kind: 'failed', error: checkpointError }
   }
 }
@@ -475,12 +437,6 @@ function isSourceChangedError(error: unknown): boolean {
     return error.scope === 'revision' && !error.retryable && isSourceChangedRevisionCode(error.code)
   }
   return false
-}
-
-function rangesBytes(ranges: readonly ByteRange[]): bigint {
-  let total = 0n
-  for (const range of ranges) total += range.end - range.start
-  return total
 }
 
 function sleepAbortable(ms: number, signal: AbortSignal): Promise<void> {

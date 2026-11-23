@@ -6,7 +6,7 @@ import type { SelectionShape } from '../../transfer/discovery'
 import type { TransferOutputSession } from '../../transfer/output-port'
 import type { ResolvedArtifactSpec, SelectionSpec } from '../../transfer/selection'
 import type { ReceiveLifecycleState, SafeRenamedSummary } from '../../transfer/state'
-import type { TransferJobResult } from '../../transfer/job'
+import type { SettledTransferJobResult } from '../../transfer/job'
 import type { ReceiveTaskRecord } from '../store/types'
 import { supportsBrowserDownload, type BrowserDownloadWindow } from './browser-handoff'
 
@@ -39,7 +39,7 @@ export interface OutputSessionHandle {
   readonly backend: SaveBackendKind
   readonly transferOutput: TransferOutputSession
   /** Settles the backend after `TransferJob.run()` finishes and persists the final task record. */
-  settle(result: TransferJobResult): Promise<ReceiveTaskRecord>
+  settle(result: SettledTransferJobResult): Promise<ReceiveTaskRecord>
   /** Closes live handles and releases the cross-tab Web Lock without deleting retained data. */
   close(): Promise<void>
 }

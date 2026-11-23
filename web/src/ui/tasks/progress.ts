@@ -9,15 +9,16 @@ const UNSETTLED_PERCENT_LIMIT = 99n
 export function presentTaskProgress(facts: TaskFacts, language: Language = 'en'): TaskProgressPresentation | null {
   const t = receiverCopy[language].progress
   const progress = facts.progress
-  if (progress === null) return retainedProgress(facts, language)
-  const materialized = facts.lifecycle.kind === 'paused'
-    ? facts.lifecycle.retainedBytes
-    : progress.materializedBytes
+  const paused = facts.lifecycle.kind === 'paused'
+  if (progress === null || (paused && progress.transferJobId === '')) return retainedProgress(facts, language)
+  const materialized = paused ? facts.lifecycle.retainedBytes : progress.materializedBytes
   const files = ` · ${t.completedFiles(progress.completedFiles)}`
   const details = progressDetails(facts, language)
   const percentage = exactPercentage(facts, materialized)
   const exact = progress.discovery === 'complete'
   const total = exact ? ` / ${formatBytes(progress.discoveredBytes)}` : ''
+  const amount = formatBytes(materialized) + total
+  const coverage = paused ? t.retainedBytes(amount) : t.receivedBytes(amount)
   const ratio = percentage === null ? '' : ` · ${percentage}%`
   return Object.freeze({
     mode: percentage === null ? 'indeterminate' : 'determinate',
@@ -28,7 +29,7 @@ export function presentTaskProgress(facts: TaskFacts, language: Language = 'en')
     remainingBytes: exact && facts.completeness !== 'partial'
       ? maximum(0n, progress.discoveredBytes - materialized) : null,
     status: discoveryStatus(facts, language),
-    label: `${t.amount(formatBytes(materialized) + total)}${ratio}${files}`,
+    label: `${coverage}${ratio}${files}`,
     details: Object.freeze(details),
   })
 }

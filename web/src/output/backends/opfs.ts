@@ -1,5 +1,6 @@
 import type { ByteRange } from '../../content/geometry'
-import type { TransferJobResult, TransferJobStatus } from '../../transfer/job'
+import { storagePauseReason } from '../../transfer/fault'
+import type { SettledTransferJobResult } from '../../transfer/job'
 import type {
   CompletedOutputFile,
   TransferDirectoryRequest,
@@ -342,7 +343,7 @@ class OPFSSessionHandle implements OutputSessionHandle {
     })
   }
 
-  async settle(result: TransferJobResult): Promise<ReceiveTaskRecord> {
+  async settle(result: SettledTransferJobResult): Promise<ReceiveTaskRecord> {
     if (result.status === 'completed') {
       return this.#settleCompleted(result)
     }
@@ -360,13 +361,22 @@ class OPFSSessionHandle implements OutputSessionHandle {
     await this.#lock.release()
   }
 
-  async #settleCompleted(result: TransferJobResult): Promise<ReceiveTaskRecord> {
+  async #seal(): Promise<bigint> {
+    if (this.#zip !== undefined) return this.#zip.finalize()
+    await this.#io.flush()
+    return this.#io.size()
+  }
+
+  async #settleCompleted(result: SettledTransferJobResult): Promise<ReceiveTaskRecord> {
     let sealedSize: bigint
-    if (this.#zip !== undefined) {
-      sealedSize = await this.#zip.finalize()
-    } else {
-      await this.#io.flush()
-      sealedSize = await this.#io.size()
+    try {
+      sealedSize = await this.#seal()
+    } catch (error) {
+      // The directory can fail to seal after every member is already durable and exportable.
+      await this.#closeIO()
+      const pauseReason = storagePauseReason(error)
+      if (pauseReason !== undefined) return this.#settleIncomplete('paused', { ...result, pauseReason, error })
+      return this.#settleIncomplete('failed', { ...result, error })
     }
     await this.#closeIO()
 
@@ -415,7 +425,7 @@ class OPFSSessionHandle implements OutputSessionHandle {
 
   async #settleIncomplete(
     status: IncompleteOPFSJobStatus,
-    result: TransferJobResult,
+    result: SettledTransferJobResult,
   ): Promise<ReceiveTaskRecord> {
     const files = await this.#store.listTaskFiles(this.taskId)
     let retainedBytes = 0n
@@ -452,7 +462,7 @@ class OPFSSessionHandle implements OutputSessionHandle {
     emitOutputTrace(this.#diagnostics?.trace, 'settlement', {
       backend: 'origin_private',
       task_id: this.taskId,
-      job_status: result.status,
+      job_status: status,
       lifecycle: nextLifecycle.kind,
       completed_files: String(storedCompletedFiles > result.completedFiles ? storedCompletedFiles : result.completedFiles),
       failed_files: String(result.failedFiles + result.failedDirectories),
@@ -503,7 +513,7 @@ class OPFSSessionHandle implements OutputSessionHandle {
         : { savedSourceMetadata: opened.record.sourceMetadata }),
       savedSize: opened.record.size,
       writeAt: (offset: bigint, data: Uint8Array) => zip.writeFileSlice(opened, offset, data),
-      checkpoint: (ranges: readonly ByteRange[]) => zip.checkpointFile(opened, ranges),
+      checkpoint: (ranges: readonly ByteRange[]) => zip.checkpointFile(opened, ranges).then(() => 'saved' as const),
       commit: (ranges: readonly ByteRange[]) => zip.commitFile(opened, ranges),
       pause: (ranges: readonly ByteRange[]) => zip.checkpointFile(opened, ranges),
       abort: () => Promise.resolve(),
@@ -545,7 +555,7 @@ class OPFSSessionHandle implements OutputSessionHandle {
         savedSize: validExisting.size,
       }),
       writeAt: (offset: bigint, data: Uint8Array) => this.#io.writeAt(offset, data),
-      checkpoint: (ranges: readonly ByteRange[]) => persist('receiving', ranges),
+      checkpoint: (ranges: readonly ByteRange[]) => persist('receiving', ranges).then(() => 'saved' as const),
       commit: async (ranges: readonly ByteRange[]) => {
         await this.#io.truncate(request.exactSize)
         await persist('completed', ranges)
@@ -562,12 +572,12 @@ class OPFSSessionHandle implements OutputSessionHandle {
   }
 }
 
-type IncompleteOPFSJobStatus = Exclude<TransferJobStatus, 'completed'>
+type IncompleteOPFSJobStatus = Exclude<SettledTransferJobResult['status'], 'completed'>
 
 function nextOPFSIncompleteLifecycle(
   current: ReceiveTaskRecord['lifecycle'],
   status: IncompleteOPFSJobStatus,
-  result: TransferJobResult,
+  result: SettledTransferJobResult,
   input: Readonly<{
     isZip: boolean
     retainedBytes: bigint

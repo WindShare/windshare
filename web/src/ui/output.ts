@@ -22,6 +22,7 @@ export interface OutputPresentationSnapshot {
   readonly safeRenamed: SafeRenamedSummary | null
   readonly sourceRevisionFailures: SourceRevisionFailures | null
   readonly actions: readonly ReceiveAction[]
+  readonly outageCheckpointed: boolean
   readonly interruption: 'pause' | 'stop' | null
 }
 
@@ -37,6 +38,7 @@ export const EMPTY_RECEIVE_RUNTIME: ReceiveRuntimeSnapshot = Object.freeze({
   sourceRevisionFailures: null,
   progress: EMPTY_TRANSFER_PROGRESS,
   actions: Object.freeze([]),
+  outageCheckpointed: false,
   interruption: null,
   retained: EMPTY_RETAINED_INVENTORY,
 })
@@ -57,6 +59,7 @@ export function presentReceiveOutput(
     safeRenamed: runtime.safeRenamed,
     sourceRevisionFailures: runtime.sourceRevisionFailures,
     actions: runtime.actions,
+    outageCheckpointed: runtime.outageCheckpointed,
     interruption: runtime.interruption,
   })
 }

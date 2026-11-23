@@ -11,7 +11,7 @@ export const progress = {
   missingFileCount: (done: bigint, total: bigint, missing: bigint, paused: boolean) => paused ? `${done}/${total} ${plural(total, 'file')} received; ${missing} unfinished.` : `Partial result: ${done}/${total} ${plural(total, 'file')} received; ${missing} not included in the ZIP.`,
   missingFile: (path: string, reason: string, paused: boolean) => `${path}: ${reason}${paused ? '' : ' Not included in the ZIP.'}`,
   moreMissing: (count: bigint, paused: boolean) => `${count} additional ${paused ? 'unfinished' : 'missing'} ${count === 1n ? 'file is' : 'files are'} not listed.`,
-  amount: (amount: string) => `${amount} saved`,
+  receivedBytes: (amount: string) => `${amount} received`,
   completedFiles: (count: number) => `${count} ${plural(count, 'file')} completed`,
   retainedBytes: (size: string) => `${size} saved for resuming`,
   completedRetained: (count: bigint) => `${count} completed ${plural(count, 'file')} saved.`,

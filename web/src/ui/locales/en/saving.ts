@@ -16,7 +16,7 @@ export const saving = {
   keepsFolders: 'Keeps folders',
   resumable: 'Resumable',
   directFolderSummary: 'Writes directly to your chosen folder. Keeps the folder layout and supports pause and resume.',
-  directPause: 'Wait for Pause to finish before leaving. Closing or crashing mid-file may lose progress on an unfinished large file; completed files stay saved.',
+  directPause: 'Wait for the download to pause before leaving. For long downloads, you can use browser storage or the WindShare native client.',
   singleZip: 'Single ZIP',
   workspaceZip: 'Downloads all files reliably in browser storage first, then saves one uncompressed ZIP.',
   largeFiles: 'Best for large files',

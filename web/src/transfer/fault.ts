@@ -106,6 +106,17 @@ export class TransferFaultError extends Error {
   }
 }
 
+/** A failed shared object invalidates every member, while an independent writer owns its failure. */
+export function outputFailure(scope: FaultScope, cause: unknown, fallback: OutputFaultCode): TransferFaultError {
+  if (cause instanceof TransferFaultError && cause.fault.scope === scope) return cause
+  let code: FaultCode = fallback
+  if (isQuotaExceededError(cause)) code = OutputFaultCode.QuotaExceeded
+  else if (isPermissionDeniedError(cause)) code = OutputFaultCode.PermissionDenied
+  else if (cause instanceof TransferFaultError) code = cause.fault.code
+  return new TransferFaultError(createFault(FaultDomain.Output, scope, code),
+    cause instanceof Error ? cause.message : String(cause), { cause })
+}
+
 export class TransferPauseError extends Error {
   readonly reason: ReceivePauseReason
 
@@ -138,6 +149,12 @@ export function isQuotaExceededError(error: unknown): boolean {
 export function isPermissionDeniedError(error: unknown): boolean {
   if (error instanceof TransferFaultError && error.fault.code === OutputFaultCode.PermissionDenied) return true
   return error instanceof DOMException && (error.name === 'NotAllowedError' || error.name === 'SecurityError')
+}
+
+export function storagePauseReason(error: unknown): 'storage-full' | 'permission-needed' | undefined {
+  if (isQuotaExceededError(error)) return 'storage-full'
+  if (isPermissionDeniedError(error)) return 'permission-needed'
+  return undefined
 }
 
 export function isSourceInvalidatedError(error: unknown): boolean {

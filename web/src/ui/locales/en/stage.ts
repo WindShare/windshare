@@ -43,5 +43,6 @@ export const stage = {
   sessionEnded: 'This transfer session ended. Open a new share link to try again.',
   restart: 'This download cannot continue from saved progress. Start a new download.',
   savedTo: (name: string) => `Saved to ${name}.`,
+  reconnectProgressSaved: 'Current progress saved. Waiting to reconnect.',
   reconnectKeepOpen: 'Reconnection is automatic. Keep this page open to preserve your download progress.',
 }

@@ -18,7 +18,7 @@ export const saving: typeof English = {
   keepsFolders: '保留目录结构',
   resumable: '支持续传',
   directFolderSummary: '直接写入所选文件夹，保留原有目录结构，支持暂停和继续下载。',
-  directPause: '请在暂停完成后再离开。中途关闭或崩溃可能会丢失当前大文件的进度，已完成的文件会保留。',
+  directPause: '请在暂停完成后再离开。耗时较长的下载可选择浏览器存储或 WindShare 原生客户端。',
   singleZip: '单个 ZIP',
   workspaceZip: '先将所有文件下载到浏览器存储，再保存为一个未压缩的 ZIP。',
   largeFiles: '适合大文件',

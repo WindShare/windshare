@@ -4,7 +4,8 @@ import type { FrozenSelectionPolicy } from '../catalog/selection'
 import type { BlockRangeReader, ContentLaneStatus } from '../content/broker'
 import type { RevisionReader } from '../content/session-services'
 import { discoverSelection, type DiscoveredFile } from './discovery'
-import { isRecoverableTransferInterruption } from './fault'
+import type { ActiveFileWrite } from './active-file-write'
+import { FaultScope, TransferFaultError, isRecoverableTransferInterruption, storagePauseReason } from './fault'
 import { transferSingleFile, type SingleFileTransferOutcome } from './file-transfer'
 import type { TransferOutputSession } from './output-port'
 import { TransferProgressTracker, type TransferProgress } from './progress'
@@ -32,10 +33,11 @@ export interface TransferJobOptions {
   readonly lanes?: ContentLaneStatus
   readonly output: TransferOutputSession
   readonly rootPath?: readonly string[]
+  readonly onUncheckpointedWrite?: () => void
   readonly onProgress?: (progress: TransferProgress) => void
 }
 
-export type TransferJobStatus =
+type SettledJobStatus =
   | 'completed'
   | 'paused'
   | 'stopped'
@@ -43,8 +45,7 @@ export type TransferJobStatus =
   | 'source-changed'
   | 'failed'
 
-export interface TransferJobResult {
-  readonly status: TransferJobStatus
+interface TransferJobFacts {
   readonly pauseReason?: ReceivePauseReason
   readonly completedFiles: bigint
   readonly completedBytes: bigint
@@ -59,6 +60,20 @@ export interface TransferJobResult {
   readonly error?: unknown
 }
 
+export type SettledTransferJobResult = TransferJobFacts & Readonly<{ status: SettledJobStatus }>
+export type TransferJobResult = SettledTransferJobResult | (TransferJobFacts & Readonly<{ status: 'detached' }>)
+
+export interface ActiveCheckpointSummary {
+  readonly allReceivedSaved: boolean
+  readonly savedFiles: number
+  readonly skippedFiles: number
+  readonly failedFiles: number
+  readonly savedBytes: bigint
+}
+
+type JobExit = Readonly<{ kind: 'paused'; reason: ReceivePauseReason }>
+  | Readonly<{ kind: 'running' | 'stopped' | 'detached' | 'failed' }>
+
 /**
  * Coordinates progressive catalog discovery and bounded concurrent file transfers
  * against any `TransferOutputSession` backend.
@@ -68,9 +83,9 @@ export class TransferJob {
   readonly #options: TransferJobOptions
   readonly #abort = new AbortController()
   readonly #tracker: TransferProgressTracker
-  #paused = false
-  #pauseReason: ReceivePauseReason = 'user'
-  #stopped = false
+  #exit: JobExit = { kind: 'running' }
+  readonly #activeWrites = new Set<ActiveFileWrite>()
+  #finished = false
   #firstError: unknown
   #discoveryComplete = false
   #discoveryFailed = false
@@ -95,16 +110,63 @@ export class TransferJob {
   }
 
   pause(reason: ReceivePauseReason = 'user'): void {
-    if (this.#paused || this.#stopped) return
-    this.#paused = true
-    this.#pauseReason = reason
+    if (this.#abort.signal.aborted) return
+    this.#exit = { kind: 'paused', reason }
     this.#abort.abort(new DOMException('Transfer paused', 'AbortError'))
   }
 
   stop(): void {
-    if (this.#stopped) return
-    this.#stopped = true
+    if (this.#abort.signal.aborted) return
+    this.#exit = { kind: 'stopped' }
     this.#abort.abort(new DOMException('Transfer stopped', 'AbortError'))
+  }
+
+  detach(): void {
+    if (this.#abort.signal.aborted) return
+    this.#exit = { kind: 'detached' }
+    this.#abort.abort(new DOMException('Transfer detached', 'AbortError'))
+  }
+
+  get allReceivedSaved(): boolean {
+    return this.#options.output.capabilities.resumable && !this.#finished && !this.#abort.signal.aborted &&
+      this.#failedFiles === 0n &&
+      this.#tracker.snapshot().materializedBytes > 0n && [...this.#activeWrites].every(file => file.durable)
+  }
+
+  async checkpointActive(signal: AbortSignal): Promise<ActiveCheckpointSummary> {
+    const round = AbortSignal.any([signal, this.#abort.signal])
+    let savedFiles = 0, skippedFiles = 0, failedFiles = 0
+    let savedBytes = 0n
+    for (const file of [...this.#activeWrites]) {
+      if (round.aborted || this.#finished) break
+      try {
+        const cut = await file.checkpointOnDisconnect(round)
+        if (cut?.outcome === 'saved') {
+          savedFiles += 1
+          savedBytes += cut.savedBytes
+        } else if (cut?.outcome === 'skipped') {
+          skippedFiles += 1
+        }
+      } catch (error) {
+        failedFiles += 1
+        this.#handleOutputFailure(error)
+      }
+    }
+    return {
+      allReceivedSaved: !round.aborted && skippedFiles === 0 && failedFiles === 0 && this.allReceivedSaved,
+      savedFiles, skippedFiles, failedFiles, savedBytes,
+    }
+  }
+
+  #handleOutputFailure(error: unknown): void {
+    if (this.#abort.signal.aborted) return
+    const reason = storagePauseReason(error)
+    if (reason !== undefined) return this.pause(reason)
+    if (error instanceof TransferFaultError && error.fault.scope === FaultScope.Job) {
+      this.#firstError = error
+      this.#exit = { kind: 'failed' }
+      this.#abort.abort(error)
+    }
   }
 
   progress(): TransferProgress {
@@ -126,6 +188,7 @@ export class TransferJob {
       this.#handleDiscoveryError(error)
     } finally {
       await Promise.allSettled(active)
+      this.#finished = true
       unsubscribeBandwidth?.()
       externalSignal?.removeEventListener('abort', onExternalAbort)
     }
@@ -161,15 +224,15 @@ export class TransferJob {
     )
 
     for await (const item of items) {
-      if (this.#paused || this.#stopped) break
+      if (this.#abort.signal.aborted) break
       if (item.kind === 'directory') {
         await this.#ensureDirectory(item)
         continue
       }
-      while (active.size >= maxWorkers && !this.#paused && !this.#stopped) {
+      while (active.size >= maxWorkers && !this.#abort.signal.aborted) {
         await Promise.race(active)
       }
-      if (this.#paused || this.#stopped) break
+      if (this.#abort.signal.aborted) break
       const task = this.#runFile(item).finally(() => active.delete(task))
       active.add(task)
     }
@@ -186,7 +249,7 @@ export class TransferJob {
         }),
       }, this.#abort.signal)
     } catch (error) {
-      if (this.#paused || this.#stopped) return
+      if (this.#abort.signal.aborted) return
       this.#recordDirectoryFailure(error)
     }
   }
@@ -196,6 +259,7 @@ export class TransferJob {
       this.pause('interrupted')
       return
     }
+    this.#handleOutputFailure(error)
     this.#discoveryFailed = true
     this.#failedDirectories += 1n
     this.#firstError ??= error
@@ -203,7 +267,7 @@ export class TransferJob {
   }
 
   async #finalizeDiscovery(): Promise<void> {
-    if (!this.#paused && !this.#stopped && !this.#discoveryFailed) {
+    if (!this.#abort.signal.aborted && !this.#discoveryFailed) {
       this.#discoveryComplete = true
       this.#tracker.observeDiscoverySettled('complete')
       await this.#options.output.markDiscoveryComplete?.()
@@ -215,7 +279,7 @@ export class TransferJob {
   }
 
   #handleDiscoveryError(error: unknown): void {
-    if (this.#paused || this.#stopped) return
+    if (this.#abort.signal.aborted) return
     if (this.#options.output.capabilities.resumable && isRecoverableTransferInterruption(error)) {
       this.pause('interrupted')
       return
@@ -226,13 +290,23 @@ export class TransferJob {
   }
 
   async #runFile(file: DiscoveredFile): Promise<void> {
+    let current: ActiveFileWrite | undefined
+    const trackWrite = (next: ActiveFileWrite | undefined) => {
+      if (current !== undefined) this.#activeWrites.delete(current)
+      current = next
+      if (next !== undefined) this.#activeWrites.add(next)
+    }
     const outcome = await transferSingleFile({
       revisions: this.#options.revisions,
       broker: this.#options.broker,
       output: this.#options.output,
       signal: this.#abort.signal,
-      isPaused: () => this.#paused,
-      isStopped: () => this.#stopped,
+      isPaused: () => this.#exit.kind === 'paused',
+      isStopped: () => this.#exit.kind === 'stopped',
+      isDetached: () => this.#exit.kind === 'detached',
+      onOutputFailure: error => this.#handleOutputFailure(error),
+      ...(this.#options.onUncheckpointedWrite === undefined ? {} : { onUncheckpointedWrite: this.#options.onUncheckpointedWrite }),
+      ...(this.#options.output.capabilities.resumable ? { trackWrite } : {}),
       onInitialCoverage: bytes => this.#tracker.observeInitialCoverage(bytes),
       onObjectBytes: bytes => this.#tracker.observeObjectBytes(bytes),
       onWritten: bytes => this.#tracker.observeWritten(bytes),
@@ -245,6 +319,7 @@ export class TransferJob {
     }, file)
 
     this.#applyFileOutcome(file, outcome)
+    trackWrite(undefined)
   }
 
   #applyFileOutcome(file: DiscoveredFile, outcome: SingleFileTransferOutcome): void {
@@ -256,6 +331,8 @@ export class TransferJob {
         return
       case 'paused':
         this.pause(outcome.reason)
+        return
+      case 'detached':
         return
       case 'stopped':
         this.stop()
@@ -318,7 +395,7 @@ export class TransferJob {
     const status = this.#resolveStatus()
     return Object.freeze({
       status,
-      ...(status === 'paused' ? { pauseReason: this.#pauseReason } : {}),
+      ...(this.#exit.kind === 'paused' ? { pauseReason: this.#exit.reason } : {}),
       completedFiles: this.#completedFiles,
       completedBytes: this.#completedBytes,
       discoveredFiles: this.#discoveredFiles,
@@ -333,9 +410,10 @@ export class TransferJob {
     })
   }
 
-  #resolveStatus(): TransferJobStatus {
-    if (this.#paused) return 'paused'
-    if (this.#stopped) return this.#completedFiles > 0n ? 'partial' : 'stopped'
+  #resolveStatus(): TransferJobResult['status'] {
+    if (this.#exit.kind === 'detached' || this.#exit.kind === 'paused') return this.#exit.kind
+    if (this.#exit.kind === 'failed') return this.#completedFiles > 0n ? 'partial' : 'failed'
+    if (this.#exit.kind === 'stopped') return this.#completedFiles > 0n ? 'partial' : 'stopped'
     if (this.#failedFiles === 0n && this.#failedDirectories === 0n && !this.#discoveryFailed) {
       return 'completed'
     }

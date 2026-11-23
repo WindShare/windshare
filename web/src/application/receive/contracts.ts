@@ -85,6 +85,7 @@ export interface ReceiveRuntimeSnapshot {
   readonly display: ReceiveOperationDisplay | null
   readonly safeRenamed: SafeRenamedSummary | null
   readonly sourceRevisionFailures: SourceRevisionFailures | null
+  readonly outageCheckpointed: boolean
   readonly progress: TransferProgress
   readonly actions: readonly ReceiveAction[]
   readonly interruption: 'pause' | 'stop' | null

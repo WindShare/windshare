@@ -19,103 +19,7 @@ import { discoverSelection, inspectSelectionShape } from '../../src/transfer/dis
 import { TransferJob } from '../../src/transfer/job'
 import type { TransferFileRequest, TransferOutputFile, TransferOutputSession } from '../../src/transfer/output-port'
 
-function id(seed: number): Uint8Array<ArrayBuffer> {
-  return new Uint8Array(16).fill(seed)
-}
-
-function makeShareFixture(files: readonly {
-  readonly seed: number
-  readonly name: string
-  readonly bytes: Uint8Array<ArrayBuffer>
-  readonly revSeed?: number
-  readonly missing?: boolean
-}[]) {
-  const shareInstance = id(1)
-  const rootId = id(2)
-  const entries: CatalogEntry[] = files.map(file => Object.freeze({
-    kind: 'file' as const,
-    id: id(file.seed),
-    idText: encodeBase64Url(id(file.seed)),
-    name: file.name,
-    expectedSize: BigInt(file.bytes.byteLength),
-  }))
-  const committed: CommittedDirectory = Object.freeze({
-    directoryId: rootId,
-    directoryIdText: encodeBase64Url(rootId),
-    generation: id(3),
-    generationText: encodeBase64Url(id(3)),
-    pageCount: 1,
-    entryCount: entries.length,
-    omittedCount: 0n,
-    terminalCommitment: new Uint8Array(32),
-  })
-  const page: CatalogPage = Object.freeze({
-    shareInstance,
-    directoryId: rootId,
-    directoryIdText: committed.directoryIdText,
-    generation: committed.generation,
-    generationText: committed.generationText,
-    pageIndex: 0,
-    terminal: true,
-    previousCommitment: new Uint8Array(32),
-    entries: Object.freeze(entries),
-    omittedCount: 0n,
-    objectCommitment: new Uint8Array(32),
-    encodedBytes: 64,
-  })
-  const descriptor: ShareDescriptor = Object.freeze({
-    shareInstance,
-    shareInstanceId: encodeBase64Url(shareInstance),
-    syntheticRoot: rootId,
-    syntheticRootId: committed.directoryIdText,
-  }) as unknown as ShareDescriptor
-  const catalog = Object.freeze({
-    loadDirectory: async () => committed,
-    page: async () => page,
-  }) as unknown as CatalogClient
-
-  const byId = new Map(files.map(file => [encodeBase64Url(id(file.seed)), file]))
-  const openedFileIds: string[] = []
-  const revisions: RevisionReader = {
-    open: async (fileId: Uint8Array) => {
-      const key = encodeBase64Url(fileId)
-      openedFileIds.push(key)
-      const file = byId.get(key)
-      if (file === undefined || file.missing) throw new Error('missing file')
-      const rev = id(file.revSeed ?? (file.seed + 50))
-      const revDesc: FileRevisionDescriptor = Object.freeze({
-        shareInstance,
-        shareInstanceId: descriptor.shareInstanceId,
-        fileId: id(file.seed),
-        fileIdText: key,
-        fileRevision: rev,
-        fileRevisionText: encodeBase64Url(rev),
-        exactSize: BigInt(file.bytes.byteLength),
-        geometry: new FileGeometry(BigInt(file.bytes.byteLength), 8n),
-      })
-      return Object.freeze({
-        descriptor: revDesc,
-        leaseId: id(99),
-        release: async () => undefined,
-      })
-    },
-  }
-  const readRanges: ByteRange[] = []
-  const broker: BlockRangeReader = {
-    readRange: async function* (revDesc, _leaseId, span) {
-      readRanges.push(span)
-      const file = byId.get(revDesc.fileIdText)!
-      for (let pos = span.start; pos < span.end; pos += 4n) {
-        const end = pos + 4n < span.end ? pos + 4n : span.end
-        yield Object.freeze({
-          offset: pos,
-          data: file.bytes.subarray(Number(pos), Number(end)),
-        })
-      }
-    },
-  }
-  return { descriptor, catalog, revisions, broker, readRanges, openedFileIds }
-}
+import { id, makeShareFixture } from './share-fixture'
 
 describe('transfer discovery and job execution', () => {
   it('classifies single-file and multi-file selections cleanly', async () => {
@@ -146,7 +50,7 @@ describe('transfer discovery and job execution', () => {
         savedRevision: req.revision,
         savedSize: req.exactSize,
         writeAt: async (offset, data) => { target.set(data, Number(offset)) },
-        checkpoint: async () => { checkpointCalls += 1 },
+        checkpoint: async () => { checkpointCalls += 1; return 'saved' },
         commit: async () => undefined,
         pause: async () => undefined,
         abort: async () => undefined,
@@ -176,7 +80,7 @@ describe('transfer discovery and job execution', () => {
         savedRevision: encodeBase64Url(id(77)),
         savedSize: 8n,
         writeAt: async () => { throw new Error('must not write to changed revision') },
-        checkpoint: async () => undefined,
+        checkpoint: async () => 'saved',
         commit: async () => undefined,
         pause: async () => undefined,
         abort: async () => undefined,
@@ -207,7 +111,7 @@ describe('transfer discovery and job execution', () => {
       openFile: async (): Promise<TransferOutputFile> => ({
         completedRanges: [],
         writeAt: async () => { jobRef.current?.pause('user') },
-        checkpoint: async () => { checkpointCalls += 1 },
+        checkpoint: async () => { checkpointCalls += 1; return 'saved' },
         commit: async () => undefined,
         pause: async ranges => { pausedRanges = ranges },
         abort: async () => undefined,
@@ -250,7 +154,7 @@ describe('transfer discovery and job execution', () => {
       openFile: async (): Promise<TransferOutputFile> => ({
         completedRanges: [],
         writeAt: async (offset, data) => { target.set(data, Number(offset)) },
-        checkpoint: async () => { checkpointCalls += 1 },
+        checkpoint: async () => { checkpointCalls += 1; return 'saved' },
         commit: async () => { commitCalls += 1 },
         pause: async () => undefined,
         abort: async () => undefined,
@@ -297,6 +201,7 @@ describe('transfer discovery and job execution', () => {
             checkpointCalls += 1
             // Simulate a slow flush exceeding intervalMilliseconds (15 s > 10 s).
             nowMs += 15_000
+            return 'saved'
           },
           commit: async () => undefined,
           pause: async () => undefined,
@@ -527,7 +432,7 @@ describe('transfer job resume completion skip', () => {
         return {
           completedRanges: [],
           writeAt: async (offset, data) => { writtenC.set(data, Number(offset)) },
-          checkpoint: async () => undefined,
+          checkpoint: async () => 'saved',
           commit: async () => undefined,
           pause: async () => undefined,
           abort: async () => undefined,
@@ -682,6 +587,7 @@ describe('reopened revision readmission', () => {
           savedRanges = ranges
           savedRevision = req.revision
           savedSourceMetadata = req.sourceMetadata
+          return 'saved'
         },
         commit: async ranges => {
           savedRanges = ranges
@@ -753,7 +659,7 @@ describe('reopened revision readmission', () => {
         openFile: async (): Promise<TransferOutputFile> => ({
           completedRanges: [],
           writeAt: async () => undefined,
-          checkpoint: async () => undefined,
+          checkpoint: async () => 'saved',
           commit: async () => undefined,
           pause: async () => undefined,
           abort: async () => { stalledAborts += 1 },
@@ -789,7 +695,7 @@ describe('reopened revision readmission', () => {
         openFile: async (): Promise<TransferOutputFile> => ({
           completedRanges: [],
           writeAt: async () => undefined,
-          checkpoint: async () => { portableCheckpoints += 1 },
+          checkpoint: async () => { portableCheckpoints += 1; return 'skipped' },
           commit: async () => undefined,
           pause: async () => undefined,
           abort: async () => { portableAborts += 1 },
@@ -818,7 +724,7 @@ describe('reopened revision readmission', () => {
         openFile: async (): Promise<TransferOutputFile> => ({
           completedRanges: [],
           writeAt: async () => undefined,
-          checkpoint: async () => undefined,
+          checkpoint: async () => 'saved',
           commit: async () => undefined,
           pause: async () => undefined,
           abort: async () => undefined,
@@ -849,7 +755,7 @@ describe('reopened revision readmission', () => {
         openFile: async (): Promise<TransferOutputFile> => ({
           completedRanges: [],
           writeAt: async () => undefined,
-          checkpoint: async () => undefined,
+          checkpoint: async () => 'saved',
           commit: async () => undefined,
           pause: async () => undefined,
           abort: async () => undefined,
@@ -933,7 +839,7 @@ describe('TransferJob resumable interruption handling', () => {
         openFile: async (): Promise<TransferOutputFile> => ({
           completedRanges: [],
           writeAt: async () => undefined,
-          checkpoint: async () => undefined,
+          checkpoint: async () => 'saved',
           commit: async () => undefined,
           pause: async ranges => {
             pauseCalls += 1
@@ -975,7 +881,7 @@ describe('TransferJob resumable interruption handling', () => {
         openFile: async (): Promise<TransferOutputFile> => ({
           completedRanges: [],
           writeAt: async () => undefined,
-          checkpoint: async () => undefined,
+          checkpoint: async () => 'saved',
           commit: async () => undefined,
           pause: async () => { zeroPauseCalls += 1 },
           abort: async () => { zeroAbortCalls += 1 },
@@ -1006,7 +912,7 @@ describe('TransferJob resumable interruption handling', () => {
         openFile: async (): Promise<TransferOutputFile> => ({
           completedRanges: [],
           writeAt: async () => undefined,
-          checkpoint: async () => undefined,
+          checkpoint: async () => 'saved',
           commit: async () => undefined,
           pause: async () => undefined,
           abort: async () => { portableAborts += 1 },
@@ -1037,7 +943,7 @@ describe('TransferJob resumable interruption handling', () => {
         openFile: async (): Promise<TransferOutputFile> => ({
           completedRanges: [],
           writeAt: async () => undefined,
-          checkpoint: async () => undefined,
+          checkpoint: async () => 'saved',
           commit: async () => undefined,
           pause: async () => undefined,
           abort: async () => { stoppedAborts += 1 },

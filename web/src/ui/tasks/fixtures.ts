@@ -42,6 +42,7 @@ export function taskFixture(overrides: Partial<TaskFacts> = {}): TaskFacts {
     safeRenamed: null,
     details: Object.freeze([]),
     interruption: null,
+    outageCheckpointed: false,
     ...overrides,
   })
 }

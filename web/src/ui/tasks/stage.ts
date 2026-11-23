@@ -72,6 +72,9 @@ function downloadingStage(
   if (state.phase === 'finalizing' || facts.progress?.phase === 'finishing') {
     return stage('finishing', t.finishing, t.finishingHint, 'finalizing')
   }
+  if (facts.blocking?.kind === 'reconnecting' && facts.outageCheckpointed) {
+    return stage('waiting', t.reconnecting, t.reconnectProgressSaved, facts.blocking.kind)
+  }
   if (facts.blocking !== null) return blockingStage(facts.blocking, language)
   return stage('downloading', t.downloading, t.downloadingHint, 'downloading')
 }

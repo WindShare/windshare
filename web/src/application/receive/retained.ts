@@ -8,9 +8,9 @@ import {
   saveRetainedOPFSTask,
   type OPFSEnvironment,
 } from '../../output/backends/opfs'
-import type { OutputDiagnosticsPorts } from '../../output/diagnostics'
+import { diagnosticBackendName, type OutputDiagnosticsPorts, type OutputTraceSource } from '../../output/diagnostics'
 import type { ReceiveStore } from '../../output/store/database'
-import { isTaskLockedElsewhere } from '../../output/store/tab-lock'
+import { acquireTaskLock, isTaskLockedElsewhere, TaskBusyError } from '../../output/store/tab-lock'
 import { completedTuplesBytes, type ReceiveTaskRecord } from '../../output/store/types'
 import { transitionReceiveState } from '../../transfer/state'
 import { actionsForState, canSavePartialState } from './admission'
@@ -21,7 +21,32 @@ export interface RetainedTaskEnvironment {
   readonly windowPort: BrowserOutputWindow
   readonly opfsEnv?: OPFSEnvironment
   readonly locks?: LockManager
-  readonly diagnostics?: OutputDiagnosticsPorts
+  readonly outputTrace?: OutputTraceSource
+}
+
+export function retainedTaskEnvironment(
+  store: ReceiveStore,
+  { windowPort, opfsEnv, outputTrace }: Pick<RetainedTaskEnvironment, 'windowPort' | 'opfsEnv' | 'outputTrace'>,
+): RetainedTaskEnvironment {
+  const locks = windowPort.navigator?.locks
+  return {
+    store, windowPort,
+    ...(locks === undefined ? {} : { locks }),
+    ...(opfsEnv === undefined ? {} : { opfsEnv }),
+    ...(outputTrace === undefined ? {} : { outputTrace }),
+  }
+}
+
+/** Only tasks with local results or recoverable progress can replace a fresh selection. */
+export function matchingRetainedTask(
+  tasks: readonly RetainedTaskSnapshot[], shareInstance: string, selectionKey: string,
+): RetainedTaskSnapshot | undefined {
+  return tasks.filter(task => task.shareInstance === shareInstance && task.selectionKey === selectionKey &&
+    (task.lifecycle.kind === 'paused' || task.lifecycle.kind === 'ready-to-save' ||
+      (task.lifecycle.kind === 'download-started' && task.lifecycle.retained) ||
+      (task.backend === 'opfs' && task.lifecycle.kind === 'partial')))
+    .sort((left, right) =>
+      (right.display?.createdAtMilliseconds ?? 0) - (left.display?.createdAtMilliseconds ?? 0))[0]
 }
 
 /**
@@ -36,6 +61,7 @@ export async function loadRetainedTasks(
   const snapshots: RetainedTaskSnapshot[] = []
   for (const record of records) {
     const normalized = await normalizeAbandonedTask(record, env, activeLocalTaskId)
+    if (normalized === undefined) continue
     const activeElsewhere = normalized.taskId !== activeLocalTaskId &&
       await isTaskLockedElsewhere(normalized.taskId, env.locks)
     const canSavePartial = canSavePartialState(
@@ -94,6 +120,10 @@ export async function executeRetainedTaskAction(
   }
 }
 
+function retainedDiagnostics(env: RetainedTaskEnvironment, record: ReceiveTaskRecord): OutputDiagnosticsPorts {
+  return { backend: diagnosticBackendName(record.backend), ...(env.outputTrace === undefined ? {} : { trace: env.outputTrace }) }
+}
+
 async function forgetRetainedTask(
   env: RetainedTaskEnvironment,
   record: ReceiveTaskRecord,
@@ -107,6 +137,9 @@ async function forgetRetainedTask(
   ) {
     throw new DOMException('Remove retained download data explicitly instead of forgetting history', 'InvalidStateError')
   }
+  if (record.backend === 'fsa' && (record.lifecycle.kind === 'partial' || record.lifecycle.kind === 'failed')) {
+    return removeRetainedTask(env, record)
+  }
   await env.store.deleteTask(record.taskId)
   return { kind: 'completed' }
 }
@@ -118,7 +151,7 @@ async function removeRetainedTask(
   if (record.backend === 'opfs') {
     await deleteOPFSTask(record, env.store, resolveOPFSEnv(env))
   } else if (record.backend === 'fsa') {
-    await discardFSATask(record, env.store, env.locks, env.diagnostics)
+    await discardFSATask(record, env.store, env.locks, retainedDiagnostics(env, record))
   } else {
     await env.store.deleteTask(record.taskId)
   }
@@ -157,7 +190,7 @@ async function continueRetainedTask(
       store: env.store,
       allowPermissionPrompt: true,
       ...(env.locks === undefined ? {} : { locks: env.locks }),
-      ...(env.diagnostics === undefined ? {} : { diagnostics: env.diagnostics }),
+      diagnostics: retainedDiagnostics(env, record),
     })
     return { kind: 'reopened', task: record, session }
   }
@@ -167,7 +200,7 @@ async function continueRetainedTask(
       store: env.store,
       env: resolveOPFSEnv(env),
       windowPort: env.windowPort,
-      ...(env.diagnostics === undefined ? {} : { diagnostics: env.diagnostics }),
+      diagnostics: retainedDiagnostics(env, record),
     })
     return { kind: 'reopened', task: record, session }
   }
@@ -182,18 +215,39 @@ async function normalizeAbandonedTask(
   record: ReceiveTaskRecord,
   env: RetainedTaskEnvironment,
   activeLocalTaskId: string | null,
-): Promise<ReceiveTaskRecord> {
+): Promise<ReceiveTaskRecord | undefined> {
   if (record.lifecycle.kind !== 'downloading' && record.lifecycle.kind !== 'preparing') {
     return record
   }
   if (record.taskId === activeLocalTaskId) return record
-  if (await isTaskLockedElsewhere(record.taskId, env.locks)) return record
+  // Hold the same lock as the writer through the IDB update. A probe alone can race a resume in another tab.
+  const lock = await acquireTaskLock(record.taskId, env.locks).catch((error: unknown) => {
+    if (error instanceof TaskBusyError) return undefined
+    throw error
+  })
+  if (lock === undefined) return record
+  try {
+    const current = await env.store.getTask(record.taskId)
+    if (current === undefined || (current.lifecycle.kind !== 'preparing' && current.lifecycle.kind !== 'downloading')) {
+      return current
+    }
+    return await pauseFromCheckpoints(current, env)
+  } finally {
+    await lock.release()
+  }
+}
 
+async function pauseFromCheckpoints(record: ReceiveTaskRecord, env: RetainedTaskEnvironment): Promise<ReceiveTaskRecord> {
   const files = await env.store.listTaskFiles(record.taskId)
   let completedFiles = 0n
   let completedBytes = 0n
   let retainedBytes = 0n
+  let discoveredFiles = 0n
+  let discoveredBytes = 0n
   for (const file of files) {
+    if (file.zipEntry?.kind === 'directory') continue
+    discoveredFiles += 1n
+    discoveredBytes += file.size
     const bytes = completedTuplesBytes(file.completedRanges)
     retainedBytes += bytes
     if (file.status === 'completed') {
@@ -207,8 +261,8 @@ async function normalizeAbandonedTask(
     completedFiles,
     completedBytes,
     retainedBytes,
-    discoveredFiles: BigInt(files.length),
-    discoveredBytes: retainedBytes,
+    discoveredFiles,
+    discoveredBytes,
     discoveryComplete: record.discoveryComplete,
   })
   const updated: ReceiveTaskRecord = Object.freeze({
@@ -216,6 +270,6 @@ async function normalizeAbandonedTask(
     lifecycle: paused,
     updatedAt: Date.now(),
   })
-  await env.store.putTask(updated).catch(() => undefined)
+  await env.store.putTask(updated)
   return updated
 }

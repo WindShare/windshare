@@ -6,13 +6,16 @@ const PLACEHOLDER_MTIME_SKEW_MS = 2_000
 
 export async function readFSADiskFingerprint(
   handle: FileSystemFileHandle,
-): Promise<FSADiskFingerprint | undefined> {
-  try {
-    const file = await handle.getFile()
-    return Object.freeze({ size: file.size, lastModified: file.lastModified })
-  } catch {
-    return undefined
-  }
+): Promise<FSADiskFingerprint> {
+  const file = await handle.getFile()
+  return { size: file.size, lastModified: file.lastModified }
+}
+
+export function matchesFSADiskFingerprint(
+  actual: FSADiskFingerprint,
+  expected: FSADiskFingerprint | undefined,
+): boolean {
+  return actual.size === expected?.size && actual.lastModified === expected.lastModified
 }
 
 /**
@@ -140,12 +143,8 @@ async function verifyAndRemoveLeaf(
   if (!await isSameHandle(currentHandle, expectedHandle)) return 'skipped'
   // Chromium's native `isSameEntry` compares paths rather than OS inodes, so checking
   // both size and lastModified prevents deleting a same-name user replacement.
-  const current = await readFSADiskFingerprint(currentHandle)
-  if (
-    current === undefined ||
-    current.size !== expectedFingerprint.size ||
-    current.lastModified !== expectedFingerprint.lastModified
-  ) {
+  const current = await readFSADiskFingerprint(currentHandle).catch(() => undefined)
+  if (current === undefined || !matchesFSADiskFingerprint(current, expectedFingerprint)) {
     return 'skipped'
   }
 
