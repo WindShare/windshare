@@ -4,7 +4,6 @@ import { isAbortError } from '../../transfer/fault'
 import type { TransferJob } from '../../transfer/job'
 import { EMPTY_TRANSFER_PROGRESS, type TransferProgress } from '../../transfer/progress'
 import {
-  initialReceiveState,
   isActiveReceiveState,
   transitionReceiveState,
   type ReceiveLifecycleState,
@@ -444,31 +443,16 @@ export class WorkspaceTask {
     this.#interruption = null
   }
 
-  completeLocalBlob(input: Readonly<{
-    taskId: string
-    shareInstance: string | null
-    selectionKey: string | null
-    suggestedName: string
-    display: ReceiveOperationDisplay | undefined
-    now: number
-  }>): void {
-    const started = transitionReceiveState(initialReceiveState(input.taskId, input.now), {
-      kind: 'download-started',
-      retained: false,
-      fileName: input.suggestedName,
-    }, input.now)
-    const destinationLabel = Object.freeze({ kind: 'browser-downloads' as const })
-    this.#taskId = input.taskId
-    this.#shareInstance = input.shareInstance
-    this.#selectionKey = input.selectionKey
-    this.#backend = 'portable'
-    this.#isZipArchive = false
-    this.#lifecycle = started
-    this.#display = Object.freeze(input.display === undefined
-      ? { objectLabel: input.suggestedName, destinationLabel, createdAtMilliseconds: input.now }
-      : { ...input.display, destinationLabel })
-    this.#safeRenamed = null
-    this.#sourceRevisionFailures = null
+  completeSettled(record: ReceiveTaskRecord): void {
+    this.#taskId = record.taskId
+    this.#shareInstance = record.shareInstance
+    this.#selectionKey = record.selectionKey
+    this.#backend = record.backend
+    this.#isZipArchive = record.artifact.kind === 'zip-archive'
+    this.#lifecycle = record.lifecycle
+    this.#display = record.display ?? null
+    this.#safeRenamed = record.safeRenamed ?? null
+    this.#sourceRevisionFailures = record.sourceRevisionFailures ?? null
     this.#progress = EMPTY_TRANSFER_PROGRESS
     this.#interruption = null
   }

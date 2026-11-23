@@ -217,6 +217,8 @@ export class RetainedTaskInventory {
     if (taskIds.length === 0 || this.#isDisposed()) return Object.freeze([])
     let resolved: RetainedTaskSnapshot[] = []
     await this.#storage.run(async access => {
+      await access.waitForTaskWrites()
+      if (this.#isDisposed()) return
       const store = await access.openStoreOptional()
       if (this.#isDisposed()) return
       if (store === undefined) return
@@ -260,6 +262,8 @@ export class RetainedTaskInventory {
     startSeq: number,
   ): Promise<void> {
     try {
+      await access.waitForTaskWrites()
+      if (this.#isDisposed() || epoch !== this.#shareLoadEpoch) return
       const store = await access.openStoreOptional()
       if (this.#isDisposed() || epoch !== this.#shareLoadEpoch) return
       const records = store === undefined ? Object.freeze([]) : await store.listTasksByShare(shareInstance)
@@ -282,6 +286,8 @@ export class RetainedTaskInventory {
   }
 
   async #loadFull(access: ReceiveStoreAccess, epoch: number, startSeq: number): Promise<void> {
+    if (this.#isDisposed() || epoch !== this.#fullLoadEpoch) return
+    await access.waitForTaskWrites()
     if (this.#isDisposed() || epoch !== this.#fullLoadEpoch) return
     const store = await access.openStoreOptional()
     if (this.#isDisposed() || epoch !== this.#fullLoadEpoch) return

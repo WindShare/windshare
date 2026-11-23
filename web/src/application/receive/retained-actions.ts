@@ -152,12 +152,13 @@ export class RetainedTaskActions {
     callbacks: RetainedActionCallbacks | undefined,
   ): Promise<void> {
     try {
+      await access.waitForTaskWrites(taskId)
+      if (this.#options.isDisposed() || !this.#options.execution.ownsLocalAction(token)) return
       let store = await access.openStoreOptional()
       if (this.#options.isDisposed() || !this.#options.execution.ownsLocalAction(token)) return
       if (store === undefined) {
-        if (action === 'forget' && this.#options.workspace.taskId === taskId) {
-          this.#options.execution.releaseLocalIfOwned(token)
-          this.#options.clearActiveTask()
+        if (this.#isEphemeralPortableForgetTarget(taskId, action)) {
+          this.#clearEphemeralPortableTask(token, taskId)
           return
         }
         store = await access.requireStore()
@@ -228,11 +229,11 @@ export class RetainedTaskActions {
     callbacks: RetainedActionCallbacks | undefined,
   ): Promise<void> {
     if (this.#options.isDisposed()) return
-    this.#options.execution.releaseLocalIfOwned(token)
-    if (this.#isEphemeralPortableForget(taskId, action, error)) {
-      this.#options.clearActiveTask()
+    if (isNotFoundError(error) && this.#isEphemeralPortableForgetTarget(taskId, action)) {
+      this.#clearEphemeralPortableTask(token, taskId)
       return
     }
+    this.#options.execution.releaseLocalIfOwned(token)
     const notFound = isNotFoundError(error)
     if (notFound) this.#options.inventory.removeTask(taskId)
     this.#options.publish()
@@ -243,11 +244,24 @@ export class RetainedTaskActions {
     this.#options.dispatchAsyncError(mapped, callbacks?.onError)
   }
 
-  #isEphemeralPortableForget(taskId: string, action: LocalRetainedActionKind, error: unknown): boolean {
-    return action === 'forget' &&
-      this.#options.workspace.taskId === taskId &&
-      this.#options.workspace.backend === 'portable' &&
-      isNotFoundError(error)
+  #isEphemeralPortableForgetTarget(taskId: string, action: LocalRetainedActionKind): boolean {
+    if (action !== 'forget') return false
+    if (this.#options.workspace.taskId === taskId && this.#options.workspace.backend === 'portable') {
+      return true
+    }
+    return this.#options.inventory.tasks.some(
+      task => task.taskId === taskId && task.backend === 'portable',
+    )
+  }
+
+  #clearEphemeralPortableTask(token: symbol, taskId: string): void {
+    this.#options.inventory.removeTask(taskId)
+    this.#options.execution.releaseLocalIfOwned(token)
+    if (this.#options.workspace.taskId === taskId) {
+      this.#options.clearActiveTask()
+    } else {
+      this.#options.publish()
+    }
   }
 
   #envPorts() {

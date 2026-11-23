@@ -908,13 +908,22 @@ describe('single-file reuse, errors, and local blob handoff', () => {
     await coordinator.dispose()
   })
 
-  it('saveLocalBlob saves synchronously without claiming transfer slot and completeLocalBlobDownload records non-retained handoff', async () => {
-    const { windowPort, downloads } = createMockDownloadWindow()
+  it('saveLocalBlob saves synchronously without claiming transfer slot and completeLocalBlobDownload persists portable history', async () => {
+    const store = new MemoryReceiveStore()
+    vi.spyOn(ReceiveStore, 'open').mockResolvedValue(Object.assign(store, { close: vi.fn() }) as unknown as ReceiveStore)
+    const { windowPort: baseWin, downloads } = createMockDownloadWindow()
+    const windowPort: BrowserOutputWindow = {
+      ...baseWin,
+      indexedDB: { open: vi.fn() } as unknown as IDBFactory,
+    }
     const joined = createSingleFileShare('photo.png')
     const coordinator = new ReceiveCoordinator({
       windowPort,
       currentJoinedShare: () => joined,
     })
+    await coordinator.loadRetained()
+    coordinator.refreshOffers(joined)
+    await waitForSnapshot(coordinator, s => s.offers?.kind === 'ready')
 
     const blob = new Blob([Uint8Array.of(137, 80, 78, 71)], { type: 'image/png' })
     expect(coordinator.saveLocalBlob(blob, 'photo.png')).toBe(true)
@@ -922,12 +931,15 @@ describe('single-file reuse, errors, and local blob handoff', () => {
     expect(downloads[0]!.fileName).toBe('photo.png')
     expect(coordinator.active).toBe(false)
     expect(coordinator.getSnapshot().lifecycle).toBeNull()
+    expect(store.tasks.size).toBe(0)
 
-    expect(coordinator.completeLocalBlobDownload(blob, 'photo.png', {
+    expect(coordinator.completeLocalBlobDownload('portable:file', blob, {
       objectLabel: 'photo.png',
       createdAtMilliseconds: 1234,
     })).toBe(true)
     expect(downloads).toHaveLength(2)
+    const taskId = coordinator.getSnapshot().lifecycle?.taskId
+    expect(taskId).toBeDefined()
     expect(coordinator.getSnapshot().lifecycle).toMatchObject({
       kind: 'download-started',
       retained: false,
@@ -935,6 +947,98 @@ describe('single-file reuse, errors, and local blob handoff', () => {
     })
     expect(coordinator.getSnapshot().backend).toBe('portable')
     expect(coordinator.active).toBe(false)
+    expect(coordinator.getSnapshot().retained.tasks.map(task => task.taskId)).toEqual([taskId])
+
+    // Immediate dispose still flushes the admitted background history write.
+    await coordinator.dispose()
+    const persisted = store.tasks.get(taskId!)
+    expect(persisted).toMatchObject({
+      taskId,
+      shareInstance: 'share-1',
+      backend: 'portable',
+      discoveryComplete: true,
+      target: { kind: 'portable', fileName: 'photo.png' },
+      display: {
+        objectLabel: 'photo.png',
+        createdAtMilliseconds: 1234,
+        destinationLabel: { kind: 'browser-downloads' },
+      },
+      lifecycle: { kind: 'download-started', retained: false, fileName: 'photo.png' },
+    })
+
+    // A reloaded coordinator loads the persisted terminal history entry.
+    const reloaded = new ReceiveCoordinator({ windowPort, currentJoinedShare: () => joined })
+    await reloaded.loadRetained()
+    expect(reloaded.getSnapshot().retained.tasks.map(task => task.taskId)).toEqual([taskId])
+    await reloaded.dispose()
+  })
+
+  it('serializes local blob history persistence against concurrent scans, immediate forget, and storage failure', async () => {
+    const store = new MemoryReceiveStore()
+    vi.spyOn(ReceiveStore, 'open').mockResolvedValue(Object.assign(store, { close: vi.fn() }) as unknown as ReceiveStore)
+    const { windowPort: baseWin, downloads } = createMockDownloadWindow()
+    const windowPort: BrowserOutputWindow = {
+      ...baseWin,
+      indexedDB: { open: vi.fn() } as unknown as IDBFactory,
+    }
+    const onActionError = vi.fn()
+    const joined = createSingleFileShare('photo.png')
+    const coordinator = new ReceiveCoordinator({
+      windowPort,
+      currentJoinedShare: () => joined,
+      onActionError,
+    })
+    coordinator.refreshOffers(joined)
+    await waitForSnapshot(coordinator, s => s.offers?.kind === 'ready')
+
+    const blob = new Blob([Uint8Array.of(137, 80, 78, 71)], { type: 'image/png' })
+    const realPut = store.putTask.bind(store)
+
+    // 1. A loadRetained() started before a slow putTask settles waits for it instead of dropping the record.
+    const scanGate = deferred<void>()
+    const scanWriteStarted = deferred<void>()
+    vi.spyOn(store, 'putTask').mockImplementationOnce(async record => {
+      scanWriteStarted.resolve()
+      await scanGate.promise
+      await realPut(record)
+    })
+    expect(coordinator.completeLocalBlobDownload('portable:file', blob)).toBe(true)
+    const firstTaskId = coordinator.getSnapshot().lifecycle!.taskId
+    await scanWriteStarted.promise
+    const scanPromise = coordinator.loadRetained()
+    scanGate.resolve()
+    await scanPromise
+    expect(coordinator.getSnapshot().retained.tasks.map(task => task.taskId)).toEqual([firstTaskId])
+
+    // 2. Immediate forget waits for an in-flight putTask so it deletes cleanly without resurrecting a zombie record.
+    const forgetGate = deferred<void>()
+    const forgetWriteStarted = deferred<void>()
+    vi.spyOn(store, 'putTask').mockImplementationOnce(async record => {
+      forgetWriteStarted.resolve()
+      await forgetGate.promise
+      await realPut(record)
+    })
+    expect(coordinator.completeLocalBlobDownload('portable:file', blob)).toBe(true)
+    const secondTaskId = coordinator.getSnapshot().lifecycle!.taskId
+    await forgetWriteStarted.promise
+    coordinator.performActiveAction('forget')
+    expect(coordinator.getSnapshot().retained.pending).toEqual({ taskId: secondTaskId, action: 'forget' })
+    forgetGate.resolve()
+    await waitForSnapshot(coordinator, s => s.retained.pending === null && s.lifecycle === null)
+    expect(store.tasks.has(secondTaskId)).toBe(false)
+    expect(coordinator.getSnapshot().retained.tasks.map(task => task.taskId)).toEqual([firstTaskId])
+
+    // 3. Best-effort persistence failures never fail the blob save and still allow forgetting the in-memory entry.
+    vi.spyOn(store, 'putTask').mockRejectedValueOnce(new DOMException('Quota exceeded', 'QuotaExceededError'))
+    expect(coordinator.completeLocalBlobDownload('portable:file', blob)).toBe(true)
+    const failedPersistId = coordinator.getSnapshot().lifecycle!.taskId
+    coordinator.performActiveAction('forget')
+    await waitForSnapshot(coordinator, s => s.retained.pending === null && s.lifecycle === null)
+    expect(downloads).toHaveLength(3)
+    expect(onActionError).not.toHaveBeenCalled()
+    expect(store.tasks.has(failedPersistId)).toBe(false)
+    expect(coordinator.getSnapshot().retained.tasks.map(task => task.taskId)).toEqual([firstTaskId])
+
     await coordinator.dispose()
   })
 })
