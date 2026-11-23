@@ -116,15 +116,15 @@ func (d *candidateDispatch) receive(candidate *pion.ICECandidate) {
 		return
 	}
 	kind := gatheredCandidate
-	if candidate == nil {
-		if d.trickle >= awaitingTrickleEnd {
-			return
-		}
+	switch {
+	case candidate == nil && d.trickle >= awaitingTrickleEnd:
+		return
+	case candidate == nil:
 		d.trickle = awaitingTrickleEnd
 		kind = pionGatheringEnded
-	} else if d.trickle >= awaitingTrickleEnd {
+	case d.trickle >= awaitingTrickleEnd:
 		kind = lateCandidate
-	} else {
+	default:
 		d.trickle = collectingCandidates
 	}
 	d.enqueueLocked(candidateEvent{kind: kind, candidate: candidate})
