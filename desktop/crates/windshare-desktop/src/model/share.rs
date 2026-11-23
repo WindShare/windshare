@@ -34,32 +34,45 @@ pub enum ShareError {
 
 impl ShareError {
     pub fn from_failure(failure: &windshare_host::Failure) -> Self {
+        let source_path = || {
+            failure
+                .source_path
+                .as_deref()
+                .filter(|path| !path.is_empty())
+                .map(str::to_owned)
+        };
         match failure.engine_code.as_deref() {
             Some("source_cloud_placeholder") => Self::CloudPlaceholder {
-                path: failure.source_path.clone(),
+                path: source_path(),
             },
             Some("source_unsupported") => Self::SourceUnsupported {
-                path: failure.source_path.clone(),
+                path: source_path(),
             },
             Some("source_missing") => Self::SourceMissing {
-                path: failure.source_path.clone(),
+                path: source_path(),
             },
             Some("source_access_denied") => Self::SourceAccessDenied {
-                path: failure.source_path.clone(),
+                path: source_path(),
             },
             Some("source_changed") => Self::SourceChanged {
-                path: failure.source_path.clone(),
+                path: source_path(),
             },
             Some("source_unavailable") => Self::SourceUnavailable {
-                path: failure.source_path.clone(),
+                path: source_path(),
             },
-            Some("selection_collision") => failure.selection_collision.as_ref().map_or_else(
-                || Self::Message(failure.message.clone()),
-                |collision| Self::SelectionCollision {
-                    first_path: collision.first_path.clone(),
-                    second_path: collision.second_path.clone(),
-                },
-            ),
+            Some("selection_collision") => failure
+                .selection_collision
+                .as_ref()
+                .filter(|collision| {
+                    !collision.first_path.is_empty() && !collision.second_path.is_empty()
+                })
+                .map_or_else(
+                    || Self::Message(failure.message.clone()),
+                    |collision| Self::SelectionCollision {
+                        first_path: collision.first_path.clone(),
+                        second_path: collision.second_path.clone(),
+                    },
+                ),
             _ => Self::Message(failure.message.clone()),
         }
     }

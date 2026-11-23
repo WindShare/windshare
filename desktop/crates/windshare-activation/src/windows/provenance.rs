@@ -28,7 +28,12 @@ mod tests;
 
 // Bit 0x00040000 is FILE_ATTRIBUTE_EA on GetFileAttributesW and must not be
 // treated as FILE_ATTRIBUTE_RECALL_ON_OPEN (which applies only to dir listings).
-const EPHEMERAL_ATTRIBUTES: u32 = FILE_ATTRIBUTE_TEMPORARY.0 | FILE_ATTRIBUTE_OFFLINE.0;
+// Match osfs by classifying FILE_ATTRIBUTE_OFFLINE as a cloud/offline
+// placeholder rather than an ephemeral export so users are not told to re-pick
+// the same item in Explorer.
+const CLOUD_PLACEHOLDER_ATTRIBUTES: u32 =
+    FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS.0 | FILE_ATTRIBUTE_OFFLINE.0;
+const EPHEMERAL_ATTRIBUTE: u32 = FILE_ATTRIBUTE_TEMPORARY.0;
 
 pub const SAVE_LOCALLY: &str = "Save these items to a regular local folder first, then share them again. You can also select files directly in Explorer.";
 pub const CLOUD_PLACEHOLDER: &str = "This item isn’t fully downloaded on this device. Make it available on this device, then share it again.";
@@ -286,10 +291,10 @@ const fn classify_get_file_attributes(attributes: u32) -> AttributeDurability {
     if attributes == INVALID_FILE_ATTRIBUTES {
         return AttributeDurability::NonDurable;
     }
-    if attributes & FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS.0 != 0 {
+    if attributes & CLOUD_PLACEHOLDER_ATTRIBUTES != 0 {
         return AttributeDurability::CloudPlaceholder;
     }
-    if attributes & EPHEMERAL_ATTRIBUTES != 0 {
+    if attributes & EPHEMERAL_ATTRIBUTE != 0 {
         return AttributeDurability::NonDurable;
     }
     AttributeDurability::Durable

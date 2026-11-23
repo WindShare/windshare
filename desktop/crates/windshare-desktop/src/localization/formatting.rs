@@ -1,15 +1,95 @@
 use super::Language;
 use crate::model::ShareError;
+use std::{borrow::Cow, fmt::Write as _};
+
+#[cfg(test)]
+#[path = "formatting_tests.rs"]
+mod tests;
 
 const MAX_OMISSION_PREVIEW_ITEMS: usize = 2;
 
-fn item_display_name(path: &str) -> &str {
-    let trimmed = path.trim_end_matches(['/', '\\']);
-    trimmed
+const fn is_unsafe_display_char(ch: char) -> bool {
+    // Control chars, Unicode line/paragraph separators (U+2028..=U+2029), and
+    // BiDi formatting controls can break card wrapping or reorder trailing labels.
+    ch.is_control()
+        || matches!(
+            ch,
+            '\u{061C}' | '\u{200E}'..='\u{200F}' | '\u{2028}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+        )
+}
+
+fn sanitize_display_text(text: &str) -> Cow<'_, str> {
+    if !text.chars().any(is_unsafe_display_char) {
+        return Cow::Borrowed(text);
+    }
+    let mut sanitized = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '\n' => sanitized.push_str(r"\n"),
+            '\r' => sanitized.push_str(r"\r"),
+            '\t' => sanitized.push_str(r"\t"),
+            _ if is_unsafe_display_char(ch) => {
+                let _ = write!(sanitized, "\\u{{{:04X}}}", u32::from(ch));
+            }
+            _ => sanitized.push(ch),
+        }
+    }
+    Cow::Owned(sanitized)
+}
+
+fn item_display_name(path: &str) -> Option<Cow<'_, str>> {
+    path.trim_end_matches(['/', '\\'])
         .rsplit(['/', '\\'])
         .next()
         .filter(|name| !name.is_empty())
-        .unwrap_or(path)
+        .map(sanitize_display_text)
+}
+
+fn path_segments(path: &str) -> Vec<&str> {
+    let trimmed = path
+        .strip_prefix(r"\\?\UNC\")
+        .or_else(|| path.strip_prefix(r"\\?\"))
+        .unwrap_or(path);
+    trimmed
+        .split(['/', '\\'])
+        .filter(|segment| !segment.is_empty() && *segment != ".")
+        .collect()
+}
+
+fn path_separator(path: &str) -> &'static str {
+    if path.contains('\\') { "\\" } else { "/" }
+}
+
+fn distinguishing_display_names(first_path: &str, second_path: &str) -> Option<(String, String)> {
+    let first = path_segments(first_path);
+    let second = path_segments(second_path);
+    if first.is_empty() || second.is_empty() {
+        return None;
+    }
+    // Upstream osfs already proved the leaf names collide under Unicode 15
+    // folding; expand from the right only when the parent paths actually differ.
+    let first_parents = &first[..first.len() - 1];
+    let second_parents = &second[..second.len() - 1];
+    let extra_parents = if first_parents == second_parents {
+        0
+    } else {
+        let common_suffix = first_parents
+            .iter()
+            .rev()
+            .zip(second_parents.iter().rev())
+            .take_while(|(left, right)| left == right)
+            .count();
+        common_suffix + 1
+    };
+    let format_tail = |segments: &[&str], sep: &str| {
+        let keep = (extra_parents + 1).min(segments.len());
+        let joined = segments[segments.len() - keep..].join(sep);
+        sanitize_display_text(&joined).into_owned()
+    };
+    Some((
+        format_tail(&first, path_separator(first_path)),
+        format_tail(&second, path_separator(second_path)),
+    ))
 }
 
 impl Language {
@@ -30,24 +110,31 @@ impl Language {
             ShareError::SelectionCollision {
                 first_path,
                 second_path,
-            } => {
-                let first = item_display_name(first_path);
-                let second = item_display_name(second_path);
-                match self {
-                    Self::English => format!(
-                        "“{first}” and “{second}” have conflicting names. Rename one item or remove a duplicate before sharing."
-                    ),
-                    Self::SimplifiedChinese => format!(
-                        "“{first}”与“{second}”名称冲突（忽略大小写后相同）。请重命名其中一项或移除重复项后再分享。"
-                    ),
-                }
-            }
+            } => self.selection_collision_error(first_path, second_path),
             ShareError::Message(message) => message.clone(),
         }
     }
 
+    fn selection_collision_error(self, first_path: &str, second_path: &str) -> String {
+        match (self, distinguishing_display_names(first_path, second_path)) {
+            (Self::English, Some((first, second))) => format!(
+                "“{first}” and “{second}” have conflicting names. Rename one item or remove a duplicate before sharing."
+            ),
+            (Self::English, None) => {
+                "Selected items have conflicting names. Rename one item or remove a duplicate before sharing."
+                    .into()
+            }
+            (Self::SimplifiedChinese, Some((first, second))) => format!(
+                "“{first}”与“{second}”名称冲突。请重命名其中一项或移除重复项后再分享。"
+            ),
+            (Self::SimplifiedChinese, None) => {
+                "所选项目存在名称冲突。请重命名其中一项或移除重复项后再分享。".into()
+            }
+        }
+    }
+
     fn cloud_placeholder_error(self, path: Option<&str>) -> String {
-        match (self, path.map(item_display_name)) {
+        match (self, path.and_then(item_display_name)) {
             (Self::English, Some(name)) => format!(
                 "“{name}” isn’t fully downloaded on this device. Make it available on this device, then share it again."
             ),
@@ -64,7 +151,7 @@ impl Language {
     }
 
     fn source_unsupported_error(self, path: Option<&str>) -> String {
-        match (self, path.map(item_display_name)) {
+        match (self, path.and_then(item_display_name)) {
             (Self::English, Some(name)) => format!(
                 "“{name}” can’t be shared safely. Select a regular file or folder instead of a symbolic link or junction."
             ),
@@ -81,7 +168,7 @@ impl Language {
     }
 
     fn source_missing_error(self, path: Option<&str>) -> String {
-        match (self, path.map(item_display_name)) {
+        match (self, path.and_then(item_display_name)) {
             (Self::English, Some(name)) => {
                 format!("“{name}” could not be found. Check that it still exists and try again.")
             }
@@ -99,7 +186,7 @@ impl Language {
     }
 
     fn source_access_denied_error(self, path: Option<&str>) -> String {
-        match (self, path.map(item_display_name)) {
+        match (self, path.and_then(item_display_name)) {
             (Self::English, Some(name)) => {
                 format!("Permission denied for “{name}”. Check read permissions and try again.")
             }
@@ -117,7 +204,7 @@ impl Language {
     }
 
     fn source_changed_error(self, path: Option<&str>) -> String {
-        match (self, path.map(item_display_name)) {
+        match (self, path.and_then(item_display_name)) {
             (Self::English, Some(name)) => {
                 format!("“{name}” changed while preparing the share. Try sharing it again.")
             }
@@ -130,7 +217,7 @@ impl Language {
     }
 
     fn source_unavailable_error(self, path: Option<&str>) -> String {
-        match (self, path.map(item_display_name)) {
+        match (self, path.and_then(item_display_name)) {
             (Self::English, Some(name)) => format!(
                 "“{name}” is currently unavailable. Check that it isn’t locked or offline, then try again."
             ),
@@ -168,14 +255,26 @@ impl Language {
             .iter()
             .take(MAX_OMISSION_PREVIEW_ITEMS)
             .map(|sample| {
+                let name = sanitize_display_text(&sample.name);
                 let reason = self.omission_reason_label(&sample.reason);
                 match self {
-                    Self::English => format!("{} ({reason})", sample.name),
-                    Self::SimplifiedChinese => format!("{}（{reason}）", sample.name),
+                    Self::English => format!("{name} ({reason})"),
+                    Self::SimplifiedChinese => format!("{name}（{reason}）"),
                 }
             })
             .collect();
-        format!("{header} · {}", examples.join(separator))
+        let shown = u64::try_from(examples.len()).unwrap_or(u64::MAX);
+        let remaining = count.saturating_sub(shown);
+        let mut notice = format!("{header} · {}", examples.join(separator));
+        if remaining > 0 {
+            match self {
+                Self::English => {
+                    let _ = write!(notice, ", +{remaining} more");
+                }
+                Self::SimplifiedChinese => notice.push('等'),
+            }
+        }
+        notice
     }
 
     fn omission_reason_label(self, reason: &str) -> &'static str {

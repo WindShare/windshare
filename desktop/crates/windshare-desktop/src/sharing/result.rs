@@ -200,19 +200,36 @@ impl Desktop {
     pub(crate) fn share_notice(theme: Theme, share: &Share, cx: &Context<Self>) -> Div {
         let locale = language(cx);
         column()
+            .w_full()
+            .min_w_0()
             .gap(px(8.))
             .when_some(share.error_message(locale), |el, error| {
-                el.child(theme.label(error, 15.).text_color(Tone::Rose.text(theme)))
+                el.child(
+                    theme
+                        .label(error, 15.)
+                        .w_full()
+                        .min_w_0()
+                        .text_color(Tone::Rose.text(theme)),
+                )
             })
             .when_some(share.relay_notice(), |el, message| {
                 el.child(
                     theme
                         .caption(locale.text(message))
+                        .w_full()
+                        .min_w_0()
                         .text_color(Tone::Peach.text(theme)),
                 )
             })
             .when_some(share.omission_notice(locale), |el, message| {
-                el.child(theme.caption(message).text_color(Tone::Peach.text(theme)))
+                el.child(
+                    theme
+                        .caption(message)
+                        .w_full()
+                        .min_w_0()
+                        .line_clamp(3)
+                        .text_color(Tone::Peach.text(theme)),
+                )
             })
     }
 }

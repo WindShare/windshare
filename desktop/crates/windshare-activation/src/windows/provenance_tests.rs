@@ -134,14 +134,17 @@ fn durable_items_acquire_independently_and_transient_or_ephemeral_items_are_reje
     assert!(ephemeral_error.to_string().contains(SAVE_LOCALLY));
 
     let native = wide(&file_path);
-    for attribute in [FILE_ATTRIBUTE_TEMPORARY, FILE_ATTRIBUTE_OFFLINE] {
+    for (attribute, expected) in [
+        (FILE_ATTRIBUTE_TEMPORARY, SAVE_LOCALLY),
+        (FILE_ATTRIBUTE_OFFLINE, CLOUD_PLACEHOLDER),
+    ] {
         // SAFETY: only this test's existing file attribute is toggled; buffer is NUL-terminated.
         unsafe {
             SetFileAttributesW(PCWSTR(native.as_ptr()), attribute).unwrap();
         }
         let flagged = open_file(&file_path, deadline);
         let error = provenance.acquire(&flagged, deadline).unwrap_err();
-        assert!(error.to_string().contains(SAVE_LOCALLY));
+        assert!(error.to_string().contains(expected));
     }
     // SAFETY: restore the test file attribute before fixture cleanup.
     unsafe {
@@ -298,7 +301,7 @@ fn get_file_attributes_distinguishes_ea_ephemeral_and_cloud_placeholders() {
     );
     assert_eq!(
         classify_get_file_attributes(FILE_ATTRIBUTE_OFFLINE.0),
-        AttributeDurability::NonDurable
+        AttributeDurability::CloudPlaceholder
     );
     assert_eq!(
         classify_get_file_attributes(FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS.0),
