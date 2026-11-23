@@ -103,6 +103,7 @@ function galleryTaskOutput(
 ): ReceiveRuntimeSnapshot {
   return Object.freeze({
     ...EMPTY_RECEIVE_RUNTIME,
+    capabilitiesState: 'ready',
     offers,
     activeTaskId: facts.lifecycle.kind === 'downloading' ? facts.lifecycle.taskId : null,
     activeSelectionKey: 'gallery-selection',
@@ -166,7 +167,9 @@ export async function gallerySnapshot(scenario: Scenario): Promise<GallerySnapsh
     },
   })
   const facts = TASK_FIXTURES[scenario === 'capacity' ? 'sender-capacity' : scenario] ?? TASK_FIXTURES['open-discovery']!
-  const output = single ? { ...EMPTY_RECEIVE_RUNTIME, offers } : galleryTaskOutput(scenario, offers, facts)
+  const output = single
+    ? { ...EMPTY_RECEIVE_RUNTIME, capabilitiesState: 'ready' as const, offers }
+    : galleryTaskOutput(scenario, offers, facts)
   const regularRows = scenario === 'long-names'
     ? ROOT_ROWS.map(row => row.id === 'notes' ? { ...row, name: LONG_NAME } : row)
     : ROOT_ROWS

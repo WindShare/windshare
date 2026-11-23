@@ -19,6 +19,12 @@ export class MemoryReceiveStore {
     return [...this.tasks.values()]
   }
 
+  async listTasksByShare(shareInstance: string): Promise<readonly ReceiveTaskRecord[]> {
+    return [...this.tasks.values()]
+      .filter(task => task.shareInstance === shareInstance)
+      .sort((left, right) => right.updatedAt - left.updatedAt)
+  }
+
   async putFile(record: ReceiveFileRecord): Promise<void> {
     this.files.set(record.id, record)
   }

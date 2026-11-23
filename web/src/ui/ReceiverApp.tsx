@@ -33,6 +33,15 @@ export function ReceiverApp({ controller, report }: { readonly controller: Recei
   const source = controller.presentation.shareKind
   const kind = useSyncExternalStore(source.subscribe, source.getSnapshot, source.getSnapshot)
   const [downloadsOpen, setDownloadsOpen] = useState(false)
+  const [dismissedTaskIds, setDismissedTaskIds] = useState<ReadonlySet<string>>(() => new Set())
+  const dismissTask = (taskId: string) => {
+    setDismissedTaskIds(previous => {
+      if (previous.has(taskId)) return previous
+      const next = new Set(previous)
+      next.add(taskId)
+      return next
+    })
+  }
   return <main className={`receiver-shell receiver-content-${kind}`}>
     <header className="receiver-header">
       <div className="receiver-header-inner">
@@ -46,8 +55,13 @@ export function ReceiverApp({ controller, report }: { readonly controller: Recei
       </div>
     </header>
     <div className="share-workspace">
-      <ReceiverHeading controller={controller} actions={<ReceiverPrimarySaving controller={controller} />} />
-      <ReceiverActivity controller={controller} openDownloads={() => setDownloadsOpen(true)} />
+      <ReceiverHeading controller={controller} actions={<ReceiverPrimarySaving controller={controller} dismissedTaskIds={dismissedTaskIds} />} />
+      <ReceiverActivity
+        controller={controller}
+        openDownloads={() => setDownloadsOpen(true)}
+        dismissedTaskIds={dismissedTaskIds}
+        onDismissTask={dismissTask}
+      />
       <ReceiverBrowsing controller={controller} />
     </div>
   </main>

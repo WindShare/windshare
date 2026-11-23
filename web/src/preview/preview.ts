@@ -97,6 +97,7 @@ export class FilePreview {
   readonly #supportsVideo: NonNullable<PreviewPorts['supportsVideo']>
   #video: VideoRangePort | undefined
   #url: string | undefined
+  #imageBlob: Blob | undefined
   #seekController: AbortController | undefined
   #presentation: PreviewPresentation | undefined
   #releaseTask: Promise<void> | undefined
@@ -175,6 +176,10 @@ export class FilePreview {
   get current(): PreviewPresentation {
     if (this.#presentation === undefined) throw new PreviewRuntimeError('Preview is not initialized')
     return this.#presentation
+  }
+
+  get imageBlob(): Blob | undefined {
+    return this.#imageBlob
   }
 
   async seek(seconds: number, signal?: AbortSignal): Promise<PreviewPresentation> {
@@ -267,6 +272,7 @@ export class FilePreview {
       throw new ImagePreviewError('Decoded image dimensions disagree with its bounded header')
     }
     const url = this.#replaceUrl(blob)
+    this.#imageBlob = blob
     this.#presentation = Object.freeze({
       kind: 'image',
       name: this.#entry.name,
@@ -296,6 +302,7 @@ export class FilePreview {
     this.#seekController = undefined
     const url = this.#url
     this.#url = undefined
+    this.#imageBlob = undefined
     this.#presentation = undefined
     if (url !== undefined) this.#revokeObjectUrl(url)
     await this.#release()

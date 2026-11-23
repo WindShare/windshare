@@ -6,6 +6,21 @@ import type {
   SourceRevisionFailure,
   SourceRevisionFailures,
 } from '../../transfer/state'
+import type { SaveUnavailableError } from './single-file'
+
+export type BrowserCapabilitiesState = 'probing' | 'ready' | 'failed'
+
+export type SaveUnavailableReason = 'storage-full' | 'portable-limit-exceeded' | 'no-safe-destination'
+
+export type SingleFileDownloadOutcome =
+  | Readonly<{ kind: 'started' }>
+  | Readonly<{ kind: 'waiting-picker' }>
+  | Readonly<{ kind: 'exported' }>
+  | Readonly<{ kind: 'resumed' }>
+  | Readonly<{ kind: 'probing' }>
+  | Readonly<{ kind: 'blocked'; reason: ReceiveBlockReason }>
+  | Readonly<{ kind: 'unavailable'; error: SaveUnavailableError }>
+  | Readonly<{ kind: 'failed'; error: unknown }>
 
 export type ReceiveBlockReason =
   | 'connectFirst'
@@ -73,12 +88,16 @@ export interface ActiveActivationSnapshot {
   readonly kind: 'waiting-picker' | 'committing'
   readonly choiceId: string
   readonly suggestedName: string
+  readonly singleFileId?: string
 }
 
 export interface ReceiveRuntimeSnapshot {
   readonly offers: ArtifactOffers | null
+  readonly capabilitiesState: BrowserCapabilitiesState
+  readonly singleFilePickerPendingFromBytes: bigint | null
   readonly activation: ActiveActivationSnapshot | null
   readonly activeTaskId: string | null
+  readonly activeSingleFileId: string | null
   readonly activeSelectionKey: string | null
   readonly backend: SaveBackendKind | null
   readonly lifecycle: ReceiveLifecycleState | null

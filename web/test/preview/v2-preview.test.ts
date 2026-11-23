@@ -354,9 +354,13 @@ describe('v2 file preview runtime', () => {
       width: 320,
       height: 200,
     })
+    expect(preview.imageBlob).toBeDefined()
+    expect(preview.imageBlob?.size).toBe(bytes.byteLength)
+    expect(new Uint8Array(await preview.imageBlob!.arrayBuffer())).toEqual(bytes)
     expect(fixture.lane.calls).toEqual([0n, 1n, 2n])
     expect(fixture.releases()).toBe(1)
     await preview.close()
+    expect(preview.imageBlob).toBeUndefined()
     expect(urls.revoked).toEqual(['blob:preview-1'])
     expect(fixture.releases()).toBe(1)
   })

@@ -7,13 +7,25 @@ import {
 } from '../application/browser-share/capability-lifecycle'
 import { capabilityInputFingerprint } from '../application/browser-share/capability-input'
 import { CapabilityNavigation } from '../application/browser-share/capability-navigation'
-import type { ReceiveAction, RetainedTaskSnapshot } from '../application/receive/contracts'
+import type {
+  ReceiveAction,
+  RetainedTaskSnapshot,
+  SingleFileDownloadOutcome,
+} from '../application/receive/contracts'
 import { ReceiveCoordinator, type ReceiveCoordinatorOptions } from '../application/receive/coordinator'
 import { InitialJoinControl } from '../receiver/initial-join'
 import type { SourceRevisionFailure } from '../transfer/state'
-import { isSourceInvalidatedError } from '../transfer/fault'
 import type { CapturedLocation } from './capability/location'
 import type { ReceiverControllerOptions } from './controller/contracts'
+import {
+  findReadyOfferChoice,
+  mapReceiverFailure,
+  outcomeFailure,
+  previewDownloadResultFromOutcome,
+  type ChooseArtifactIntent,
+  type PreviewDownloadCallbacks,
+  type PreviewDownloadResult,
+} from './controller/failures'
 import { BrowserNavigationCoordinator } from './controller/navigation'
 import { JoinedShareObservation } from './controller/joined-observation'
 import { ReceiverProjections } from './controller/projections'
@@ -31,6 +43,7 @@ export type { DiagnosticFormatter, SecurityMilestone } from '../application/brow
 export { captureLocation } from './capability/location'
 export type { CapturedLocation, LocationCaptureOptions } from './capability/location'
 export type { ReceiverControllerOptions } from './controller/contracts'
+export type { ChooseArtifactIntent, PreviewDownloadCallbacks, PreviewDownloadResult } from './controller/failures'
 export type { ReceiverTraceEvent } from '../application/receive/contracts'
 
 export class ReceiverController {
@@ -283,9 +296,10 @@ export class ReceiverController {
   previewFile(id: string): void {
     this.recordExperienceIntent('preview-file')
     const joined = this.#joined
+    const page = this.#browse.page
     const entry = this.#browse.entry(id)
-    if (joined === undefined || entry?.kind !== 'file') return
-    this.#previews.open(joined, entry)
+    if (joined === undefined || page === undefined || entry?.kind !== 'file') return
+    this.#previews.open(joined, entry, page.directory)
   }
 
   cancelPreview(): void { this.#previews.cancel() }
@@ -293,14 +307,75 @@ export class ReceiverController {
   previewMediaPresented(presentationId: number): void { this.#previews.mediaPresented(presentationId) }
   previewMediaFailed(presentationId: number): void { this.#previews.mediaFailed(presentationId) }
 
-  chooseArtifact(choiceId: string): void {
+  chooseArtifact(choiceId: string, intent: ChooseArtifactIntent = 'default'): void {
     this.recordExperienceIntent('choose-saving-outcome')
     if (this.#receive.startBlockedReason() !== null) return
-    this.#previews.yieldToReceiving()
-    this.#receive.startDownload(choiceId, Object.freeze({
+    if (this.#snapshot.error !== null) this.#publish({ ...this.#snapshot, error: null })
+    const display = Object.freeze({
       objectLabel: this.#snapshot.draft.label,
       createdAtMilliseconds: Date.now(),
-    }))
+    })
+    if (intent === 'default' && this.#tryCompleteSinglePhotoBlob(choiceId, display)) return
+    this.#previews.yieldToReceiving()
+    this.#receive.startDownload(choiceId, display)
+  }
+
+  downloadFile(id: string): SingleFileDownloadOutcome {
+    this.recordExperienceIntent('download-single-file')
+    if (this.#snapshot.error !== null) this.#publish({ ...this.#snapshot, error: null })
+    const page = this.#browse.page
+    const entry = this.#browse.entry(id)
+    if (this.#disposed || page === undefined || entry?.kind !== 'file') {
+      return Object.freeze({ kind: 'blocked', reason: 'actionUnavailable' })
+    }
+    this.#previews.yieldToReceiving()
+    const outcome = this.#receive.startSingleFileDownload(entry, page.directory, {
+      display: Object.freeze({ objectLabel: entry.name, createdAtMilliseconds: Date.now() }),
+    })
+    const failure = outcomeFailure(outcome, error => this.#publicError(error))
+    if (failure !== null) this.#publish({ ...this.#snapshot, error: failure })
+    return outcome
+  }
+
+  downloadPreviewedFile(callbacks?: PreviewDownloadCallbacks): PreviewDownloadResult {
+    const target = this.#previews.activeTarget()
+    const previewState = this.#snapshot.preview.state
+    if (this.#disposed || target === undefined || previewState === 'idle') {
+      return Object.freeze({ kind: 'failed', failure: Object.freeze({ kind: 'blocked', reason: 'actionUnavailable' }) })
+    }
+    if (target.imageBlob !== undefined) {
+      this.recordExperienceIntent('save-preview-image')
+      if (this.#receive.saveLocalBlob(target.imageBlob, target.entry.name)) {
+        return Object.freeze({ kind: 'saved-image' })
+      }
+      return Object.freeze({
+        kind: 'failed',
+        failure: Object.freeze({ kind: 'save-unavailable', reason: 'no-safe-destination' }),
+      })
+    }
+    this.recordExperienceIntent('download-preview-file')
+    const fileId = target.entry.idText
+    const closeOnActivate = previewState === 'loading' || previewState === 'error'
+    const outcome = this.#receive.startSingleFileDownload(target.entry, target.directory, {
+      display: Object.freeze({ objectLabel: target.entry.name, createdAtMilliseconds: Date.now() }),
+      onActivated: () => {
+        if (!closeOnActivate || this.#disposed) return
+        const current = this.#snapshot.preview
+        if ((current.state === 'loading' || current.state === 'error') && current.fileId === fileId) {
+          this.#previews.cancel()
+        }
+      },
+      ...(callbacks?.onExported === undefined ? {} : { onExported: callbacks.onExported }),
+      onAsyncError: error => {
+        const current = this.#snapshot.preview
+        if (current.state !== 'idle' && current.fileId === fileId && callbacks?.onAsyncFailure !== undefined) {
+          callbacks.onAsyncFailure(mapReceiverFailure(error, err => this.#publicError(err)))
+        } else {
+          this.#publishActionError(error)
+        }
+      },
+    })
+    return previewDownloadResultFromOutcome(outcome, error => this.#publicError(error))
   }
 
   cancelPreparing(): void {
@@ -421,6 +496,7 @@ export class ReceiverController {
       if (!this.#joinReplacementIsCurrent(navigation)) return false
       this.#traceJoin('joined')
       this.#joinedObservation.observe(joined)
+      this.#receive.preloadShareTasks(joined.descriptor.shareInstanceId)
       await this.#openInitialBrowsePage(joined)
       return this.#joinReplacementIsCurrent(navigation)
     } catch (error) {
@@ -497,7 +573,7 @@ export class ReceiverController {
     if (transition !== 'page-updated') this.#beginSelectionProjection(joined)
     if (share?.kind === 'photo' && page.directory.idText === joined.descriptor.syntheticRootId && !this.#receive.active) {
       const entry = page.entries[0]
-      if (entry?.kind === 'file') this.#previews.openAutomaticPhoto(joined, entry)
+      if (entry?.kind === 'file') this.#previews.openAutomaticPhoto(joined, entry, page.directory)
     }
     if (!(share?.kind === 'browser' && share.singleFolder && page.directory.idText === joined.descriptor.syntheticRootId)) {
       // The synthetic wrapper is not the directory the recipient came to browse.
@@ -516,10 +592,23 @@ export class ReceiverController {
     this.#beginSelectionProjection(joined)
   }
 
+  #tryCompleteSinglePhotoBlob(
+    choiceId: string,
+    display: NonNullable<ReceiverSnapshot['taskDisplay']>,
+  ): boolean {
+    const share = this.#snapshot.share
+    if (share?.kind !== 'photo') return false
+    if (findReadyOfferChoice(this.#snapshot.output.offers, choiceId)?.backend !== 'portable') return false
+    const target = this.#previews.activeTarget()
+    if (target?.imageBlob === undefined || target.entry.idText !== share.file.id) return false
+    this.#receive.completeLocalBlobDownload(target.imageBlob, target.entry.name, display)
+    return true
+  }
+
   #publishActionError(error: unknown): void {
     this.#publish({
       ...this.#snapshot,
-      error: isSourceInvalidatedError(error) ? { kind: 'source-changed' } : this.#publicError(error),
+      error: mapReceiverFailure(error, err => this.#publicError(err)),
     })
   }
 

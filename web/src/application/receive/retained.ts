@@ -64,6 +64,15 @@ export async function loadRetainedTasks(
   activeLocalTaskId: string | null,
 ): Promise<readonly RetainedTaskSnapshot[]> {
   const records = await env.store.listTasks()
+  return resolveRetainedCandidates(env, records, activeLocalTaskId)
+}
+
+/** Normalizes abandoned records and checks cross-tab locks only for the given candidate subset. */
+export async function resolveRetainedCandidates(
+  env: RetainedTaskEnvironment,
+  records: readonly ReceiveTaskRecord[],
+  activeLocalTaskId: string | null,
+): Promise<readonly RetainedTaskSnapshot[]> {
   const snapshots: RetainedTaskSnapshot[] = []
   for (const record of records) {
     env.signal?.throwIfAborted()
@@ -80,7 +89,7 @@ export async function loadRetainedTasks(
   return Object.freeze(snapshots)
 }
 
-function retainedSnapshot(record: ReceiveTaskRecord, activeElsewhere: boolean): RetainedTaskSnapshot {
+export function retainedSnapshot(record: ReceiveTaskRecord, activeElsewhere: boolean): RetainedTaskSnapshot {
   const canSavePartial = canSavePartialState(record.lifecycle, record.backend, record.target.kind === 'opfs' && record.target.isZip)
   return Object.freeze({
     taskId: record.taskId, shareInstance: record.shareInstance, selectionKey: record.selectionKey,

@@ -32,8 +32,12 @@ function sameFields<T>(left: T, right: T): boolean {
 }
 
 function browse(snapshot: ReceiverSnapshot) {
-  const { share, rows, breadcrumbs, pageIndex, pageCount, omittedCount, browse, draft, preview } = snapshot
-  return Object.freeze({ share, rows, breadcrumbs, pageIndex, pageCount, omittedCount, browse, draft, preview })
+  const { share, rows, breadcrumbs, pageIndex, pageCount, omittedCount, browse, draft, preview, startAdmission } = snapshot
+  const { capabilitiesState, activeSingleFileId, singleFilePickerPendingFromBytes, language } = snapshot.output
+  return Object.freeze({
+    share, rows, breadcrumbs, pageIndex, pageCount, omittedCount, browse, draft, preview,
+    startAdmission, capabilitiesState, activeSingleFileId, singleFilePickerPendingFromBytes, language,
+  })
 }
 function connection(snapshot: ReceiverSnapshot) {
   const { phase, status, error, connection, pathActivity } = snapshot

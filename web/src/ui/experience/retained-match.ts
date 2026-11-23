@@ -105,13 +105,31 @@ function selectionTask(
     candidate.selectionKey === key) ?? null
 }
 
-function resolveSelectionRetained(snapshot: WorkspaceTaskSnapshot): SelectionRetainedMatch {
+export function isDismissibleWorkspaceTask(task: TaskPresentation): boolean {
+  return task.stage === 'handed-to-browser' || task.stage === 'saved'
+}
+
+function isDismissedWorkspaceTask(
+  task: TaskPresentation,
+  dismissedTaskIds: ReadonlySet<string> | undefined,
+): boolean {
+  return dismissedTaskIds !== undefined &&
+    isDismissibleWorkspaceTask(task) &&
+    dismissedTaskIds.has(task.operationId)
+}
+
+function resolveSelectionRetained(
+  snapshot: WorkspaceTaskSnapshot,
+  visibleCurrent: TaskPresentation | null,
+  dismissedTaskIds?: ReadonlySet<string>,
+): SelectionRetainedMatch {
   const key = snapshot.output.offers?.selectionKey
-  if (snapshot.current !== null || snapshot.share === null || key === undefined) {
+  if (visibleCurrent !== null || snapshot.share === null || key === undefined) {
     return { kind: 'none' }
   }
   let fallbackBanner: WorkspaceRetainedBanner | null = null
   for (const task of snapshot.tasks) {
+    if (isDismissedWorkspaceTask(task, dismissedTaskIds)) continue
     const retained = selectionTask(task, snapshot, key)
     if (retained === null) continue
     if (isCompleteLocalRetained(retained, task)) return { kind: 'local-complete', task }
@@ -176,12 +194,16 @@ function resolveRetainedBanner(
  * or after reload/reopen—the workspace surfaces that task directly and folds remote redownload
  * behind a secondary disclosure instead of creating duplicate browser copies.
  */
-export function resolveWorkspaceTaskLayout(snapshot: WorkspaceTaskSnapshot): WorkspaceTaskLayout {
+export function resolveWorkspaceTaskLayout(
+  snapshot: WorkspaceTaskSnapshot,
+  dismissedTaskIds?: ReadonlySet<string>,
+): WorkspaceTaskLayout {
   const { share, current, output } = snapshot
-  const selectionMatch = resolveSelectionRetained(snapshot)
+  const visibleCurrent = current !== null && !isDismissedWorkspaceTask(current, dismissedTaskIds) ? current : null
+  const selectionMatch = resolveSelectionRetained(snapshot, visibleCurrent, dismissedTaskIds)
   const completedLocalMatch = selectionMatch.kind === 'local-complete' ? selectionMatch.task : null
-  const primaryTask = current ?? completedLocalMatch
-  const matchesSelection = completedLocalMatch !== null || currentMatchesSelection(snapshot)
+  const primaryTask = visibleCurrent ?? completedLocalMatch
+  const matchesSelection = completedLocalMatch !== null || (visibleCurrent !== null && currentMatchesSelection(snapshot))
   const hasActionableLocalResult = primaryTask !== null && matchesSelection &&
     primaryTask.completeness === 'complete' && (
       (primaryTask.stage === 'handed-to-browser' &&

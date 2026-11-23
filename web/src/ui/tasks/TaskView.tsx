@@ -57,16 +57,18 @@ export function TaskActionButton({ action, perform, primary = false, busy = fals
   </div>
 }
 
-export function TaskCard({ task, actions, onDetails, detailsRef, busy = false, showTimestamp = false }: {
+export function TaskCard({ task, actions, onDetails, onDismiss, detailsRef, busy = false, showTimestamp = false }: {
   readonly task: TaskPresentation
   readonly actions: TaskViewActions
   readonly onDetails: (invoker: HTMLButtonElement) => void
+  readonly onDismiss?: () => void
   readonly detailsRef?: Ref<HTMLButtonElement>
   readonly busy?: boolean
   readonly showTimestamp?: boolean
 }) {
   const { language } = usePreferences()
-  const t = receiverCopy[language].downloads
+  const copy = receiverCopy[language]
+  const t = copy.downloads
   const rate = useReceiveRate(task)
   const hasMeta = task.destinationLabel !== null || task.elapsedMilliseconds !== null || (showTimestamp && task.createdAtMilliseconds !== null)
   return <section className={`task-card task-tone-${task.tone}`} aria-label={t.downloadObject(task.objectLabel)}
@@ -89,6 +91,10 @@ export function TaskCard({ task, actions, onDetails, detailsRef, busy = false, s
         {task.primaryAction !== null && <TaskActionButton action={task.primaryAction}
           perform={actions.perform} primary busy={busy} />}
         <button ref={detailsRef} className="quiet-action" type="button" onClick={event => onDetails(event.currentTarget)}>{t.details}<ReceiverIcon name="chevron-right" /></button>
+        {onDismiss !== undefined && <button className="quiet-action task-dismiss-action" type="button"
+          aria-label={copy.browse.dismissTask} title={copy.browse.dismissTask} onClick={onDismiss}>
+          <ReceiverIcon name="close" />
+        </button>}
       </div>
     </div>
     {task.progress !== null && <div className="task-progress" data-progress-mode={task.progress.mode}>

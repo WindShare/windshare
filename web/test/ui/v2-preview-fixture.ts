@@ -21,6 +21,13 @@ export const entry: Extract<CatalogEntry, { kind: 'file' }> = Object.freeze({
   expectedSize: 100n,
 })
 
+export const rootDirectory: BrowseDirectory = Object.freeze({
+  id: identity(1),
+  idText: identityText(1),
+  path: Object.freeze([]),
+  ancestry: Object.freeze([identityText(1)]),
+})
+
 export class FakeJoined {
   readonly descriptor = {
     shareInstance: identity(7),

@@ -6,6 +6,7 @@ import { PreviewController } from '../../src/ui/preview-controller'
 import type { JoinedBrowserShare } from '../../src/application/browser-share/gateway'
 import {
   entry,
+  rootDirectory,
   remoteOperationError,
   nonRetryableRemoteRevisionError,
   turn,
@@ -30,7 +31,7 @@ describe('v2 preview seek failure presentation', () => {
       recordFailure: failures.report,
     })
 
-    previews.open(joined as unknown as JoinedBrowserShare, entry)
+    previews.open(joined as unknown as JoinedBrowserShare, entry, rootDirectory)
     await turn()
     if (snapshot.preview.state !== 'video') throw new TypeError('expected video preview')
     previews.mediaPresented(snapshot.preview.presentationId)
@@ -67,7 +68,7 @@ describe('v2 preview seek failure presentation', () => {
       recordFailure: failures.report,
     })
 
-    previews.open(joined as unknown as JoinedBrowserShare, entry)
+    previews.open(joined as unknown as JoinedBrowserShare, entry, rootDirectory)
     await turn()
     if (snapshot.preview.state !== 'video') throw new TypeError('expected video preview')
     previews.mediaPresented(snapshot.preview.presentationId)
@@ -92,7 +93,7 @@ describe('v2 preview seek failure presentation', () => {
       publicError: () => 'preview failed',
     })
 
-    previews.open(joined as unknown as JoinedBrowserShare, entry)
+    previews.open(joined as unknown as JoinedBrowserShare, entry, rootDirectory)
     await turn()
     // The opening frame has not presented, so there is no earlier frame to keep.
     previews.seek(12)
@@ -118,7 +119,7 @@ describe('v2 preview seek failure presentation', () => {
       recordFailure: failures.report,
     })
 
-    previews.open(joined as unknown as JoinedBrowserShare, entry)
+    previews.open(joined as unknown as JoinedBrowserShare, entry, rootDirectory)
     await turn()
     const opened = snapshot.preview
     if (opened.state !== 'video') throw new TypeError('expected video preview')
@@ -156,7 +157,7 @@ describe('v2 preview seek failure presentation', () => {
       recordFailure: failures.report,
     })
 
-    previews.open(joined as unknown as JoinedBrowserShare, entry)
+    previews.open(joined as unknown as JoinedBrowserShare, entry, rootDirectory)
     await turn()
     if (snapshot.preview.state !== 'video') throw new TypeError('expected video preview')
     previews.mediaPresented(snapshot.preview.presentationId)
@@ -201,7 +202,7 @@ describe('v2 preview seek failure rollback', () => {
 
   it('rolls back to the requested position, not the presented keyframe', async () => {
     const { joined, previews, video, presentAt } = rollbackPreview()
-    previews.open(joined as unknown as JoinedBrowserShare, entry)
+    previews.open(joined as unknown as JoinedBrowserShare, entry, rootDirectory)
     await turn()
     previews.mediaPresented(video().presentationId)
     joined.seekResult = presentAt
@@ -229,7 +230,7 @@ describe('v2 preview seek failure rollback', () => {
   it('rolls back to the opening keyframe position when no seek has presented', async () => {
     const joined = new DiagnosticPreviewJoined({ openPresentation: keyframePresentation(0, 0.5) })
     const { previews, video } = rollbackPreview()
-    previews.open(joined as unknown as JoinedBrowserShare, entry)
+    previews.open(joined as unknown as JoinedBrowserShare, entry, rootDirectory)
     await turn()
     // A head-trimmed file opens with the slider at the keyframe seek(0) chose.
     expect(video().requestedSeconds).toBe(0.5)
@@ -243,7 +244,7 @@ describe('v2 preview seek failure rollback', () => {
 
   it('returns the position to the last presented frame after a local seek failure', async () => {
     const { joined, previews, video, presentAt } = rollbackPreview()
-    previews.open(joined as unknown as JoinedBrowserShare, entry)
+    previews.open(joined as unknown as JoinedBrowserShare, entry, rootDirectory)
     await turn()
     previews.mediaPresented(video().presentationId)
     joined.seekResult = presentAt
@@ -272,7 +273,7 @@ describe('v2 preview seek failure rollback', () => {
 
   it('follows a frame that presents after a later seek has failed', async () => {
     const { joined, previews, video, presentAt } = rollbackPreview()
-    previews.open(joined as unknown as JoinedBrowserShare, entry)
+    previews.open(joined as unknown as JoinedBrowserShare, entry, rootDirectory)
     await turn()
     previews.mediaPresented(video().presentationId)
     joined.seekResult = presentAt
@@ -311,7 +312,7 @@ describe('v2 preview stale media failure during a newer seek', () => {
 
   it('keeps seek B pending when the previous frame fails, then shows B', async () => {
     const { joined, failures, previews, video, presentAt } = racingPreview()
-    previews.open(joined as unknown as JoinedBrowserShare, entry)
+    previews.open(joined as unknown as JoinedBrowserShare, entry, rootDirectory)
     await turn()
     previews.mediaPresented(video().presentationId)       // frame at 0 on canvas
     joined.seekResult = presentAt
@@ -339,7 +340,7 @@ describe('v2 preview stale media failure during a newer seek', () => {
 
   it('rolls back seek B after a stale frame failure without flooding local diagnostics', async () => {
     const { joined, failures, previews, video, presentAt } = racingPreview()
-    previews.open(joined as unknown as JoinedBrowserShare, entry)
+    previews.open(joined as unknown as JoinedBrowserShare, entry, rootDirectory)
     await turn()
     previews.mediaPresented(video().presentationId)
     joined.seekResult = presentAt

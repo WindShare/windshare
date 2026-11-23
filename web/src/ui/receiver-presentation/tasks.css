@@ -240,6 +240,20 @@
   border-color: var(--receiver-rule-strong);
   color: var(--receiver-ink);
 }
+.receiver-shell .share-workspace > .task-card .task-summary > .task-actions > .task-dismiss-action {
+  width: 36px;
+  min-width: 36px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: var(--receiver-subtle);
+}
+.receiver-shell .share-workspace > .task-card .task-summary > .task-actions > .task-dismiss-action:hover:not(:disabled) {
+  background: var(--receiver-wash);
+  border-color: transparent;
+  color: var(--receiver-ink);
+}
 
 :where(.receiver-shell, .detail-sheet) .task-progress {
   display: flex;

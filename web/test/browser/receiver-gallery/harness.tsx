@@ -186,6 +186,14 @@ class GalleryController {
   }
 
   chooseArtifact = (id: string) => { this.intents.push('choose:' + id) }
+  downloadFile = (id: string) => {
+    this.intents.push('download-file:' + id)
+    return { kind: 'started' as const }
+  }
+  downloadPreviewedFile = () => {
+    this.intents.push('download-previewed')
+    return { kind: 'saved-image' as const }
+  }
   retryOutputConfirmation = () => { this.intents.push('retry-output') }
   cancelPreparing = () => { this.intents.push('cancel-preparing') }
   performLifecycleAction = () => { this.intents.push('task-action') }
