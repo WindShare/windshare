@@ -251,8 +251,9 @@ class FSASessionHandle implements OutputSessionHandle {
       capabilities: Object.freeze({
         // FileSystemWritableFileStream has no in-place flush; reopening with
         // keepExistingData copies the full file prefix on non-CoW filesystems,
-        // so FSA commits on pause, lease retry, and completion instead.
+        // so FSA commits on pause, lease/reopen retry, and completion instead.
         maxConcurrentFiles: FSA_MAX_CONCURRENT_FILES,
+        resumable: true,
       }),
       ensureDirectory: (request: TransferDirectoryRequest, signal: AbortSignal) => this.#ensureDirectory(request, signal),
       ...(priorCompleted.size > 0

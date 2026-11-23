@@ -105,6 +105,7 @@ class PortableSessionHandle implements OutputSessionHandle {
       capabilities: Object.freeze({
         // Sequential streaming ZIP writes one member at a time to avoid extra buffering.
         maxConcurrentFiles: 1,
+        resumable: false,
       }),
       ...(isZip ? { ensureDirectory: (req: TransferDirectoryRequest) => this.#ensureDir(req) } : {}),
       openFile: (request: TransferFileRequest, signal: AbortSignal) => this.#openFile(request, signal),

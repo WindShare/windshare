@@ -37,7 +37,11 @@ export interface ProgressiveZipEntryInput {
 }
 
 export interface OpenedProgressiveZipFile {
+  /** Previously persisted record exposed for source-change verification on reopen. */
   readonly record: ReceiveFileRecord
+  /** Revision identity authorized for the current write attempt. */
+  readonly activeRevision: string
+  readonly activeSourceMetadata?: string
   readonly plan: ZipEntryPlanV1
   readonly completedRanges: readonly ByteRange[]
   crcRanges: readonly ZipCrcRange[]
@@ -151,7 +155,7 @@ export class ProgressiveZipWriter {
   async openFile(input: ProgressiveZipEntryInput): Promise<OpenedProgressiveZipFile> {
     const existing = this.#entries.get(input.fileId)
     if (existing?.zipEntry !== undefined) {
-      return this.#reopenFile(existing)
+      return this.#reopenFile(existing, input)
     }
     const pending = this.#pendingFiles.get(input.fileId)
     if (pending !== undefined) return pending
@@ -224,7 +228,10 @@ export class ProgressiveZipWriter {
     this.#entries.set(key, row)
   }
 
-  #reopenFile(existing: ReceiveFileRecord): OpenedProgressiveZipFile {
+  #reopenFile(
+    existing: ReceiveFileRecord,
+    input: ProgressiveZipEntryInput,
+  ): OpenedProgressiveZipFile {
     const zip = existing.zipEntry!
     const normalized = normalizeZipEntry({
       kind: 'file',
@@ -237,6 +244,8 @@ export class ProgressiveZipWriter {
     const plan = planZipEntry(normalized, zip.localHeaderOffset)
     return {
       record: existing,
+      activeRevision: input.revision,
+      ...(input.sourceMetadata === undefined ? {} : { activeSourceMetadata: input.sourceMetadata }),
       plan,
       completedRanges: fromRangeTuples(existing.completedRanges),
       crcRanges: zip.crcRanges,
@@ -283,6 +292,8 @@ export class ProgressiveZipWriter {
     this.#entries.set(input.fileId, row)
     return {
       record: row,
+      activeRevision: input.revision,
+      ...(input.sourceMetadata === undefined ? {} : { activeSourceMetadata: input.sourceMetadata }),
       plan,
       completedRanges: Object.freeze([]),
       crcRanges: Object.freeze([]),
@@ -305,14 +316,7 @@ export class ProgressiveZipWriter {
     opened: OpenedProgressiveZipFile,
     ranges: readonly ByteRange[],
   ): Promise<void> {
-    const updated: ReceiveFileRecord = Object.freeze({
-      ...opened.record,
-      completedRanges: toRangeTuples(ranges),
-      zipEntry: Object.freeze({
-        ...opened.record.zipEntry!,
-        crcRanges: opened.crcRanges,
-      }),
-    })
+    const updated = buildUpdatedZipFileRecord(opened, ranges, 'receiving')
     this.#entries.set(updated.fileId, updated)
     await this.#io.checkpoint('zip-file-checkpoint', () => this.#store.putFile(updated))
   }
@@ -327,16 +331,7 @@ export class ProgressiveZipWriter {
     }
     const descriptor = encodeZipDataDescriptor(opened.plan, crc32)
     await this.#io.writeAt(opened.record.zipEntry!.descriptorOffset, descriptor)
-    const updated: ReceiveFileRecord = Object.freeze({
-      ...opened.record,
-      completedRanges: toRangeTuples(ranges),
-      status: 'completed',
-      zipEntry: Object.freeze({
-        ...opened.record.zipEntry!,
-        crcRanges: opened.crcRanges,
-        crc32,
-      }),
-    })
+    const updated = buildUpdatedZipFileRecord(opened, ranges, 'completed', crc32)
     this.#entries.set(updated.fileId, updated)
     await this.#io.checkpoint('zip-file-commit', () => this.#store.putFile(updated))
   }
@@ -394,6 +389,31 @@ export class ProgressiveZipWriter {
     await this.#io.flush()
     return offset
   }
+}
+
+function buildUpdatedZipFileRecord(
+  opened: OpenedProgressiveZipFile,
+  ranges: readonly ByteRange[],
+  status: 'receiving' | 'completed',
+  crc32?: number,
+): ReceiveFileRecord {
+  const prev = opened.record
+  return Object.freeze({
+    id: prev.id,
+    taskId: prev.taskId,
+    fileId: prev.fileId,
+    revision: opened.activeRevision,
+    ...(opened.activeSourceMetadata === undefined ? {} : { sourceMetadata: opened.activeSourceMetadata }),
+    path: prev.path,
+    size: prev.size,
+    completedRanges: toRangeTuples(ranges),
+    status,
+    zipEntry: Object.freeze({
+      ...prev.zipEntry!,
+      crcRanges: opened.crcRanges,
+      ...(crc32 === undefined ? {} : { crc32 }),
+    }),
+  })
 }
 
 /**

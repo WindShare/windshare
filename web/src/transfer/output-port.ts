@@ -51,10 +51,16 @@ export interface PeriodicCheckpointPolicy {
 export interface TransferOutputCapabilities {
   readonly maxConcurrentFiles: number
   /**
+   * True when `checkpoint()` durably persists progress across file reopens
+   * (FSA and OPFS), allowing mid-file lease replacement and reopened-revision
+   * readmission without discarding written bytes.
+   */
+  readonly resumable: boolean
+  /**
    * Optional mid-file periodic checkpoint schedule.
    * Only backends with cheap in-place flushing (e.g. OPFS SyncAccessHandle)
    * should advertise this; copy-on-reopen streams like FSA commit on `pause()`,
-   * `commit()`, and explicit lease-replacement `checkpoint()` calls instead.
+   * `commit()`, and explicit retry `checkpoint()` calls instead.
    */
   readonly periodicCheckpoint?: PeriodicCheckpointPolicy
 }

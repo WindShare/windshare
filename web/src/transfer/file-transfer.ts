@@ -1,6 +1,7 @@
 import { BLOCK_BROKER_PARALLEL_READS, type BlockRangeReader } from '../content/broker'
 import { ByteRangeSet, byteRange, type ByteRange } from '../content/geometry'
-import { compareRevisionMetadata } from '../content/revision-comparison'
+import type { FileRevisionDescriptor } from '../content/records'
+import { compareRevisionDescriptors, compareRevisionMetadata } from '../content/revision-comparison'
 import {
   RemoteRevisionError,
   RevisionCapacityBusyError,
@@ -27,6 +28,10 @@ import type { CompletedOutputFile, TransferOutputFile, TransferOutputSession } f
 
 const MAX_CAPACITY_WAIT_MS = 60_000
 const MAX_LEASE_RETRIES = 3
+// Allow one reopen readmission without newly written bytes (e.g. a reconnect
+// before the first block arrives), then stop if a second consecutive reopen
+// still makes zero progress.
+const MAX_STALLED_REOPEN_RETRIES = 1
 
 export interface FileTransferContext {
   readonly revisions: RevisionReader
@@ -50,6 +55,17 @@ export type SingleFileTransferOutcome =
   | Readonly<{ kind: 'source-unavailable'; error: unknown }>
   | Readonly<{ kind: 'failed'; error: unknown }>
 
+interface FileTransferAttemptState {
+  readonly attemptIndex: number
+  readonly leaseRetries: number
+  readonly stalledReopens: number
+  readonly reopenedFrom?: FileRevisionDescriptor
+}
+
+type AttemptResult =
+  | SingleFileTransferOutcome
+  | Readonly<{ kind: 'retry'; next: FileTransferAttemptState }>
+
 /**
  * Downloads missing byte ranges of one file in parallel, flushing physical writes
  * before committing checkpoints so resumes never rely on unverified metadata.
@@ -58,15 +74,19 @@ export async function transferSingleFile(
   ctx: FileTransferContext,
   file: DiscoveredFile,
 ): Promise<SingleFileTransferOutcome> {
-  let leaseAttempt = 0
+  let state: FileTransferAttemptState = {
+    attemptIndex: 0,
+    leaseRetries: 0,
+    stalledReopens: 0,
+  }
   for (;;) {
     const preflight = preflightOutcome(ctx)
     if (preflight !== undefined) return preflight
     ctx.signal.throwIfAborted()
 
-    const attempt = await attemptSingleFileTransfer(ctx, file, leaseAttempt)
-    if (attempt === 'retry-lease') {
-      leaseAttempt += 1
+    const attempt = await attemptSingleFileTransfer(ctx, file, state)
+    if (attempt.kind === 'retry') {
+      state = attempt.next
       continue
     }
     return attempt
@@ -82,19 +102,23 @@ function preflightOutcome(ctx: FileTransferContext): SingleFileTransferOutcome |
 async function attemptSingleFileTransfer(
   ctx: FileTransferContext,
   file: DiscoveredFile,
-  leaseAttempt: number,
-): Promise<SingleFileTransferOutcome | 'retry-lease'> {
+  state: FileTransferAttemptState,
+): Promise<AttemptResult> {
   let opened: OpenedRevision | undefined
   let writer: TransferOutputFile | undefined
+  let initialBytes = 0n
   const rangeState: { current: ByteRangeSet | undefined } = { current: undefined }
   try {
-    const completed = await checkAlreadyCompleted(ctx, file, leaseAttempt)
+    const completed = await checkAlreadyCompleted(ctx, file, state.attemptIndex)
     if (completed !== undefined) {
       ctx.onInitialCoverage?.(completed.size)
       return { kind: 'completed', size: completed.size }
     }
 
     opened = await openRevisionWithBackoff(ctx, file.entry.id)
+    const readmissionFailure = verifyReadmittedRevision(state.reopenedFrom, opened.descriptor)
+    if (readmissionFailure !== undefined) return readmissionFailure
+
     const desc = opened.descriptor
     const revisionText = encodeBase64Url(desc.fileRevision)
     writer = await openOutputFile(ctx, file, opened, revisionText)
@@ -105,14 +129,18 @@ async function attemptSingleFileTransfer(
     }
 
     rangeState.current = new ByteRangeSet(desc.exactSize, writer.completedRanges)
-    const initialBytes = rangesBytes(rangeState.current.ranges)
-    if (initialBytes > 0n) ctx.onInitialCoverage?.(initialBytes)
+    initialBytes = rangesBytes(rangeState.current.ranges)
+    // Only report initial disk coverage once per file; retry attempts reuse
+    // bytes already counted in earlier attempts' initial coverage and writes.
+    if (state.attemptIndex === 0 && initialBytes > 0n) {
+      ctx.onInitialCoverage?.(initialBytes)
+    }
 
     await streamMissingRanges(ctx, opened, writer, rangeState)
     await writer.commit(rangeState.current.ranges)
     return { kind: 'completed', size: desc.exactSize }
   } catch (error) {
-    return handleFileError(ctx, writer, rangeState.current, error, leaseAttempt)
+    return handleFileError(ctx, writer, rangeState.current, initialBytes, error, state)
   } finally {
     await opened?.release().catch(() => undefined)
   }
@@ -121,13 +149,24 @@ async function attemptSingleFileTransfer(
 function checkAlreadyCompleted(
   ctx: FileTransferContext,
   file: DiscoveredFile,
-  leaseAttempt: number,
+  attemptIndex: number,
 ): Promise<CompletedOutputFile | undefined> {
-  // Only check prior completion on the initial attempt; lease-replacement retries are already streaming.
-  if (leaseAttempt > 0 || ctx.output.checkCompleted === undefined) {
+  // Only check prior completion on the initial attempt; retry attempts are already streaming.
+  if (attemptIndex > 0 || ctx.output.checkCompleted === undefined) {
     return Promise.resolve(undefined)
   }
   return ctx.output.checkCompleted(file.entry.idText, ctx.signal)
+}
+
+function verifyReadmittedRevision(
+  previous: FileRevisionDescriptor | undefined,
+  current: FileRevisionDescriptor,
+): SingleFileTransferOutcome | undefined {
+  if (previous === undefined) return undefined
+  const comparison = compareRevisionDescriptors(previous, current)
+  if (comparison.kind === 'metadata-agreement') return undefined
+  if (comparison.kind === 'observed-change') return { kind: 'source-changed' }
+  return { kind: 'failed', error: new RevisionReopenedDuringRecoveryError(previous, current) }
 }
 
 function openOutputFile(
@@ -287,9 +326,10 @@ async function handleFileError(
   ctx: FileTransferContext,
   writer: TransferOutputFile | undefined,
   ranges: ByteRangeSet | undefined,
+  initialBytes: bigint,
   error: unknown,
-  leaseAttempt: number,
-): Promise<SingleFileTransferOutcome | 'retry-lease'> {
+  state: FileTransferAttemptState,
+): Promise<AttemptResult> {
   const pauseReason = pauseReasonFor(ctx, error)
   if (pauseReason !== undefined) {
     await pauseWriterSafely(writer, ranges)
@@ -303,9 +343,10 @@ async function handleFileError(
     await writer?.abort(error).catch(() => undefined)
     return { kind: 'source-changed' }
   }
-  if (requiresRevisionLeaseReplacement(error) && leaseAttempt < MAX_LEASE_RETRIES && !ctx.signal.aborted) {
-    await checkpointWriterSafely(writer, ranges)
-    return 'retry-lease'
+  const nextRetry = nextRetryStateFor(ctx, ranges, initialBytes, error, state)
+  if (nextRetry !== undefined) {
+    const checkpointOutcome = await checkpointForRetry(ctx, writer, ranges)
+    return checkpointOutcome ?? { kind: 'retry', next: nextRetry }
   }
   await writer?.abort(error).catch(() => undefined)
   if (isAbortError(error) && ctx.signal.aborted) {
@@ -314,6 +355,41 @@ async function handleFileError(
   return error instanceof RemoteRevisionError
     ? { kind: 'source-unavailable', error }
     : { kind: 'failed', error }
+}
+
+function nextRetryStateFor(
+  ctx: FileTransferContext,
+  ranges: ByteRangeSet | undefined,
+  initialBytes: bigint,
+  error: unknown,
+  state: FileTransferAttemptState,
+): FileTransferAttemptState | undefined {
+  if (!ctx.output.capabilities.resumable || ctx.signal.aborted) return undefined
+  const madeProgress = ranges !== undefined && rangesBytes(ranges.ranges) > initialBytes
+  if (isReusableReopenedRevisionError(error)) {
+    const stalledReopens = madeProgress ? 0 : state.stalledReopens + 1
+    if (stalledReopens > MAX_STALLED_REOPEN_RETRIES) return undefined
+    return {
+      attemptIndex: state.attemptIndex + 1,
+      leaseRetries: madeProgress ? 0 : state.leaseRetries,
+      stalledReopens,
+      reopenedFrom: error.previous,
+    }
+  }
+  if (requiresRevisionLeaseReplacement(error) && state.leaseRetries < MAX_LEASE_RETRIES) {
+    return {
+      attemptIndex: state.attemptIndex + 1,
+      leaseRetries: state.leaseRetries + 1,
+      stalledReopens: madeProgress ? 0 : state.stalledReopens,
+      ...(state.reopenedFrom === undefined ? {} : { reopenedFrom: state.reopenedFrom }),
+    }
+  }
+  return undefined
+}
+
+function isReusableReopenedRevisionError(error: unknown): error is RevisionReopenedDuringRecoveryError {
+  return error instanceof RevisionReopenedDuringRecoveryError &&
+    error.comparison.kind === 'metadata-agreement'
 }
 
 function pauseReasonFor(
@@ -336,12 +412,31 @@ async function pauseWriterSafely(
   }
 }
 
-async function checkpointWriterSafely(
+async function checkpointForRetry(
+  ctx: FileTransferContext,
   writer: TransferOutputFile | undefined,
   ranges: ByteRangeSet | undefined,
-): Promise<void> {
-  if (writer !== undefined && ranges !== undefined) {
-    await writer.checkpoint(ranges.ranges).catch(() => undefined)
+): Promise<SingleFileTransferOutcome | undefined> {
+  if (writer === undefined) return undefined
+  if (ranges === undefined || ranges.empty) {
+    // No bytes need preservation; aborting clears any empty FSA placeholder
+    // before the retry attempt opens a fresh revision.
+    await writer.abort().catch(() => undefined)
+    return undefined
+  }
+  try {
+    await writer.checkpoint(ranges.ranges)
+    return undefined
+  } catch (checkpointError) {
+    const pauseReason = pauseReasonFor(ctx, checkpointError)
+    if (pauseReason !== undefined) {
+      return { kind: 'paused', reason: pauseReason }
+    }
+    await writer.abort(checkpointError).catch(() => undefined)
+    if (isAbortError(checkpointError) && ctx.signal.aborted) {
+      return ctx.isPaused() ? { kind: 'paused', reason: 'user' } : { kind: 'stopped' }
+    }
+    return { kind: 'failed', error: checkpointError }
   }
 }
 

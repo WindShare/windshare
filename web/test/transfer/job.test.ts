@@ -6,7 +6,10 @@ import { SelectionPolicy } from '../../src/catalog/selection'
 import type { BlockRangeReader } from '../../src/content/broker'
 import { FileGeometry, byteRange, type ByteRange } from '../../src/content/geometry'
 import type { FileRevisionDescriptor } from '../../src/content/records'
-import type { RevisionReader } from '../../src/content/session-services'
+import {
+  RevisionReopenedDuringRecoveryError,
+  type RevisionReader,
+} from '../../src/content/session-services'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import { discoverSelection, inspectSelectionShape } from '../../src/transfer/discovery'
 import { TransferJob } from '../../src/transfer/job'
@@ -131,6 +134,7 @@ describe('transfer discovery and job execution', () => {
       sessionId: 'sess-1',
       capabilities: {
         maxConcurrentFiles: 2,
+        resumable: true,
         periodicCheckpoint: { intervalBytes: 4n, intervalMilliseconds: 60_000 },
       },
       openFile: async (req: TransferFileRequest): Promise<TransferOutputFile> => ({
@@ -195,7 +199,7 @@ describe('transfer discovery and job execution', () => {
     let checkpointCalls = 0
     const output: TransferOutputSession = {
       sessionId: 'sess-pause',
-      capabilities: { maxConcurrentFiles: 1 },
+      capabilities: { maxConcurrentFiles: 1, resumable: true },
       openFile: async (): Promise<TransferOutputFile> => ({
         completedRanges: [],
         writeAt: async () => { jobRef.current?.pause('user') },
@@ -238,7 +242,7 @@ describe('transfer discovery and job execution', () => {
 
     const output: TransferOutputSession = {
       sessionId: 'sess-no-periodic',
-      capabilities: { maxConcurrentFiles: 1 },
+      capabilities: { maxConcurrentFiles: 1, resumable: true },
       openFile: async (): Promise<TransferOutputFile> => ({
         completedRanges: [],
         writeAt: async (offset, data) => { target.set(data, Number(offset)) },
@@ -276,6 +280,7 @@ describe('transfer discovery and job execution', () => {
         sessionId: 'sess-slow-cp',
         capabilities: {
           maxConcurrentFiles: 1,
+          resumable: true,
           periodicCheckpoint: { intervalBytes: 1_000n, intervalMilliseconds: 10_000 },
         },
         openFile: async (): Promise<TransferOutputFile> => ({
@@ -508,7 +513,7 @@ describe('transfer job resume completion skip', () => {
 
     const output: TransferOutputSession = {
       sessionId: 'sess-skip-completed',
-      capabilities: { maxConcurrentFiles: 2 },
+      capabilities: { maxConcurrentFiles: 2, resumable: true },
       checkCompleted: async fileId => {
         const size = completed.get(fileId)
         return size === undefined ? undefined : { size }
@@ -544,5 +549,352 @@ describe('transfer job resume completion skip', () => {
     expect(fixture.openedFileIds).toEqual([pendingId])
     expect(openedOutputs).toEqual([pendingId])
     expect([...writtenC]).toEqual([...payloadC])
+  })
+})
+
+function makeDescriptor(input: Readonly<{
+  shareInstance: Uint8Array<ArrayBuffer>
+  fileId: Uint8Array<ArrayBuffer>
+  revision: Uint8Array<ArrayBuffer>
+  exactSize: bigint
+  sourceMetadata?: string
+}>): FileRevisionDescriptor {
+  return Object.freeze({
+    shareInstance: input.shareInstance,
+    shareInstanceId: encodeBase64Url(input.shareInstance),
+    fileId: input.fileId,
+    fileIdText: encodeBase64Url(input.fileId),
+    fileRevision: input.revision,
+    fileRevisionText: encodeBase64Url(input.revision),
+    exactSize: input.exactSize,
+    geometry: new FileGeometry(input.exactSize, 4n),
+    ...(input.sourceMetadata === undefined ? {} : { sourceMetadata: input.sourceMetadata }),
+  })
+}
+
+function makeSingleFileCatalog(fileId: Uint8Array<ArrayBuffer>, name: string, exactSize: bigint) {
+  const shareInstance = id(1)
+  const rootId = id(2)
+  const generation = id(3)
+  const entry: CatalogEntry = Object.freeze({
+    kind: 'file',
+    id: fileId,
+    idText: encodeBase64Url(fileId),
+    name,
+    expectedSize: exactSize,
+  })
+  const committed: CommittedDirectory = Object.freeze({
+    directoryId: rootId,
+    directoryIdText: encodeBase64Url(rootId),
+    generation,
+    generationText: encodeBase64Url(generation),
+    pageCount: 1,
+    entryCount: 1,
+    omittedCount: 0n,
+    terminalCommitment: new Uint8Array(32),
+  })
+  const page: CatalogPage = Object.freeze({
+    shareInstance,
+    directoryId: rootId,
+    directoryIdText: committed.directoryIdText,
+    generation,
+    generationText: committed.generationText,
+    pageIndex: 0,
+    terminal: true,
+    previousCommitment: new Uint8Array(32),
+    entries: Object.freeze([entry]),
+    omittedCount: 0n,
+    objectCommitment: new Uint8Array(32),
+    encodedBytes: 64,
+  })
+  const descriptor: ShareDescriptor = Object.freeze({
+    shareInstance,
+    shareInstanceId: encodeBase64Url(shareInstance),
+    syntheticRoot: rootId,
+    syntheticRootId: committed.directoryIdText,
+  }) as unknown as ShareDescriptor
+  const catalog = Object.freeze({
+    loadDirectory: async () => committed,
+    page: async () => page,
+  }) as unknown as CatalogClient
+  return { shareInstance, descriptor, catalog }
+}
+
+describe('reopened revision readmission', () => {
+  const metaA = encodeBase64Url(new Uint8Array(32).fill(0x2a))
+  const metaB = encodeBase64Url(new Uint8Array(32).fill(0x5b))
+
+  it('checkpoints and resumes across repeated metadata-agreement reopens without double-counting progress', async () => {
+    const payload = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
+    const fileId = id(51)
+    const { shareInstance, descriptor, catalog } = makeSingleFileCatalog(fileId, 'movie.bin', BigInt(payload.byteLength))
+
+    let openCount = 0
+    const revDescriptors = [
+      makeDescriptor({ shareInstance, fileId, revision: id(61), exactSize: 12n, sourceMetadata: metaA }),
+      makeDescriptor({ shareInstance, fileId, revision: id(62), exactSize: 12n, sourceMetadata: metaA }),
+      makeDescriptor({ shareInstance, fileId, revision: id(63), exactSize: 12n, sourceMetadata: metaA }),
+    ]
+    const revisions: RevisionReader = {
+      open: async () => {
+        const desc = revDescriptors[Math.min(openCount, revDescriptors.length - 1)]!
+        openCount += 1
+        return Object.freeze({ descriptor: desc, leaseId: id(openCount), release: async () => undefined })
+      },
+    }
+    const readSpans: ByteRange[] = []
+    const broker: BlockRangeReader = {
+      readRange: async function* (desc, _leaseId, span) {
+        readSpans.push(span)
+        const sliceEnd = span.start + 4n < span.end ? span.start + 4n : span.end
+        yield Object.freeze({ offset: span.start, data: payload.subarray(Number(span.start), Number(sliceEnd)) })
+        if (sliceEnd < span.end) {
+          const nextDesc = revDescriptors[openCount]!
+          throw new RevisionReopenedDuringRecoveryError(desc, nextDesc)
+        }
+      },
+    }
+
+    const disk = new Uint8Array(payload.byteLength)
+    let savedRanges: readonly ByteRange[] = []
+    let savedRevision: string | undefined
+    let savedSourceMetadata: string | undefined
+    let checkpointCalls = 0
+    let abortCalls = 0
+    let lastMaterialized = 0n
+    let lastWritten = 0n
+
+    const output: TransferOutputSession = {
+      sessionId: 'sess-reopen-progress',
+      capabilities: { maxConcurrentFiles: 1, resumable: true },
+      openFile: async (req: TransferFileRequest): Promise<TransferOutputFile> => ({
+        completedRanges: savedRanges,
+        ...(savedRevision === undefined ? {} : { savedRevision }),
+        ...(savedSourceMetadata === undefined ? {} : { savedSourceMetadata }),
+        savedSize: req.exactSize,
+        writeAt: async (offset, data) => { disk.set(data, Number(offset)) },
+        checkpoint: async ranges => {
+          checkpointCalls += 1
+          savedRanges = ranges
+          savedRevision = req.revision
+          savedSourceMetadata = req.sourceMetadata
+        },
+        commit: async ranges => {
+          savedRanges = ranges
+          savedRevision = req.revision
+          savedSourceMetadata = req.sourceMetadata
+        },
+        pause: async () => undefined,
+        abort: async () => { abortCalls += 1 },
+      }),
+    }
+
+    const result = await new TransferJob({
+      descriptor,
+      catalog,
+      selection: new SelectionPolicy(true).snapshot(),
+      revisions,
+      broker,
+      output,
+      onProgress: progress => {
+        lastMaterialized = progress.materializedBytes
+        lastWritten = progress.writtenBytes
+      },
+    }).run()
+
+    expect(result.status).toBe('completed')
+    expect(openCount).toBe(3)
+    expect(checkpointCalls).toBe(2)
+    expect(abortCalls).toBe(0)
+    expect(readSpans).toEqual([byteRange(0n, 12n), byteRange(4n, 12n), byteRange(8n, 12n)])
+    expect([...disk]).toEqual([...payload])
+    expect(lastMaterialized).toBe(12n)
+    expect(lastWritten).toBe(12n)
+  })
+
+  it('bounds stalled reopens and rejects non-resumable, changed, and unavailable reopens', async () => {
+    const fileId = id(52)
+    const { shareInstance, descriptor, catalog } = makeSingleFileCatalog(fileId, 'clip.bin', 8n)
+    const prev = makeDescriptor({ shareInstance, fileId, revision: id(71), exactSize: 8n, sourceMetadata: metaA })
+    const sameMetaNext = makeDescriptor({ shareInstance, fileId, revision: id(72), exactSize: 8n, sourceMetadata: metaA })
+    const changedMetaNext = makeDescriptor({ shareInstance, fileId, revision: id(73), exactSize: 8n, sourceMetadata: metaB })
+    const noMetaPrev = makeDescriptor({ shareInstance, fileId, revision: id(74), exactSize: 8n })
+    const noMetaNext = makeDescriptor({ shareInstance, fileId, revision: id(75), exactSize: 8n })
+
+    // 1. Repeated zero-progress reopens stop after one stalled retry.
+    let stalledOpens = 0
+    let stalledAborts = 0
+    const stalledResult = await new TransferJob({
+      descriptor,
+      catalog,
+      selection: new SelectionPolicy(true).snapshot(),
+      revisions: {
+        open: async () => {
+          stalledOpens += 1
+          return Object.freeze({
+            descriptor: stalledOpens === 1 ? prev : sameMetaNext,
+            leaseId: id(stalledOpens),
+            release: async () => undefined,
+          })
+        },
+      },
+      broker: {
+        readRange: async function* () {
+          yield await Promise.reject(new RevisionReopenedDuringRecoveryError(prev, sameMetaNext))
+        },
+      },
+      output: {
+        sessionId: 'sess-stalled',
+        capabilities: { maxConcurrentFiles: 1, resumable: true },
+        openFile: async (): Promise<TransferOutputFile> => ({
+          completedRanges: [],
+          writeAt: async () => undefined,
+          checkpoint: async () => undefined,
+          commit: async () => undefined,
+          pause: async () => undefined,
+          abort: async () => { stalledAborts += 1 },
+        }),
+      },
+    }).run()
+    expect(stalledResult.status).toBe('failed')
+    expect(stalledOpens).toBe(2)
+    expect(stalledAborts).toBe(2)
+
+    // 2. Non-resumable backend does not checkpoint or retry on metadata-agreement reopen.
+    let portableOpens = 0
+    let portableCheckpoints = 0
+    let portableAborts = 0
+    const nonResumableResult = await new TransferJob({
+      descriptor,
+      catalog,
+      selection: new SelectionPolicy(true).snapshot(),
+      revisions: {
+        open: async () => {
+          portableOpens += 1
+          return Object.freeze({ descriptor: prev, leaseId: id(1), release: async () => undefined })
+        },
+      },
+      broker: {
+        readRange: async function* () {
+          yield await Promise.reject(new RevisionReopenedDuringRecoveryError(prev, sameMetaNext))
+        },
+      },
+      output: {
+        sessionId: 'sess-non-resumable',
+        capabilities: { maxConcurrentFiles: 1, resumable: false },
+        openFile: async (): Promise<TransferOutputFile> => ({
+          completedRanges: [],
+          writeAt: async () => undefined,
+          checkpoint: async () => { portableCheckpoints += 1 },
+          commit: async () => undefined,
+          pause: async () => undefined,
+          abort: async () => { portableAborts += 1 },
+        }),
+      },
+    }).run()
+    expect(nonResumableResult.status).toBe('failed')
+    expect(portableOpens).toBe(1)
+    expect(portableCheckpoints).toBe(0)
+    expect(portableAborts).toBe(1)
+
+    // 3. Observed source change reports source-changed immediately; unavailable metadata fails without retry.
+    const changedResult = await new TransferJob({
+      descriptor,
+      catalog,
+      selection: new SelectionPolicy(true).snapshot(),
+      revisions: { open: async () => Object.freeze({ descriptor: prev, leaseId: id(1), release: async () => undefined }) },
+      broker: {
+        readRange: async function* () {
+          yield await Promise.reject(new RevisionReopenedDuringRecoveryError(prev, changedMetaNext))
+        },
+      },
+      output: {
+        sessionId: 'sess-changed',
+        capabilities: { maxConcurrentFiles: 1, resumable: true },
+        openFile: async (): Promise<TransferOutputFile> => ({
+          completedRanges: [],
+          writeAt: async () => undefined,
+          checkpoint: async () => undefined,
+          commit: async () => undefined,
+          pause: async () => undefined,
+          abort: async () => undefined,
+        }),
+      },
+    }).run()
+    expect(changedResult.status).toBe('source-changed')
+
+    let unavailableOpens = 0
+    const unavailableResult = await new TransferJob({
+      descriptor,
+      catalog,
+      selection: new SelectionPolicy(true).snapshot(),
+      revisions: {
+        open: async () => {
+          unavailableOpens += 1
+          return Object.freeze({ descriptor: noMetaPrev, leaseId: id(1), release: async () => undefined })
+        },
+      },
+      broker: {
+        readRange: async function* () {
+          yield await Promise.reject(new RevisionReopenedDuringRecoveryError(noMetaPrev, noMetaNext))
+        },
+      },
+      output: {
+        sessionId: 'sess-unavailable',
+        capabilities: { maxConcurrentFiles: 1, resumable: true },
+        openFile: async (): Promise<TransferOutputFile> => ({
+          completedRanges: [],
+          writeAt: async () => undefined,
+          checkpoint: async () => undefined,
+          commit: async () => undefined,
+          pause: async () => undefined,
+          abort: async () => undefined,
+        }),
+      },
+    }).run()
+    expect(unavailableResult.status).toBe('failed')
+    expect(unavailableOpens).toBe(1)
+  })
+
+  it('pauses with storage-full when checkpointing for reopen retry hits quota exhaustion', async () => {
+    const fileId = id(53)
+    const { shareInstance, descriptor, catalog } = makeSingleFileCatalog(fileId, 'huge.bin', 8n)
+    const prev = makeDescriptor({ shareInstance, fileId, revision: id(81), exactSize: 8n, sourceMetadata: metaA })
+    const next = makeDescriptor({ shareInstance, fileId, revision: id(82), exactSize: 8n, sourceMetadata: metaA })
+    let openCount = 0
+
+    const result = await new TransferJob({
+      descriptor,
+      catalog,
+      selection: new SelectionPolicy(true).snapshot(),
+      revisions: {
+        open: async () => {
+          openCount += 1
+          return Object.freeze({ descriptor: prev, leaseId: id(1), release: async () => undefined })
+        },
+      },
+      broker: {
+        readRange: async function* () {
+          yield Object.freeze({ offset: 0n, data: new Uint8Array([1, 2, 3, 4]) })
+          throw new RevisionReopenedDuringRecoveryError(prev, next)
+        },
+      },
+      output: {
+        sessionId: 'sess-quota',
+        capabilities: { maxConcurrentFiles: 1, resumable: true },
+        openFile: async (): Promise<TransferOutputFile> => ({
+          completedRanges: [],
+          writeAt: async () => undefined,
+          checkpoint: async () => { throw new DOMException('Disk full', 'QuotaExceededError') },
+          commit: async () => undefined,
+          pause: async () => undefined,
+          abort: async () => undefined,
+        }),
+      },
+    }).run()
+
+    expect(result.status).toBe('paused')
+    expect(result.pauseReason).toBe('storage-full')
+    expect(openCount).toBe(1)
   })
 })
