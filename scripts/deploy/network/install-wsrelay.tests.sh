@@ -3,7 +3,7 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT
-export WS_TEST_ROOT="$work/host" WS_TEST_CONFIG="$work/node.json" WS_TEST_LOG="$work/restarts"
+export WS_TEST_ROOT="$work/host" WS_TEST_CONFIG="$work/node.json" WS_TEST_LOG="$work/restarts" WS_TEST_UNIT_LOG="$work/systemctl" WS_TEST_FAILED="$work/unit-failed"
 mkdir -p "$work/bin"
 touch "$WS_TEST_CONFIG"
 sed -e "s|^readonly root=.*|readonly root=$WS_TEST_ROOT|" \
@@ -25,10 +25,29 @@ cat > "$work/bin/systemctl" <<'SH'
 #!/usr/bin/env bash
 set -eu
 [[ ! -e /proc/$$/fd/9 && $# == 2 && $2 == windshare-network.service ]]
-[[ $1 == restart ]] || { [[ $1 == reset-failed ]]; exit; }
-target=$(basename "$(readlink "$WS_TEST_ROOT/current")")
-echo "$target" >> "$WS_TEST_LOG"
-[[ $target != "${FAIL_RESTART:-}" ]]
+case "$1" in
+    reset-failed)
+        rm -f -- "$WS_TEST_FAILED"
+        echo "reset-failed" >> "$WS_TEST_UNIT_LOG"
+        exit 0
+        ;;
+    stop)
+        target=$(basename "$(readlink "$WS_TEST_ROOT/current")")
+        [[ -x $WS_TEST_ROOT/releases/$target/wsrelay ]]
+        echo "stop:$target" >> "$WS_TEST_UNIT_LOG"
+        exit 0
+        ;;
+    restart)
+        [[ ! -e $WS_TEST_FAILED ]]
+        target=$(basename "$(readlink "$WS_TEST_ROOT/current")")
+        echo "restart:$target" >> "$WS_TEST_UNIT_LOG"
+        echo "$target" >> "$WS_TEST_LOG"
+        [[ $target != "${FAIL_RESTART:-}" ]]
+        ;;
+    *)
+        exit 1
+        ;;
+esac
 SH
 cat > "$work/bin/curl" <<'SH'
 #!/usr/bin/env bash
@@ -51,8 +70,14 @@ install_node() { bash "$work/install" "$(revision "$1")" "${2:-$digest}" < "$wor
 selected() { basename "$(readlink "$WS_TEST_ROOT/current")"; }
 fails() { if "$@"; then echo "unexpected success: $*" >&2; exit 1; fi; }
 
-FAIL_RESTART=$(revision 1) fails install_node 1
-[[ ! -e $WS_TEST_ROOT/current && ! -L $WS_TEST_ROOT/current && ! -d $WS_TEST_ROOT/releases/$(revision 1) ]]
+for failure in FAIL_RESTART FAIL_HEALTH; do
+    : > "$WS_TEST_UNIT_LOG"
+    export "$failure=$(revision 1)"
+    fails install_node 1
+    unset "$failure"
+    [[ ! -e $WS_TEST_ROOT/current && ! -L $WS_TEST_ROOT/current && ! -d $WS_TEST_ROOT/releases/$(revision 1) ]]
+    [[ $(cat "$WS_TEST_UNIT_LOG") == $'reset-failed\nrestart:'"$(revision 1)"$'\nstop:'"$(revision 1)"$'\nreset-failed' ]]
+done
 install_node 2
 fails install_node 3 "$(printf '%064d' 0)"
 FAIL_CONFIG=1 fails install_node 3
@@ -63,10 +88,13 @@ for failure in FAIL_RESTART FAIL_HEALTH; do
     unset "$failure"
     [[ $(selected) == "$(revision 2)" && $(tail -2 "$WS_TEST_LOG") == "$(revision 3)"$'\n'"$(revision 2)" ]]
 done
-# A bad rollback must also surface as a failed installation.
+# A bad rollback must also surface as a failed installation and discard the failed release.
 FAIL_RESTART=$(revision 2) FAIL_HEALTH=$(revision 3) fails install_node 3
-[[ $(selected) == "$(revision 2)" ]]
+[[ $(selected) == "$(revision 2)" && ! -d $WS_TEST_ROOT/releases/$(revision 3) ]]
+# Clear any prior start-limit/failed state before restarting a hotfix release.
+touch "$WS_TEST_FAILED"
 install_node 3
+[[ ! -e $WS_TEST_FAILED && $(selected) == "$(revision 3)" ]]
 install_node 4
 install_node 5
 [[ $(selected) == "$(revision 5)" && $(find "$WS_TEST_ROOT/releases" -mindepth 1 -maxdepth 1 -type d | wc -l) == 3 ]]

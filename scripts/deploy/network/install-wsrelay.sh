@@ -61,6 +61,8 @@ select_release() {
 }
 
 restart_healthy() {
+    # Clear any prior start-limit or failed state before both upgrades and rollbacks.
+    systemctl reset-failed "$unit" 9>&- || true
     systemctl restart "$unit" 9>&- || return 1
     for ((attempt=0; attempt<health_attempts; attempt++)); do
         if [[ $(curl --silent --max-time 1 --noproxy '*' --output /dev/null --write-out '%{http_code}' "$health_url") == 200 ]]; then
@@ -74,19 +76,25 @@ restart_healthy() {
 select_release "$release"
 if ! restart_healthy; then
     log startup_failed
+    rollback_error=
     if [[ -z $previous ]]; then
+        # Stop the unit before removing the symlink and binary it may still run or restart.
+        systemctl stop "$unit" 9>&- || true
+        systemctl reset-failed "$unit" 9>&- || true
         rm -- "$current"
     elif [[ $previous != "$release" ]]; then
         select_release "$previous"
-        # A crash loop may exhaust systemd's start limit before rollback.
-        systemctl reset-failed "$unit" 9>&- || true
-        restart_healthy || die "rollback to ${previous##*/} failed"
-        log "rolled_back_to_${previous##*/}"
+        if restart_healthy; then
+            log "rolled_back_to_${previous##*/}"
+        else
+            rollback_error="rollback to ${previous##*/} failed"
+        fi
     fi
     if [[ $new_release == true ]]; then
         rm -- "$release/wsrelay"
         rmdir -- "$release"
     fi
+    [[ -z $rollback_error ]] || die "$rollback_error"
     exit 1
 fi
 
