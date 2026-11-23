@@ -584,3 +584,104 @@ func TestAuthorizationWaitDoesNotPenalizeCandidateInBackupRanking(t *testing.T) 
 		}
 	})
 }
+
+func TestCandidateFailingOrStoppingBeforeBeginDoesNotBlockBackup(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		plan := relayplan.Plan{
+			Network: []relayplan.Candidate{
+				{URL: "https://primary.example", Zone: "global", Provider: "a", Operator: "one"},
+				{URL: "https://dial-failed.example", Zone: "cn", Provider: "c", Operator: "two"},
+				{URL: "https://stopped-early.example", Zone: "cn", Provider: "d", Operator: "three"},
+				{URL: "https://fallback.example", Zone: "global", Provider: "b", Operator: "two"},
+			},
+		}
+		admissions := NewNetworkAdmissions(plan, nil, nil)
+		var mu sync.Mutex
+		var events []Admission
+		admissions.Observe(func(event Admission) {
+			mu.Lock()
+			events = append(events, event)
+			mu.Unlock()
+		})
+		set, err := NewPlannedSender(t.Context(), plan, func(_ context.Context, url string) (SenderEndpoint, error) {
+			if url == plan.Network[1].URL {
+				return nil, errors.New("endpoint setup failed before Begin")
+			}
+			cfg := newSenderRelayTestConfig(t, nil, &senderRelayTestDialer{
+				dial: func(dialCtx context.Context, req relayv2.SenderConfig) (SenderConnection, error) {
+					delay := 20 * time.Millisecond
+					if req.RelayBaseURL == plan.Network[3].URL {
+						delay = 50 * time.Millisecond
+					}
+					if err := waitDialDelay(dialCtx, delay); err != nil {
+						return SenderConnection{}, err
+					}
+					return blockingTestConnection(), nil
+				},
+			}, nil)
+			cfg.Candidate = Candidate{PublicURL: url}
+			cfg.Attempts = admissions.Control(url)
+			lifecycle, err := NewSenderLifecycle(cfg)
+			if err != nil {
+				return nil, err
+			}
+			if url == plan.Network[2].URL {
+				lifecycle.StopRecovery()
+			}
+			return lifecycle, nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			set.StopRecovery()
+			set.workers.Wait()
+		}()
+
+		if err := set.WaitReady(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(100 * time.Millisecond)
+		synctest.Wait()
+
+		want := []string{plan.Network[3].URL, plan.Network[0].URL}
+		if got := set.Registrations().Admitted; !slices.Equal(got, want) {
+			t.Fatalf("admitted = %v, want %v", got, want)
+		}
+		if status := set.Status(); status.Availability.Available != 2 {
+			t.Fatalf("available = %d, want 2 (%+v)", status.Availability.Available, status)
+		}
+		mu.Lock()
+		for _, event := range events {
+			if event.Endpoint == plan.Network[3].URL && event.Reason == AdmissionReasonBackupNotChosen {
+				t.Fatalf("healthy fallback was blocked by candidate that never entered Begin: %+v", events)
+			}
+		}
+		mu.Unlock()
+	})
+
+	// Also verify the Begin() gate directly when a candidate enters Begin only
+	// after primary is already admitted while a higher-ranked candidate never starts.
+	synctest.Test(t, func(t *testing.T) {
+		plan := relayplan.Plan{
+			Network: []relayplan.Candidate{
+				{URL: "https://primary.example", Zone: "global", Provider: "a", Operator: "one"},
+				{URL: "https://never-begun.example", Zone: "cn", Provider: "c", Operator: "two"},
+				{URL: "https://fallback.example", Zone: "global", Provider: "b", Operator: "two"},
+			},
+		}
+		a := NewNetworkAdmissions(plan, nil, nil)
+		primary, err := a.Control(plan.Network[0].URL).Begin(t.Context())
+		if err != nil || !primary.Admit() {
+			t.Fatalf("primary admission failed: %v", err)
+		}
+		primary.Release()
+		a.Control(plan.Network[1].URL).Unavailable()
+
+		fallback, err := a.Control(plan.Network[2].URL).Begin(t.Context())
+		if err != nil || !fallback.Admit() {
+			t.Fatalf("fallback blocked in Begin/Admit by unstarted candidate: %v", err)
+		}
+		fallback.Release()
+	})
+}

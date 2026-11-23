@@ -110,13 +110,14 @@ func NewNetworkAdmissions(plan relayplan.Plan, clock Clock, serverRetryAt func(s
 	a := &NetworkAdmissions{clock: clock, serverRetryAt: serverRetryAt, candidates: candidates, policy: plan.Policy,
 		target: min(relayplan.TargetNetworkRegistrations, MaximumEndpoints-len(plan.Configured)),
 		states: make([]admissionState, len(candidates)), changed: make(chan struct{}), primary: -1}
-	started := clock.Now()
 	for i, candidate := range a.candidates {
 		at := candidate.ServerRetryAt
 		if !plan.Decision.CooldownFallback && candidate.CooldownUntil.After(at) {
 			at = candidate.CooldownUntil
 		}
-		a.states[i] = admissionState{notBefore: at, eligible: i < len(plan.Network) && !at.After(started)}
+		// Eligibility is entered only from Begin so candidates that fail or stop
+		// before dialing cannot occupy backup ranking.
+		a.states[i] = admissionState{notBefore: at}
 	}
 	return a
 }
