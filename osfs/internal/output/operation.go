@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
@@ -261,82 +262,48 @@ func (a *Authority) reserveTopLevelLocked(
 		}
 		return res, a.root, false, nil
 	case receivecontract.DirectoryTreeResultRoot:
-		return a.reserveResultRootLocked(opID, resID, artifact, layout, authorityRef)
+		rootLayout, ok := layout.ResultRoot()
+		if !ok {
+			return receivecontract.DestinationReservation{}, nil, false, transfer.ErrInvalidOutputBinding
+		}
+		return a.reserveNamedEntryLocked(
+			opID, resID, artifact, authorityRef, ctrlDir,
+			receivecontract.ContainerEntryResultRoot, rootLayout.Name(),
+		)
 	case receivecontract.DirectoryTreeSingleFile:
-		return a.reserveSingleFileLocked(opID, resID, artifact, layout, authorityRef, ctrlDir)
+		single, ok := layout.SingleFile()
+		if !ok {
+			return receivecontract.DestinationReservation{}, nil, false, transfer.ErrInvalidOutputBinding
+		}
+		return a.reserveNamedEntryLocked(
+			opID, resID, artifact, authorityRef, ctrlDir,
+			receivecontract.ContainerEntrySingleFile, single.SuggestedName,
+		)
 	default:
 		return receivecontract.DestinationReservation{}, nil, false, transfer.ErrInvalidOutputBinding
 	}
 }
 
-func (a *Authority) reserveResultRootLocked(
+func (a *Authority) reserveNamedEntryLocked(
 	opID receivecontract.OperationID,
 	resID receivecontract.DestinationReservationID,
 	artifact receivecontract.ArtifactSpec,
-	layout receivecontract.DirectoryTreeLayout,
-	authorityRef receivecontract.AuthorityRef,
-) (receivecontract.DestinationReservation, *Dir, bool, error) {
-	rootLayout, ok := layout.ResultRoot()
-	if !ok {
-		return receivecontract.DestinationReservation{}, nil, false, transfer.ErrInvalidOutputBinding
-	}
-	for idx := range uint32(maxReservationProbes) {
-		logical, err := receivecontract.CollisionName(opID, rootLayout.Name(), idx, false)
-		if err != nil {
-			return receivecontract.DestinationReservation{}, nil, false, err
-		}
-		physical, repaired, err := sanitizeTopLevelComponent(opID, logical, a.root)
-		if err != nil {
-			return receivecontract.DestinationReservation{}, nil, false, err
-		}
-		err = mkdirChild(a.root, physical, publicDirMode)
-		if errors.Is(err, ErrNamespaceCollision) || errors.Is(err, fs.ErrExist) {
-			continue
-		}
-		if err != nil {
-			return receivecontract.DestinationReservation{}, nil, false, err
-		}
-		resDir, err := openChildDir(a.root, physical)
-		if err != nil {
-			_ = removeChild(a.root, physical, true)
-			return receivecontract.DestinationReservation{}, nil, false, err
-		}
-		res, err := receivecontract.NewNativeNamedEntryReservation(opID, resID, artifact, authorityRef, logical, physical, idx)
-		if err != nil {
-			_ = resDir.Close()
-			_ = removeChild(a.root, physical, true)
-			return receivecontract.DestinationReservation{}, nil, false, err
-		}
-		if repaired {
-			emitTrace(a.diagnostics, traceEvent{
-				component:    "directory",
-				operation:    "map_name",
-				decision:     "admitted",
-				operationID:  opID,
-				logicalPath:  logical,
-				physicalPath: physical,
-			})
-		}
-		return res, resDir, true, nil
-	}
-	return receivecontract.DestinationReservation{}, nil, false, ErrNamespaceCollision
-}
-
-func (a *Authority) reserveSingleFileLocked(
-	opID receivecontract.OperationID,
-	resID receivecontract.DestinationReservationID,
-	artifact receivecontract.ArtifactSpec,
-	layout receivecontract.DirectoryTreeLayout,
 	authorityRef receivecontract.AuthorityRef,
 	ctrlDir *Dir,
+	entryKind receivecontract.ContainerEntryKind,
+	requestedName string,
 ) (receivecontract.DestinationReservation, *Dir, bool, error) {
-	single, ok := layout.SingleFile()
-	if !ok {
-		return receivecontract.DestinationReservation{}, nil, false, transfer.ErrInvalidOutputBinding
+	claimed, err := existingTopLevelClaims(ctrlDir)
+	if err != nil {
+		return receivecontract.DestinationReservation{}, nil, false, err
 	}
-	claimed := existingSingleFileClaims(ctrlDir)
+	fileLike := entryKind == receivecontract.ContainerEntrySingleFile
+	traceComponent := "directory"
+	if fileLike {
+		traceComponent = "file"
+	}
 	for idx := range uint32(maxReservationProbes) {
-		logical, err := receivecontract.CollisionName(opID, single.SuggestedName, idx, true)
+		logical, err := receivecontract.CollisionName(opID, requestedName, idx, fileLike)
 		if err != nil {
 			return receivecontract.DestinationReservation{}, nil, false, err
 		}
@@ -344,23 +311,27 @@ func (a *Authority) reserveSingleFileLocked(
 		if err != nil {
 			return receivecontract.DestinationReservation{}, nil, false, err
 		}
-		if _, taken := claimed[physical]; taken {
+		if _, taken := claimed[catalog.SiblingNameKey(physical)]; taken {
 			continue
 		}
-		kind, _, err := lstatChild(a.root, physical)
+		resDir, ownsRes, collided, err := a.claimPublicEntryLocked(entryKind, physical)
 		if err != nil {
 			return receivecontract.DestinationReservation{}, nil, false, err
 		}
-		if kind != EntryAbsent {
+		if collided {
 			continue
 		}
 		res, err := receivecontract.NewNativeNamedEntryReservation(opID, resID, artifact, authorityRef, logical, physical, idx)
 		if err != nil {
+			if ownsRes {
+				_ = resDir.Close()
+				_ = removeChild(a.root, physical, true)
+			}
 			return receivecontract.DestinationReservation{}, nil, false, err
 		}
 		if repaired {
 			emitTrace(a.diagnostics, traceEvent{
-				component:    "file",
+				component:    traceComponent,
 				operation:    "map_name",
 				decision:     "admitted",
 				operationID:  opID,
@@ -368,16 +339,55 @@ func (a *Authority) reserveSingleFileLocked(
 				physicalPath: physical,
 			})
 		}
-		return res, a.root, false, nil
+		return res, resDir, ownsRes, nil
 	}
 	return receivecontract.DestinationReservation{}, nil, false, ErrNamespaceCollision
 }
 
-func existingSingleFileClaims(ctrlDir *Dir) map[string]struct{} {
+func (a *Authority) claimPublicEntryLocked(
+	entryKind receivecontract.ContainerEntryKind,
+	physical string,
+) (resDir *Dir, ownsRes bool, collided bool, err error) {
+	switch entryKind {
+	case receivecontract.ContainerEntryResultRoot:
+		err = mkdirChild(a.root, physical, publicDirMode)
+		if errors.Is(err, ErrNamespaceCollision) || errors.Is(err, fs.ErrExist) {
+			return nil, false, true, nil
+		}
+		if err != nil {
+			return nil, false, false, err
+		}
+		resDir, err = openChildDir(a.root, physical)
+		if err != nil {
+			_ = removeChild(a.root, physical, true)
+			return nil, false, false, err
+		}
+		return resDir, true, false, nil
+	case receivecontract.ContainerEntrySingleFile:
+		kind, _, err := lstatChild(a.root, physical)
+		if err != nil {
+			return nil, false, false, err
+		}
+		if kind != EntryAbsent {
+			return nil, false, true, nil
+		}
+		return a.root, false, false, nil
+	default:
+		return nil, false, false, transfer.ErrInvalidOutputBinding
+	}
+}
+
+// existingTopLevelClaims collects normalized container-root physical names held
+// by unfinished operations in ctrlDir. Single files stay staged privately until
+// commit, and a paused result root may have been removed from disk before
+// resume; checking every retained reservation prevents another file or folder
+// task from claiming the same top-level name (including case-folded aliases on
+// Windows/macOS).
+func existingTopLevelClaims(ctrlDir *Dir) (map[string]struct{}, error) {
 	claimed := make(map[string]struct{})
 	names, err := readDirNames(ctrlDir)
 	if err != nil {
-		return claimed
+		return nil, err
 	}
 	for _, name := range names {
 		if _, ok := isValidOpDirName(name); !ok {
@@ -393,12 +403,11 @@ func existingSingleFileClaims(ctrlDir *Dir) map[string]struct{} {
 			continue
 		}
 		if res, ok := header.Intent.MaterializationPlan().DestinationReservation(); ok &&
-			res.Kind() == receivecontract.ReservationNamedContainerEntry &&
-			res.EntryKind() == receivecontract.ContainerEntrySingleFile {
-			claimed[res.PhysicalName()] = struct{}{}
+			res.Kind() == receivecontract.ReservationNamedContainerEntry {
+			claimed[catalog.SiblingNameKey(res.PhysicalName())] = struct{}{}
 		}
 	}
-	return claimed
+	return claimed, nil
 }
 
 func (op *Operation) ReceiveIntent() (transfer.ReceiveIntent, bool) {
