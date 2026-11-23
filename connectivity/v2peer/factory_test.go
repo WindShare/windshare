@@ -11,6 +11,7 @@ import (
 	"time"
 
 	pion "github.com/pion/webrtc/v4"
+
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/catalog"
 	framechannel "github.com/windshare/windshare/core/framechannel"
@@ -35,17 +36,19 @@ type capturedFailure struct {
 }
 
 type testPeerSession struct {
-	share           catalog.ShareInstance
-	sessionID       protocolsession.ProtocolSessionID
-	controls        chan capturedControl
-	failures        chan capturedFailure
-	admissions      chan protocolsession.FrameChannel
-	ownedAdmissions chan protocolsession.FrameChannel
-	lane            session.LaneIdentity
-	admitErr        error
+	share             catalog.ShareInstance
+	sessionID         protocolsession.ProtocolSessionID
+	controls          chan capturedControl
+	failures          chan capturedFailure
+	admissions        chan protocolsession.FrameChannel
+	ownedAdmissions   chan protocolsession.FrameChannel
+	lane              session.LaneIdentity
+	admitErr          error
+	retireReplacement func(session.LaneIdentity, session.LaneIdentity) bool
 
 	sessionControlMu   sync.Mutex
 	pathControlHandler func(context.Context, []byte) error
+	turnHandler        func(context.Context, []byte) error
 	sessionControls    chan capturedControl
 }
 
@@ -62,6 +65,10 @@ func newTestPeerSession(seed byte) *testPeerSession {
 		lane:            session.LaneIdentity{ID: 9, Epoch: 2},
 		sessionControls: make(chan capturedControl, peerTestSessionControlCapacity),
 	}
+}
+
+func (s *testPeerSession) RetireReplacedLane(old, successor session.LaneIdentity) bool {
+	return s.retireReplacement != nil && s.retireReplacement(old, successor)
 }
 
 func TestPeerFactoriesValidateIndependentPhaseBudgets(t *testing.T) {
@@ -448,7 +455,7 @@ func TestSenderHandlerRetainsBindingAcrossCompletionAndCancelUntilExpiry(t *test
 	operationKey := op.ID()
 	handler.mu.Lock()
 	handler.attempts[operationKey] = attempt
-	handler.bindings[binding] = operationKey
+	handler.paths[binding.PeerPathID] = senderPathAttempts{current: attempt}
 	if claim := handler.claimEvidenceLocked(operationKey, binding); !claim.acquired {
 		handler.mu.Unlock()
 		t.Fatalf("installed attempt evidence claim = %#v", claim)
@@ -849,7 +856,7 @@ func testSenderHandlerCancellationKeepsAnAdmittedLaneUntilPhysicalClose(t *testi
 		handler.mu.Lock()
 		attempt = handler.attempts[operationKey]
 		handler.mu.Unlock()
-		return attempt != nil && attempt.attached.Load()
+		return attempt != nil && attempt.attached()
 	})
 	if err := handler.Cancel(ctx, op); err != nil {
 		t.Fatalf("cancel attached operation: %v", err)

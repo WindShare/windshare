@@ -3,6 +3,7 @@ import { relayCopy } from './locales'
 import { request, RequestError } from '../ui/request'
 
 export interface Capabilities {
+  managed_turn?: boolean
   revocation_stops_shares?: boolean
   password_change?: boolean
 }
@@ -55,6 +56,8 @@ export class RelayClient {
   signIn(password: string, token: string | null) {
     return this.call(token ? 'initialize' : 'login', token ? { password, token } : { password })
   }
+  turnStatus = (signal: AbortSignal) => this.call<{ enabled: boolean }>('turn/status', undefined, signal)
+  toggleTURN = (enabled: boolean) => this.call<{ enabled: boolean }>('turn/toggle', { enabled })
   signOut = () => this.call('logout', {})
   changePassword = (currentPassword: string, newPassword: string) =>
     this.call('password', { current_password: currentPassword, new_password: newPassword })

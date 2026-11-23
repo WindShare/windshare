@@ -41,12 +41,15 @@ const NEGOTIATION_EVENT_RESERVE = 16
 const SELECTED_PAIR_SAMPLE_MILLISECONDS = 5_000
 const PROVIDER_OBSERVATION_CAPACITY = 64
 
+export interface TURNServer { readonly urls: readonly string[]; readonly username: string; readonly credential: string }
+
 export interface OfferChannelFactory {
   offer(
     route: SignalingRoute,
     signal: AbortSignal,
     observer?: PeerOfferAttemptObserver,
     profile?: AttemptICEProfile,
+    turnServer?: TURNServer,
   ): Promise<PeerChannel>
 }
 
@@ -109,12 +112,16 @@ export class BrowserOfferChannelFactory implements OfferChannelFactory {
     signal: AbortSignal,
     observer?: PeerOfferAttemptObserver,
     profile?: AttemptICEProfile,
+    turnServer?: TURNServer,
   ): Promise<PeerChannel> {
     signal.throwIfAborted()
     let connection: BrowserPeerConnection
     try {
       const configuration = cloneConfiguration(this.#configuration)
-      if (profile !== undefined) {
+      if (turnServer !== undefined) {
+        configuration.iceTransportPolicy = 'relay'
+        configuration.iceServers = [{ urls: [...turnServer.urls], username: turnServer.username, credential: turnServer.credential }]
+      } else if (profile !== undefined) {
         configuration.iceServers = profile.urls.length === 0 ? [] : [{ urls: [...profile.urls] }]
       }
       connection = this.#peerConnections.create(configuration, (fact) => observer?.providerFact?.(fact))
@@ -133,7 +140,7 @@ export class BrowserOfferChannelFactory implements OfferChannelFactory {
       channel,
       route,
       this.#maxCandidates,
-      observer,
+      observer, turnServer === undefined ? 'direct' : 'turn',
     )
     negotiation.run(signal).catch(() => undefined)
     return negotiation.opened
@@ -155,6 +162,7 @@ class OfferNegotiation {
   readonly #channel: WebRTCFrameChannel
   readonly #route: SignalingRoute
   readonly #candidateBudget: CandidateBudget
+  readonly #expected: 'turn' | 'direct'
   readonly #path: BrowserPeerRoute
   readonly #routeListeners = new Set<(route: PeerPathRoute) => void>()
   #selectedPairID: string | undefined
@@ -189,7 +197,9 @@ class OfferNegotiation {
     route: SignalingRoute,
     maximumCandidates: number,
     observer: PeerOfferAttemptObserver | undefined,
+    expected: 'turn' | 'direct',
   ) {
+    this.#expected = expected
     this.#connection = connection
     this.#peer = connection.peer
     this.#channel = channel
@@ -373,7 +383,8 @@ class OfferNegotiation {
   }
 
   #publishOpenedChannel(): void {
-    if (!this.#openedChannel && this.#channel.state === 'open' && this.#path.current !== undefined) {
+    if (this.#path.current !== undefined && this.#path.current !== this.#expected) throw new PeerNegotiationError('Selected ICE route does not match the offer purpose')
+    if (!this.#openedChannel && this.#channel.state === 'open' && this.#path.current === this.#expected) {
       this.#openedChannel = true
       this.#observe((observer) => observer.dataChannelOpened(() => this.#candidateCounts()))
       this.#opened.resolve(this.#ownedChannel)

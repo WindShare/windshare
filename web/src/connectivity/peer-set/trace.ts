@@ -4,9 +4,9 @@ export type PeerRecoveryTracePayload<Event = PeerRecoveryTraceEvent> =
   Event extends PeerRecoveryTraceEvent ? Omit<Event, 'eventName' | 'correlation'> : never
 export class PeerRecoveryTrace {
   readonly #protocolSessionId: ProtocolSessionIdentity
-  readonly #peerPathId: PeerPathIdentity
+  readonly #peerPathId: PeerPathIdentity | undefined
   readonly #trace: ConnectivityTraceSource | undefined
-  constructor(session: ProtocolSessionIdentity, path: PeerPathIdentity, trace?: ConnectivityTraceSource) {
+  constructor(session: ProtocolSessionIdentity, path: PeerPathIdentity | undefined, trace?: ConnectivityTraceSource) {
     this.#protocolSessionId = session
     this.#peerPathId = path
     this.#trace = trace
@@ -21,7 +21,7 @@ export class PeerRecoveryTrace {
       if (observer === undefined) return
       const correlation: ProtocolCorrelation = Object.freeze({
         protocolSessionId: this.#protocolSessionId,
-        peerPathId: this.#peerPathId,
+        ...(this.#peerPathId === undefined ? {} : { peerPathId: this.#peerPathId }),
         ...(attemptId === undefined ? {} : { peerAttemptId: attemptId }),
         ...(lane === undefined
           ? {}

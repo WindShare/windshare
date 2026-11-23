@@ -8,13 +8,18 @@ import (
 
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/socketauthority"
+	"github.com/windshare/windshare/connectivity/turnsession"
 	"github.com/windshare/windshare/connectivity/v2signal"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
 func (handler *senderHandler) runSessionControls(ctx context.Context) func() {
 	child, cancel := context.WithCancel(ctx)
 	var work sync.WaitGroup
+	handler.session.SetTURNControlHandler(func(_ context.Context, body []byte) error {
+		return handler.turn.Handle(child, body, handler.session.SendTURNControl)
+	})
 	handler.session.SetPeerPathControlHandler(func(_ context.Context, body []byte) error {
 		handler.factory.native.ApplyControl([16]byte(handler.session.ProtocolSessionID()), body)
 		return nil
@@ -24,9 +29,32 @@ func (handler *senderHandler) runSessionControls(ctx context.Context) func() {
 	})
 	return func() {
 		cancel()
+		handler.session.SetTURNControlHandler(nil)
+		handler.turn.Close()
 		work.Wait()
 		handler.session.SetPeerPathControlHandler(nil)
 	}
+}
+
+// A renewal can reach the sender over another lane before the old TURN transport
+// closes. Both exact operations stay routable and joinable during that overlap.
+type senderPathAttempts struct {
+	current, previous *peerAttempt
+}
+
+func (path senderPathAttempts) contains(binding v2signal.Binding) bool {
+	return path.current != nil && path.current.binding() == binding ||
+		path.previous != nil && path.previous.binding() == binding
+}
+
+func (path senderPathAttempts) renewalPredecessor(offer v2signal.Offer, serviceID string) *session.LaneIdentity {
+	old := path.current
+	if path.previous != nil || old.binding().Purpose != v2signal.TURNRelay || offer.Binding.Purpose != v2signal.TURNRelay ||
+		old.binding().PeerSlot != offer.Binding.PeerSlot || old.config.turnServiceID != serviceID ||
+		old.config.offer.TURNGrantID == offer.TURNGrantID {
+		return nil
+	}
+	return old.installedLane.Load()
 }
 
 func (handler *senderHandler) claimRejectedOffer(
@@ -39,7 +67,7 @@ func (handler *senderHandler) claimRejectedOffer(
 	handler.mu.Lock()
 	defer handler.mu.Unlock()
 	handler.expireRetiredLocked(handler.factory.now())
-	_, activeBinding := handler.bindings[binding]
+	activeBinding := handler.paths[binding.PeerPathID].contains(binding)
 	claim := handler.claimEvidenceLocked(operation, binding)
 	if activeBinding {
 		// An active recorder owns this identity. Reserving a missing claim repairs
@@ -63,7 +91,7 @@ func (handler *senderHandler) claimRejectedOffer(
 	if handler.stopping {
 		return claim
 	}
-	if len(handler.bindings)+len(handler.retiredBindings) >= handler.factory.maxRetiredBindings {
+	if len(handler.attempts)+len(handler.retiredBindings) >= handler.factory.maxRetiredBindings {
 		blockedUntil := handler.factory.now().Add(handler.factory.retiredBindingTTL)
 		if handler.replayBlockedUntil.Before(blockedUntil) {
 			handler.replayBlockedUntil = blockedUntil
@@ -86,6 +114,11 @@ func (handler *senderHandler) startAttempt(
 ) error {
 	operation := op.ID()
 	var capacityBoundary *v2signal.Binding
+	var grant turnsession.OfferGrant
+	authorized := true
+	if offer.Binding.Purpose == v2signal.TURNRelay {
+		grant, authorized = handler.turn.BindOffer(offer.TURNGrantID)
+	}
 	handler.mu.Lock()
 	defer func() {
 		handler.mu.Unlock()
@@ -96,7 +129,7 @@ func (handler *senderHandler) startAttempt(
 	if handler.stopping {
 		return context.Canceled
 	}
-	if handler.factory.native.Retired([16]byte(handler.session.ProtocolSessionID()), offer.Binding.PeerPathID) {
+	if offer.Binding.Purpose != v2signal.TURNRelay && handler.factory.native.Retired([16]byte(handler.session.ProtocolSessionID()), offer.Binding.PeerPathID) {
 		return ErrPeerPathRetired
 	}
 	handler.expireRetiredLocked(handler.factory.now())
@@ -109,21 +142,24 @@ func (handler *senderHandler) startAttempt(
 	if _, exists := handler.retiredOperations[operation]; exists {
 		return errors.Join(ErrProtocol, errors.New("retired peer offer operation was repeated"))
 	}
-	if _, exists := handler.bindings[offer.Binding]; exists {
-		return errors.Join(ErrProtocol, v2signal.ErrSignalBinding)
-	}
 	if _, exists := handler.retiredBindings[offer.Binding]; exists {
 		return errors.Join(ErrProtocol, v2signal.ErrSignalBinding)
 	}
 	if handler.evidenceAuthority.claimed(offer.Binding) {
 		return errors.Join(ErrProtocol, v2signal.ErrSignalBinding)
 	}
-	for binding := range handler.bindings {
-		if binding.PeerPathID == offer.Binding.PeerPathID {
+	if !authorized {
+		return turnsession.ErrUnknownGrant
+	}
+	var previousLane *session.LaneIdentity
+	pathID := offer.Binding.PeerPathID
+	path, occupied := handler.paths[pathID]
+	if occupied {
+		previousLane = path.renewalPredecessor(offer, grant.ServiceID())
+		if previousLane == nil {
 			return ErrAttemptCapacity
 		}
-	}
-	if len(handler.attempts) >= SenderMaxActivePeerAttemptsPerSession {
+	} else if len(handler.paths) >= SenderMaxActivePeerAttemptsPerSession {
 		return ErrAttemptCapacity
 	}
 	// Detailed retired operations are dispensable once the path boundary has
@@ -136,13 +172,13 @@ func (handler *senderHandler) startAttempt(
 	}
 	// Every admitted attempt must be able to leave a replay tombstone. Reserving
 	// that budget up front avoids a security-sensitive eviction race at teardown.
-	if len(handler.bindings)+len(handler.retiredBindings) >= handler.factory.maxRetiredBindings {
+	if len(handler.attempts)+len(handler.retiredBindings) >= handler.factory.maxRetiredBindings {
 		return ErrReplayCapacity
 	}
 	attempt := newPeerAttempt(peerAttemptConfig{
 		factory: handler.factory, session: handler.session,
 		operation: op, offer: offer,
-		onDone: handler.attemptDone,
+		onDone: handler.attemptDone, turnServiceID: grant.ServiceID(), replacesTURN: previousLane,
 	})
 	claim := handler.claimEvidenceLocked(operation, offer.Binding)
 	if claim.capacity {
@@ -156,9 +192,9 @@ func (handler *senderHandler) startAttempt(
 		return errors.Join(ErrProtocol, v2signal.ErrSignalBinding)
 	}
 	handler.attempts[operation] = attempt
-	handler.bindings[offer.Binding] = operation
+	handler.paths[pathID] = senderPathAttempts{current: attempt, previous: path.current}
 	handler.work.Add(1)
-	attempt.start(ctx, &handler.work)
+	attempt.start(ctx, &handler.work, grant)
 	return nil
 }
 
@@ -211,7 +247,16 @@ func (handler *senderHandler) attemptDone(attempt *peerAttempt, result error) {
 	handler.mu.Lock()
 	if handler.attempts[operation] == attempt {
 		delete(handler.attempts, operation)
-		delete(handler.bindings, binding)
+		path := handler.paths[binding.PeerPathID]
+		if path.current == attempt {
+			path.current = path.previous
+		}
+		path.previous = nil
+		if path.current == nil {
+			delete(handler.paths, binding.PeerPathID)
+		} else {
+			handler.paths[binding.PeerPathID] = path
+		}
 		if !handler.stopping {
 			retired := retiredBinding{
 				operation: operation,
@@ -261,7 +306,7 @@ func (handler *senderHandler) stopAll() {
 	handler.factory.native.CloseSession([16]byte(handler.session.ProtocolSessionID()))
 	handler.mu.Lock()
 	clear(handler.attempts)
-	clear(handler.bindings)
+	clear(handler.paths)
 	handler.evidenceAuthority.reset()
 	clear(handler.retiredOperations)
 	clear(handler.retiredBindings)
@@ -327,7 +372,7 @@ func (attempt *peerAttempt) prepareNativeAttempt(ctx context.Context, request na
 	return nil, err
 }
 
-func (attempt *peerAttempt) run(ctx context.Context) error {
+func (attempt *peerAttempt) run(ctx context.Context, grant turnsession.OfferGrant) error {
 	attempt.recorder.begin()
 	// The received offer already owns its preparation window. Capacity waiting
 	// and answer construction share this one deadline; a grant cannot restart it.
@@ -340,7 +385,7 @@ func (attempt *peerAttempt) run(ctx context.Context) error {
 	attempt.recorder.negotiationDeadlineArmed()
 	request := nativepeer.AttemptRequest{Configuration: attempt.config.factory.configuration, ProtocolSessionID: [16]byte(attempt.config.session.ProtocolSessionID()), Binding: attempt.binding()}
 	var prepared *nativepeer.PreparedAttempt
-	if attempt.config.factory.peerConnections == nil {
+	if attempt.binding().Purpose != v2signal.TURNRelay && attempt.config.factory.peerConnections == nil {
 		prepared, err = attempt.prepareNativeAttempt(negotiationContext, request)
 		if err != nil {
 			return attempt.finish(ctx, errors.Join(ErrNegotiation, err), nil, false)
@@ -348,9 +393,15 @@ func (attempt *peerAttempt) run(ctx context.Context) error {
 		defer prepared.Close()
 	}
 	var peer PeerConnection
-	if attempt.config.factory.peerConnections != nil {
+	switch {
+	case attempt.binding().Purpose == v2signal.TURNRelay:
+		peer, err = attempt.openTURN(negotiationContext, request, grant)
+		if attempt.releaseTURN != nil {
+			defer attempt.releaseTURN()
+		}
+	case attempt.config.factory.peerConnections != nil:
 		peer, err = attempt.config.factory.peerConnections.NewPeerConnection(negotiationContext, request)
-	} else {
+	default:
 		connection, startErr := prepared.Start(negotiationContext)
 		err = startErr
 		if connection != nil {

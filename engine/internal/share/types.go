@@ -6,6 +6,8 @@ import (
 	"errors"
 	"time"
 
+	"github.com/windshare/windshare/connectivity/turnsession"
+
 	"github.com/windshare/windshare/engine/relayprofile"
 
 	"github.com/windshare/windshare/core/diagnostics"
@@ -96,6 +98,7 @@ type SleepInhibitor interface {
 }
 
 type Dependencies struct {
+	TURNProvider     turnsession.Provider
 	Clock            relayset.Clock
 	Control          task.Control
 	Controller       *Controller

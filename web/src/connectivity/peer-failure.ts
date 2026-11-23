@@ -4,6 +4,7 @@ import {
   type LaneRejection,
 } from '../session/lane-codec'
 import { peerFailureScope } from '../session/message'
+import type { SessionLaneIdentity } from '../session/runtime-types'
 
 export type PeerAttemptPhase = 'negotiation' | 'admission'
 
@@ -73,10 +74,7 @@ export type PeerAttemptFailure =
       readonly terminal: ProtocolSessionTerminalSnapshot
     }
 
-export interface PeerAdmittedLane {
-  readonly laneId: number
-  readonly laneEpoch: number
-}
+export type PeerAdmittedLane = SessionLaneIdentity
 
 export type PeerAttemptCancellationOwner =
   | 'last-activation'

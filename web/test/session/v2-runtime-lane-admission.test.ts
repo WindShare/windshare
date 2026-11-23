@@ -2,6 +2,8 @@ import { createEd25519Verifier } from '../../src/crypto/ed25519'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ShareDescriptor } from '../../src/catalog/records'
 import type { FrameChannel } from '../../src/contracts/channel'
+import { LaneSet } from '../../src/content/lane-set'
+import { ReceiverConnectivity } from '../../src/connectivity/receiver-policy'
 import type { ProtocolTraceEvent } from '../../src/session/diagnostics'
 import {
   LaneInstallationError,
@@ -9,6 +11,8 @@ import {
 } from '../../src/session/runtime'
 import type { LaneGrant } from '../../src/session/lane-codec'
 import { encodeCanonicalCbor } from '../../src/protocol/cbor'
+import { encodeTURNDemand } from '../../src/protocol/turn-control'
+import { EnvelopeOpener } from '../../src/session/envelope'
 import { encodeMessage, MESSAGE_KIND } from '../../src/session/message'
 import type { ReceiverSessionOptions } from '../../src/session/runtime-types'
 import type { SessionKeys } from '../../src/session/transcript'
@@ -92,6 +96,7 @@ describe('receiver runtime caller-owned lane admission', () => {
     const replacement = new ScriptedChannel(b64ToBytes(lane.laneAckB64))
     try {
       await expect(runtime.adoptGrantedLane(replacement, grant())).resolves.toMatchObject({ installation: 'installed' })
+      await runtime.retireLaneIfCovered({ laneId: lane.attachedLaneId, laneEpoch: 0 })
       await runtime.retireLane(lane.attachedLaneId, 0)
       expect(initialChannel.closes).toBe(1)
       expect(replacement.closes).toBe(0)
@@ -103,6 +108,70 @@ describe('receiver runtime caller-owned lane admission', () => {
       await runtime.retireLane(lane.attachedLaneId, lane.attachedLaneEpoch)
       expect(replacement.closes).toBe(1)
       expect(runtime.isClosed).toBe(false)
+    } finally {
+      await runtime.close()
+    }
+  })
+
+  it.each(['ordinary', 'spare'] as const)('guards %s retirement through synchronous trace and content callbacks', async (renewal) => {
+    const next = grant()
+    const observations: Array<{
+      source: string; usable: readonly number[]; reciprocal: Promise<void> | undefined; joined: Promise<void> | undefined
+    }> = []
+    let observe: (source: string) => void = () => {}
+    const { runtime, initialChannel } = runtimeFixture({ current: event => {
+      if (event.eventName === 'lane_transition' && event.transition === 'unavailable' &&
+        event.correlation.lane?.id === runtime.initialLaneId) observe('trace')
+    } })
+    const old = { laneId: runtime.initialLaneId, laneEpoch: 0 }
+    const successor = new ScriptedChannel(b64ToBytes(lane.laneAckB64))
+    const connectivity = new ReceiverConnectivity({
+      session: runtime, lanes: new LaneSet(), nativePeerUsable: () => false,
+      createBlockLane: id => ({ id, fetchBlock: async () => { throw new Error('unexpected block request') } }),
+      onContentLaneDetached: removed => { if (removed.laneId === old.laneId) observe('content') },
+    })
+    try {
+      connectivity.begin('download')
+      expect(runtime.retireLaneIfCovered(old)).toBeUndefined()
+      await runtime.adoptGrantedLane(successor, next)
+      connectivity.addRelayLane(next.laneId)
+      expect(runtime.retireLaneIfCovered(old, { ...next, laneEpoch: next.laneEpoch + 1 })).toBeUndefined()
+      expect(runtime.retireLaneIfCovered(old, old)).toBeUndefined()
+      observe = source => {
+        const reciprocal = runtime.retireLaneIfCovered(next)
+        const joined = runtime.retireLaneIfCovered(old, next)
+        observations.push({ source, usable: runtime.availableLaneIds(), reciprocal, joined })
+      }
+      const retirement = runtime.retireLaneIfCovered(old, renewal === 'spare' ? next : undefined)
+      expect(retirement).toBeInstanceOf(Promise)
+      expect(observations.map(observation => observation.source)).toEqual(['trace', 'content'])
+      for (const observation of observations) {
+        expect(observation.usable).toEqual([next.laneId])
+        expect(observation.reciprocal).toBeUndefined()
+        expect(observation.joined).toBe(retirement)
+      }
+      await retirement
+      expect(initialChannel.closes).toBe(1)
+      expect(successor.closes).toBe(0)
+    } finally {
+      await connectivity.close()
+      await runtime.close()
+    }
+  })
+
+  it('keeps the last usable lane while an authenticated alternative is draining', async () => {
+    const { runtime } = runtimeFixture()
+    const old = { laneId: runtime.initialLaneId, laneEpoch: 0 }
+    const next = grant()
+    const successor = new ScriptedChannel(b64ToBytes(lane.laneAckB64))
+    try {
+      await runtime.adoptGrantedLane(successor, next)
+      successor.availability.abort()
+      expect(runtime.laneEpoch(next.laneId)).toBe(next.laneEpoch)
+      expect(runtime.retireLaneIfCovered(old)).toBeUndefined()
+      expect(runtime.retireLaneIfCovered(old, next)).toBeUndefined()
+      await runtime.retireLaneIfCovered(next)
+      expect(runtime.availableLaneIds()).toEqual([old.laneId])
     } finally {
       await runtime.close()
     }
@@ -157,6 +226,28 @@ describe('receiver runtime caller-owned lane admission', () => {
       },
     })
     await runtime.close()
+  })
+
+  it('ends the whole session on a direction-invalid TURN control even with a healthy second lane', async () => {
+    const events: ProtocolTraceEvent[] = []
+    const { runtime, initialChannel } = runtimeFixture({ current: event => events.push(event) })
+    const second = new ScriptedChannel(b64ToBytes(lane.laneAckB64))
+    try {
+      await runtime.adoptGrantedLane(second, grant())
+      expect(runtime.availableLaneIds()).toHaveLength(2)
+      const demand = encodeTURNDemand({ requestId: 1n, mode: 'parallel', serviceIds: [] })
+      const { plaintext } = encodeMessage(MESSAGE_KIND.turnControl, undefined, demand)
+      vi.spyOn(EnvelopeOpener.prototype, 'open').mockResolvedValueOnce({ sequence: 0n, plaintext })
+      initialChannel.receive(new Uint8Array())
+      await vi.waitFor(() => expect(runtime.isClosed).toBe(true))
+      expect(events).toContainEqual(expect.objectContaining({
+        transition: 'detached', termination: expect.objectContaining({ kind: 'authenticated_failure' }),
+      }))
+      expect(second.closes).toBe(1)
+    } finally {
+      vi.restoreAllMocks()
+      await runtime.close()
+    }
   })
 
   it('publishes authenticated milestones and transfers an accepted channel to the runtime', async () => {

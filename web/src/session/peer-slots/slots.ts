@@ -1,4 +1,4 @@
-export const PEER_CONTINUATION_SLOTS = 4
+export const PEER_CONTINUATION_SLOTS = 8
 const MAXIMUM_SEQUENCE = 0xffffffffffffffffn
 
 export interface PeerAttemptOrdinal {
@@ -24,8 +24,14 @@ export class PeerSlotPool {
     () => ({ sequence: 0n, occupied: false }))
 
   acquire(): PeerSlotLease {
+    const lease = this.tryAcquire()
+    if (!lease) throw new RangeError('Peer negotiation slots are occupied')
+    return lease
+  }
+
+  tryAcquire(): PeerSlotLease | undefined {
     const peerSlot = this.#slots.findIndex((slot) => !slot.occupied && slot.sequence < MAXIMUM_SEQUENCE)
-    if (peerSlot < 0) throw new RangeError('Peer negotiation slots are occupied')
+    if (peerSlot < 0) return undefined
     const slot = this.#slots[peerSlot]!
     slot.occupied = true
     let closed = false

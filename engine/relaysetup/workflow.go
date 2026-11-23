@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"time"
 
 	"github.com/windshare/windshare/engine/relayprofile"
 )
@@ -39,13 +40,25 @@ func (run *workflow) execute(ctx context.Context, request Request, progress func
 		return run.continueEnrollment(ctx, saved, progress)
 	}
 	if request.AccessKey != "" {
-		return run.install(ctx, saved.SettingsRevision(), saved.CredentialProfile(request.URL, request.AccessKey))
+		profile := saved.CredentialProfile(request.URL, request.AccessKey)
+		// Manual credentials also work with offline relays. Discovery is public
+		// and bounded so an unavailable console cannot prevent installation.
+		const capabilityTimeout = 3 * time.Second
+		probe, cancel := context.WithTimeout(ctx, capabilityTimeout)
+		capability, err := run.discover(probe, request.URL)
+		cancel()
+		if err == nil {
+			profile.ManagedTurn = capability.ManagedTurn
+			profile.ConsoleURL = capability.ConsoleURL
+			profile.OfferedFrontend = capability.OfferedFrontend
+		}
+		return run.install(ctx, saved.SettingsRevision(), profile)
 	}
 	discovery, err := run.discover(ctx, request.URL)
 	if err != nil {
 		return Result{}, err
 	}
-	candidate := relayprofile.Candidate{PublicURL: discovery.RelayURL, ConsoleURL: discovery.ConsoleURL, OfferedFrontend: discovery.OfferedFrontend}
+	candidate := relayprofile.Candidate{PublicURL: discovery.RelayURL, ConsoleURL: discovery.ConsoleURL, ManagedTurn: discovery.ManagedTurn, OfferedFrontend: discovery.OfferedFrontend}
 	if discovery.Access == "open" && request.Operation == AddProfile {
 		return run.install(ctx, saved.SettingsRevision(), candidate)
 	}
@@ -68,7 +81,7 @@ func (run *workflow) execute(ctx context.Context, request Request, progress func
 	}
 	saved.Pending = &PendingSetup{
 		SettingsRevision: saved.SettingsRevision(), OperationID: encode(operation),
-		RelayURL: discovery.RelayURL, ConsoleURL: discovery.ConsoleURL, OfferedFrontend: discovery.OfferedFrontend,
+		RelayURL: discovery.RelayURL, ConsoleURL: discovery.ConsoleURL, ManagedTurn: discovery.ManagedTurn, OfferedFrontend: discovery.OfferedFrontend,
 		AccountLoginPage: discovery.AccountLoginPage, DeviceName: request.DeviceName, ClaimSecret: encode(secret), Operation: request.Operation, phase: requesting{}}
 
 	// Persist the claimant before the first request; a lost response can recover by digest.

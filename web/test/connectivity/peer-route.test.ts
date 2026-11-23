@@ -33,13 +33,13 @@ describe('browser peer route authority', () => {
     const route = new BrowserPeerRoute(() => transport, (value) => changes.push(value))
     route.refresh()
     transport.change('relay')
-    expect(route.current).toBeUndefined()
+    expect(route.current).toBe('turn')
     transport.change('srflx')
     expect(route.current).toBe('direct')
     transport.change(null)
     route.observeStats('direct')
     expect(route.current).toBeUndefined()
-    expect(changes).toEqual(['direct', undefined, 'direct', undefined])
+    expect(changes).toEqual(['direct', 'turn', 'direct', undefined])
     route.close()
   })
 
@@ -72,7 +72,7 @@ describe('browser peer route authority', () => {
     route.close()
   })
 
-  it.each([undefined, null, 'unknown', 'invalid', 'relay'])('does not guess a route for candidate type %s', (type) => {
+  it.each([undefined, null, 'unknown', 'invalid'])('does not guess a route for candidate type %s', (type) => {
     const transport = new PairTransport()
     transport.pair!.remote.type = type
     const route = new BrowserPeerRoute(() => transport, () => undefined)

@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/netip"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -61,12 +62,16 @@ type Event struct {
 
 type Connection struct {
 	*pion.PeerConnection
-	lease     *socketauthority.Lease
-	release   func()
-	request   AttemptConfig
-	mapped    []MappedEndpoint
-	closeOnce sync.Once
-	closeErr  error
+	lease       *socketauthority.Lease
+	release     func()
+	request     AttemptConfig
+	mapped      []MappedEndpoint
+	mux         hostPortDiscovery
+	candidateMu sync.Mutex
+	candidates  candidateDispatch
+	closed      bool
+	closeOnce   sync.Once
+	closeErr    error
 }
 
 // NewPeerConnection acquires an exclusive attempt reference. The caller's path
@@ -114,8 +119,10 @@ func NewPeerConnection(configuration pion.Configuration, request AttemptConfig) 
 	settings.SetIPFilter(localEndpointFilter(endpoints))
 	settings.SetICEMulticastDNSMode(ice.MulticastDNSModeQueryOnly)
 	configureNetworkTypes(&settings, lease, tcpEndpoints)
-	configureICE(&configuration, request.ICE)
-	connection := &Connection{lease: lease, release: release, request: request, mapped: mapped}
+	// Pion opens separate ephemeral sockets for discovery URLs. The leased mux owns STUN.
+	configuration.ICEServers = nil
+	configuration.ICETransportPolicy = pion.ICETransportPolicyAll
+	connection := &Connection{lease: lease, release: release, request: request, mapped: mapped, mux: mux}
 	settings.LoggerFactory = providerLoggerFactory{LoggerFactory: logging.NewDefaultLoggerFactory(), observe: connection.observeDiagnostic}
 	pc, err := pion.NewAPI(pion.WithSettingEngine(settings)).NewPeerConnection(configuration)
 	if err != nil {
@@ -181,12 +188,17 @@ func localEndpointFilter(endpoints []netip.AddrPort) func(net.IP) bool {
 	}
 }
 
-func configureICE(configuration *pion.Configuration, connection iceconfig.Connection) {
-	configuration.ICEServers = nil
-	if urls := connection.DiscoveryURLs(); len(urls) > 0 {
-		configuration.ICEServers = []pion.ICEServer{{URLs: urls}}
+// Supplemental mapped candidates travel by trickle, outside Pion's local SDP.
+func (c *Connection) LocalDescription() *pion.SessionDescription {
+	description := c.PeerConnection.LocalDescription()
+	hasSTUN := c.mux != nil && len(c.request.ICE.DiscoveryServers()) != 0
+	if description == nil || (len(c.mapped) == 0 && !hasSTUN) {
+		return description
 	}
-	configuration.ICETransportPolicy = pion.ICETransportPolicyAll
+	return &pion.SessionDescription{
+		Type: description.Type,
+		SDP:  strings.ReplaceAll(description.SDP, "a=end-of-candidates\r\n", ""),
+	}
 }
 
 func (c *Connection) event(milestone, state string) Event {
@@ -221,12 +233,20 @@ func (c *Connection) OnConnectionStateChange(callback func(pion.PeerConnectionSt
 	})
 }
 func (c *Connection) Close() error {
+	var publishClosed bool
 	c.closeOnce.Do(func() {
+		c.candidateMu.Lock()
+		c.closed = true
+		c.candidates.replace(nil)
+		c.candidateMu.Unlock()
 		c.closeErr = c.PeerConnection.Close()
 		c.release()
 		c.closeErr = errors.Join(c.closeErr, c.lease.Close())
-		c.observe("provider_closed", "")
+		publishClosed = true
 	})
+	if publishClosed {
+		c.candidates.observeClosed(func() { c.observe("provider_closed", "") })
+	}
 	return c.closeErr
 }
 

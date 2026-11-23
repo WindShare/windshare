@@ -12,6 +12,7 @@ const (
 	Unknown Route = iota
 	Direct
 	ApplicationRelay
+	TURN
 )
 const MaximumIntervals = 4096
 
@@ -20,6 +21,7 @@ type Snapshot struct {
 	FirstDirectElapsed    *time.Duration
 	DirectBytes           uint64
 	ApplicationRelayBytes uint64
+	TURNBytes             uint64
 	UnknownBytes          uint64
 	DirectFraction        *float64
 	FallbackStall         time.Duration
@@ -41,7 +43,7 @@ type Metrics struct {
 	pending    uint64
 	last       time.Time
 	stall      time.Duration
-	bytes      [ApplicationRelay + 1]uint64
+	bytes      [TURN + 1]uint64
 	ranges     map[string][]interval
 	intervals  int
 	incomplete bool
@@ -159,7 +161,7 @@ func (m *Metrics) Delivered(revision string, start, end uint64, route Route) {
 		return
 	}
 	m.tick()
-	if revision == "" || end <= start || route > ApplicationRelay {
+	if revision == "" || end <= start || route > TURN {
 		m.incomplete = true
 		return
 	}
@@ -212,12 +214,12 @@ func (m *Metrics) Snapshot(final bool) Snapshot {
 		clear(m.ranges)
 		m.intervals = 0
 	}
-	result := Snapshot{DownloadID: m.id, DirectBytes: m.bytes[Direct], ApplicationRelayBytes: m.bytes[ApplicationRelay], UnknownBytes: m.bytes[Unknown], FallbackStall: m.stall, Incomplete: m.incomplete, Final: m.final}
+	result := Snapshot{DownloadID: m.id, DirectBytes: m.bytes[Direct], ApplicationRelayBytes: m.bytes[ApplicationRelay], TURNBytes: m.bytes[TURN], UnknownBytes: m.bytes[Unknown], FallbackStall: m.stall, Incomplete: m.incomplete, Final: m.final}
 	if m.first != nil {
 		value := *m.first
 		result.FirstDirectElapsed = &value
 	}
-	total := float64(result.DirectBytes) + float64(result.ApplicationRelayBytes) + float64(result.UnknownBytes)
+	total := float64(result.DirectBytes) + float64(result.ApplicationRelayBytes) + float64(result.UnknownBytes) + float64(result.TURNBytes)
 	if total > 0 && !m.incomplete {
 		fraction := float64(result.DirectBytes) / total
 		result.DirectFraction = &fraction

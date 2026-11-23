@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/fxamacker/cbor/v2"
+
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
@@ -102,8 +103,8 @@ func recoverableRejectedOffer(t *testing.T, binding v2signal.Binding) []byte {
 		binding.PeerPathID[:],
 		binding.AttemptID[:],
 		binding.AttemptSequence,
-		uint64(binding.PeerSlot),
-		uint64(7),
+		uint64(binding.PeerSlot), uint64(binding.Purpose),
+		uint64(7), nil,
 	})
 }
 
@@ -322,8 +323,9 @@ func testSenderDistinctBindingRejectionIsNotSuppressedByActiveOperation(t *testi
 	rejectedBinding := testBinding(140)
 
 	handler.mu.Lock()
-	handler.attempts[operation.ID()] = &peerAttempt{}
-	handler.bindings[activeBinding] = operation.ID()
+	attempt := &peerAttempt{config: peerAttemptConfig{offer: v2signal.Offer{Binding: activeBinding}}}
+	handler.attempts[operation.ID()] = attempt
+	handler.paths[activeBinding.PeerPathID] = senderPathAttempts{current: attempt}
 	if claim := handler.claimEvidenceLocked(operation.ID(), activeBinding); !claim.acquired {
 		handler.mu.Unlock()
 		t.Fatalf("active evidence claim = %#v", claim)

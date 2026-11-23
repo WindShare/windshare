@@ -1,68 +1,48 @@
 package peerset
 
 import (
-	"context"
 	"errors"
-	"github.com/windshare/windshare/connectivity/nativepeer"
-	"github.com/windshare/windshare/connectivity/v2signal"
 	"time"
+
+	"github.com/windshare/windshare/connectivity/v2signal"
 )
 
-func (p *Path) prepareProvider(wave *recoveryWave, binding v2signal.Binding, refund func(time.Duration)) *attemptOpportunity {
-	opportunity := &attemptOpportunity{binding: binding, start: p.config.Start, refund: refund}
-	remaining := func() time.Duration { return WaveBudget - p.owner.config.Clock.Now().Sub(wave.started) }
-	if p.config.Prepare != nil {
-		// Queue time belongs to the absolute wave, not to the active attempt. Keep
-		// enough time for a complete preparation/checking opportunity after admission.
-		wait := min(nativepeer.QueueBudget, remaining()-MinimumAttemptOpportunity)
-		prepared, err := p.waitPreparation(binding, max(wait, 0))
-		if err == nil && remaining() < MinimumAttemptOpportunity {
-			prepared.Close()
-			err = ErrWaveExhausted
-		}
-		if err != nil {
-			opportunity.start = func(context.Context, v2signal.Binding) (Attempt, error) { return nil, err }
-		} else {
-			opportunity.start = prepared.Start
-			opportunity.close = prepared.Close
-		}
+func (p *Path) prepareProvider(wave *recoveryWave, binding v2signal.Binding, limit time.Duration, refund func(time.Duration)) (*attemptOpportunity, error) {
+	remaining := wave.remaining(p.owner.config.Clock.Now())
+	minimum := p.minimumOpportunity()
+	if remaining < minimum {
+		return nil, ErrWaveExhausted
 	}
-	opportunity.budget = min(AttemptBudget, max(remaining(), 0))
-	return opportunity
-}
-func (p *Path) waitPreparation(binding v2signal.Binding, wait time.Duration) (PreparedStarter, error) {
-	child, cancel := context.WithCancelCause(p.ctx)
-	timer := p.owner.config.Clock.NewTimer(wait)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		select {
-		case <-timer.C():
-			cancel(context.DeadlineExceeded)
-		case <-child.Done():
-		}
-	}()
-	prepared, err := p.config.Prepare(child, binding)
+	opportunity := &attemptOpportunity{binding: binding, start: p.config.Start, budget: min(limit, remaining), refund: refund}
+	if p.config.Prepare == nil {
+		return opportunity, nil
+	}
+	// Queueing spends wave time. At the boundary a ready permit can still
+	// fund the full checking opportunity, while a busy gate must decline immediately.
+	wait := remaining - minimum
+	prepared, err := p.config.Prepare(p.ctx, binding, wait)
+	remaining = wave.remaining(p.owner.config.Clock.Now())
 	if err == nil && (prepared.Start == nil || prepared.Close == nil) {
-		if prepared.Close != nil {
-			prepared.Close()
-		}
-		prepared = PreparedStarter{}
 		err = ErrConfig
 	}
-	timer.Stop()
-	expired := context.Cause(child)
-	cancel(context.Canceled)
-	<-done
-	if expired != nil {
+	if cause := p.ctx.Err(); cause != nil {
+		err = errors.Join(cause, err)
+	} else if remaining < minimum || (remaining == minimum && err != nil) {
+		err = errors.Join(ErrWaveExhausted, err)
+	}
+	if err != nil {
 		if prepared.Close != nil {
 			prepared.Close()
 		}
-		return PreparedStarter{}, errors.Join(expired, err)
+		return nil, err
 	}
-	return prepared, err
+	opportunity.start = prepared.Start
+	opportunity.close = prepared.Close
+	opportunity.budget = min(limit, remaining)
+	return opportunity, nil
 }
-func (p *Path) executePrepared(opportunity *attemptOpportunity) (Result, bool) {
+
+func (p *Path) executePrepared(opportunity *attemptOpportunity) (Result, attemptProgress) {
 	if opportunity.close != nil {
 		defer opportunity.close()
 	}

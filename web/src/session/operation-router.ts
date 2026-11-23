@@ -294,7 +294,7 @@ export class OperationQueue implements SessionOperation {
 
 }
 
-type SessionControlKind = typeof MESSAGE_KIND.peerPathControl
+type SessionControlKind = typeof MESSAGE_KIND.peerPathControl | typeof MESSAGE_KIND.turnControl
 type SessionControlListener = (body: Uint8Array<ArrayBuffer>) => void
 
 export class OperationRouter {
@@ -308,6 +308,7 @@ export class OperationRouter {
   readonly #diagnostics: ProtocolTraceContext | undefined
   readonly #sessionControls: ReadonlyMap<MessageKind, Set<SessionControlListener>> = new Map([
     [MESSAGE_KIND.peerPathControl, new Set<SessionControlListener>()],
+    [MESSAGE_KIND.turnControl, new Set<SessionControlListener>()],
   ])
   readonly #authenticatedResponses = new WeakMap<SessionMessage,
     ReceivedProtocolError | Readonly<{ correlation: ReceivedProtocolError['correlation'] }>>()
@@ -444,6 +445,10 @@ export class OperationRouter {
 
   receivedCorrelationFor(message: SessionMessage): ReceivedProtocolError['correlation'] | undefined {
     return this.#authenticatedResponses.get(message)?.correlation
+  }
+
+  subscribeTURNControls(listener: SessionControlListener): () => void {
+    return this.#subscribeSessionControl(MESSAGE_KIND.turnControl, listener)
   }
 
   subscribePeerPathControls(listener: SessionControlListener): () => void {

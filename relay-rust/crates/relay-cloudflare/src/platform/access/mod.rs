@@ -3,6 +3,7 @@ mod sessions;
 mod storage;
 mod store;
 mod termination;
+mod turn;
 
 use super::io;
 use serde_json::{Value, json};
@@ -30,6 +31,7 @@ const COOKIE_NAME: &str = "__Host-windshare_admin";
 pub struct AccessObject {
     state: State,
     env: Env,
+    turn_limits: std::cell::RefCell<turn::Limits>,
 }
 
 pub fn failure(error: impl std::fmt::Display) -> worker::Error {
@@ -51,7 +53,7 @@ fn trace(event: &str, fields: &Value) {
     );
 }
 
-fn reply(value: &Value, status: u16) -> Result<Response> {
+pub(super) fn reply(value: &Value, status: u16) -> Result<Response> {
     let mut response = Response::from_json(value)?.with_status(status);
     response.headers_mut().set(
         "Cache-Control",
@@ -128,6 +130,10 @@ impl AccessObject {
 
     async fn route(&self, mut req: Request) -> Result<Response> {
         let path = req.path();
+        if path == "/internal/authorize-turn" && req.method() == Method::Post {
+            let digest = req.json().await?;
+            return self.authorize_turn(&Database::read_only(&self.state), &digest, io::now().0);
+        }
         if path != "/internal/authorize" {
             if req.url()?.origin().ascii_serialization() != self.console_origin()? {
                 return reply_error(ConsoleError::forbidden("console_origin_required"));
@@ -192,7 +198,11 @@ impl AccessObject {
 
 impl DurableObject for AccessObject {
     fn new(state: State, env: Env) -> Self {
-        Self { state, env }
+        Self {
+            state,
+            env,
+            turn_limits: std::cell::RefCell::default(),
+        }
     }
 
     async fn fetch(&self, req: Request) -> Result<Response> {

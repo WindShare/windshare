@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/fxamacker/cbor/v2"
+
 	"github.com/windshare/windshare/core/session/peerslot"
 )
 
@@ -120,11 +121,6 @@ func TestPeerSignalingRejectsHostileBodiesAndBindingSubstitution(t *testing.T) {
 			t.Fatal("purpose substitution accepted")
 		}
 	}
-	invalidPurpose := binding
-	invalidPurpose.Purpose = ThroughputExploration + 1
-	if _, err := EncodeOffer(Offer{Binding: invalidPurpose, SDP: "v=0"}); !errors.Is(err, ErrInvalidSignal) {
-		t.Fatal(err)
-	}
 	other := binding
 	other.AttemptID[0] ^= 0xff
 	if err := binding.RequireSame(other); !errors.Is(err, ErrSignalBinding) {
@@ -153,7 +149,7 @@ func TestPeerSignalingRejectsHostileBodiesAndBindingSubstitution(t *testing.T) {
 	}
 
 	valid, _ := EncodeOffer(Offer{Binding: binding, SDP: "v=0"})
-	nonCanonical := append([]byte{0x98, 0x07}, valid[1:]...)
+	nonCanonical := append([]byte{0x98, 0x08}, valid[1:]...)
 	if _, err := DecodeOffer(nonCanonical); !errors.Is(err, ErrNonCanonicalSignal) {
 		t.Fatalf("noncanonical array error = %v", err)
 	}
@@ -182,6 +178,37 @@ func TestPeerSignalingRejectsHostileBodiesAndBindingSubstitution(t *testing.T) {
 	extra := append(bytes.Clone(candidate), 0)
 	if _, err := DecodeCandidate(extra); !errors.Is(err, ErrInvalidSignal) {
 		t.Fatalf("trailing candidate error = %v", err)
+	}
+}
+
+func TestOfferRequiresGrantExactlyForTURN(t *testing.T) {
+	binding := testBinding()
+	grantID := [IdentityBytes]byte{1}
+	for _, tc := range []struct {
+		name    string
+		purpose ConnectionPurpose
+		grant   [IdentityBytes]byte
+		wireID  any
+	}{
+		{"unknown purpose", TURNRelay + 1, [IdentityBytes]byte{}, nil},
+		{"TURN without grant", TURNRelay, [IdentityBytes]byte{}, nil},
+		{"TURN with zero grant", TURNRelay, [IdentityBytes]byte{}, make([]byte, IdentityBytes)},
+		{"direct with grant", InitialConnectivity, grantID, grantID[:]},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			binding := binding
+			binding.Purpose = tc.purpose
+			if _, err := EncodeOffer(Offer{Binding: binding, SDP: "v=0", TURNGrantID: tc.grant}); !errors.Is(err, ErrInvalidSignal) {
+				t.Fatalf("encode: %v", err)
+			}
+			body, err := signalEncMode.Marshal([]any{SignalingSchemaVersion, binding.PeerPathID[:], binding.AttemptID[:], binding.AttemptSequence, binding.PeerSlot, tc.purpose, "v=0", tc.wireID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := DecodeOffer(body); !errors.Is(err, ErrInvalidSignal) {
+				t.Fatalf("decode: %v", err)
+			}
+		})
 	}
 }
 

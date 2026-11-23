@@ -7,7 +7,7 @@ import (
 )
 
 // Count bounds session replay metadata independently of physical path churn.
-const Count = 4
+const Count = 8
 
 var (
 	ErrCapacity = errors.New("peer negotiation slots are occupied")

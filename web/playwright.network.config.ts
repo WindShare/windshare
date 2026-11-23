@@ -10,6 +10,7 @@ export default defineConfig({
   // The ordinary smoke owns the relay-only path. These scenarios complement it
   // with direct recovery and authenticated peer adoption across route changes.
   testMatch: [
+    'v2-parallel-turn.network.spec.ts',
     'v2-direct-hot-switch.weekly.spec.ts',
     'v2-direct-recovery.weekly.spec.ts',
   ],

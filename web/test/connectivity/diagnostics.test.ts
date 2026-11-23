@@ -48,6 +48,7 @@ describe('connectivity diagnostics vocabulary', () => {
       'failed',
     ])
     expect(BROWSER_CONNECTIVITY_RECOVERY_STAGES).toEqual([
+      'turn_demand_sent', 'turn_grants_received', 'turn_refresh_requested', 'turn_path_admitted', 'turn_path_closed',
       'parallelism',
       'wave-started',
       'retry-decided',

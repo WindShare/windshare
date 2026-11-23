@@ -11,6 +11,8 @@ import (
 // ReceiverSession owns controls once for every direct path in a protocol
 // generation. Closing an ICE attempt never closes the download job.
 type ReceiverSession struct {
+	turn        *turnManager
+	allowTURN   bool
 	mu          sync.Mutex
 	owner       *PeerSet
 	config      ReceiverConfig
@@ -31,6 +33,12 @@ func OpenReceiverSession(parent context.Context, config Config, receiver Receive
 	}
 	ctx, cancel := context.WithCancel(parent)
 	s := &ReceiverSession{owner: owner, config: receiver, ctx: ctx, cancel: cancel, ready: make(chan struct{}), done: make(chan struct{})}
+	if owner, ok := receiver.Lanes.(interface{ LaneSet() *transferlanes.Set }); ok && owner.LaneSet() != nil {
+		s.allowTURN = owner.LaneSet().AllowsRoute(transferlanes.RouteTURN)
+		if controls, ok := receiver.Lanes.(turnRuntime); ok && s.allowTURN {
+			s.turn = newTURNManager(s, controls)
+		}
+	}
 	s.attachControls()
 	s.mu.Lock()
 	err = s.startDirectLocked()
@@ -39,6 +47,9 @@ func OpenReceiverSession(parent context.Context, config Config, receiver Receive
 		cancel()
 		s.work.Wait()
 		s.detachControls()
+		if s.turn != nil {
+			s.turn.close()
+		}
 		return nil, err
 	}
 	if lanes, ok := receiver.Lanes.(interface{ LaneSet() *transferlanes.Set }); ok {

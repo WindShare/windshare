@@ -7,7 +7,7 @@ interface SelectedPairTransport extends Pick<EventTarget, 'addEventListener' | '
   } | null
 }
 
-const DIRECT_CANDIDATE_TYPES: ReadonlySet<unknown> = new Set(['host', 'srflx', 'prflx'])
+const CANDIDATE_TYPES: ReadonlySet<unknown> = new Set(['host', 'srflx', 'prflx', 'relay'])
 
 /** The selected transport pair owns routing; statistics are asynchronous observations. */
 export class BrowserPeerRoute {
@@ -75,7 +75,7 @@ export class BrowserPeerRoute {
   }
 }
 
-function classifyPair(local: unknown, remote: unknown): PeerPathRoute {
-  if (!DIRECT_CANDIDATE_TYPES.has(local) || !DIRECT_CANDIDATE_TYPES.has(remote)) return undefined
-  return 'direct'
+export function classifyPair(local: unknown, remote: unknown): PeerPathRoute {
+  if (!CANDIDATE_TYPES.has(local) || !CANDIDATE_TYPES.has(remote)) return undefined
+  return local === 'relay' || remote === 'relay' ? 'turn' : 'direct'
 }

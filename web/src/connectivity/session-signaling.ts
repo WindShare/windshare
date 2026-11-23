@@ -60,6 +60,7 @@ export type { ConnectivityTraceSource } from './diagnostics'
  */
 export class SessionSignalingRoute implements SignalingRoute, PeerOfferAttemptObserver {
   readonly messages: ReadableStream<ConnectivitySignal>
+  readonly #turnGrantId: Uint8Array<ArrayBuffer> | undefined
   readonly binding: PeerBinding
   readonly #session: ReceiverSessionRuntime
   readonly #controller: ReadableStreamDefaultController<ConnectivitySignal>
@@ -80,7 +81,9 @@ export class SessionSignalingRoute implements SignalingRoute, PeerOfferAttemptOb
       waveAttemptOrdinal: 1,
       sessionAttemptOrdinal: 1,
     },
+    turnGrantId?: Uint8Array<ArrayBuffer>,
   ) {
+    this.#turnGrantId = turnGrantId?.slice()
     this.#session = session
     this.binding = snapshotBinding(binding)
     let controller!: ReadableStreamDefaultController<ConnectivitySignal>
@@ -224,7 +227,7 @@ export class SessionSignalingRoute implements SignalingRoute, PeerOfferAttemptOb
     try {
       const operation = await this.#session.beginOperation(
         MESSAGE_KIND.peerOffer,
-        encodePeerOffer({ ...this.binding, sdp }),
+        encodePeerOffer({ ...this.binding, sdp, ...(this.#turnGrantId === undefined ? {} : { turnGrantId: this.#turnGrantId }) }),
         signal === undefined ? {} : { signal },
       )
       if (this.#closed) {

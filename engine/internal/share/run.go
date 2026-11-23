@@ -161,9 +161,9 @@ func (s *activeShare) serve(ctx, resourceContext context.Context) (task.FailureC
 		return task.FailureLocal, err
 	}
 	s.peers, err = d.Peers(nativeconnectivity.SenderConfig{
-		Capacity: d.Connectivity,
-		ICEPool:  d.ICEPool,
-		Now:      d.Control.Now, Diagnostics: d.Control.Diagnostics.Enabled(), ObserveChannel: o.attachChannel,
+		Trace: d.Control.Diagnostics, Capacity: d.Connectivity, TURNProvider: d.TURNProvider,
+		ICEPool: d.ICEPool,
+		Now:     d.Control.Now, Diagnostics: d.Control.Diagnostics.Enabled(), ObserveChannel: o.attachChannel,
 	})
 	if native, ok := s.peers.(nativePeers); ok {
 		o.attachPeers(native.Factory)

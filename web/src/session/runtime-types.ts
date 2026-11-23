@@ -44,10 +44,13 @@ export type LaneTermination =
   | Readonly<{ kind: 'closed'; reason: LaneCloseReason }>
   | Readonly<{ kind: 'physical_failure' | 'authenticated_failure'; failure: unknown }>
 
-export interface LaneChange {
-  readonly type: 'attached' | 'unavailable' | 'detached'
+export interface SessionLaneIdentity {
   readonly laneId: number
   readonly laneEpoch: number
+}
+
+export interface LaneChange extends SessionLaneIdentity {
+  readonly type: 'attached' | 'unavailable' | 'detached'
   readonly failure?: unknown
 }
 

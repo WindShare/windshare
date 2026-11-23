@@ -1,5 +1,9 @@
 # Cloudflare deployment
 
+**Managed TURN is enabled by default for full and relay-only deployments.** Enable Realtime TURN on the account and grant the deployment token **Account / Cloudflare Calls / Edit**. Missing Calls access leaves the relay and frontend operational. Cloudflare includes 1,000 GB of monthly egress per account shared with Realtime SFU, then charges US$0.05/GB. Pausing managed TURN in the console stops new credentials. Existing credentials expire within 30 minutes. Set `CLOUDFLARE_TURN_ENABLED=false` and redeploy to remove the binding and deployment-owned key. [Cloudflare pricing](https://developers.cloudflare.com/realtime/sfu/platform/pricing/)
+
+A Workers token without Calls Edit returned HTTP 403 (10000) in a live deployment. The relay and frontend still deployed.
+
 Fork the repository and run **Deploy private relay** in GitHub Actions.
 The default `full` mode hosts the receiver frontend and private relay together.
 A separate console origin handles owner sign-in, device approval and credentials.

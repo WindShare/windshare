@@ -40,6 +40,7 @@ func (failure *apiFailure) temporary() bool {
 }
 
 type discovery struct {
+	ManagedTurn      bool   `json:"managed_turn,omitempty"`
 	Version          int    `json:"version"`
 	Access           string `json:"access"`
 	RelayURL         string `json:"relay_url"`

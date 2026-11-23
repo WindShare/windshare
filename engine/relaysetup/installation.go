@@ -52,5 +52,5 @@ func pendingInstallation(current Snapshot, pending *PendingSetup) (relayconfig.C
 }
 
 func (pending *PendingSetup) profile(accessKey string) relayprofile.Candidate {
-	return relayprofile.Candidate{PublicURL: pending.RelayURL, AccessKey: accessKey, ConsoleURL: pending.ConsoleURL, OfferedFrontend: pending.OfferedFrontend}
+	return relayprofile.Candidate{PublicURL: pending.RelayURL, AccessKey: accessKey, ConsoleURL: pending.ConsoleURL, ManagedTurn: pending.ManagedTurn, OfferedFrontend: pending.OfferedFrontend}
 }

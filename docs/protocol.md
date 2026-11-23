@@ -38,7 +38,7 @@ Private source locators preserve native bytes; catalog names use a versioned Uni
 1. **Share**: the sender seals the descriptor and registers it with a relay by signing a relay challenge; the relay then publishes the route. `RESUME` restores the route of the same share after a reconnect, using a resume token and a new signed challenge.
 2. **Join**: the receiver sends `JOIN` with the `shareId`, receives the sealed descriptor on a new relay session, and verifies it against `pkHash`.
 3. **Handshake**: `ClientHello` (HMAC proof of the read capability, ephemeral X25519) and the sender-signed `ServerHello` bind session wire version 3 and establish a `ProtocolSessionID` and per-direction traffic keys. Version mismatches fail before operation admission. The relay session becomes the first lane.
-4. **Operate**: the receiver lists directories, leases file revisions, and requests blocks. `PEER_*` negotiation binds a path's initial-connectivity, recovery, or throughput purpose for admission on both peers. A DataChannel joins the session after an authenticated `LANE_ATTACH` grant and a `LaneHello`/sender-signed `LaneAccept` exchange.
+4. **Operate**: the receiver lists directories, leases file revisions, and requests blocks. Peer signaling v5 binds initial, recovery, throughput, or TURN purpose. Each TURN offer carries its session-issued 16-byte grant ID. Direct offers carry CBOR null. A DataChannel joins the session after an authenticated `LANE_ATTACH` grant and a `LaneHello`/sender-signed `LaneAccept` exchange.
 5. **Stop**: a signed `STOP` permanently revokes the relay route of that `ShareInstance`.
 
 ## Capability link
@@ -75,11 +75,14 @@ After the handshake, every lane frame is an AES-256-GCM `OperationEnvelope` boun
 | Operation end | `OPERATION_COMPLETE`, `OPERATION_ERROR`, `CANCEL` |
 | Lanes | `LANE_ATTACH` |
 | Peer paths | `PEER_OFFER`, `PEER_ANSWER`, `PEER_CANDIDATE`, `PEER_PATH_CONTROL` |
+| TURN (kind 20) | Session-scoped `Demand` requests `parallel` or `all` services. `Grants` reports `ok`, `unconfigured`, `retry_later`, or `partial_retryable`. With partial success, use the returned grants immediately and retry remaining capacity under bounded backoff while demand persists. |
 | Session | `SESSION_TERMINAL` |
 
 `PEER_PATH_CONTROL` (kind 19) is a session-scoped control carrying reachability
 demand, revocation, mapping-ready, and network-change notices. Its body schema
 version evolves independently.
+
+A TURN grant advertises the milliseconds remaining until its issuer’s expiry. Zero denotes a static credential. Once an offer is accepted for negotiation, its grant remains valid until that deadline across subsequent rotations.
 
 ## Identities
 
@@ -95,8 +98,8 @@ version evolves independently.
 | `OperationID` | One request and its responses within a session |
 | `LaneID`, `LaneEpoch` | A reusable session lane slot, and its current channel generation |
 | `RelaySessionID` | One receiver connection's route through a relay |
-| `PeerPathID`, `AttemptID` | A direct peer path, and one negotiation attempt on it |
-| `PeerSlot`, `AttemptSequence` | A reusable session negotiation slot, and its increasing sequence across physical path replacements |
+| `PeerPathID`, `AttemptID` | A direct or TURN peer path, and one negotiation attempt on it |
+| `PeerSlot`, `AttemptSequence` | One of eight session negotiation slots and its increasing attempt sequence |
 
 ## Code
 

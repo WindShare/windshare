@@ -590,6 +590,7 @@ type downloadConnectivityTracePayload struct {
 	FirstDirectElapsedMS  *string  `json:"first_direct_elapsed_ms"`
 	DirectBytes           string   `json:"direct_bytes"`
 	ApplicationRelayBytes string   `json:"application_relay_bytes"`
+	TURNBytes             string   `json:"turn_bytes"`
 	UnknownBytes          string   `json:"unknown_bytes"`
 	DirectFraction        *float64 `json:"direct_fraction"`
 	FallbackStallMS       string   `json:"fallback_stall_ms"`
@@ -601,12 +602,12 @@ func buildDownloadConnectivityPayload(m downloadmetrics.Snapshot) *downloadConne
 	summary := &downloadConnectivityTracePayload{
 		DownloadID:            m.DownloadID,
 		DirectBytes:           strconv.FormatUint(m.DirectBytes, 10),
-		ApplicationRelayBytes: strconv.FormatUint(m.ApplicationRelayBytes, 10),
-		UnknownBytes:          strconv.FormatUint(m.UnknownBytes, 10),
-		DirectFraction:        m.DirectFraction,
-		FallbackStallMS:       strconv.FormatInt(max(m.FallbackStall.Milliseconds(), 0), 10),
-		Incomplete:            m.Incomplete,
-		Final:                 m.Final,
+		ApplicationRelayBytes: strconv.FormatUint(m.ApplicationRelayBytes, 10), TURNBytes: strconv.FormatUint(m.TURNBytes, 10),
+		UnknownBytes:    strconv.FormatUint(m.UnknownBytes, 10),
+		DirectFraction:  m.DirectFraction,
+		FallbackStallMS: strconv.FormatInt(max(m.FallbackStall.Milliseconds(), 0), 10),
+		Incomplete:      m.Incomplete,
+		Final:           m.Final,
 	}
 	if m.FirstDirectElapsed != nil {
 		value := strconv.FormatInt(max(m.FirstDirectElapsed.Milliseconds(), 0), 10)

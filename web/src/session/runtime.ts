@@ -1,3 +1,4 @@
+import { decodeTURNDemand } from '../protocol/turn-control'
 import { observeProtocolFailure } from './failure-diagnostics'
 import { cancellationTraceReason } from './operation-diagnostics'
 import { cancellationFromSignal } from './operations/cancellation'
@@ -50,6 +51,7 @@ import {
 import { OperationQueue, OperationRouter } from './operation-router'
 import {
   type LaneChange,
+  type SessionLaneIdentity,
   type LaneTermination,
   OPERATION_CANCEL_REASON,
   type OperationCancellation,
@@ -206,6 +208,17 @@ export class ReceiverSessionRuntime {
     options.signal?.throwIfAborted()
     decodePeerPathControl(body)
     await this.#selectLane(options.laneId).writer.send(encodeMessage(MESSAGE_KIND.peerPathControl, undefined, body), options)
+  }
+
+  subscribeTURNControls(listener: (body: Uint8Array<ArrayBuffer>) => void): () => void {
+    return this.#router.subscribeTURNControls(listener)
+  }
+
+  async sendTURNControl(body: Uint8Array, options: { readonly laneId?: number; readonly signal?: AbortSignal } = {}): Promise<void> {
+    this.#requireOpen()
+    options.signal?.throwIfAborted()
+    decodeTURNDemand(body)
+    await this.#selectLane(options.laneId).writer.send(encodeMessage(MESSAGE_KIND.turnControl, undefined, body), options)
   }
 
   async requestLaneGrant(
@@ -493,6 +506,20 @@ export class ReceiverSessionRuntime {
       operation.id,
       encodeBody([cancellation.protocolReason]),
     )).catch(() => undefined)
+  }
+
+  // Return the drain only after the registry has claimed retirement of this epoch.
+  // Callers can reserve a spare when the predecessor still owns the last usable lane.
+  retireLaneIfCovered(predecessor: SessionLaneIdentity, successor?: SessionLaneIdentity): Promise<void> | undefined {
+    const registered = this.#lanes.get(predecessor.laneId)
+    const old = registered?.epoch === predecessor.laneEpoch ? registered : undefined
+    if (successor) {
+      const next = this.#lanes.get(successor.laneId)
+      if (this.#closed || !next?.available || next.epoch !== successor.laneEpoch || next === old) return
+    } else if (old?.available && ![...this.#lanes.values()].some(lane => lane !== old && lane.available)) {
+      return
+    }
+    return old?.close('retired') ?? Promise.resolve()
   }
 
   async retireLane(laneId: number, laneEpoch: number): Promise<void> {

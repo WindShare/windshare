@@ -14,15 +14,15 @@ func TestSessionControlSchemasRejectUnsupportedVersionsAndNonControlKinds(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ValidateSessionControlBody(MessagePeerPathControl, body); err != nil {
+	if err := ValidateSessionControlBody(RoleSender, MessagePeerPathControl, body); err != nil {
 		t.Fatal(err)
 	}
 	futurePath := bytes.Clone(body)
 	futurePath[1] = 4
-	if err := ValidateSessionControlBody(MessagePeerPathControl, futurePath); !errors.Is(err, ErrPeerPathControl) {
+	if err := ValidateSessionControlBody(RoleSender, MessagePeerPathControl, futurePath); !errors.Is(err, ErrPeerPathControl) {
 		t.Fatalf("unsupported reachability version changed decoder: %v", err)
 	}
-	if err := ValidateSessionControlBody(MessageListChildren, body); !errors.Is(err, ErrUnknownMessageKind) {
+	if err := ValidateSessionControlBody(RoleSender, MessageListChildren, body); !errors.Is(err, ErrUnknownMessageKind) {
 		t.Fatalf("operation kind accepted as session control: %v", err)
 	}
 }

@@ -8,7 +8,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/windshare/windshare/connectivity/turnsession"
+
 	pion "github.com/pion/webrtc/v4"
+
 	"github.com/windshare/windshare/connectivity/v2peer/internal/candidatewriter"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -49,11 +52,13 @@ func (rejection *peerOperationRejection) Error() string { return rejection.messa
 func (rejection *peerOperationRejection) Unwrap() error { return rejection.cause }
 
 type peerAttemptConfig struct {
-	factory   *Factory
-	session   sendersession.PeerSession
-	operation protocolsession.Operation
-	offer     v2signal.Offer
-	onDone    func(*peerAttempt, error)
+	turnServiceID string
+	replacesTURN  *session.LaneIdentity
+	factory       *Factory
+	session       sendersession.PeerSession
+	operation     protocolsession.Operation
+	offer         v2signal.Offer
+	onDone        func(*peerAttempt, error)
 }
 
 type attemptEventKind uint8
@@ -81,15 +86,16 @@ type attemptEvent struct {
 }
 
 type peerAttempt struct {
-	config   peerAttemptConfig
-	recorder *senderAttemptRecorder
-	events   chan attemptEvent
-	inboxMu  sync.Mutex
-	closed   bool
+	releaseTURN func()
+	config      peerAttemptConfig
+	recorder    *senderAttemptRecorder
+	events      chan attemptEvent
+	inboxMu     sync.Mutex
+	closed      bool
 
 	cancelMu                 sync.Mutex
 	cancel                   context.CancelCauseFunc
-	attached                 atomic.Bool
+	installedLane            atomic.Pointer[session.LaneIdentity]
 	dataChannelReceived      atomic.Bool
 	operationCancelRequested atomic.Bool
 	done                     chan struct{}
@@ -120,18 +126,20 @@ func newPeerAttempt(config peerAttemptConfig) *peerAttempt {
 
 func (attempt *peerAttempt) binding() v2signal.Binding { return attempt.config.offer.Binding }
 
+func (attempt *peerAttempt) attached() bool { return attempt.installedLane.Load() != nil }
+
 func (attempt *peerAttempt) operationID() protocolsession.OperationID {
 	return attempt.config.operation.ID()
 }
 
-func (attempt *peerAttempt) start(parent context.Context, work *sync.WaitGroup) {
+func (attempt *peerAttempt) start(parent context.Context, work *sync.WaitGroup, grant turnsession.OfferGrant) {
 	ctx, cancel := context.WithCancelCause(parent)
 	attempt.cancelMu.Lock()
 	attempt.cancel = cancel
 	attempt.cancelMu.Unlock()
 	go func() {
 		defer work.Done()
-		result := attempt.run(ctx)
+		result := attempt.run(ctx, grant)
 		attempt.closeInbox()
 		close(attempt.done)
 		cancel(result)
@@ -549,7 +557,7 @@ func (execution *attemptExecution) channelClosed(channelErr error) error {
 	if execution.operationCanceled {
 		return nil
 	}
-	if execution.attempt.attached.Load() && channelErr == nil {
+	if execution.attempt.attached() && channelErr == nil {
 		return nil
 	}
 	return errors.Join(
@@ -576,7 +584,7 @@ func (execution *attemptExecution) cancelOperation(event attemptEvent) (bool, er
 	if owned {
 		return !admitted, admissionErr
 	}
-	return !execution.attempt.attached.Load(), nil
+	return !execution.attempt.attached(), nil
 }
 
 func candidateInit(candidate v2signal.Candidate) pion.ICECandidateInit {

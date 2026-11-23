@@ -18,9 +18,9 @@ it('decodes Go peer errors and confines delayed terminal codes after tombstone G
  for (const item of vector.peerErrors) {
   let terminal = false
   const router = new OperationRouter(() => { terminal = true })
-  router.create(MESSAGE_KIND.peerOffer, encodeBody([4, path, attempt, 1n, vector.peerSlot, 0, 'v=0'])).close()
+  router.create(MESSAGE_KIND.peerOffer, encodeBody([5, path, attempt, 1n, vector.peerSlot, 0, 'v=0', null])).close()
   const currentId = new Uint8Array(16).fill(70)
-  const current = router.create(MESSAGE_KIND.peerOffer, encodeBody([4, path, currentId, 2n, vector.peerSlot, 0, 'v=0']))
+  const current = router.create(MESSAGE_KIND.peerOffer, encodeBody([5, path, currentId, 2n, vector.peerSlot, 0, 'v=0', null]))
   const message = encodeMessage(MESSAGE_KIND.operationError, operationId, bytes(item.bodyB64))
   expect(decodeOperationErrorControl(message.body)).toMatchObject({
    code: item.code, peerAttempt: { peerPathId: path, attemptId: attempt, attemptSequence: 1n, peerSlot: vector.peerSlot },
@@ -35,7 +35,7 @@ it('decodes Go peer errors and confines delayed terminal codes after tombstone G
 
 it('rejects missing, malformed, zero, overflowing, and cross-scope peer identities', () => {
  const valid = new Map<number, unknown>([[0,3],[1,5],[2,0x5002],[3,false],[4,null],[5,'expired'],[6,[path,attempt,1n,0]]])
- for (const binding of [null, [], [path, attempt], [path, attempt, 1n], [path, attempt, 0n, 0], [path, attempt, 1n << 64n, 0], [new Uint8Array(16), attempt, 1n, 0], [path, new Uint8Array(15), 1n, 0], [path, attempt, 1n, 4], [path, attempt, 1n, -1]]) {
+ for (const binding of [null, [], [path, attempt], [path, attempt, 1n], [path, attempt, 0n, 0], [path, attempt, 1n << 64n, 0], [new Uint8Array(16), attempt, 1n, 0], [path, new Uint8Array(15), 1n, 0], [path, attempt, 1n, 8], [path, attempt, 1n, -1]]) {
   const fields = new Map(valid); fields.set(6,binding)
   expect(() => decodeOperationErrorControl(encodeBody(fields))).toThrow()
  }

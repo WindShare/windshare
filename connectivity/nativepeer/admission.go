@@ -14,16 +14,18 @@ import (
 // These application limits mirror browser tab admission. The injected authority
 // survives manager, authenticated-session and network-generation replacement.
 const (
-	ConcurrentAttempts             = 4
-	DirectAttemptReserve           = 1
-	StartsPerWindow                = 16
-	STUNEndpointsPerWindow         = 32
-	MaximumQueuedAttempts          = 64
-	AdmissionWindow                = time.Minute
-	AttemptBudget                  = 85 * time.Second
-	ActiveTimePerWindow            = ConcurrentAttempts * AttemptBudget
+	ConcurrentAttempts     = 4
+	DirectAttemptReserve   = 1
+	StartsPerWindow        = 16
+	STUNEndpointsPerWindow = 32
+	MaximumQueuedAttempts  = 64
+	AdmissionWindow        = time.Minute
+
+	// The permit clock starts at the resource grant. A receiver can hold its
+	// preparation before starting signaling and the configured lane admission.
+	PermitLifetime                 = 85 * time.Second
+	ActiveTimePerWindow            = ConcurrentAttempts * PermitLifetime
 	QueueBudget                    = time.Minute
-	MinimumPreparationOpportunity  = 50 * time.Second
 	MaximumSTUNEndpointsPerAttempt = icepolicy.EndpointsPerProfile
 )
 
@@ -97,7 +99,7 @@ func NewAdmission(clock AdmissionClock) *Admission {
 	return &Admission{clock: clock, updated: clock.Now(), starts: StartsPerWindow, endpoints: STUNEndpointsPerWindow, activeTime: float64(ActiveTimePerWindow)}
 }
 
-func (g *Admission) acquirePurpose(ctx context.Context, owner *NativePeerConnectivity, endpoints int, sockets *socketauthority.Request, observe func(AdmissionFacts), purpose v2signal.ConnectionPurpose) (*attemptPermit, error) {
+func (g *Admission) acquirePurpose(ctx context.Context, owner *NativePeerConnectivity, endpoints int, sockets *socketauthority.Request, observe func(AdmissionFacts), purpose v2signal.ConnectionPurpose, queueWait time.Duration) (*attemptPermit, error) {
 	if err := context.Cause(ctx); err != nil {
 		return nil, err
 	}
@@ -120,11 +122,16 @@ func (g *Admission) acquirePurpose(ctx context.Context, owner *NativePeerConnect
 		changed := sockets.Changes()
 		g.mu.Lock()
 		g.drainLocked()
-		if purpose == v2signal.ThroughputExploration && w.permit == nil && w.err == nil {
+		if (queueWait == 0 || purpose == v2signal.ThroughputExploration) && w.permit == nil && w.err == nil {
 			g.queue = slices.DeleteFunc(g.queue, func(entry *admissionWaiter) bool { return entry == w })
 			g.emitLocked(w, AdmissionRejected)
+			g.drainLocked()
+			err := ErrAdmission
+			if w.capacity != nil {
+				err = errors.Join(err, w.capacity)
+			}
 			g.mu.Unlock()
-			return nil, ErrAdmission
+			return nil, err
 		}
 		g.mu.Unlock()
 		select {
@@ -194,7 +201,7 @@ func (g *Admission) drainLocked() {
 		}
 		wait := max((float64(1+reserve)-g.starts)*float64(AdmissionWindow)/StartsPerWindow,
 			(float64(w.endpoints)-g.endpoints)*float64(AdmissionWindow)/STUNEndpointsPerWindow,
-			(float64(AttemptBudget)*float64(1+reserve)-g.activeTime)*float64(AdmissionWindow)/float64(ActiveTimePerWindow))
+			(float64(PermitLifetime)*float64(1+reserve)-g.activeTime)*float64(AdmissionWindow)/float64(ActiveTimePerWindow))
 		if wait > 0 {
 			delay := max(time.Duration(wait), time.Nanosecond)
 			if nextRefill == 0 || delay < nextRefill {
@@ -220,7 +227,7 @@ func (g *Admission) drainLocked() {
 		g.active++
 		g.starts--
 		g.endpoints -= float64(w.endpoints)
-		g.activeTime -= float64(AttemptBudget)
+		g.activeTime -= float64(PermitLifetime)
 		w.permit = &attemptPermit{gate: g, started: g.clock.Now(), waiter: w, sockets: reservation}
 		g.emitLocked(w, AdmissionGranted)
 		close(w.ready)
@@ -282,9 +289,9 @@ func (p *attemptPermit) release() {
 		g := p.gate
 		g.mu.Lock()
 		g.refillLocked()
-		used := min(max(g.clock.Now().Sub(p.started), 0), AttemptBudget)
+		used := min(max(g.clock.Now().Sub(p.started), 0), PermitLifetime)
 		g.active--
-		g.activeTime = min(float64(ActiveTimePerWindow), g.activeTime+float64(AttemptBudget-used))
+		g.activeTime = min(float64(ActiveTimePerWindow), g.activeTime+float64(PermitLifetime-used))
 		g.emitLocked(p.waiter, AdmissionReleased)
 		g.drainLocked()
 		g.mu.Unlock()

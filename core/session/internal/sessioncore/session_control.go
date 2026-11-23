@@ -13,6 +13,10 @@ func (runtime *Runtime) SetPeerPathControlHandler(handler func(context.Context, 
 	runtime.peerPathControls.set(handler)
 }
 
+func (runtime *Runtime) SetTURNControlHandler(handler func(context.Context, []byte) error) {
+	runtime.turnControls.set(handler)
+}
+
 // Each control family owns its callback while sharing authentication and lane
 // delivery.
 type sessionControlHandler struct {
@@ -49,7 +53,7 @@ func (runtime *Runtime) SendSessionControl(ctx context.Context, kind protocolses
 	if runtime == nil || ctx == nil {
 		return session.ErrRuntimeConfig
 	}
-	if err := protocolsession.ValidateSessionControlBody(kind, body); err != nil {
+	if err := protocolsession.ValidateSessionControlBody(runtime.role, kind, body); err != nil {
 		return err
 	}
 	message, err := protocolsession.NewMessage(kind, nil, body)

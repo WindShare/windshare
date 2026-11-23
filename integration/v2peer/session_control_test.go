@@ -5,6 +5,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -12,8 +13,14 @@ import (
 // peer operation ID and must never enter an answer/candidate response queue.
 type integrationSessionControls struct {
 	mu          sync.Mutex
+	turnHandler func(context.Context, []byte) error
 	pathHandler func(context.Context, []byte) error
 	sent        []receiverIntegrationControl
+}
+
+func (*integrationSessionControls) RetireReplacedLane(_, _ session.LaneIdentity) bool {
+	// Direct negotiation fixtures never install a successor on the same TURN path.
+	return false
 }
 
 func (controls *integrationSessionControls) SetPeerPathControlHandler(handler func(context.Context, []byte) error) {
@@ -22,15 +29,25 @@ func (controls *integrationSessionControls) SetPeerPathControlHandler(handler fu
 	controls.pathHandler = handler
 }
 
+func (controls *integrationSessionControls) SetTURNControlHandler(handler func(context.Context, []byte) error) {
+	controls.mu.Lock()
+	defer controls.mu.Unlock()
+	controls.turnHandler = handler
+}
+
 func (controls *integrationSessionControls) SendPeerPathControl(ctx context.Context, body []byte) error {
 	return controls.send(ctx, protocolsession.MessagePeerPathControl, body)
+}
+
+func (controls *integrationSessionControls) SendTURNControl(ctx context.Context, body []byte) error {
+	return controls.send(ctx, protocolsession.MessageTURNControl, body)
 }
 
 func (controls *integrationSessionControls) send(ctx context.Context, kind protocolsession.MessageKind, body []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := protocolsession.ValidateSessionControlBody(kind, body); err != nil {
+	if err := protocolsession.ValidateSessionControlBody(protocolsession.RoleSender, kind, body); err != nil {
 		return err
 	}
 	controls.mu.Lock()

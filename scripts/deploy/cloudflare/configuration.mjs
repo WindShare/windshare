@@ -50,3 +50,9 @@ export function consoleConfig(host, inputs, state) {
     observability: { enabled: true },
   };
 }
+
+export function managedTURNEnabled(env) {
+  const value = env.CLOUDFLARE_TURN_ENABLED || 'true';
+  if (!['true', 'false'].includes(value)) throw new Error('CLOUDFLARE_TURN_ENABLED must be true or false.');
+  return value === 'true';
+}

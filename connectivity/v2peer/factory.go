@@ -8,7 +8,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/windshare/windshare/core/session/turngrant"
+
+	"github.com/windshare/windshare/connectivity/turnsession"
+	"github.com/windshare/windshare/core/diagnostics"
+
 	pion "github.com/pion/webrtc/v4"
+
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -100,6 +106,9 @@ func (function DataChannelAdapterFunc) WrapDataChannel(
 }
 
 type Config struct {
+	Trace              diagnostics.Sink
+	TURNCapacity       *turnsession.Capacity
+	TURNProvider       turnsession.Provider
 	Native             *nativepeer.NativePeerConnectivity
 	Configuration      pion.Configuration
 	PeerConnections    PeerConnectionFactory
@@ -118,6 +127,10 @@ type Config struct {
 }
 
 type Factory struct {
+	turnPeers             turnPeerFactory
+	trace                 diagnostics.Sink
+	turnCapacity          *turnsession.Capacity
+	turnProvider          turnsession.Provider
 	native                *nativepeer.NativePeerConnectivity
 	configuration         pion.Configuration
 	peerConnections       PeerConnectionFactory
@@ -202,7 +215,11 @@ func NewFactory(config Config) (*Factory, error) {
 	if err != nil {
 		return nil, errors.Join(ErrConfig, err)
 	}
+	if config.TURNCapacity == nil {
+		config.TURNCapacity = turnsession.NewCapacity()
+	}
 	factory := &Factory{
+		trace: config.Trace, turnPeers: openTURNPeer, turnCapacity: config.TURNCapacity, turnProvider: config.TURNProvider,
 		native:        config.Native,
 		configuration: config.Configuration, peerConnections: config.PeerConnections,
 		dataChannels:      config.DataChannels,
@@ -239,9 +256,10 @@ func (factory *Factory) NewSenderPeerHandler(
 	}
 	capacity := SenderMaxActivePeerAttemptsPerSession*(factory.maxCandidates+3) + handlerEventReserve
 	return &senderHandler{
+		turn:    turnsession.NewSender(turngrant.Trace{Sink: factory.trace, Session: session.ProtocolSessionID()}, factory.turnProvider, factory.now),
 		factory: factory, session: session, events: make(chan handlerEvent, capacity),
 		attempts:          make(map[protocolsession.OperationID]*peerAttempt),
-		bindings:          make(map[v2signal.Binding]protocolsession.OperationID),
+		paths:             make(map[v2signal.PeerPathID]senderPathAttempts),
 		evidenceAuthority: newSenderEvidenceAuthority(factory.maxPeerPaths),
 		retiredOperations: make(map[protocolsession.OperationID]retiredBinding),
 		retiredBindings:   make(map[v2signal.Binding]retiredBinding),
@@ -296,10 +314,14 @@ func (factory *Factory) BeginOperationContinuation(
 	// publish its rejection. Rebuilding only the continuation contract from a
 	// canonical placeholder preserves v2signal's single binding/scope owner while
 	// leaving the malformed original body for the handler to reject and observe.
-	placeholder, encodeErr := v2signal.EncodeOffer(v2signal.Offer{
+	offer := v2signal.Offer{
 		Binding: binding,
 		SDP:     rejectedOfferAuthoritySDP,
-	})
+	}
+	if binding.Purpose == v2signal.TURNRelay {
+		offer.TURNGrantID[0] = 1
+	}
+	placeholder, encodeErr := v2signal.EncodeOffer(offer)
 	if encodeErr != nil {
 		return nil, true, errors.Join(err, encodeErr)
 	}
@@ -338,6 +360,7 @@ type handlerEvent struct {
 }
 
 type senderHandler struct {
+	turn    *turnsession.Sender
 	factory *Factory
 	session sendersession.PeerSession
 	events  chan handlerEvent
@@ -347,7 +370,7 @@ type senderHandler struct {
 
 	mu       sync.Mutex
 	attempts map[protocolsession.OperationID]*peerAttempt
-	bindings map[v2signal.Binding]protocolsession.OperationID
+	paths    map[v2signal.PeerPathID]senderPathAttempts
 	// Evidence identity is scoped to the ProtocolSession, while replay
 	// tombstones intentionally expire. Keeping these authorities separate is
 	// what makes one (session,path,attempt,side) stream terminal exactly once.

@@ -95,7 +95,7 @@
       "bodyB64": "hwNQAQIDBAUGBwgJCgsMDQ4PEFAJAAAAAAAAAAAAAAAAAAAABAQZ6mAA"
     }
   ],
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "messageKinds": {
     "offer": 16,
     "answer": 17,
@@ -112,19 +112,23 @@
     "direction": 1,
     "operationId": "72623859790382856"
   },
+  "turnOffer": {
+    "sdp": "v=0\r\na=setup:actpass\r\n",
+    "bodyB64": "iAVQAQIDBAUGBwgJCgsMDQ4PEFAhIiMkJSYnKCkqKywtLi8wAQIDdnY9MA0KYT1zZXR1cDphY3RwYXNzDQpQAQAAAAAAAAAAAAAAAAAAAA=="
+  },
   "offer": {
     "sdp": "v=0\r\na=setup:actpass\r\n",
-    "bodyB64": "hwRQAQIDBAUGBwgJCgsMDQ4PEFAhIiMkJSYnKCkqKywtLi8wAQIAdnY9MA0KYT1zZXR1cDphY3RwYXNzDQo="
+    "bodyB64": "iAVQAQIDBAUGBwgJCgsMDQ4PEFAhIiMkJSYnKCkqKywtLi8wAQIAdnY9MA0KYT1zZXR1cDphY3RwYXNzDQr2"
   },
   "answer": {
     "sdp": "v=0\r\na=setup:active\r\n",
-    "bodyB64": "hwRQAQIDBAUGBwgJCgsMDQ4PEFAhIiMkJSYnKCkqKywtLi8wAQIAdXY9MA0KYT1zZXR1cDphY3RpdmUNCg=="
+    "bodyB64": "hwVQAQIDBAUGBwgJCgsMDQ4PEFAhIiMkJSYnKCkqKywtLi8wAQIAdXY9MA0KYT1zZXR1cDphY3RpdmUNCg=="
   },
   "candidate": {
     "candidate": "candidate:1 1 udp 2122260223 192.0.2.1 5000 typ host",
     "sdpMid": "data",
     "sdpMLineIndex": 0,
     "usernameFragment": "windshare",
-    "bodyB64": "igRQAQIDBAUGBwgJCgsMDQ4PEFAhIiMkJSYnKCkqKywtLi8wAQIAeDRjYW5kaWRhdGU6MSAxIHVkcCAyMTIyMjYwMjIzIDE5Mi4wLjIuMSA1MDAwIHR5cCBob3N0ZGRhdGEAaXdpbmRzaGFyZQ=="
+    "bodyB64": "igVQAQIDBAUGBwgJCgsMDQ4PEFAhIiMkJSYnKCkqKywtLi8wAQIAeDRjYW5kaWRhdGU6MSAxIHVkcCAyMTIyMjYwMjIzIDE5Mi4wLjIuMSA1MDAwIHR5cCBob3N0ZGRhdGEAaXdpbmRzaGFyZQ=="
   }
 }

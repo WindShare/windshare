@@ -58,7 +58,7 @@ it('seals known session-terminal reasons before a waiting peer consumer can retr
  let terminated = false
  const router = new OperationRouter(() => { terminated = true })
  const id = new Uint8Array(16).fill(1)
- const operation = router.create(MESSAGE_KIND.peerOffer, encodeBody([4, id, id, 1n, 0, 0, 'v=0']))
+ const operation = router.create(MESSAGE_KIND.peerOffer, encodeBody([5, id, id, 1n, 0, 0, 'v=0', null]))
  const reading = operation.next().catch(error => error as unknown)
  const failure = encodeMessage(MESSAGE_KIND.operationError,operation.id,encodeBody(new Map<number,unknown>([[0,3],[1,5],[2,0x500a],[3,false],[4,null],[5,'authentication'],[6,[id,id,1n,0]]])))
  await expect(router.route(failure)).rejects.toMatchObject({scope:'session'})

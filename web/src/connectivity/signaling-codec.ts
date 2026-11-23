@@ -10,7 +10,7 @@ import {
   requireUnsigned,
 } from '../protocol/cbor'
 
-export const SIGNALING_SCHEMA_VERSION = 4
+export const SIGNALING_SCHEMA_VERSION = 5
 export const SIGNALING_IDENTITY_BYTES = 16
 export const SIGNALING_MAXIMUM_SDP_BYTES = 60 * 1024
 export const SIGNALING_MAXIMUM_CANDIDATE_BYTES = 4 * 1024
@@ -21,8 +21,8 @@ const MAXIMUM_SIGNALING_BODY_BYTES = 65_536 - 44
 const MAXIMUM_UINT16 = 0xffff
 const TEXT_ENCODER = new TextEncoder()
 
-export type ConnectionPurpose = 'initial' | 'recovery' | 'throughput'
-const PURPOSES: readonly ConnectionPurpose[] = ['initial', 'recovery', 'throughput']
+export type ConnectionPurpose = 'initial' | 'recovery' | 'throughput' | 'turn-relay'
+const PURPOSES: readonly ConnectionPurpose[] = ['initial', 'recovery', 'throughput', 'turn-relay']
 export interface PeerBinding extends PeerAttemptOrdinal {
   readonly purpose: ConnectionPurpose
   readonly peerPathId: Uint8Array<ArrayBuffer>
@@ -47,20 +47,34 @@ export class SignalingCodecError extends Error {
   }
 }
 
-export function encodePeerOffer(value: PeerDescription): Uint8Array<ArrayBuffer> {
-  return encodeDescription(value)
+export interface PeerOffer extends PeerDescription {
+  readonly turnGrantId?: Uint8Array<ArrayBuffer>
 }
 
-export function decodePeerOffer(encoded: Uint8Array): PeerDescription {
-  return decodeDescription(encoded, 'peer offer')
+export function encodePeerOffer(value: PeerOffer): Uint8Array<ArrayBuffer> {
+  if (value.purpose === 'turn-relay') {
+    return encodeCanonicalCbor([...descriptionFields(value), requireBytes(value.turnGrantId, SIGNALING_IDENTITY_BYTES, 'TURN grant ID', true)])
+  }
+  if (value.turnGrantId !== undefined) throw new SignalingCodecError('Unexpected TURN grant ID')
+  return encodeCanonicalCbor([...descriptionFields(value), null])
+}
+
+export function decodePeerOffer(encoded: Uint8Array): PeerOffer {
+  const fields = exactArray(encoded, 8, 'peer offer')
+  const description = decodeDescription(fields, 'peer offer')
+  if (description.purpose === 'turn-relay') {
+    return { ...description, turnGrantId: requireBytes(fields[7], SIGNALING_IDENTITY_BYTES, 'TURN grant ID', true) }
+  }
+  if (fields[7] !== null) throw new SignalingCodecError('Unexpected TURN grant ID')
+  return description
 }
 
 export function encodePeerAnswer(value: PeerDescription): Uint8Array<ArrayBuffer> {
-  return encodeDescription(value)
+  return encodeCanonicalCbor(descriptionFields(value))
 }
 
 export function decodePeerAnswer(encoded: Uint8Array): PeerDescription {
-  return decodeDescription(encoded, 'peer answer')
+  return decodeDescription(exactArray(encoded, 7, 'peer answer'), 'peer answer')
 }
 
 export function encodePeerCandidate(value: PeerCandidate): Uint8Array<ArrayBuffer> {
@@ -113,9 +127,9 @@ export function samePeerBinding(left: PeerBinding, right: PeerBinding): boolean 
   return left.purpose === right.purpose && left.peerSlot === right.peerSlot && left.attemptSequence === right.attemptSequence && equalBytes(left.peerPathId, right.peerPathId) && equalBytes(left.attemptId, right.attemptId)
 }
 
-function encodeDescription(value: PeerDescription): Uint8Array<ArrayBuffer> {
+function descriptionFields(value: PeerDescription): unknown[] {
   const binding = snapshotBinding(value)
-  return encodeCanonicalCbor([
+  return [
     SIGNALING_SCHEMA_VERSION,
     binding.peerPathId,
     binding.attemptId,
@@ -123,11 +137,10 @@ function encodeDescription(value: PeerDescription): Uint8Array<ArrayBuffer> {
     binding.peerSlot,
     encodePurpose(binding.purpose),
     requireBoundedText(value.sdp, SIGNALING_MAXIMUM_SDP_BYTES, false, 'SDP'),
-  ])
+  ]
 }
 
-function decodeDescription(encoded: Uint8Array, label: string): PeerDescription {
-  const fields = exactArray(encoded, 7, label)
+function decodeDescription(fields: readonly unknown[], label: string): PeerDescription {
   const binding = decodePrefix(fields, label)
   return Object.freeze({
     ...binding,
@@ -234,6 +247,6 @@ function encodePurpose(value: ConnectionPurpose): number {
 function decodePurpose(value: unknown): ConnectionPurpose {
  const index = requireUnsigned(value, 'connection purpose')
  const purpose = PURPOSES[Number(index)]
- if (index > 2n || purpose === undefined) throw new SignalingCodecError('Invalid connection purpose')
+ if (index > 3n || purpose === undefined) throw new SignalingCodecError('Invalid connection purpose')
  return purpose
 }

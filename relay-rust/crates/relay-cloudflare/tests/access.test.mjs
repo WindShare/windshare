@@ -16,13 +16,15 @@ const claimant = () => {
   const secret = randomBytes(32);
   return { claim_secret: encode(secret), claim_digest: digest(secret) };
 };
-function options(ownerPassword = password, consoleOrigin = origin, relayOrigin = 'https://127.0.0.1', faults = false) {
+function options(ownerPassword = password, consoleOrigin = origin, relayOrigin = 'https://127.0.0.1', faults = false, turn = undefined) {
   const shared = { compatibilityDate: '2026-10-17',
     compatibilityFlags: ['web_socket_auto_reply_to_close'], modulesRoot: root };
   const module = (path, type = 'ESModule') => ({ type, path: root + path });
   return convertV4MiniflareOptions({ log: new Log(LogLevel.ERROR), workers: [
     { ...shared, name: 'relay', modules: [...(faults ? [module('tests/access-host.mjs')] : []), module('entry.mjs'), module('build/index.js'), module('build/index_bg.wasm', 'CompiledWasm')],
-      bindings: { OWNER_PASSWORD: ownerPassword, CONSOLE_ORIGIN: consoleOrigin, RELAY_URL: relayOrigin, FRONTEND_URL: relayOrigin },
+      bindings: { OWNER_PASSWORD: ownerPassword, CONSOLE_ORIGIN: consoleOrigin, RELAY_URL: relayOrigin, FRONTEND_URL: relayOrigin,
+        ...(turn ? { TURN_KEY: JSON.stringify({key_id:'fixture',api_token:'test-token'}) } : {}) },
+      ...(turn ? { outboundService: turn } : {}),
       durableObjects: { SHARES: { className: 'ShareRelayObject', useSQLite: true },
         ACCESS: { className: 'AccessObject', useSQLite: true } } },
     { ...shared, name: 'console', modules: [module('console-entry.mjs')], bindings: { CONSOLE_ORIGIN: consoleOrigin },
@@ -341,4 +343,94 @@ test('failed termination batches preserve retry responsibility without starving 
     });
     assert.equal(stopped.status, 200, 'terminating an empty target must be idempotent');
   } finally { await mf.dispose(); }
+});
+
+test('managed TURN authorizes read-only, pauses new grants and bounds issuance per credential', { timeout: 30_000 }, async t => {
+  const relayOrigin = 'https://127.0.0.1';
+  const urls = ['turn:localhost:3478', 'turns:localhost:443?transport=tcp'];
+  const grant = { urls, username: 'guest', password: 'ephemeral', ttl_seconds: 1800 };
+  const iceServers = [
+    { urls: 'stun:localhost' },
+    { urls: urls[0], username: grant.username, credential: grant.password },
+    { urls: 'turn:other.example', username: grant.username, credential: 'other' },
+    { urls: [...urls, 'turn:bad@example.org'], username: grant.username, credential: grant.password },
+  ];
+  let upstream = 0;
+  const mf = new Miniflare(options(password, origin, relayOrigin, true, async request => {
+    assert.equal(request.url, 'https://rtc.live.cloudflare.com/v1/turn/keys/fixture/credentials/generate-ice-servers');
+    assert.equal(request.headers.get('authorization'), 'Bearer test-token');
+    assert.deepEqual(await request.json(), { ttl: 1800 });
+    upstream++;
+    if (upstream <= 2) {
+      const limit = 32 * 1024;
+      const size = upstream === 1 ? limit + 1 : limit;
+      const bytes = new TextEncoder().encode(JSON.stringify({ iceServers }).padEnd(size));
+      return new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(bytes.subarray(0, limit / 2));
+          controller.enqueue(bytes.subarray(limit / 2));
+          controller.close();
+        },
+      }), { status: 201 });
+    }
+    return Response.json({ iceServers }, { status: 201 });
+  }));
+  t.after(() => mf.dispose());
+  const edge = await mf.getWorker('relay');
+  const ui = await mf.getWorker('console');
+  let cookie = '';
+  const admin = (path, body) => ui.fetch(origin + '/api/' + path, {
+    method: body ? 'POST' : 'GET',
+    headers: { Origin: origin, Cookie: cookie, 'Content-Type': 'application/json' },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  const issue = key => edge.fetch(relayOrigin + '/v2/turn/credentials', {
+    method: 'POST', headers: { Authorization: 'Bearer ' + key },
+  });
+  const refusal = async (key, status, error) => {
+    const response = await issue(key);
+    assert.equal(response.status, status);
+    assert.deepEqual(await response.json(), { error });
+  };
+  const discovery = async () => (await (await edge.fetch(relayOrigin + '/.well-known/windshare')).json()).managed_turn;
+  const authority = (await mf.getBindings('relay')).ACCESS.getByName('authority');
+  const changes = async () => (await authority.fetch('https://internal/__test/changes')).json();
+  assert.equal(await discovery(), true);
+  const empty = await changes();
+  await refusal('invalid', 403, 'access_denied');
+  assert.deepEqual(await changes(), empty);
+
+  const login = await admin('login', { password });
+  assert.equal(login.status, 200);
+  cookie = login.headers.get('set-cookie').split(';')[0];
+  assert.equal((await (await admin('session')).json()).capabilities.managed_turn, true);
+  const created = await (await admin('credentials', { name: 'local TURN test' })).json();
+  const key = created.configuration.access_key;
+  assert.equal((await admin('turn/toggle', { enabled: false })).status, 200);
+  const paused = await changes();
+  await refusal(key, 403, 'turn_disabled');
+  await refusal('invalid', 403, 'access_denied');
+  assert.equal(await discovery(), true);
+  assert.deepEqual(await changes(), paused);
+  assert.equal(upstream, 0);
+
+  assert.equal((await admin('turn/toggle', { enabled: true })).status, 200);
+  const before = await changes();
+  await refusal(key, 503, 'turn_unavailable');
+  for (let i = 1; i < 20; i++) {
+    const response = await issue(key);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    assert.deepEqual(await response.json(), grant);
+  }
+  const limited = await issue(key);
+  assert.equal(limited.status, 429);
+  assert.equal(limited.headers.get('retry-after'), '60');
+  assert.deepEqual(await changes(), before);
+  assert.equal(upstream, 20);
+
+  assert.equal((await admin('credentials/revoke', { credential_id: created.credential.credential_id, terminate_shares: false })).status, 200);
+  await refusal(key, 403, 'access_denied');
+  assert.equal((await admin('turn/toggle', { enabled: false })).status, 200);
+  await refusal(key, 403, 'access_denied');
 });

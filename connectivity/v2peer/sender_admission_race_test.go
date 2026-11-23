@@ -171,7 +171,7 @@ func TestSuccessfulAdmissionWinsEveryCompetingTerminalBoundary(t *testing.T) {
 				receiveTest(t, harness.session.contextCanceled)
 				close(harness.session.release)
 				receiveTest(t, harness.admissionDone)
-				assertPeerState(t, func() bool { return harness.attempt.attached.Load() })
+				assertPeerState(t, func() bool { return harness.attempt.attached() })
 				if stopped := harness.execution.ctx.Err() != nil; stopped != test.lifetimeStops {
 					t.Fatalf("attempt lifetime stopped=%t, want %t", stopped, test.lifetimeStops)
 				}
@@ -241,7 +241,7 @@ func TestAuthenticatedLaneRejectionWinsAdmissionTimeout(t *testing.T) {
 	if errors.Is(actual, ErrPeerAdmissionTimeout) {
 		t.Fatalf("admission timeout hid authenticated rejection: %v", actual)
 	}
-	if harness.attempt.attached.Load() {
+	if harness.attempt.attached() {
 		t.Fatal("rejected admission published a lane")
 	}
 	peer := harness.execution.peer.(*testPeerConnection)

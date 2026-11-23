@@ -4,7 +4,8 @@ import { PEER_CONTINUATION_SLOTS, PeerSlotPool } from '../../src/session/peer-sl
 it('reuses bounded slots without resetting sequences or reviving closed owners', () => {
   const pool = new PeerSlotPool()
   const leases = Array.from({ length: PEER_CONTINUATION_SLOTS }, () => pool.acquire())
-  expect(leases.map((lease) => lease.next().peerSlot)).toEqual([0, 1, 2, 3])
+  expect(pool.tryAcquire()).toBeUndefined()
+  expect(leases.map((lease) => lease.next().peerSlot)).toEqual([0, 1, 2, 3, 4, 5, 6, 7])
   expect(() => pool.acquire()).toThrow('occupied')
 
   let previous = leases[1]!

@@ -123,15 +123,21 @@ export class SessionLane {
   }
 
   #shutdown(): Promise<void> {
-    this.#closeTask ??= this.#close()
+    if (!this.#closeTask) {
+      const cancelInput = !this.#closed
+      this.#closed = true
+      // A synchronous withdrawal listener may re-enter close or request another retirement.
+      this.#closeTask = Promise.resolve().then(() => this.#drain(cancelInput))
+      if (cancelInput) {
+        this.#withdraw()
+        this.writer.fail(new SessionRuntimeError('lane', 'Session lane closed'))
+      }
+    }
     return this.#closeTask
   }
 
-  async #close(): Promise<void> {
-    if (!this.#closed) {
-      this.#closed = true
-      this.#withdraw()
-      this.writer.fail(new SessionRuntimeError('lane', 'Session lane closed'))
+  async #drain(cancelInput: boolean): Promise<void> {
+    if (cancelInput) {
       await this.#reader.cancel().catch(error => this.#observeCleanup(error, 'session.reader.cancel'))
     }
     try {

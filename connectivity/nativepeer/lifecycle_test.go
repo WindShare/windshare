@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	pion "github.com/pion/webrtc/v4"
@@ -407,81 +408,64 @@ func TestPrepareAttemptCancelsWhileSharedWatcherSampleBlocks(t *testing.T) {
 	}
 }
 
-type waitingPrepareContext struct {
-	context.Context
-	once    sync.Once
-	waiting chan struct{}
-}
-
-func newWaitingPrepareContext(parent context.Context) *waitingPrepareContext {
-	return &waitingPrepareContext{Context: parent, waiting: make(chan struct{})}
-}
-
-func (c *waitingPrepareContext) Done() <-chan struct{} {
-	c.once.Do(func() { close(c.waiting) })
-	return c.Context.Done()
-}
-
 func TestPrepareAttemptSharesColdStartSamplingErrorWithoutSerializing(t *testing.T) {
-	now := time.Unix(750, 0)
-	clock := func() time.Time { return now }
-	sampleErr := errors.New("adapter enumeration unavailable")
-	block := make(chan struct{})
-	source := &countingNetworkSource{
-		err:     sampleErr,
-		entered: make(chan struct{}, 2),
-		block:   block,
-	}
-	watcher := networkstate.NewWatcher(networkstate.WatcherConfig{Source: source, Debounce: time.Nanosecond, Interval: time.Hour, Now: clock})
-	defer watcher.Close()
-
-	native := newTestConnectivity(t, Config{Monitor: watcher, Now: clock, Reachability: reachability.New(reachability.Config{Now: clock})})
-	defer native.Close(context.Background())
-
-	leaderDone := make(chan error, 1)
-	go func() {
-		prepared, err := native.PrepareAttempt(context.Background(), request(1))
-		if prepared != nil {
-			prepared.Close()
+	synctest.Test(t, func(t *testing.T) {
+		now := time.Unix(750, 0)
+		clock := func() time.Time { return now }
+		sampleErr := errors.New("adapter enumeration unavailable")
+		block := make(chan struct{})
+		source := &countingNetworkSource{
+			err:     sampleErr,
+			entered: make(chan struct{}, 2),
+			block:   block,
 		}
-		leaderDone <- err
-	}()
-	<-source.entered
+		watcher := networkstate.NewWatcher(networkstate.WatcherConfig{Source: source, Debounce: time.Nanosecond, Interval: time.Hour, Now: clock})
+		defer watcher.Close()
 
-	const waiters = 4
-	waiterCtxs := make([]*waitingPrepareContext, waiters)
-	waiterErrs := make([]chan error, waiters)
-	for i := range waiters {
-		waiterCtxs[i] = newWaitingPrepareContext(context.Background())
-		waiterErrs[i] = make(chan error, 1)
-		go func(idx int) {
-			prepared, err := native.PrepareAttempt(waiterCtxs[idx], request(uint64(idx+2)))
+		native := newTestConnectivity(t, Config{Monitor: watcher, Now: clock, Reachability: reachability.New(reachability.Config{Now: clock})})
+		defer native.Close(context.Background())
+
+		leaderDone := make(chan error, 1)
+		go func() {
+			prepared, err := native.PrepareAttempt(context.Background(), request(1))
 			if prepared != nil {
 				prepared.Close()
 			}
-			waiterErrs[idx] <- err
-		}(i)
-	}
-	for _, wctx := range waiterCtxs {
-		<-wctx.waiting
-	}
+			leaderDone <- err
+		}()
+		<-source.entered
 
-	source.mu.Lock()
-	source.block = nil
-	source.mu.Unlock()
-	close(block)
-
-	if err := <-leaderDone; !errors.Is(err, sampleErr) {
-		t.Fatalf("leader PrepareAttempt err = %v, want %v", err, sampleErr)
-	}
-	for i, ch := range waiterErrs {
-		if err := <-ch; !errors.Is(err, sampleErr) {
-			t.Fatalf("waiter %d PrepareAttempt err = %v, want %v", i, err, sampleErr)
+		const waiters = 4
+		waiterErrs := make([]chan error, waiters)
+		for i := range waiters {
+			waiterErrs[i] = make(chan error, 1)
+			go func(idx int) {
+				prepared, err := native.PrepareAttempt(t.Context(), request(uint64(idx+2)))
+				if prepared != nil {
+					prepared.Close()
+				}
+				waiterErrs[idx] <- err
+			}(i)
 		}
-	}
-	if calls := source.calls.Load(); calls != 1 {
-		t.Fatalf("cold-start failing PrepareAttempt calls = %d, want 1", calls)
-	}
+		synctest.Wait()
+
+		source.mu.Lock()
+		source.block = nil
+		source.mu.Unlock()
+		close(block)
+
+		if err := <-leaderDone; !errors.Is(err, sampleErr) {
+			t.Fatalf("leader PrepareAttempt err = %v, want %v", err, sampleErr)
+		}
+		for i, ch := range waiterErrs {
+			if err := <-ch; !errors.Is(err, sampleErr) {
+				t.Fatalf("waiter %d PrepareAttempt err = %v, want %v", i, err, sampleErr)
+			}
+		}
+		if calls := source.calls.Load(); calls != 1 {
+			t.Fatalf("cold-start failing PrepareAttempt calls = %d, want 1", calls)
+		}
+	})
 }
 
 type blockingGateway struct {

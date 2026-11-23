@@ -1,4 +1,5 @@
 import {
+  CborError,
   decodeCanonicalCbor,
   encodeCanonicalCbor,
   requireArray,
@@ -42,7 +43,7 @@ export function decodePeerPathControl(body: Uint8Array): PeerPathControl {
     'peer path control',
   )
   if (fields.length !== FIELD_COUNT || requireUnsigned(fields[0], 'path control schema') !== BigInt(SCHEMA_VERSION)) {
-    throw new Error('invalid path control schema')
+    throw new CborError('invalid path control schema')
   }
   const value = Object.freeze({
     peerPathId: requireBytes(fields[1], IDENTITY_BYTES, 'peer path ID', true),
@@ -65,7 +66,7 @@ function validate(value: PeerPathControl): void {
     !Number.isInteger(value.kind) ||
     value.kind < PEER_PATH_CONTROL_KIND.demand || value.kind > PEER_PATH_CONTROL_KIND.networkChanged
   ) {
-    throw new Error('invalid path control identity or kind')
+    throw new CborError('invalid path control identity or kind')
   }
   // Receipt owns these durations; accepting wall-clock timestamps would make
   // remote clock skew capable of extending a local reachability lease.
@@ -77,6 +78,6 @@ function validate(value: PeerPathControl): void {
     (value.kind === PEER_PATH_CONTROL_KIND.revoke) !== (value.validForMilliseconds === 0) ||
     (value.kind !== PEER_PATH_CONTROL_KIND.demand && value.holdForMilliseconds !== 0)
   ) {
-    throw new Error('invalid path control lifetime or hold')
+    throw new CborError('invalid path control lifetime or hold')
   }
 }

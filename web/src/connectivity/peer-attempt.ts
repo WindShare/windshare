@@ -1,3 +1,4 @@
+import type { TURNGrant } from '../protocol/turn-control'
 import {
   LaneAdmissionRejectedError,
   LaneAdmissionTransportError,
@@ -59,6 +60,7 @@ export interface PeerCandidatePublication {
 export type PeerCandidatePublisher = (candidate: PeerCandidatePublication) => boolean
 
 export interface BrowserPeerAttemptExecutorOptions {
+  readonly turnGrant?: TURNGrant
   readonly tabAdmission?: PeerTabAdmission
   readonly admissionReceiver?: object
   readonly session: ReceiverSessionRuntime
@@ -121,6 +123,7 @@ class PhaseSettlementFailure {
 
 /** One handle owns one immutable identity tuple and one exactly-joined workflow. */
 export class BrowserPeerAttemptExecutor implements PeerRecoveryAttemptFactory {
+  readonly #turnGrant: TURNGrant | undefined
   readonly #session: ReceiverSessionRuntime
   readonly #offers: OfferChannelFactory
   readonly #peerPathIdentity: Uint8Array<ArrayBuffer>
@@ -136,6 +139,7 @@ export class BrowserPeerAttemptExecutor implements PeerRecoveryAttemptFactory {
       options.peerPathIdentity.byteLength !== 16 ||
       !options.peerPathIdentity.some((item) => item !== 0)
     ) throw new RangeError('peer path identity must be a nonzero 16-byte value')
+    this.#turnGrant = options.turnGrant
     this.#session = options.session
     this.#offers = options.offers
     this.#peerPathIdentity = options.peerPathIdentity.slice()
@@ -183,11 +187,11 @@ export class BrowserPeerAttemptExecutor implements PeerRecoveryAttemptFactory {
           waveOrdinal: context.waveOrdinal,
           waveAttemptOrdinal: context.waveAttemptOrdinal,
           sessionAttemptOrdinal: context.sessionAttemptOrdinal,
-        },
+        }, this.#turnGrant?.grantId,
       )
       resources.route = route
       permit = await this.#tabAdmission.acquire(this.#admissionReceiver,
-        context.iceProfile?.endpointIDs.length ?? 2,
+        this.#turnGrant === undefined ? context.iceProfile?.endpointIDs.length ?? 2 : 0,
         context.admissionWaitBudgetMilliseconds ?? 0, signal, context.purpose)
       signal.throwIfAborted()
       if (context.iceProfile !== undefined) route.providerFact({ kind: 'profile',
@@ -404,7 +408,8 @@ export class BrowserPeerAttemptExecutor implements PeerRecoveryAttemptFactory {
       providerFact: (fact) => { route.providerFact(fact); context.observeICEFact?.(fact) }, phaseChanged,
     }
     phaseChanged('signaling')
-    try { return await this.#offers.offer(route, owner.signal, observer, context.iceProfile) }
+    try { return await this.#offers.offer(route, owner.signal, observer, context.iceProfile, this.#turnGrant === undefined ? undefined :
+      { urls: this.#turnGrant.urls, username: this.#turnGrant.username, credential: this.#turnGrant.password }) }
     finally { timer?.abort(); owner.close() }
   }
 

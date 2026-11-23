@@ -44,13 +44,13 @@ func SelectRelays(config Config, override []string) ([]relayprofile.Candidate, e
 	if len(override) == 0 {
 		return nil, ErrConfig
 	}
-	credentials := make(map[string]string, len(saved))
+	profiles := make(map[string]relayprofile.Candidate, len(saved))
 	for _, candidate := range saved {
 		endpoint, err := v2.NormalizeRelayEndpoint(candidate.PublicURL)
 		if err != nil {
 			return nil, relayAddressError{cause: err}
 		}
-		credentials[endpoint.DialURL] = candidate.AccessKey
+		profiles[endpoint.DialURL] = candidate
 	}
 	candidates := make([]relayprofile.Candidate, 0, len(override))
 	seen := make(map[string]bool, len(override))
@@ -65,9 +65,9 @@ func SelectRelays(config Config, override []string) ([]relayprofile.Candidate, e
 		seen[endpoint.DialURL] = true
 		// Identity excludes queries for protocol proofs. Credential matching must
 		// retain those queries so another routing target cannot inherit authority.
-		candidates = append(candidates, relayprofile.Candidate{
-			PublicURL: address, AccessKey: credentials[endpoint.DialURL],
-		})
+		profile := profiles[endpoint.DialURL]
+		profile.PublicURL = address
+		candidates = append(candidates, profile)
 	}
 	if _, err := relayprofile.PublicURLs(candidates); err != nil || len(candidates) > relayset.MaximumEndpoints {
 		return nil, ErrConfig

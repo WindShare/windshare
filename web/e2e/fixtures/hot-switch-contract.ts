@@ -17,13 +17,13 @@ export interface HotSwitchDispatch {
   readonly dispatchSequence: number
   readonly laneId: number
   readonly laneEpoch: number
-  readonly route: 'application-relay' | 'direct'
+  readonly route: 'application-relay' | 'direct' | 'turn'
 }
 
 export interface HotSwitchLaneObservation {
   readonly laneId: number
   readonly laneEpoch: number
-  readonly route: 'application-relay' | 'direct'
+  readonly route: 'application-relay' | 'direct' | 'turn'
 }
 
 export function sameLaneIdentity(
@@ -90,9 +90,12 @@ export type HotSwitchPeerAttemptEvidence = WithoutCorrelation<PeerAttemptTraceEv
   lane?: Readonly<{ laneId: number; laneEpoch: number }>
 }>
 
-export type HotSwitchPeerRecoveryEvidence = RecoveryBridgePayload<PeerRecoveryTraceEvent> & Readonly<{
+type RecoveryPathEvidence<Event> = Event extends { readonly correlation: { readonly peerPathId: unknown } }
+  ? RecoveryBridgePayload<Event> & Readonly<{ peerPathIdBytes: readonly number[] }>
+  : RecoveryBridgePayload<Event> & Readonly<{ peerPathIdBytes?: readonly number[] }>
+
+export type HotSwitchPeerRecoveryEvidence = RecoveryPathEvidence<PeerRecoveryTraceEvent> & Readonly<{
   protocolSessionIdBytes: readonly number[]
-  peerPathIdBytes: readonly number[]
   attemptIdBytes?: readonly number[]
   lane?: Readonly<{ laneId: number; laneEpoch: number }>
 }>

@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/pion/ice/v4"
 )
@@ -160,9 +161,11 @@ func (a *Authority) acquireLocked(key pathKey, addresses []netip.Addr) (*Lease, 
 			_ = mux.Close()
 			return nil, fmt.Errorf("allocate %s endpoint: %w", network, err)
 		}
-		mux.endpoints = append(mux.endpoints, ice.NewUDPMuxDefault(ice.UDPMuxParams{
+		mux.endpoints = append(mux.endpoints, ice.NewUniversalUDPMuxDefault(ice.UniversalUDPMuxParams{
 			UDPConn: conn,
 			Logger:  newUDPMuxLogger(),
+			// A fresh attempt must observe the current NAT binding even on coarse clocks.
+			XORMappedAddrCacheTTL: -time.Nanosecond,
 		}))
 	}
 	entry := &pathSockets{key: key, addresses: addresses, mux: mux, refs: 1}

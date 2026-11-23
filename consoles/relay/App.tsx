@@ -1,3 +1,4 @@
+import { ManagedTURN } from './managed-turn'
 import { useMemo, useState } from 'react'
 import { useAction, useResource, type Feedback } from '../ui/activity'
 import { ChangePasswordDialog, Login } from '../ui/forms'
@@ -39,7 +40,8 @@ function RelayContent({ api, session, capabilities, code, token, expired, clearT
   return <div className="workspace">
     <div className="view"><div className="page-title"><h1>{t.access}</h1></div>
       <CodeEntry /><Credentials api={api} capabilities={capabilities} keyPhase={keyCreation.state.phase}
-        keyFeedback={keyCreation.feedback} /></div>
+        keyFeedback={keyCreation.feedback} />
+      {capabilities.managed_turn && <ManagedTURN api={api} />}</div>
   </div>
 }
 

@@ -33,6 +33,7 @@ type peerSignalingVector struct {
 	AttemptIDB64       string                   `json:"attemptIdB64"`
 	SenderPublicKeyB64 string                   `json:"senderPublicKeyB64"`
 	ControlBinding     peerControlBindingVector `json:"controlBinding"`
+	TURNOffer          peerDescriptionVector    `json:"turnOffer"`
 	Offer              peerDescriptionVector    `json:"offer"`
 	Answer             peerDescriptionVector    `json:"answer"`
 	Candidate          peerCandidateVector      `json:"candidate"`
@@ -103,6 +104,13 @@ func buildPeerSignalingVector(t *testing.T) peerSignalingVector {
 	if err != nil {
 		t.Fatal(err)
 	}
+	turnOffer := offer
+	turnOffer.Binding.Purpose = TURNRelay
+	turnOffer.TURNGrantID = protocolsession.TURNGrantID{1}
+	turnBody, err := EncodeOffer(turnOffer)
+	if err != nil {
+		t.Fatal(err)
+	}
 	answerBody, err := EncodeAnswer(answer)
 	if err != nil {
 		t.Fatal(err)
@@ -140,7 +148,8 @@ func buildPeerSignalingVector(t *testing.T) peerSignalingVector {
 			LaneID:               base.LaneID, LaneEpoch: base.LaneEpoch, Direction: uint8(base.Direction),
 			OperationID: operationID.String(),
 		},
-		Offer: peerDescriptionVector{SDP: offer.SDP, BodyB64: base64.StdEncoding.EncodeToString(offerBody)},
+		TURNOffer: peerDescriptionVector{SDP: turnOffer.SDP, BodyB64: base64.StdEncoding.EncodeToString(turnBody)},
+		Offer:     peerDescriptionVector{SDP: offer.SDP, BodyB64: base64.StdEncoding.EncodeToString(offerBody)},
 		Answer: peerDescriptionVector{
 			SDP: answer.SDP, BodyB64: base64.StdEncoding.EncodeToString(answerBody),
 		},

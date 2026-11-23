@@ -137,7 +137,7 @@ func TestPrivateEnrollmentResumesClaimedInstallationWithoutChangingSelectionsEar
 		switch req.URL.Path {
 		case "/.well-known/windshare":
 			return response(200, map[string]any{"version": 1, "access": "restricted", "relay_url": "https://private.example",
-				"console_url": "https://console.example", "frontend_url": "https://suggested.example",
+				"console_url": "https://console.example", "frontend_url": "https://suggested.example", "managed_turn": true,
 				"account_login_page": "https://accounts.example/device"})
 		case "/api/enrollments":
 			requests++
@@ -191,7 +191,7 @@ func TestPrivateEnrollmentResumesClaimedInstallationWithoutChangingSelectionsEar
 	if login == nil || login.URL != "https://accounts.example/device#invite=aW52aXRl" {
 		t.Fatalf("lost the account login destination during enrollment: %v", login)
 	}
-	if store.saved.Pending == nil || store.saved.Pending.credential().AccessKey != "client-only-key" || len(store.saved.Profiles) != 1 {
+	if store.saved.Pending == nil || !store.saved.Pending.ManagedTurn || store.saved.Pending.credential().AccessKey != "client-only-key" || len(store.saved.Profiles) != 1 {
 		t.Fatal("lost pending installation")
 	}
 	store.failInstall = false
@@ -199,7 +199,7 @@ func TestPrivateEnrollmentResumesClaimedInstallationWithoutChangingSelectionsEar
 	if err != nil || result.CredentialID != "credential" || requests != 1 || claims != 3 || confirmations != 2 || waits != 2 {
 		t.Fatalf("recovery repeated enrollment: %+v %v", result, err)
 	}
-	if len(store.saved.Profiles) != 2 || store.saved.Pending != nil || store.saved.FrontURL != "https://chosen.example" ||
+	if len(store.saved.Profiles) != 2 || !store.saved.Profiles[1].ManagedTurn || store.saved.Pending != nil || store.saved.FrontURL != "https://chosen.example" ||
 		!slices.Equal(store.saved.ActiveRelays, []string{"https://public.example", "https://private.example"}) {
 		t.Fatal("private selection did not commit atomically")
 	}

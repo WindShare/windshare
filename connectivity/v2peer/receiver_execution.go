@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	pion "github.com/pion/webrtc/v4"
+
 	"github.com/windshare/windshare/connectivity/v2peer/internal/candidatewriter"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -164,7 +165,7 @@ func (execution *receiverExecution) openSignaling() receiverWorkflowResult {
 		)
 	}
 	body, err := v2signal.EncodeOffer(v2signal.Offer{
-		Binding: execution.attempt.binding, SDP: localOffer.SDP,
+		Binding: execution.attempt.binding, SDP: localOffer.SDP, TURNGrantID: execution.attempt.turnGrantID,
 	})
 	if err != nil {
 		return receiverPreOperationFailure(
@@ -479,7 +480,7 @@ func (execution *receiverExecution) startAttachment() error {
 	if execution.attachStarted {
 		return errors.Join(errChannelAdmission, errors.New("peer DataChannel admission started twice"))
 	}
-	route, err := selectedPeerRoute(execution.attempt.peer)
+	route, err := selectedPeerRoute(execution.attempt.peer, execution.attempt.binding.Purpose)
 	if err != nil {
 		return err
 	}
@@ -541,6 +542,8 @@ func (execution *receiverExecution) finishAttachment(
 		}
 		return true, false, result
 	}
+	// The lane now owns the transport. Late signaling may still outlive this negotiation.
+	execution.attempt.releaseTURN()
 	execution.attempt.resultMu.Lock()
 	execution.attempt.lane = event.admission.Lane
 	execution.attempt.resultMu.Unlock()

@@ -1,3 +1,4 @@
+import { provisionTURN } from './turn.mjs';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { appendFile, mkdir, mkdtemp, readFile, rm, rmdir, writeFile } from 'node:fs/promises';
@@ -7,7 +8,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { directoryRevision } from './directory-revision.mjs';
 import { cloudflareClient } from './cloudflare.mjs';
-import { consoleConfig, deploymentConfig, frontendConfig, FRONTEND_DEPLOYMENT, FULL_DEPLOYMENT, readDeploymentMode } from './configuration.mjs';
+import { consoleConfig, deploymentConfig, frontendConfig, FRONTEND_DEPLOYMENT, FULL_DEPLOYMENT, managedTURNEnabled, readDeploymentMode } from './configuration.mjs';
 import { deployFrontend, readFrontendInputs } from './frontend.mjs';
 import { deployRelay, readInputs, SECRET_BINDING, STATE_BINDING, validateHostConfig } from './deployment.mjs';
 import { deploymentReport, deploymentReporter } from './reporting.mjs';
@@ -69,6 +70,7 @@ async function main() {
     return;
   }
   const inputs = readInputs(process.env);
+  const turnEnabled = managedTURNEnabled(process.env);
   const reporter = deploymentReporter({ githubActions, operationId, mode });
   reporter.protect(inputs);
   const require = createRequire(join(hostDirectory, 'package.json'));
@@ -90,6 +92,8 @@ async function main() {
     },
     deployConsole: plan => publish(plan, consoleConfig(host, inputs, plan.state)),
   });
+  const warning = await provisionTURN({ client: client(inputs.workerName), workerName: inputs.workerName, deploymentId: result.state.deploymentId, enabled: turnEnabled, log });
+  if (warning && process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY, warning + '\n\n');
   const destination = process.env.WINDSHARE_DEPLOYMENT_OUTPUT || (githubActions ? undefined : join(tmpdir(), 'windshare-deployment'));
   const { file, summary } = deploymentReport(result, { githubActions, mode, revision: process.env.GITHUB_SHA,
     outputDirectory: destination ? resolve(destination) : undefined });

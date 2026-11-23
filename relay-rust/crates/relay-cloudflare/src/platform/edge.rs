@@ -25,11 +25,27 @@ pub async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                 Response::error("method not allowed", 405)
             };
         }
-        return access::fetch(&env, req).await;
+        // Bind capability to the serving Worker version. A warm AccessObject
+        // may predate installation or removal of a Worker secret.
+        let managed = env.secret("TURN_KEY").is_ok();
+        if path.starts_with("/api/turn/") && !managed {
+            return Response::error("not found", 404);
+        }
+        let session = path == "/api/session" && req.method() == Method::Get;
+        let mut response = access::fetch(&env, req).await?;
+        if session && response.status_code() == 200 {
+            let mut status = response.json::<serde_json::Value>().await?;
+            status["capabilities"]["managed_turn"] = json!(managed);
+            return access::reply(&status, 200);
+        }
+        return Ok(response);
+    }
+    if req.path() == "/v2/turn/credentials" {
+        return super::turn::issue(&env, &req).await;
     }
     if req.method() == Method::Get && req.path() == "/.well-known/windshare" {
         let mut response = Response::from_json(&json!({
-            "version":1,"access":"restricted",
+            "version":1,"access":"restricted","managed_turn":env.secret("TURN_KEY").is_ok(),
             "relay_url":env.var("RELAY_URL").map_or(origin,|value| value.to_string()),
             "console_url":console,"frontend_url":env.var("FRONTEND_URL").ok().map(|value| value.to_string()),
         }))?;

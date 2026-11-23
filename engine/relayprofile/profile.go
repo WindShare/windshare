@@ -9,6 +9,7 @@ const MaximumEndpoints = relayset.MaximumEndpoints
 const MaxAccessKeyBytes = relayset.MaxAccessKeyBytes
 
 type Candidate struct {
+	ManagedTurn     bool `json:"managed_turn,omitempty"`
 	PublicURL       string
 	ConsoleURL      string `json:"-"`
 	OfferedFrontend string `json:"-"`

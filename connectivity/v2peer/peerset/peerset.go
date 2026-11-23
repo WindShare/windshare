@@ -46,7 +46,9 @@ type PreparedStarter struct {
 	Start Starter
 	Close func()
 }
-type Preparer func(context.Context, v2signal.Binding) (PreparedStarter, error)
+
+// A zero queue allowance requires a synchronous capacity decision.
+type Preparer func(context.Context, v2signal.Binding, time.Duration) (PreparedStarter, error)
 type Demand uint8
 
 const (
@@ -83,6 +85,7 @@ type ContentLaneOwner interface {
 }
 
 type PathConfig struct {
+	attemptBudget time.Duration
 	Purpose       v2signal.ConnectionPurpose
 	Budget        *Budget
 	Native        *nativepeer.NativePeerConnectivity
@@ -94,6 +97,17 @@ type PathConfig struct {
 	Demand        Demand
 	StopAfterWave bool
 	Content       ContentLaneOwner
+}
+
+func (p *Path) attemptBudget() time.Duration {
+	if p.config.attemptBudget == 0 {
+		return DefaultAttemptBudget
+	}
+	return p.config.attemptBudget
+}
+
+func (p *Path) minimumOpportunity() time.Duration {
+	return min(MinimumAttemptOpportunity, p.attemptBudget())
 }
 
 func (p *Path) budget() *Budget {
@@ -146,12 +160,7 @@ func (s *PeerSet) Open(ctx context.Context, config PathConfig) (*Path, error) {
 	if config.Demand == BrowseDemand && s.prewarmed[config.SessionID] {
 		return nil, ErrPathTerminal
 	}
-	pool := s.slots[config.SessionID]
-	if pool == nil {
-		pool = &peerslot.Pool{}
-		s.slots[config.SessionID] = pool
-	}
-	slot, err := pool.Acquire()
+	slot, err := s.slotPoolLocked(config.SessionID).Acquire()
 	if err != nil {
 		return nil, err
 	}
@@ -266,4 +275,13 @@ func (p *Path) wait(delay time.Duration) bool {
 			return true
 		}
 	}
+}
+
+func (s *PeerSet) slotPoolLocked(id protocolsession.ProtocolSessionID) *peerslot.Pool {
+	pool := s.slots[id]
+	if pool == nil {
+		pool = &peerslot.Pool{}
+		s.slots[id] = pool
+	}
+	return pool
 }

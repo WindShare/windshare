@@ -4,6 +4,7 @@ envelope-sample.json
 name-collision-v1.json
 path-policy.json
 portable-path-vectors.json
+turn-control.json
 v2-content-payloads.json
 v2-descriptor-object.json
 v2-fragment.json

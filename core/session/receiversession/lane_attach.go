@@ -43,6 +43,21 @@ func (runtime *Runtime) DetachLane(identity session.LaneIdentity) bool {
 	return runtime != nil && runtime.core.DetachLane(identity)
 }
 
+// RetireLaneIfCovered atomically checks that the named successor (or any
+// alternative, if nil) can carry control traffic before retiring a usable lane.
+func (runtime *Runtime) RetireLaneIfCovered(identity session.LaneIdentity, successor *session.LaneIdentity) bool {
+	return runtime != nil && runtime.core != nil && runtime.core.RetireLaneIfCovered(identity, successor)
+}
+
+// UsableLaneDone lets connectivity publish a newly attached lane only while
+// its exact epoch can carry authenticated traffic.
+func (runtime *Runtime) UsableLaneDone(identity session.LaneIdentity) (<-chan struct{}, bool) {
+	if runtime == nil || runtime.core == nil {
+		return nil, false
+	}
+	return runtime.core.UsableLaneDone(identity)
+}
+
 func (runtime *Runtime) AttachedLanes() int {
 	if runtime == nil {
 		return 0

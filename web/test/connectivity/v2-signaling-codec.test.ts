@@ -29,6 +29,7 @@ interface SignalingVector {
   readonly controlBinding: {
     readonly operationId: string
   }
+  readonly turnOffer: { readonly sdp: string; readonly bodyB64: string }
   readonly offer: { readonly sdp: string; readonly bodyB64: string }
   readonly answer: { readonly sdp: string; readonly bodyB64: string }
   readonly candidate: {
@@ -58,7 +59,23 @@ describe('v2 E2E peer signaling codec', () => {
       expect(samePeerBinding(initial, alternate)).toBe(false)
     }
     const fields = [...decodeCanonicalCbor(bytes(vector.offer.bodyB64), 65_536, 'offer') as readonly unknown[]]
-    fields[5] = 3
+    fields[5] = 4
+    expect(() => decodePeerOffer(encodeCanonicalCbor(fields))).toThrow()
+  })
+
+  it('binds a nonzero grant exclusively to a TURN offer on encode and decode', () => {
+    const initial = decodePeerOffer(bytes(vector.offer.bodyB64))
+    const turn = decodePeerOffer(bytes(vector.turnOffer.bodyB64))
+    const fields = [...decodeCanonicalCbor(bytes(vector.offer.bodyB64), 65_536, 'offer') as readonly unknown[]]
+    for (const grantId of [undefined, new Uint8Array(16)]) {
+      expect(() => encodePeerOffer({ ...initial, purpose: 'turn-relay', ...(grantId && { turnGrantId: grantId }) })).toThrow()
+      fields[5] = 3
+      fields[7] = grantId ?? null
+      expect(() => decodePeerOffer(encodeCanonicalCbor(fields))).toThrow()
+    }
+    expect(() => encodePeerOffer({ ...turn, purpose: 'initial' })).toThrow()
+    fields[5] = 0
+    fields[7] = turn.turnGrantId
     expect(() => decodePeerOffer(encodeCanonicalCbor(fields))).toThrow()
   })
 
@@ -70,7 +87,11 @@ describe('v2 E2E peer signaling codec', () => {
       attemptSequence: BigInt(vector.attemptSequence),
       peerSlot: vector.peerSlot,
     }
-    expect(vector.schemaVersion).toBe(4)
+    expect(vector.schemaVersion).toBe(5)
+    const turn = decodePeerOffer(bytes(vector.turnOffer.bodyB64))
+    expect(turn.purpose).toBe('turn-relay')
+    expect(turn.turnGrantId?.[0]).toBe(1)
+    expect(encodePeerOffer(turn)).toEqual(bytes(vector.turnOffer.bodyB64))
     expect(MESSAGE_KIND.peerOffer).toBe(vector.messageKinds.offer)
     expect(MESSAGE_KIND.peerAnswer).toBe(vector.messageKinds.answer)
     expect(MESSAGE_KIND.peerCandidate).toBe(vector.messageKinds.candidate)

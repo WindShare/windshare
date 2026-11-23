@@ -180,7 +180,9 @@ function projectRecoveryCorrelation(
 ) {
   return {
     protocolSessionIdBytes: Object.freeze([...correlation.protocolSessionId.copyBytes()]),
-    peerPathIdBytes: Object.freeze([...correlation.peerPathId.copyBytes()]),
+    ...(correlation.peerPathId === undefined
+      ? {}
+      : { peerPathIdBytes: Object.freeze([...correlation.peerPathId.copyBytes()]) }),
     ...(correlation.peerAttemptId === undefined
       ? {}
       : { attemptIdBytes: Object.freeze([...correlation.peerAttemptId.copyBytes()]) }),

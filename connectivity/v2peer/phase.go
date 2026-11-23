@@ -14,11 +14,12 @@ import (
 const (
 	PeerSignalingPreparationBudget     = 10 * time.Second
 	PeerAnswerPreparationReserve       = 2 * time.Second
-	PeerICECheckingBudget              = 40 * time.Second
+	PeerICECheckingBudget              = 32 * time.Second
 	PeerDataChannelEstablishmentBudget = 15 * time.Second
+	PeerCheckingOpportunity            = PeerSignalingPreparationBudget + PeerICECheckingBudget
 	// Providers without observable stage boundaries retain the complete checking
 	// opportunity under one explicitly negotiation-owned deadline.
-	DefaultPeerNegotiationBudget          = PeerSignalingPreparationBudget + PeerICECheckingBudget + PeerDataChannelEstablishmentBudget
+	DefaultPeerNegotiationBudget          = PeerCheckingOpportunity + PeerDataChannelEstablishmentBudget
 	DefaultPeerAdmissionBudget            = 20 * time.Second
 	MinimumLaneGrantCompletionMargin      = 5 * time.Second
 	MaximumPeerAdmissionBudget            = protocolsession.LaneGrantTTL - MinimumLaneGrantCompletionMargin

@@ -15,11 +15,12 @@ import (
 )
 
 type shareRequest struct {
-	paths       []string
-	relayIntent relayprofile.Intent
-	link        shareLinkPresentation
-	chunkSize   uint32
-	observation observationOptions
+	paths        []string
+	relayIntent  relayprofile.Intent
+	turnServices []relayconfig.TURNService
+	link         shareLinkPresentation
+	chunkSize    uint32
+	observation  observationOptions
 }
 
 func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcome) {
@@ -97,7 +98,7 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 		return shareRequest{}, requestParseUsageFailure
 	}
 	return shareRequest{
-		paths: paths, relayIntent: intent,
+		paths: paths, relayIntent: intent, turnServices: saved.TURNServices,
 		link:      shareLinkPresentation{frontURL: frontend, splitKey: *splitKey, browserTrace: *browserTrace},
 		chunkSize: uint32(*blockSize), observation: observation,
 	}, requestParseReady

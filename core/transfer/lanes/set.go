@@ -61,7 +61,7 @@ type Set struct {
 	settlementProducer observationstream.Producer[SettlementSummary]
 	settlementConsumer observationstream.Consumer[SettlementSummary]
 	finalSettlements   []*laneState
-	contentActivity    [RouteDirect + 1]ContentActivity
+	contentActivity    [RouteTURN + 1]ContentActivity
 	downloadMetrics    *downloadmetrics.Metrics
 }
 

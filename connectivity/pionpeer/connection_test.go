@@ -11,6 +11,7 @@ import (
 	"github.com/pion/ice/v4"
 	"github.com/pion/stun/v4"
 	pion "github.com/pion/webrtc/v4"
+
 	"github.com/windshare/windshare/connectivity/iceconfig"
 	"github.com/windshare/windshare/connectivity/socketauthority"
 )
@@ -31,7 +32,7 @@ func testSessionLease(t *testing.T, authority *socketauthority.Authority, sessio
 }
 func testConnection(t *testing.T, lease *socketauthority.Lease, urls []string, mapped []MappedEndpoint) *Connection {
 	t.Helper()
-	configuration, err := iceconfig.New(urls)
+	configuration, err := iceconfig.NewDirect(urls)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,17 +69,21 @@ func connectPayload(t *testing.T, left, right *Connection, filter func(pion.ICEC
 	}
 	channel.OnOpen(func() { opened <- struct{}{} })
 	var leftCandidates, rightCandidates []pion.ICECandidateInit
+	leftGather, rightGather := make(chan struct{}), make(chan struct{})
 	left.OnICECandidate(func(candidate *pion.ICECandidate) {
 		if candidate != nil {
 			leftCandidates = append(leftCandidates, candidate.ToJSON())
+		} else {
+			close(leftGather)
 		}
 	})
 	right.OnICECandidate(func(candidate *pion.ICECandidate) {
 		if candidate != nil {
 			rightCandidates = append(rightCandidates, candidate.ToJSON())
+		} else {
+			close(rightGather)
 		}
 	})
-	leftGather := pion.GatheringCompletePromise(left.PeerConnection)
 	offer, err := left.CreateOffer(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -94,7 +99,6 @@ func connectPayload(t *testing.T, left, right *Connection, filter func(pion.ICEC
 	if err = right.SetRemoteDescription(remoteOffer); err != nil {
 		t.Fatal(err)
 	}
-	rightGather := pion.GatheringCompletePromise(right.PeerConnection)
 	answer, err := right.CreateAnswer(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -191,7 +195,7 @@ func TestSocketCarriesSTUNGatherChecksPayloadAndFreshReplacement(t *testing.T) {
 		})
 	}
 }
-func serveSTUN(server net.PacketConn, observed chan<- netip.AddrPort, count *atomic.Int32) {
+func serveSTUN(server net.PacketConn, observed chan<- netip.AddrPort, mappedIP net.IP) {
 	buffer := make([]byte, 1500)
 	for {
 		n, source, err := server.ReadFrom(buffer)
@@ -206,10 +210,11 @@ func serveSTUN(server net.PacketConn, observed chan<- netip.AddrPort, count *ato
 		if observed != nil {
 			observed <- address.AddrPort()
 		}
-		if count != nil {
-			count.Add(1)
+		ip := mappedIP
+		if ip == nil {
+			ip = address.IP
 		}
-		reply, err := stun.Build(stun.NewTransactionIDSetter(message.TransactionID), stun.BindingSuccess, &stun.XORMappedAddress{IP: address.IP, Port: address.Port})
+		reply, err := stun.Build(stun.NewTransactionIDSetter(message.TransactionID), stun.BindingSuccess, &stun.XORMappedAddress{IP: ip, Port: address.Port})
 		if err == nil {
 			_, _ = server.WriteTo(reply.Raw, source)
 		}
@@ -336,7 +341,7 @@ func TestProviderRejectsMismatchedAndConcurrentResources(t *testing.T) {
 	if err = connection.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = iceconfig.New([]string{"invalid:url"}); err == nil {
+	if _, err = iceconfig.NewDirect([]string{"invalid:url"}); err == nil {
 		t.Fatal("invalid URL accepted")
 	}
 }

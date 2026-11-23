@@ -29,6 +29,7 @@ func (reader *LockedReader) Read(destination []byte) (int, error) {
 }
 
 type Runtime struct {
+	turnControls         sessionControlHandler
 	peerPathControls     sessionControlHandler
 	share                catalog.ShareInstance
 	role                 protocolsession.Role
@@ -122,6 +123,10 @@ func New(config Config) (*Runtime, error) {
 	}
 	runtime.inbound = inbound
 	if err := inbound.RegisterHandler(protocolsession.MessagePeerPathControl, &runtime.peerPathControls); err != nil {
+		cancelLifecycle()
+		return nil, err
+	}
+	if err := inbound.RegisterHandler(protocolsession.MessageTURNControl, &runtime.turnControls); err != nil {
 		cancelLifecycle()
 		return nil, err
 	}
@@ -378,6 +383,21 @@ func (runtime *Runtime) HasUsableLanes() bool { return runtime.lanes.hasUsable()
 
 func (runtime *Runtime) DetachLane(identity session.LaneIdentity) bool {
 	return runtime.lanes.detach(identity)
+}
+
+// RetireLaneIfCovered permits reuse of an absent or draining predecessor.
+// Retiring a usable one requires another usable carrier. A named successor
+// must be selectable at the exact epoch in either case.
+func (runtime *Runtime) RetireLaneIfCovered(identity session.LaneIdentity, successor *session.LaneIdentity) bool {
+	return runtime.lanes.retireIfCovered(identity, successor)
+}
+
+func (runtime *Runtime) UsableLaneDone(identity session.LaneIdentity) (<-chan struct{}, bool) {
+	if !runtime.lanes.transportOpen(identity) {
+		return nil, false
+	}
+	lane, err := runtime.lanes.selectLane(&identity)
+	return lane.done, err == nil
 }
 
 func (runtime *Runtime) AttachedLanes() int { return runtime.lanes.len() }

@@ -1,4 +1,4 @@
-import { decode as decodePunycode } from 'punycode/'
+import punycode from 'punycode/punycode.js'
 
 import { concatBytes, encodeBase64Url } from '../crypto/bytes'
 import { sha256 } from '../crypto/digest'
@@ -43,7 +43,7 @@ function validALabel(label: string): boolean {
   // Some URL runtimes accept invalid ASCII A-labels. Decode first so their
   // Unicode validation runs, then require the same authenticated host identity.
   try {
-    const unicode = decodePunycode(label.slice(PUNYCODE_PREFIX.length))
+    const unicode = punycode.decode(label.slice(PUNYCODE_PREFIX.length))
     return new URL(`https://${unicode}`).hostname === label
   } catch {
     return false
