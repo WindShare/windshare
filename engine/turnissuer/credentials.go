@@ -15,7 +15,6 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/windshare/windshare/core/session/turngrant"
@@ -92,10 +91,10 @@ func (r *Resolver) request(ctx context.Context, method, address, token string, b
 }
 
 func (r *Resolver) issue(ctx context.Context, s source, trace turngrant.Trace) (turngrant.Credential, error) {
-	c := turngrant.Credential{ServiceID: s.ID, URLs: slices.Clone(s.URLs), ValidFor: time.Duration(s.TTL()) * time.Second}
+	c := turngrant.Credential{ServiceID: s.ID, URLs: slices.Clone(s.URLs)}
 	switch s.Kind {
 	case relayconfig.TURNStatic:
-		c.Username, c.Password, c.ValidFor = s.Username, s.Password, 0
+		c.Username, c.Password = s.Username, s.Password
 	case relayconfig.TURNCoturn:
 		var nonce [16]byte
 		r.randomMu.Lock()
@@ -104,7 +103,9 @@ func (r *Resolver) issue(ctx context.Context, s source, trace turngrant.Trace) (
 		if err != nil {
 			return c, err
 		}
-		c.Username = strconv.FormatInt(r.options.Now().Add(c.ValidFor).Unix(), 10) + ":" + hex.EncodeToString(nonce[:])
+		// Coturn authenticates the whole Unix second embedded in the username.
+		c.ExpiresAt = r.options.Now().Add(time.Duration(s.TTL()) * time.Second).Truncate(time.Second)
+		c.Username = strconv.FormatInt(c.ExpiresAt.Unix(), 10) + ":" + hex.EncodeToString(nonce[:])
 		// TURN REST authentication specifies HMAC-SHA1 over the complete username.
 		mac := hmac.New(sha1.New, []byte(s.SharedSecret))
 		mac.Write([]byte(c.Username))
@@ -113,19 +114,25 @@ func (r *Resolver) issue(ctx context.Context, s source, trace turngrant.Trace) (
 		var response struct {
 			Servers json.RawMessage `json:"iceServers"`
 		}
+		// The provider starts its TTL during the request. Its response and the
+		// rest of this batch can arrive later.
+		c.ExpiresAt = r.options.Now().Add(time.Duration(s.TTL()) * time.Second)
 		err := r.request(ctx, http.MethodPost, cloudflareKeys+url.PathEscape(s.KeyID)+"/credentials/generate-ice-servers", s.APIToken, map[string]int{"ttl": s.TTL()}, &response)
 		if err != nil {
 			return c, err
 		}
-		if err := selectCloudflareServers(&c, response.Servers, s.URLs); err != nil {
+		selected, err := selectCloudflareServers(response.Servers, s.URLs)
+		if err != nil {
 			return c, err
 		}
+		c.URLs, c.Username, c.Password = selected.URLs, selected.Username, selected.Credential
 	case "managed":
 		var response struct {
 			URLs               []string
 			Username, Password string
 			TTL                int `json:"ttl_seconds"`
 		}
+		requestedAt := r.options.Now()
 		err := r.request(ctx, http.MethodPost, s.origin+"/v2/turn/credentials", s.access, nil, &response)
 		if errors.Is(err, errDisabled) {
 			r.mu.Lock()
@@ -136,7 +143,8 @@ func (r *Resolver) issue(ctx context.Context, s source, trace turngrant.Trace) (
 		if err != nil || response.TTL <= 0 || response.TTL > relayconfig.MaximumTURNTTL {
 			return c, errUnavailable
 		}
-		c.URLs, c.Username, c.Password, c.ValidFor = response.URLs, response.Username, response.Password, time.Duration(response.TTL)*time.Second
+		c.URLs, c.Username, c.Password = response.URLs, response.Username, response.Password
+		c.ExpiresAt = requestedAt.Add(time.Duration(response.TTL) * time.Second)
 	default:
 		return c, errUnavailable
 	}
@@ -146,38 +154,4 @@ func (r *Resolver) issue(ctx context.Context, s source, trace turngrant.Trace) (
 		return c, errUnavailable
 	}
 	return c, nil
-}
-
-func selectCloudflareServers(c *turngrant.Credential, response json.RawMessage, filters []string) error {
-	type server struct {
-		URLs                 []string
-		Username, Credential string
-	}
-	var servers []server
-	if json.Unmarshal(response, &servers) != nil {
-		var one server
-		if json.Unmarshal(response, &one) != nil {
-			return errUnavailable
-		}
-		servers = []server{one}
-	}
-	c.URLs = nil
-	for _, entry := range servers {
-		if entry.Username == "" || entry.Credential == "" {
-			continue
-		}
-		if c.Username != "" && (entry.Username != c.Username || entry.Credential != c.Password) {
-			continue
-		}
-		for _, u := range entry.URLs {
-			if p.ValidTURNURL(u) && (len(filters) == 0 || slices.ContainsFunc(filters, func(filter string) bool { return u == filter || strings.HasPrefix(u, filter+"?") })) && !slices.Contains(c.URLs, u) {
-				c.Username, c.Password = entry.Username, entry.Credential
-				c.URLs = append(c.URLs, u)
-				if len(c.URLs) == p.MaxURLsPerGrant {
-					return nil
-				}
-			}
-		}
-	}
-	return nil
 }

@@ -542,6 +542,8 @@ func (execution *receiverExecution) finishAttachment(
 		}
 		return true, false, result
 	}
+	// The lane now owns the transport. Late signaling may still outlive this negotiation.
+	execution.attempt.releaseTURN()
 	execution.attempt.resultMu.Lock()
 	execution.attempt.lane = event.admission.Lane
 	execution.attempt.resultMu.Unlock()

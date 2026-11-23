@@ -415,23 +415,30 @@ export class RelayCutProxy {
     const upstream = connect({ host, port })
     const pair = [client, upstream] as const
     this.#connections.add(pair)
+    const request = new RelayRequestProxy(host, port)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const throttle = bytesPerSecond === undefined ? undefined : new Transform({
+      transform(chunk: Buffer, _encoding, callback) {
+        timer = setTimeout(callback, Math.ceil(chunk.length * 1000 / bytesPerSecond), null, chunk)
+      },
+    })
     let settled = false
     const settle = () => {
       if (settled) return
       settled = true
       this.#connections.delete(pair)
+      clearTimeout(timer)
+      throttle?.destroy()
+      request.destroy()
       client.destroy()
       upstream.destroy()
     }
     client.on('error', settle).on('close', settle)
     upstream.on('error', settle).on('close', settle)
-    const request = new RelayRequestProxy(host, port)
     request.on('error', settle)
     client.pipe(request).pipe(upstream)
-    if (bytesPerSecond === undefined) upstream.pipe(client)
-    else upstream.pipe(new Transform({ transform(chunk: Buffer, _encoding, callback) {
-      setTimeout(callback, Math.ceil(chunk.length * 1000 / bytesPerSecond), null, chunk)
-    } })).pipe(client)
+    if (throttle) upstream.pipe(throttle.on('error', settle)).pipe(client)
+    else upstream.pipe(client)
   }
 }
 

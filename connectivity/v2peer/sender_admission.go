@@ -304,7 +304,7 @@ func (execution *attemptExecution) acceptAdmission(
 			event.err,
 		)
 	}
-	execution.attempt.attached.Store(true)
+	execution.attempt.installedLane.Store(&result.Lane)
 	direct := true
 	if source, ok := execution.peer.(interface {
 		SelectedPair() (pionpeer.PairFacts, bool)
@@ -330,6 +330,11 @@ func (execution *attemptExecution) acceptAdmission(
 			ResponseDelivery:     SenderResponseDelivered,
 		},
 	)
+	if old := execution.attempt.config.replacesTURN; old != nil {
+		// Core atomically verifies the successor before retiring the exact old epoch.
+		// Its transport drain belongs to this attempt's join, outside the signaling loop.
+		execution.children.Go(func() { execution.attempt.config.session.RetireReplacedLane(*old, result.Lane) })
+	}
 	return true, true, nil
 }
 

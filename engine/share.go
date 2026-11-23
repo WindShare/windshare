@@ -66,7 +66,7 @@ func (engine *Engine) StartShare(ctx context.Context, request ShareRequest) (*Sh
 	if err != nil {
 		return nil, err
 	}
-	issuer, err := turnissuer.New(request.TURNServices, selection.Relays, request.RelayIntent.Candidates(), turnissuer.Options{})
+	sources, err := turnissuer.SelectSources(request.TURNServices, selection.Relays, request.RelayIntent.Candidates())
 	if err != nil {
 		selection.ReleaseAuthorization()
 		return nil, err
@@ -82,8 +82,7 @@ func (engine *Engine) StartShare(ctx context.Context, request ShareRequest) (*Sh
 		}
 	}
 	dependencies := share.Dependencies{
-		TURNProvider: issuer,
-		Controller:   controller, RevisionCapacity: engine.revisions,
+		Controller: controller, RevisionCapacity: engine.revisions,
 		CatalogBudget: engine.catalog, CacheBudget: engine.cache, Connectivity: engine.connectivity,
 		Prepare: injected.Prepare, PollNetwork: pollNetwork,
 		Attempts: admissions.Control, Clock: engine.config.Clock,
@@ -99,9 +98,9 @@ func (engine *Engine) StartShare(ctx context.Context, request ShareRequest) (*Sh
 	}
 	current, err := startWorkflow(engine, ctx, "share", request.Diagnostics, func(ctx context.Context, control task.Control) task.Completion[share.Result] {
 		defer selection.ReleaseAuthorization()
-		probe, cancel := context.WithCancel(ctx)
-		discovered := issuer.Discover(probe, turngrant.Trace{Sink: control.Diagnostics})
-		defer func() { cancel(); <-discovered }()
+		issuer := sources.Open(ctx, turnissuer.Options{Trace: turngrant.Trace{Sink: control.Diagnostics}})
+		defer issuer.Close()
+		dependencies.TURNProvider = issuer
 		control.Diagnostics.Record(selection)
 		dependencies.ObserveAttempt = engine.network.Observer(selection, control.Diagnostics)
 		if control.Diagnostics.Enabled() {

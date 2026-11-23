@@ -48,15 +48,16 @@ impl AccessObject {
         if !db.initialized()? {
             return reply_error(ConsoleError::forbidden("access_denied"));
         }
-        if !db.get::<bool>(SETTING)?.unwrap_or(true) {
-            return reply_error(ConsoleError::forbidden("turn_disabled"));
-        }
         let digest = Digest(key);
         if db
             .credential(digest)?
             .is_none_or(|mut c| c.authorize(digest, now).is_err())
         {
             return reply_error(ConsoleError::forbidden("access_denied"));
+        }
+        // Only an active credential may learn that the owner paused issuance.
+        if !db.get::<bool>(SETTING)?.unwrap_or(true) {
+            return reply_error(ConsoleError::forbidden("turn_disabled"));
         }
         if !self.turn_limits.borrow_mut().admit(key, now) {
             let mut response =

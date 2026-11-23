@@ -38,6 +38,7 @@ import {
   BrowserPeerRecoveryRearmSource,
   type PeerRecoveryActivation,
   type PeerRecoveryDependencies,
+  type PeerRecoverySupervisorOptions,
   PeerRecoverySupervisor,
 } from './peer-set/path'
 import { PeerSet } from './peer-set/peer-set'
@@ -178,7 +179,6 @@ export class ReceiverConnectivity {
   readonly #slots = new PeerSlotPool()
   readonly #peers = new PeerSet(this.#slots)
   readonly #turn: TURNPaths
-  #turnCleanup: Promise<void> | undefined
   readonly #pathControls = new Map<string, PeerPathControl>()
   #peerPathId: PeerPathIdentity | undefined
   readonly #installedPeers = new Map<string, InstalledPeer>()
@@ -218,12 +218,9 @@ export class ReceiverConnectivity {
         admissionWaitBudgetMilliseconds: DEFAULT_PEER_NEGOTIATION_BUDGET_MILLISECONDS,
         negotiationBudgetMilliseconds: DEFAULT_PEER_NEGOTIATION_BUDGET_MILLISECONDS,
         admissionBudgetMilliseconds: DEFAULT_PEER_ADMISSION_BUDGET_MILLISECONDS, phaseChanged: () => undefined }),
-      trace: (stage, detail, path, lane) => {
-        const identity = path ?? this.#peerPathId
-        if (identity) new PeerRecoveryTrace(this.#protocolSessionId, identity, this.#connectivityTrace)
-          .emit(() => ({ stage, ...detail }), undefined, lane)
-      },
-      release: async lane => { this.#releasePeer(lane.laneId, lane.laneEpoch); await this.#joinPeerCleanup() },
+      trace: (stage, detail, path, lane) => new PeerRecoveryTrace(this.#protocolSessionId, path, this.#connectivityTrace)
+        .emit(() => ({ stage, ...detail }), undefined, lane),
+      release: async (lane, retirement) => { await this.#releasePeer(lane.laneId, lane.laneEpoch, retirement) },
     })
     this.#laneEpochs.set(options.session.initialLaneId, options.session.keys.initialLaneEpoch)
     this.#unsubscribeLaneChanges = this.#session.subscribeLaneChanges((change) => {
@@ -324,7 +321,7 @@ export class ReceiverConnectivity {
       ...controlsClose,
       ...(recoveryClose === undefined ? [] : [recoveryClose]),
       this.#joinPeerCleanup(),
-      this.#throughputTask, this.#turnCleanup, this.#turn.reset(),
+      this.#throughputTask, this.#turn.reset(),
     ])
   }
 
@@ -345,15 +342,15 @@ export class ReceiverConnectivity {
       ? createPeerPathIdentity()
       : createPeerPathIdentity(this.#randomBytes)
     const peerPathId = createPeerPathIdentityValue(peerPathIdentity)
+    const recovery = this.#peers.add(this.#recoveryOptions(peerPathId, () => this.#peerUnavailable(), 'initial'))
     this.#peerPathId = peerPathId
-    const recovery = this.#createPeerRecovery(peerPathId, this.#offers, () => this.#peerUnavailable())
     const clock = this.#peerRecoveryOptions.clock ?? browserPeerRecoveryClock
     this.#pathControls.set(encodeBase64Url(peerPathIdentity), new PeerPathControl(
       this.#session, peerPathIdentity, this.#peerRecoveryOptions.network!, clock, (notice) => recovery.pathChanged(notice)))
     return recovery
   }
 
-  #createPeerRecovery(peerPathId: PeerPathIdentity, offers: OfferChannelFactory, onUnavailable: () => void, purpose: ConnectionPurpose = 'initial'): PeerRecoverySupervisor {
+  #recoveryOptions(peerPathId: PeerPathIdentity, onUnavailable: () => void, purpose: ConnectionPurpose): Omit<PeerRecoverySupervisorOptions, 'slot'> {
     const peerPathIdentity = peerPathId.copyBytes()
     const clock = this.#peerRecoveryOptions.clock ?? browserPeerRecoveryClock
     const budget = this.#peerRecoveryOptions.budget
@@ -361,14 +358,14 @@ export class ReceiverConnectivity {
       ...(this.#peerRecoveryOptions.tabAdmission === undefined ? {} : { tabAdmission: this.#peerRecoveryOptions.tabAdmission }),
       admissionReceiver: this.#peerRecoveryOptions.budget ?? this,
       session: this.#session,
-      offers,
+      offers: this.#offers,
       peerPathIdentity,
       clock,
       publish: (candidate) => this.#publishPeer(candidate),
       ...(this.#randomBytes === undefined ? {} : { randomBytes: this.#randomBytes }),
       ...(this.#connectivityTrace === undefined ? {} : { trace: this.#connectivityTrace }),
     })
-    const recovery = this.#peers.add({
+    return {
       purpose,
       protocolSessionId: this.#protocolSessionId,
       peerPathId,
@@ -387,8 +384,7 @@ export class ReceiverConnectivity {
         : { random: this.#peerRecoveryOptions.random }),
       rearmSource: this.#peerRecoveryOptions.rearmSource ?? new BrowserPeerRecoveryRearmSource(),
       ...(this.#connectivityTrace === undefined ? {} : { trace: this.#connectivityTrace }),
-    })
-    return recovery
+    }
   }
 
   #capabilityAllowsAttempt(): boolean {
@@ -478,9 +474,10 @@ export class ReceiverConnectivity {
     const identity = createPeerPathIdentityValue(createPeerPathIdentity(this.#randomBytes))
     const key = encodeBase64Url(identity.copyBytes())
     if (this.#peers.path(identity) !== undefined) return
-    const path = this.#createPeerRecovery(identity, this.#offers, () => {
+    const path = this.#peers.tryAdd(this.#recoveryOptions(identity, () => {
       this.#retireOptional(identity).then(() => this.#peerUnavailable()).catch(() => this.#peerUnavailable())
-    }, 'throughput')
+    }, 'throughput'))
+    if (!path) return
     const entry: { identity: PeerPathIdentity; activation?: PeerRecoveryActivation } = { identity }
     this.#optionalPaths.set(key, entry)
     const clock = this.#peerRecoveryOptions.clock ?? browserPeerRecoveryClock
@@ -536,7 +533,7 @@ export class ReceiverConnectivity {
     const active = this.#activations.get(id)
     if (active === undefined) return
     this.#activations.delete(id)
-    if (this.#activations.size === 0) this.#turnCleanup = this.#turn.reset()
+    if (this.#activations.size === 0) void this.#turn.reset()
     if (this.#activations.size === 0) for (const control of this.#pathControls.values()) control.deactivate()
     active.peerRecovery?.close()
     if (active.ownsRoutes) active.routes.close(reason)
@@ -552,7 +549,7 @@ export class ReceiverConnectivity {
       installed.laneEpoch !== laneEpoch
     ) return
     this.#installedPeers.delete(encodeBase64Url(installed.peerPathId.copyBytes()))
-    this.#turn.detached(laneId, laneEpoch)
+    this.#turn.detached(installed.peerPathId, { laneId, laneEpoch })
     this.#peers.path(installed.peerPathId)?.peerDetached({
       attemptId: installed.attemptId,
       protocolSessionId: installed.protocolSessionId,
@@ -563,21 +560,21 @@ export class ReceiverConnectivity {
     this.#startInstalledPeerCleanup(installed)
   }
 
-  #releasePeer(laneId: number, laneEpoch: number): void {
-    const installed = [...this.#installedPeers.values()].find((peer) =>
-      peer.laneId === laneId && peer.laneEpoch === laneEpoch)
-    if (installed === undefined) return
+  #releasePeer(laneId: number, laneEpoch: number, retirement?: Promise<void>): Promise<void> | undefined {
+    const matches = (peer: InstalledPeer) => peer.laneId === laneId && peer.laneEpoch === laneEpoch
+    const installed = [...this.#installedPeers.values()].find(matches)
+    if (installed === undefined) return [...this.#peerCleanupTasks.keys()].find(matches)?.closeTask ?? retirement
     this.#removeAdmittedLane(laneId, laneEpoch)
     this.#installedPeers.delete(encodeBase64Url(installed.peerPathId.copyBytes()))
-    this.#startInstalledPeerCleanup(installed)
+    return this.#startInstalledPeerCleanup(installed, retirement)
   }
 
-  #startInstalledPeerCleanup(installed: InstalledPeer): void {
-    if (installed.closeTask !== undefined) return
+  #startInstalledPeerCleanup(installed: InstalledPeer, retirement?: Promise<void>): Promise<void> {
+    if (installed.closeTask !== undefined) return installed.closeTask
     installed.unsubscribePathRoute?.()
     const closeTask = Promise.allSettled([
       // Record retirement before transport cleanup can finish the receive stream.
-      this.#session.retireLane(installed.laneId, installed.laneEpoch),
+      retirement ?? this.#session.retireLane(installed.laneId, installed.laneEpoch),
       Promise.resolve().then(() => installed.peer.close()),
       Promise.resolve().then(() => installed.route.close()),
     ]).then(() => {
@@ -585,6 +582,7 @@ export class ReceiverConnectivity {
     })
     installed.closeTask = closeTask
     this.#peerCleanupTasks.set(installed, closeTask)
+    return closeTask
   }
 
   async #joinPeerCleanup(): Promise<void> {

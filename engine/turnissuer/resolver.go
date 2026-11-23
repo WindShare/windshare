@@ -4,22 +4,16 @@ package turnissuer
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"io"
 	"net/http"
 	"slices"
 	"sync"
 	"time"
 
-	"github.com/windshare/windshare/core/session/turngrant"
-
 	d "github.com/windshare/windshare/core/diagnostics"
-
 	p "github.com/windshare/windshare/core/session/protocolsession"
+	"github.com/windshare/windshare/core/session/turngrant"
 	"github.com/windshare/windshare/engine/relayconfig"
-	"github.com/windshare/windshare/engine/relayprofile"
-	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
 
 const issueTimeout = 5 * time.Second
@@ -29,24 +23,22 @@ type Options struct {
 	HTTP   *http.Client
 	Now    func() time.Time
 	Random io.Reader
+	Trace  turngrant.Trace
 }
-type source struct {
-	relayconfig.TURNService
-	origin, access string
-}
+
 type Resolver struct {
 	options     Options
 	sources     []source
+	lifetime    context.Context
+	cancel      context.CancelFunc
 	mu          sync.Mutex
 	randomMu    sync.Mutex
 	known       map[string]bool
-	discovering chan struct{}
+	discovering map[string]chan struct{}
+	probes      sync.WaitGroup
 }
 
-func New(manual []relayconfig.TURNService, selected []relayprofile.Registration, profiles []relayprofile.Candidate, options Options) (*Resolver, error) {
-	if err := relayconfig.ValidateTURNServices(manual); err != nil {
-		return nil, err
-	}
+func (sources Sources) Open(owner context.Context, options Options) *Resolver {
 	if options.Now == nil {
 		options.Now = time.Now
 	}
@@ -59,140 +51,162 @@ func New(manual []relayconfig.TURNService, selected []relayprofile.Registration,
 	}
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	options.HTTP = &client
-	r := &Resolver{options: options, known: make(map[string]bool)}
-	ids := map[string]bool{}
-	for _, s := range relayconfig.CloneTURNServices(manual) {
-		r.sources = append(r.sources, source{TURNService: s})
-		ids[s.ID] = true
-	}
-	byURL := make(map[string]relayprofile.Candidate)
-	for _, s := range profiles {
-		u, err := v2.NormalizeRelayEndpoint(s.PublicURL)
-		if err == nil {
-			byURL[u.DialURL] = s
+	ctx, cancel := context.WithCancel(owner)
+	r := &Resolver{options: options, sources: sources.ordered, lifetime: ctx, cancel: cancel, known: make(map[string]bool), discovering: make(map[string]chan struct{})}
+	for _, s := range r.sources {
+		if s.advertised {
+			r.known[s.ID] = true
 		}
 	}
-	for _, active := range selected {
-		u, err := v2.NormalizeRelayEndpoint(active.PublicURL)
-		if err != nil {
-			continue
-		}
-		s := byURL[u.DialURL]
-		origin, ok := managedOrigin(s.PublicURL)
-		if !ok || s.AccessKey == "" {
-			continue
-		}
-		digest := sha256.Sum256([]byte(u.DialURL))
-		id := "managed-" + hex.EncodeToString(digest[:12])
-		for ids[id] {
-			id += "-"
-		}
-		ids[id] = true
-		r.sources = append(r.sources, source{TURNService: relayconfig.TURNService{ID: id, Kind: "managed", Role: relayconfig.RoleFallback}, origin: origin, access: s.AccessKey})
-		if s.ManagedTurn {
-			r.known[id] = true
+	for _, s := range r.sources {
+		if s.origin != "" && !s.advertised {
+			r.discover(s)
 		}
 	}
-	return r, nil
+	return r
 }
 
-// Discovery never delays publication. Concurrent sessions share just the
-// capability result, while issued credentials stay scoped to their own session.
-func (r *Resolver) Discover(ctx context.Context, trace turngrant.Trace) <-chan struct{} {
+func (r *Resolver) Close() {
+	r.mu.Lock()
+	r.cancel()
+	r.mu.Unlock()
+	r.probes.Wait()
+}
+
+// A probe belongs to the share. An issuing session can abandon its wait while
+// other sessions still need the same endpoint's result.
+func (r *Resolver) discover(s source) <-chan struct{} {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.discovering != nil {
-		return r.discovering
+	if _, known := r.known[s.ID]; known || r.lifetime.Err() != nil {
+		return nil
 	}
-	done := make(chan struct{})
-	var pending []source
-	for _, s := range r.sources {
-		if _, known := r.known[s.ID]; s.origin != "" && !known {
-			pending = append(pending, s)
-		}
-	}
-	if len(pending) == 0 {
-		close(done)
+	if done := r.discovering[s.ID]; done != nil {
 		return done
 	}
-	r.discovering = done
-	go func() {
-		var wg sync.WaitGroup
-		for _, s := range pending {
-			wg.Go(func() {
-				probe, cancel := context.WithTimeout(ctx, discoveryTimeout)
-				defer cancel()
-				var capability struct {
-					Managed bool `json:"managed_turn"`
-				}
-				if err := r.request(probe, http.MethodGet, s.origin+"/.well-known/windshare", "", nil, &capability); err == nil {
-					r.mu.Lock()
-					r.known[s.ID] = capability.Managed
-					r.mu.Unlock()
-					trace.Event("turn_capability_discovered", s.ID, d.Fields{"enabled": d.Bool(capability.Managed)})
-				}
-			})
+	done := make(chan struct{})
+	r.discovering[s.ID] = done
+	r.probes.Go(func() {
+		ctx, cancel := context.WithTimeout(r.lifetime, discoveryTimeout)
+		defer cancel()
+		var capability struct {
+			Managed bool `json:"managed_turn"`
 		}
-		wg.Wait()
+		err := r.request(ctx, http.MethodGet, s.origin+"/.well-known/windshare", "", nil, &capability)
+		if err == nil {
+			r.options.Trace.Event("turn_capability_discovered", s.ID, d.Fields{"enabled": d.Bool(capability.Managed)})
+		}
 		r.mu.Lock()
-		r.discovering = nil
+		if err == nil {
+			r.known[s.ID] = capability.Managed
+		}
+		delete(r.discovering, s.ID)
 		close(done)
 		r.mu.Unlock()
-	}()
+	})
 	return done
+}
+
+type outcome struct {
+	target     source
+	retained   bool
+	credential turngrant.Credential
 }
 
 func (r *Resolver) Issue(ctx context.Context, request turngrant.IssueRequest) turngrant.IssueResult {
 	ctx, cancel := context.WithTimeout(ctx, issueTimeout)
 	defer cancel()
 	available, unknown := r.availability()
-	var discovered <-chan struct{}
-	if request.Mode == p.TURNAll && len(unknown) > 0 {
-		discovered = r.Discover(ctx, request.Trace)
-	}
-	var result turngrant.IssueResult
-	var targets []source
-	for _, s := range activeServices(available, request.ServiceIDs) {
-		if s.EffectiveRole() == relayconfig.RoleFallback && request.Mode == p.TURNParallel {
-			continue
-		}
-		if request.Reusable[s.ID] {
-			result.Retained = append(result.Retained, s.ID)
-			continue
-		}
-		targets = append(targets, s)
-	}
-	issued := make([]turngrant.Credential, len(targets))
+	targets := activeServices(available, unknown, request)
+	ready := readyTargets(request, targets, unknown)
+	issued := make([]outcome, len(targets))
+	count := 0
 	var wg sync.WaitGroup
-	for i, s := range targets {
+	issue := func(target source, needsProbe bool) {
+		slot := &issued[count]
+		count++
+		if request.Reusable[target.ID] {
+			*slot = outcome{target: target, retained: true}
+			return
+		}
 		wg.Go(func() {
-			// A missing capability may use the same bounded request window, but
-			// must not shorten another service's opportunity to issue a credential.
-			if unknown[s.ID] && !r.awaitDiscovery(ctx, s.ID, discovered) {
-				return
-			}
-			credential, err := r.issue(ctx, s, request.Trace)
-			if err != nil {
-				request.Trace.Event("turn_grant_failed", s.ID, d.Fields{"kind": d.Text(s.Kind), "role": d.Text(s.EffectiveRole()), "reason": d.Text("issuer_unavailable")})
-				return
-			}
-			issued[i] = credential
+			*slot = r.issueSelected(ctx, request, target, needsProbe)
 		})
 	}
-	wg.Wait()
-	for _, c := range issued {
-		if c.ServiceID != "" {
-			result.Credentials = append(result.Credentials, c)
+	for _, target := range ready {
+		issue(target, unknown[target.ID])
+	}
+	missingFallback := false
+	if len(ready) < len(targets) {
+		for _, probe := range r.probeUnknown(available, unknown) {
+			if r.awaitProbe(ctx, probe.target, probe.done) {
+				issue(probe.target, false)
+				if count == len(targets) {
+					break
+				}
+			}
+		}
+		if count == len(ready) && !unknown[targets[count].ID] {
+			// The last confirmed parallel service remains usable if no fallback was found.
+			issue(targets[count], false)
+			missingFallback = true
 		}
 	}
+	wg.Wait()
 	available, unknown = r.availability()
+	return summarizeIssuance(request, issued[:count], available, unknown, missingFallback)
+}
+
+func (r *Resolver) issueSelected(ctx context.Context, request turngrant.IssueRequest, target source, needsProbe bool) outcome {
+	if needsProbe && !r.awaitDiscovery(ctx, target) {
+		return outcome{target: target}
+	}
+	credential, err := r.issue(ctx, target, request.Trace)
+	if err != nil {
+		request.Trace.Event("turn_grant_failed", target.ID, d.Fields{"kind": d.Text(target.Kind), "role": d.Text(target.EffectiveRole()), "reason": d.Text("issuer_unavailable")})
+		return outcome{target: target}
+	}
+	return outcome{target: target, credential: credential}
+}
+
+func summarizeIssuance(request turngrant.IssueRequest, issued []outcome, available []source, unknown map[string]bool, missingFallback bool) turngrant.IssueResult {
+	var result turngrant.IssueResult
 	result.HasFallback = slices.ContainsFunc(available, func(s source) bool { return !unknown[s.ID] && s.EffectiveRole() == relayconfig.RoleFallback })
+	// A transient discovery failure leaves the fourth parallel grant usable.
+	// A receiver that still has room can retry the missing fallback role.
+	retry := missingFallback && (len(unknown) != 0 || result.HasFallback)
+	for _, item := range issued {
+		switch {
+		case item.retained:
+			result.Retained = append(result.Retained, item.target.ID)
+		case item.credential.ServiceID != "":
+			result.Credentials = append(result.Credentials, item.credential)
+		case slices.ContainsFunc(available, func(s source) bool { return s.ID == item.target.ID }):
+			// Discovery and managed issuance can permanently disable a target.
+			// Only services still eligible warrant another request.
+			retry = true
+		}
+	}
+	// A disabled managed endpoint can uncover a previously unselected service.
+	// Return its cached grant immediately, or issue it on the next bounded request.
+	for _, s := range activeServices(available, unknown, request) {
+		if slices.ContainsFunc(issued, func(item outcome) bool { return item.target.ID == s.ID }) {
+			continue
+		}
+		if request.Reusable[s.ID] && len(result.Retained)+len(result.Credentials) < p.MaxGrantsPerMessage {
+			result.Retained = append(result.Retained, s.ID)
+		} else {
+			retry = true
+		}
+	}
 	switch {
+	case retry:
+		result.Status = p.TURNRetryStatus(len(result.Retained) + len(result.Credentials))
 	case len(result.Credentials)+len(result.Retained) > 0:
 		result.Status = p.TURNOK
 	case len(available) == 0:
 		result.Status = p.TURNUnconfigured
-	case len(unknown) > 0 || len(targets) > 0:
+	case len(unknown) == len(available):
 		result.Status = p.TURNRetryLater
 	default:
 		result.Status = p.TURNOK
@@ -200,55 +214,58 @@ func (r *Resolver) Issue(ctx context.Context, request turngrant.IssueRequest) tu
 	return result
 }
 
-func (r *Resolver) awaitDiscovery(ctx context.Context, id string, discovered <-chan struct{}) bool {
-	select {
-	case <-ctx.Done():
-		return false
-	case <-discovered:
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		return r.known[id]
+type capabilityProbe struct {
+	target source
+	done   <-chan struct{}
+}
+
+func (r *Resolver) probeUnknown(available []source, unknown map[string]bool) []capabilityProbe {
+	// A share can select more private relays than a session can use as TURN
+	// paths. Check all eligible alternatives, but issue only for open places.
+	probes := make([]capabilityProbe, 0, len(unknown))
+	for _, s := range available {
+		if unknown[s.ID] {
+			probes = append(probes, capabilityProbe{s, r.discover(s)})
+		}
 	}
+	return probes
+}
+
+func (r *Resolver) awaitDiscovery(ctx context.Context, s source) bool {
+	return r.awaitProbe(ctx, s, r.discover(s))
+}
+
+func (r *Resolver) awaitProbe(ctx context.Context, s source, done <-chan struct{}) bool {
+	if done != nil {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-done:
+		}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.known[s.ID]
 }
 
 func (r *Resolver) availability() ([]source, map[string]bool) {
 	r.mu.Lock()
-	var available []source
+	defer r.mu.Unlock()
+	var confirmed, pending []source
 	unknown := make(map[string]bool)
 	for _, s := range r.sources {
 		if s.origin != "" {
-			active, known := r.known[s.ID]
+			enabled, known := r.known[s.ID]
 			if !known {
 				unknown[s.ID] = true
+				pending = append(pending, s)
+				continue
 			}
-			if known && !active {
+			if !enabled {
 				continue
 			}
 		}
-		available = append(available, s)
+		confirmed = append(confirmed, s)
 	}
-	r.mu.Unlock()
-	return available, unknown
-}
-
-// Reserve room for both configured roles before filtering parallel demand.
-// Escalation can then add the fallback without displacing a busy parallel lane.
-func activeServices(available []source, ids []string) []source {
-	if len(ids) > 0 {
-		return slices.DeleteFunc(available, func(s source) bool { return !slices.Contains(ids, s.ID) })
-	}
-	if len(available) <= p.MaxGrantsPerMessage {
-		return available
-	}
-	selected := available[:p.MaxGrantsPerMessage]
-	role := selected[0].EffectiveRole()
-	if !slices.ContainsFunc(selected, func(s source) bool { return s.EffectiveRole() != role }) {
-		for _, s := range available[p.MaxGrantsPerMessage:] {
-			if s.EffectiveRole() != role {
-				selected[len(selected)-1] = s
-				break
-			}
-		}
-	}
-	return selected
+	return append(confirmed, pending...), unknown
 }

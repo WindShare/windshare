@@ -1,4 +1,4 @@
-import { encodeCanonicalCbor } from '../../src/protocol/cbor'
+import { CborError, encodeCanonicalCbor } from '../../src/protocol/cbor'
 import { readFileSync } from 'node:fs'
 import { expect, it } from 'vitest'
 import { decodeTURNDemand, decodeTURNGrants, encodeTURNDemand, encodeTURNGrants } from '../../src/protocol/turn-control'
@@ -7,18 +7,21 @@ import { MESSAGE_KIND, validateSenderControlBody } from '../../src/session/messa
 const vector = JSON.parse(
   readFileSync(new URL('../../../core/testvectors/turn-control.json', import.meta.url), 'utf8'),
 ) as {
-  cases: Array<{ sender: boolean; bodyB64: string }>
+  cases: Array<{ sender: boolean; bodyB64: string; valid?: boolean }>
 }
 it('round trips the direction-bound Go demand and grant vectors', () => {
   for (const item of vector.cases) {
     const body = Uint8Array.from(Buffer.from(item.bodyB64, 'base64'))
-    if (item.sender) {
+    if (item.valid === false) {
+      expect(() => decodeTURNDemand(body)).toThrow(CborError)
+      expect(() => decodeTURNGrants(body)).toThrow(CborError)
+    } else if (item.sender) {
       validateSenderControlBody(MESSAGE_KIND.turnControl, body)
       expect(encodeTURNGrants(decodeTURNGrants(body))).toEqual(body)
       expect(() => decodeTURNDemand(body)).toThrow()
     } else {
       expect(encodeTURNDemand(decodeTURNDemand(body))).toEqual(body)
-      expect(() => validateSenderControlBody(MESSAGE_KIND.turnControl, body)).toThrow()
+      expect(() => validateSenderControlBody(MESSAGE_KIND.turnControl, body)).toThrow(CborError)
     }
   }
 })
@@ -39,5 +42,6 @@ it('rejects duplicate identities, invalid ICE authorities, and oversized control
     expect(() => decodeTURNDemand(body)).toThrow()
     expect(() => decodeTURNGrants(body)).toThrow()
   }
-  expect(() => decodeTURNGrants(new Uint8Array(16 * 1024 + 1))).toThrow()
+  expect(() => decodeTURNGrants(new Uint8Array(16 * 1024 + 1))).toThrow(CborError)
+  expect(() => encodeTURNDemand({ requestId: 1n, mode: 'unknown' as never, serviceIds: [] })).toThrow(CborError)
 })

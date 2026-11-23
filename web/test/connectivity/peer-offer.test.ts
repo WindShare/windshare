@@ -267,6 +267,28 @@ describe('browser offer lifecycle', () => {
     await channel.close()
   })
 
+  it.each(['direct', 'turn'] as const)('rejects a selected route that cannot serve a %s offer', async (expected) => {
+    const fixture = negotiationFixture()
+    const turn = { urls: ['turn:localhost'], username: 'user', credential: 'password' }
+    fixture.peer.ice.select(expected === 'direct' ? 'relay' : 'host')
+    const opening = fixture.factory.offer(fixture.route, fixture.signal, undefined, undefined, expected === 'turn' ? turn : undefined)
+    const rejected = expect(opening).rejects.toBeInstanceOf(PeerNegotiationError)
+    await establish(fixture)
+    await rejected
+    expect(fixture.peer.closeCalls).toBe(1)
+  })
+
+  it('admits a TURN offer when the selected remote candidate is peer-reflexive', async () => {
+    const fixture = negotiationFixture()
+    fixture.peer.ice.select('prflx', 'relay')
+    const turn = { urls: ['turn:localhost'], username: 'user', credential: 'password' }
+    const opening = fixture.factory.offer(fixture.route, fixture.signal, undefined, undefined, turn)
+    await establish(fixture)
+    const channel = await opening
+    expect(channel.pathRoute).toBe('turn')
+    await channel.close()
+  })
+
   it('bounds remote candidates across the pre-description lifetime', async () => {
     const fixture = negotiationFixture(2)
     const opening = fixture.factory.offer(fixture.route, fixture.signal)
@@ -817,16 +839,18 @@ class ControlledRoute implements SignalingRoute {
 }
 
 class FakeSelectedPairTransport extends EventTarget {
+  #localType: RTCIceCandidateType = 'host'
   #remoteType: RTCIceCandidateType | null = 'host'
 
   getSelectedCandidatePair(): RTCIceCandidatePair | null {
     return this.#remoteType === null ? null : {
-      local: { type: 'host' },
+      local: { type: this.#localType },
       remote: { type: this.#remoteType },
     } as RTCIceCandidatePair
   }
 
-  select(remoteType: RTCIceCandidateType | null): void {
+  select(remoteType: RTCIceCandidateType | null, localType: RTCIceCandidateType = 'host'): void {
+    this.#localType = localType
     this.#remoteType = remoteType
     this.dispatchEvent(new Event('selectedcandidatepairchange'))
   }

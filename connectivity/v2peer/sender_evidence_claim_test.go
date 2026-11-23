@@ -323,8 +323,9 @@ func testSenderDistinctBindingRejectionIsNotSuppressedByActiveOperation(t *testi
 	rejectedBinding := testBinding(140)
 
 	handler.mu.Lock()
-	handler.attempts[operation.ID()] = &peerAttempt{}
-	handler.bindings[activeBinding] = operation.ID()
+	attempt := &peerAttempt{config: peerAttemptConfig{offer: v2signal.Offer{Binding: activeBinding}}}
+	handler.attempts[operation.ID()] = attempt
+	handler.paths[activeBinding.PeerPathID] = senderPathAttempts{current: attempt}
 	if claim := handler.claimEvidenceLocked(operation.ID(), activeBinding); !claim.acquired {
 		handler.mu.Unlock()
 		t.Fatalf("active evidence claim = %#v", claim)

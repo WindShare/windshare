@@ -14,6 +14,11 @@
       "sender": false
     },
     {
+      "bodyB64": "hQEBAwKDau+7v2hvbWXvu79raG9tZcKFcmVsYXlkY2FmPw==",
+      "name": "demand",
+      "sender": false
+    },
+    {
       "bodyB64": "hgECAQH1gA==",
       "name": "grants",
       "sender": true
@@ -32,6 +37,71 @@
       "bodyB64": "hgECBAP1gA==",
       "name": "grants",
       "sender": true
+    },
+    {
+      "bodyB64": "hgECBQT0gYZkaG9tZVABAAAAAAAAAAAAAAAAAAAAgnN0dXJuOmxvY2FsaG9zdDozNDc4eCN0dXJuczpleGFtcGxlLm9yZzo0NDM/dHJhbnNwb3J0PXRjcGVndWVzdGdmaXh0dXJlGgAbd0A=",
+      "name": "grants",
+      "sender": true
+    },
+    {
+      "bodyB64": "hQEBAQOA",
+      "name": "unknown demand mode",
+      "sender": false,
+      "valid": false
+    },
+    {
+      "bodyB64": "hQEBAQKBZsKFaG9tZQ==",
+      "name": "invalid service ID",
+      "sender": false,
+      "valid": false
+    },
+    {
+      "bodyB64": "hQEBAQKBZmhvbWXChQ==",
+      "name": "invalid service ID",
+      "sender": false,
+      "valid": false
+    },
+    {
+      "bodyB64": "hQEBAQKBZmhvbWXCoA==",
+      "name": "invalid service ID",
+      "sender": false,
+      "valid": false
+    },
+    {
+      "bodyB64": "hQEBAQKBZmNhZmXMgQ==",
+      "name": "invalid service ID",
+      "sender": false,
+      "valid": false
+    },
+    {
+      "bodyB64": "hgECAQX0gA==",
+      "name": "unknown grant status",
+      "sender": true,
+      "valid": false
+    },
+    {
+      "bodyB64": "hgECAQT1gA==",
+      "name": "partial without grants",
+      "sender": true,
+      "valid": false
+    },
+    {
+      "bodyB64": "hgECAQP1gYZkaG9tZVABAAAAAAAAAAAAAAAAAAAAgnN0dXJuOmxvY2FsaG9zdDozNDc4eCN0dXJuczpleGFtcGxlLm9yZzo0NDM/dHJhbnNwb3J0PXRjcGVndWVzdGdmaXh0dXJlGgAbd0A=",
+      "name": "retry with grants",
+      "sender": true,
+      "valid": false
+    },
+    {
+      "bodyB64": "hgECAQL0gYZkaG9tZVABAAAAAAAAAAAAAAAAAAAAgnN0dXJuOmxvY2FsaG9zdDozNDc4eCN0dXJuczpleGFtcGxlLm9yZzo0NDM/dHJhbnNwb3J0PXRjcGVndWVzdGdmaXh0dXJlGgAbd0A=",
+      "name": "unconfigured with grants",
+      "sender": true,
+      "valid": false
+    },
+    {
+      "bodyB64": "hgECAQL1gA==",
+      "name": "unconfigured with fallback",
+      "sender": true,
+      "valid": false
     }
   ]
 }

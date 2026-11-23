@@ -29,12 +29,20 @@ func TestSessionCoalescesDemandAndRenewsOneGrantAtATime(t *testing.T) {
 		if r.Reusable["a"] {
 			return turngrant.IssueResult{Status: p.TURNOK, Retained: []string{"a"}}
 		}
-		return turngrant.IssueResult{Status: p.TURNOK, Credentials: []turngrant.Credential{{ServiceID: "a", URLs: []string{"turn:one"}, Username: "u", Password: "p", ValidFor: time.Minute}}}
+		return turngrant.IssueResult{Status: p.TURNOK, Credentials: []turngrant.Credential{{ServiceID: "a", URLs: []string{"turn:one"}, Username: "u", Password: "p", ExpiresAt: clock.Add(time.Minute)}}}
 	})
 	s := NewSender(turngrant.Trace{Session: p.ProtocolSessionID{1}}, provider, func() time.Time { return clock })
 	defer s.Close()
 	responses := make(chan p.TURNGrants, 2)
-	send := func(_ context.Context, b []byte) error { g, err := p.DecodeTURNGrants(b); responses <- g; return err }
+	send := func(_ context.Context, b []byte) error {
+		g, err := p.DecodeTURNGrants(b)
+		if g.RequestID == 1 {
+			// A second coalesced response waits for this write to finish.
+			clock = clock.Add(time.Second)
+		}
+		responses <- g
+		return err
+	}
 	for n := uint64(1); n <= 2; n++ {
 		body, _ := p.EncodeTURNDemand(p.TURNDemand{RequestID: n, Mode: p.TURNParallel})
 		if err := s.Handle(t.Context(), body, send); err != nil {
@@ -46,6 +54,9 @@ func TestSessionCoalescesDemandAndRenewsOneGrantAtATime(t *testing.T) {
 	first, second := <-responses, <-responses
 	if calls != 1 || first.RequestID == second.RequestID || first.Grants[0].GrantID != second.Grants[0].GrantID {
 		t.Fatal("identical demand did not share its grant")
+	}
+	if first.Grants[0].ValidForMS != 60_000 || second.Grants[0].ValidForMS != 59_000 {
+		t.Fatal("the second response extended its grant while waiting for the first write")
 	}
 	id := first.Grants[0].GrantID
 	more := s.resolve(t.Context(), p.TURNDemand{RequestID: 3, Mode: p.TURNAll})

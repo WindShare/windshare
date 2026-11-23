@@ -7,6 +7,7 @@ import (
 	"testing/synctest"
 
 	pion "github.com/pion/webrtc/v4"
+	"github.com/windshare/windshare/connectivity/turnsession"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -105,7 +106,7 @@ func testSenderAdmissionProgressesWhileCandidateSendIsBlocked(t *testing.T) {
 	})
 	var work sync.WaitGroup
 	work.Add(1)
-	attempt.start(context.Background(), &work)
+	attempt.start(context.Background(), &work, turnsession.OfferGrant{})
 	t.Cleanup(func() {
 		close(session.release)
 		attempt.stop(context.Canceled)
@@ -130,7 +131,7 @@ func testSenderAdmissionProgressesWhileCandidateSendIsBlocked(t *testing.T) {
 	if admitted := receiveTest(t, session.admissions); admitted != channel {
 		t.Fatal("admission did not receive the open direct channel")
 	}
-	assertPeerState(t, attempt.attached.Load)
+	assertPeerState(t, attempt.attached)
 	ctx, cancel := context.WithTimeout(context.Background(), peerTestTimeout)
 	defer cancel()
 	if err := attempt.cancelOperation(ctx); err != nil {

@@ -75,12 +75,14 @@ After the handshake, every lane frame is an AES-256-GCM `OperationEnvelope` boun
 | Operation end | `OPERATION_COMPLETE`, `OPERATION_ERROR`, `CANCEL` |
 | Lanes | `LANE_ATTACH` |
 | Peer paths | `PEER_OFFER`, `PEER_ANSWER`, `PEER_CANDIDATE`, `PEER_PATH_CONTROL` |
-| TURN (kind 20) | Session-scoped `TURN_CONTROL`: receiver `Demand` (`parallel` or `all`), sender `Grants` (`ok`, `unconfigured`, or `retry_later`) |
+| TURN (kind 20) | Session-scoped `Demand` requests `parallel` or `all` services. `Grants` reports `ok`, `unconfigured`, `retry_later`, or `partial_retryable`. With partial success, use the returned grants immediately and retry remaining capacity under bounded backoff while demand persists. |
 | Session | `SESSION_TERMINAL` |
 
 `PEER_PATH_CONTROL` (kind 19) is a session-scoped control carrying reachability
 demand, revocation, mapping-ready, and network-change notices. Its body schema
 version evolves independently.
+
+A TURN grant advertises the milliseconds remaining until its issuer’s expiry. Zero denotes a static credential. Once an offer is accepted for negotiation, its grant remains valid until that deadline across subsequent rotations.
 
 ## Identities
 

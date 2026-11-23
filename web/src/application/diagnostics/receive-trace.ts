@@ -227,7 +227,14 @@ function projectPeerRecoveryPayload(
   switch (event.stage) {
     case 'turn_demand_sent': case 'turn_refresh_requested': case 'turn_grants_received':
     case 'turn_path_admitted': case 'turn_path_closed':
-      return { stage: event.stage, service_id: event.serviceId, grant_id: event.grantId, mode: event.mode, status: event.status }
+      return Object.fromEntries(Object.entries({
+        stage: event.stage,
+        service_id: event.serviceId,
+        grant_id: event.grantId,
+        mode: event.mode,
+        status: event.status,
+        reason: event.reason,
+      }).filter(([, value]) => value !== undefined))
     case 'parallelism':
       return {
         stage: 'parallelism',

@@ -5,6 +5,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -15,6 +16,11 @@ type integrationSessionControls struct {
 	turnHandler func(context.Context, []byte) error
 	pathHandler func(context.Context, []byte) error
 	sent        []receiverIntegrationControl
+}
+
+func (*integrationSessionControls) RetireReplacedLane(_, _ session.LaneIdentity) bool {
+	// Direct negotiation fixtures never install a successor on the same TURN path.
+	return false
 }
 
 func (controls *integrationSessionControls) SetPeerPathControlHandler(handler func(context.Context, []byte) error) {

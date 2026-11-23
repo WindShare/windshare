@@ -1,6 +1,7 @@
 package relayconfig
 
 import (
+	"regexp"
 	"slices"
 	"strings"
 
@@ -18,6 +19,9 @@ const (
 	RoleParallel    = "parallel"
 	RoleFallback    = "fallback"
 )
+
+// Cloudflare TURN key UIDs occupy one path segment and are at most 32 bytes.
+var cloudflareKeyID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
 
 type TURNService struct {
 	ID           string   `json:"id"`
@@ -88,7 +92,7 @@ func ValidateTURNServices(services []TURNService) error {
 				return ErrConfig
 			}
 		case TURNCloudflare:
-			if s.KeyID == "" || strings.ContainsAny(s.KeyID, "/%?#\\") || s.APIToken == "" || s.SharedSecret != "" || s.Username != "" || s.Password != "" {
+			if !cloudflareKeyID.MatchString(s.KeyID) || strings.TrimSpace(s.APIToken) == "" || s.SharedSecret != "" || s.Username != "" || s.Password != "" {
 				return ErrConfig
 			}
 		default:

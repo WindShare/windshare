@@ -76,7 +76,7 @@ func TestSenderPeerFailureRetiresAdmittedChannelAfterEventLoopExit(t *testing.T)
 				result := make(chan error, 1)
 				go func() { result <- execution.runEvents() }()
 				owner := receiveTest(t, session.ownedAdmissions)
-				assertPeerState(t, func() bool { return attempt.attached.Load() })
+				assertPeerState(t, func() bool { return attempt.attached() })
 
 				peer.mu.Lock()
 				stateChanged := peer.onState
@@ -116,7 +116,7 @@ func TestSenderPeerFailureRetiresAdmittedChannelAfterEventLoopExit(t *testing.T)
 					t.Fatalf("retirement cause=%v peer closes=%d channel closes=%d",
 						channel.Err(), peer.closeCalls.Load(), channel.closeCalls.Load())
 				}
-				if !attempt.attached.Load() {
+				if !attempt.attached() {
 					t.Fatal("transport failure rewrote successful admission")
 				}
 				attempt.finish(ctx, errPeerConnectionFailed, nil, false)

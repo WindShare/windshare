@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	"github.com/windshare/windshare/connectivity/turnsession"
 	"github.com/windshare/windshare/core/session/turngrant"
 
 	p "github.com/windshare/windshare/core/session/protocolsession"
@@ -21,6 +24,17 @@ import (
 type transportFunc func(*http.Request) (*http.Response, error)
 
 func (f transportFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+func testResolver(t *testing.T, manual []relayconfig.TURNService, selected []relayprofile.Registration, profiles []relayprofile.Candidate, options Options) *Resolver {
+	t.Helper()
+	sources, err := SelectSources(manual, selected, profiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := sources.Open(t.Context(), options)
+	t.Cleanup(r.Close)
+	return r
+}
+
 func TestManualIssuersAndRoleBudget(t *testing.T) {
 	var calls atomic.Int32
 	httpClient := &http.Client{Transport: transportFunc(func(request *http.Request) (*http.Response, error) {
@@ -38,17 +52,14 @@ func TestManualIssuersAndRoleBudget(t *testing.T) {
 		{ID: "rest", Kind: "coturn", URLs: []string{"turn:two"}, SharedSecret: "fixture", TTLSeconds: 60},
 		{ID: "cloud", Kind: "cloudflare", KeyID: "key", APIToken: "api", URLs: []string{"turn:one"}},
 	}
-	r, err := New(specs, nil, nil, Options{HTTP: httpClient, Now: func() time.Time { return time.Unix(100, 0) }, Random: bytes.NewReader(make([]byte, 32))})
-	if err != nil {
-		t.Fatal(err)
-	}
+	r := testResolver(t, specs, nil, nil, Options{HTTP: httpClient, Now: func() time.Time { return time.Unix(100, 0) }, Random: bytes.NewReader(make([]byte, 32))})
 	specs[0].URLs[0] = "turn:changed"
 	result := r.Issue(t.Context(), turngrant.IssueRequest{Mode: p.TURNParallel})
 	if calls.Load() != 0 || result.Status != p.TURNOK || !result.HasFallback || len(result.Credentials) != 2 {
 		t.Fatal("parallel role selection")
 	}
 	a, b := result.Credentials[0], result.Credentials[1]
-	if a.URLs[0] != "turn:one" || a.ValidFor != 0 || b.Username != "160:"+strings.Repeat("0", 32) || b.ValidFor != time.Minute || b.Password != "ftAC/mcvKxRdSoEbctcvfTo8UtQ=" {
+	if a.URLs[0] != "turn:one" || !a.ExpiresAt.IsZero() || b.Username != "160:"+strings.Repeat("0", 32) || !b.ExpiresAt.Equal(time.Unix(160, 0)) || b.Password != "ftAC/mcvKxRdSoEbctcvfTo8UtQ=" {
 		t.Fatalf("manual grant mismatch, coturn proof %s", b.Password)
 	}
 	result = r.Issue(t.Context(), turngrant.IssueRequest{Mode: p.TURNAll, Reusable: map[string]bool{"static": true, "rest": true}})
@@ -88,19 +99,17 @@ func TestManagedDiscoveryFailureAndRevocation(t *testing.T) {
 	}))
 	defer host.Close()
 	candidate := relayprofile.Candidate{PublicURL: host.URL, AccessKey: "enrolled"}
-	r, err := New(nil, []relayprofile.Registration{candidate.Registration()}, []relayprofile.Candidate{candidate}, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	now := time.Unix(100, 0)
+	r := testResolver(t, nil, []relayprofile.Registration{candidate.Registration()}, []relayprofile.Candidate{candidate}, Options{Now: func() time.Time { return now }})
 	issue := func(mode p.TURNMode) turngrant.IssueResult {
 		return r.Issue(context.Background(), turngrant.IssueRequest{Mode: mode})
 	}
 	if issue(p.TURNParallel).Status != p.TURNRetryLater {
 		t.Fatal("unknown capability is retryable")
 	}
-	<-r.Discover(t.Context(), turngrant.Trace{})
+	r.awaitDiscovery(t.Context(), r.sources[0])
 	state.Store(1)
-	<-r.Discover(t.Context(), turngrant.Trace{})
+	r.awaitDiscovery(t.Context(), r.sources[0])
 	if g := issue(p.TURNParallel); g.Status != p.TURNOK || !g.HasFallback || len(g.Credentials) != 0 || issued.Load() != 0 {
 		t.Fatal("fallback charged during parallel demand")
 	}
@@ -108,7 +117,7 @@ func TestManagedDiscoveryFailureAndRevocation(t *testing.T) {
 		t.Fatal("redirect leaked outside the relay origin")
 	}
 	state.Store(3)
-	if g := issue(p.TURNAll); len(g.Credentials) != 1 || g.Credentials[0].ValidFor != 30*time.Minute {
+	if g := issue(p.TURNAll); len(g.Credentials) != 1 || !g.Credentials[0].ExpiresAt.Equal(now.Add(30*time.Minute)) {
 		t.Fatal("managed grant missing")
 	}
 	state.Store(2)
@@ -137,14 +146,67 @@ func TestUnknownCapabilityDoesNotDelayKnownIssuer(t *testing.T) {
 		return reply.Result(), nil
 	})}
 	source := relayprofile.Candidate{PublicURL: "https://private.example", AccessKey: "enrolled"}
-	r, err := New([]relayconfig.TURNService{{ID: "known", Kind: relayconfig.TURNCloudflare, KeyID: "key", APIToken: "api"}}, []relayprofile.Registration{source.Registration()}, []relayprofile.Candidate{source}, Options{HTTP: client})
-	if err != nil {
-		t.Fatal(err)
-	}
+	r := testResolver(t, []relayconfig.TURNService{{ID: "known", Kind: relayconfig.TURNCloudflare, KeyID: "key", APIToken: "api"}}, []relayprofile.Registration{source.Registration()}, []relayprofile.Candidate{source}, Options{HTTP: client})
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	result := r.Issue(ctx, turngrant.IssueRequest{Mode: p.TURNAll})
 	if ctx.Err() != nil || len(result.Credentials) != 1 || result.Credentials[0].ServiceID != "known" {
 		t.Fatal("independent issuer blocked by discovery")
 	}
+}
+
+func TestParallelIssuanceUsesProviderDeadlines(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		time.Sleep(250 * time.Millisecond)
+		started := time.Now()
+		client := &http.Client{Transport: transportFunc(func(*http.Request) (*http.Response, error) {
+			// The other issuer signs immediately. Only this response takes four seconds.
+			time.Sleep(4 * time.Second)
+			reply := httptest.NewRecorder()
+			_, _ = reply.WriteString(`{"iceServers":{"urls":"turn:cloud.test","username":"u","credential":"p"}}`)
+			return reply.Result(), nil
+		})}
+		source := testResolver(t, []relayconfig.TURNService{
+			{ID: "coturn", Kind: "coturn", URLs: []string{"turn:home.test"}, SharedSecret: "test-secret", TTLSeconds: 60},
+			{ID: "cloud", Kind: "cloudflare", KeyID: "key", APIToken: "test-token", TTLSeconds: 60},
+		}, nil, nil, Options{HTTP: client})
+		sender := turnsession.NewSender(turngrant.Trace{}, source, time.Now)
+		defer sender.Close()
+
+		body, err := p.EncodeTURNDemand(p.TURNDemand{RequestID: 1, Mode: p.TURNAll})
+		if err != nil {
+			t.Fatal(err)
+		}
+		responses := make(chan []byte, 1)
+		if err := sender.Handle(t.Context(), body, func(_ context.Context, reply []byte) error { responses <- reply; return nil }); err != nil {
+			t.Fatal(err)
+		}
+		reply, err := p.DecodeTURNGrants(<-responses)
+		if err != nil || reply.Status != p.TURNOK || len(reply.Grants) != 2 {
+			t.Fatalf("got status %v, grants %d, err %v", reply.Status, len(reply.Grants), err)
+		}
+		if elapsed := time.Since(started); elapsed != 4*time.Second {
+			t.Fatalf("issuance elapsed %s", elapsed)
+		}
+		signed := started.Add(time.Minute).Truncate(time.Second)
+		for _, grant := range reply.Grants {
+			expiry := started.Add(time.Minute)
+			if grant.ServiceID == "coturn" {
+				expiry = signed
+				if !strings.HasPrefix(grant.Username, strconv.FormatInt(signed.Unix(), 10)+":") {
+					t.Fatal("coturn username and issuer deadline differ")
+				}
+			}
+			if got, want := grant.ValidForMS, uint64(time.Until(expiry).Milliseconds()); got != want {
+				t.Fatalf("%s advertised %d ms, has %d ms left", grant.ServiceID, got, want)
+			}
+		}
+		time.Sleep(time.Until(signed))
+		for _, grant := range reply.Grants {
+			_, authorized := sender.Lookup(grant.GrantID)
+			if authorized != (grant.ServiceID == "cloud") {
+				t.Fatalf("%s authorization at signed expiry = %v", grant.ServiceID, authorized)
+			}
+		}
+	})
 }

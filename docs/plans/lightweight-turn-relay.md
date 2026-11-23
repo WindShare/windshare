@@ -94,7 +94,7 @@ sequenceDiagram
     alt 仅需配置为 parallel 的服务
         R->>S: E2EE TURN_CONTROL(Demand, mode=parallel, service_ids=[])
         Note over S: 仅签发 parallel 服务，无 fallback 签发调用
-    else 全部通道约 3s 无法交付，或合计有效速率连续 5s 低于 1 MiB/s
+    else 全部通道约 3s 无法交付，或最近 5s 的平均有效速率低于 1 MiB/s
         R->>S: E2EE TURN_CONTROL(Demand, mode=all, service_ids=[])
         par 并发签发 parallel + fallback 服务（单服务独立 5s 超时）
             S->>CF: POST /v2/turn/credentials (Bearer AccessKey)
@@ -123,8 +123,8 @@ sequenceDiagram
    - `auto` 仅在有网络需求，且满足规模或时长门槛（剩余 `> 4 MiB` 或持续 `> 2s`）时评估新增 TURN。块因网络或退避而排队（`networkWaitingBytes > 0`，即使没有在途块），或在途窗口已满且还有后续内容（`windowHasMoreWork`），都算网络需求。消费或落盘背压不触发。浏览、短下载和首块直接使用已就绪通道。
    - `Demand.Mode` 由角色和当前内容交付情况决定。
      - `parallel` 允许在有网络需求时并行提速，手配 `coturn` / `shared_static` 默认使用此角色。
-     - `fallback` 用于托管 TURN，也是手配 `cloudflare` 的默认角色。只有各通道均无法交付内容约 `3s`，或直连、`wsrelay`、已接入 TURN 的合计有效速率连续 `5s` 低于 `1 MiB/s`，才通过可用的已鉴权通道发 `mode=all`。能正常供数的高速 `wsrelay` 足以承担直连失败后的传输。
-   - 只有 `Grants.Status=unconfigured` 才停止本会话的 TURN 评估。`retry_later` 仅在仍需建连或续期时按退避间隔有限重试，`HasFallback` 只表示已知的服务角色。仅有 `fallback` 时收到空的 `ok`，等需求升级再请求。
+     - `fallback` 用于托管 TURN，也是手配 `cloudflare` 的默认角色。只有各通道均无法交付内容约 `3s`，或直连、`wsrelay`、已接入 TURN 的最近 `5s` 的合计平均有效速率低于 `1 MiB/s`，才通过可用的已鉴权通道发 `mode=all`。能正常供数的高速 `wsrelay` 足以承担直连失败后的传输。
+   - 只有 `Grants.Status=unconfigured` 才停止本会话的 TURN 评估。首次从 `parallel` 升级到 `all` 有独立的重试机会。全量重试要求相应网络需求仍在且有服务名额，定向续期使用该服务的有限退避。`HasFallback` 只表示已知的服务角色。仅有 `fallback` 时收到空的 `ok`，等需求升级再请求。
 3. **槽位预算与直连生命周期解耦**：
    - 将 `peerslot.Count`（Go 与 TS 同步）从 `4` 提升至 `8`，与现有 `SenderMaxActivePeerAttemptsPerSession = 8`、`peerset.MaximumPaths = 8`、`MaxLogicalLanes = 16` 对齐。
    - `MaxDirectPaths = 3`（主直连 1 + 吞吐探索 2），常驻 TURN 最多 4 条，另留 1 个协商槽位供接替。Go 与 Web 使用相同上限。
@@ -167,8 +167,8 @@ sequenceDiagram
 3. **实现极简 `turn_control.go`（直接置于 `core/session/protocolsession/`，对齐 [peer_path_control.go](../../core/session/protocolsession/peer_path_control.go) 避免循环依赖）**：
    - 仅定义 2 种消息体（确定性 CBOR 数组或 `uint64` 键 map——遵守 `validateCBORValue` 禁止字符串 map key 的契约，严格防超长与重复键）：
      - `Demand`（Receiver → Sender）：`[Schema=1, Kind=1, RequestID: uint64, Mode: uint8, ServiceIDs: []string]`。`Mode` 为 `1`（`parallel`：仅签发 `role=parallel` 服务，不触发 `fallback` 托管/计费服务）或 `2`（`all`：签发 `parallel` + `fallback` 服务）；`ServiceIDs` 为空表示按 `Mode` 全量申请，非空（最多 4 个）表示定向刷新过期或断连的指定服务。
-     - `Grants`（Sender → Receiver）为 `[Schema=1, Kind=2, RequestID: uint64, Status: uint8, HasFallback: bool, Grants: []Grant]`。`1=ok` 返回成功项，包含部分成功和仅配 `fallback` 时对 `parallel` 的空回复。`2=unconfigured` 仅用于发现已完成且确认没有启用服务。`3=retry_later` 表示无可返回凭据且发现未定，或本次签发全部暂时失败（如超时、429）。
-     - 单条 `Grant` 为 `[ServiceID: string, GrantID: [16]byte, URLs: []string, Username: string, Password: string, ValidForMS: uint64]`。`ValidForMS=0` 表示静态凭据无已知到期时间。
+     - `Grants`（Sender → Receiver）为 `[Schema=1, Kind=2, RequestID: uint64, Status: uint8, HasFallback: bool, Grants: []Grant]`。`1=ok` 表示本次目标已处理完，包括仅配 `fallback` 时对 `parallel` 的空回复。`2=unconfigured` 仅用于发现已完成且确认没有启用服务。`3=retry_later` 表示无可返回凭据且发现未定，或本次签发全部暂时失败（如超时、429）。`4=partial_retryable` 携带至少一项可用凭据，表示另有本次目标暂时不可用。
+     - 单条 `Grant` 为 `[ServiceID: string, GrantID: [16]byte, URLs: []string, Username: string, Password: string, ValidForMS: uint64]`。`ValidForMS` 按发送回复时距签发方到期的剩余毫秒计算，`0` 专用于静态凭据。
    - 严格校验常量：`MaxGrantsPerMessage = 4`、`MaxURLsPerGrant = 8`（对齐 `iceconfig.MaximumURLs`，兼容 Cloudflare 返回 3–5 条 URL）、`MaxURLBytes = 512`、`MaxCredentialBytes = 1024`、`MaxBodyBytes = 16 KiB`；URL 仅允许 `turn:` 与 `turns:` scheme，禁止含空白字符或内嵌凭据。
    - 在 `web/src/protocol/turn-control.ts` 实现对称编解码，并在 `core/testvectors/turn-control.json` 沉淀 Go ↔ TS 共享规范向量。
 4. **恢复 `RouteTURN` 路由与观测归因**：
@@ -188,8 +188,8 @@ sequenceDiagram
      ```
      不暴露任意外部 URL 字段——客户端固定由 `relay_url` 同源拼出 `<relay_url>/v2/turn/credentials`，从契约层面杜绝 `AccessKey` 发往第三方域名；未绑定 `TURN_KEY` 时省略（或为 `false`），与普通 `wsrelay` 保持干净兼容。管理员在管理台暂停托管 TURN 不改变该端点能力宣告（避免重开时老客户端需重新配对），而由签发接口返回明确错误码 `turn_disabled`。
    - **认证与限频**：在 [platform/access/handlers.rs](../../relay-rust/crates/relay-cloudflare/src/platform/access/handlers.rs) 与 [platform/access/mod.rs](../../relay-rust/crates/relay-cloudflare/src/platform/access/mod.rs) 新增内部路由 `POST /internal/authorize-turn`（放行内部调用，且在 `db.cleanup(now)` 与 `self.schedule()` **之前提前返回**）：
-     - 校验托管 TURN 总开关是否启用（默认 `true`，读内存缓存/单行配置键 `"setting:managed_turn"`），关闭时返回 `403` + `{"error": "turn_disabled"}`；
-     - 校验摘要对应的凭证存在且处于激活（未吊销）状态（复用 `windshare-relay-access` 校验语义，但**不调用 `db.save_credential`**）；
+     - 先验证摘要对应的凭证已激活且未吊销，沿用 `windshare-relay-access` 的只读鉴权。
+     - 再读取托管 TURN 开关 `setting:managed_turn`（默认启用），已授权调用方在暂停时收到 `403 turn_disabled`。
      - 通过 `RefCell` 在内存维护有界（如上限 1,024 条）的每凭证 60 秒窗口计数（如上限 20 次/分钟，best-effort），超限返回 `429` + `Retry-After`；
      - **不落盘 SQLite 租约表、不写 `last_used`、不注册 DO Alarm**，确保 TURN 签发路径消耗 0 行 SQLite 写入。
    - **Edge 侧签发模块（新增 `src/platform/turn.rs`，~180 行）**：
@@ -220,6 +220,7 @@ sequenceDiagram
    - `document` / `Config` 新增 `TURNServices []TURNService`（`json:"turn_services,omitempty"`，配置上限 8 个，单会话按顺序最多激活 4 个），支持显式可选字段 `role`（`"parallel" | "fallback"`；省略时 `coturn`/`shared_static` 默认 `"parallel"`，`cloudflare` 默认 `"fallback"`）：
      ```json
      {
+       "profiles": [],
        "turn_services": [
          {
            "id": "home-coturn",
@@ -250,7 +251,7 @@ sequenceDiagram
 2. **新建深模块 `engine/turnissuer/`（<= 6 个生产文件）**：
    - 核心领域类型与端口：
      - `ServiceSpec`（使用明确判别字段或内部接口区分 4 种来源：`Static` / `Coturn` / `CloudflareDirect` / `ManagedRelay`，并携带归一化后的 `Role: Parallel | Fallback`）；
-     - `Grant`（`ServiceID`、`URLs`、`Username`、`Password`、`ValidFor`）；
+     - `turngrant.Credential`（`ServiceID`、`URLs`、`Username`、`Password`、签发方到期时间 `ExpiresAt`）；
      - `Provider` 接口（供 `connectivity/v2peer` 消费：`Issue(ctx context.Context, mode Mode, serviceIDs []string) IssueResult`，其中 `IssueResult` 含 `Status`、`Outcomes []IssueOutcome` 与 `HasFallback bool`）。
    - 4 种签发器实现（全部接受注入 `http.Client`、`Clock`、`Random`，可完全离线单测）：
      - 优先使用短期凭据。显式配置 `kind=shared_static` 即授权将专用账号发给接收端（`ValidFor=0`）。接收端在分享结束后仍可使用，直到提供方撤销或轮换密码。只在配置时说明一次。
@@ -258,7 +259,7 @@ sequenceDiagram
      - `cloudflare`：POST `https://rtc.live.cloudflare.com/v1/turn/keys/{key_id}/credentials/generate-ice-servers` 获取临时凭据（防御性兼容 `iceServers` 对象/数组及 `credential` 字段；如用户配置了 `urls` 子集则按前缀/精确匹配过滤，否则保留全部非 `stun:` URL）；
      - `managed`：由对应已激活私有中转的 `relay_url` 确定性拼出同源 `POST <relay_url>/v2/turn/credentials`（仅允许 HTTPS 或 loopback，且 `http.Client` 禁用 30x 重定向防止 `Authorization: Bearer <AccessKey>` 外泄）；若服务端返回 `turn_disabled`，在本次分享生命周期内将该托管端点标记为已停用，静默跳过后续请求不反复打扰 `AccessObject`。
    - 对持有 `AccessKey` 且 `ManagedTurn` 未知的私有中转，随分享在后台探测 `/.well-known/windshare`（3s 超时），发现后加入 `fallback`。`parallel` 不等待探测，`all` 可在同一 5s 签发预算内等待。探测超时保留未知状态，下次有需求再试。
-   - `Resolver` 按 `Mode` 与 `ServiceIDs` 选取至多 4 个目标并发签发，单服务限时 5s。`parallel` 只访问同角色签发器，`all` 优先涵盖两种角色。部分失败仍返回成功项。
+   - `Resolver` 按 `Mode` 与 `ServiceIDs` 选取至多 4 个目标并发签发，单服务限时 5s。`parallel` 只访问同角色签发器，`all` 优先涵盖已确认的两种角色，在确有兜底需求时可限时等待能够改变选择的能力探测。部分暂时失败时保留成功凭据并返回 `partial_retryable`。
 3. **无锁透传至 CLI 与 Desktop**：
    - [engine/share.go](../../engine/share.go) 的 `ShareRequest` 增加不可变 `TURNServices []relayconfig.TURNService`；托管 TURN 规格在 `StartShare` 阶段根据 `selection.Relays` 匹配 `request.RelayIntent.Candidates()` 提取（通过 `NormalizeRelayEndpoint` 规范化匹配，保持 `relayprofile.Registration` 接口封装不变，且 `--relay` 显式覆盖中转时托管 TURN 天然只跟随被选中的中转，手配 `turn_services` 保持正交生效）。
    - `cmd/wind/internal/cli/share.go` 与 [host/desktop/creation.go](../../host/desktop/creation.go) 透传加载到的 `TURNServices`；
@@ -295,7 +296,7 @@ sequenceDiagram
 5. **发送端接入（`connectivity/v2peer/`）**：
    - 在 `v2peer.Config` 注入 `TURNProvider`。由 `engine/internal/nativeconnectivity.Capacity` 给原生收发两端注入同一 Engine 级 TURN 协商并发额度，跨分享、任务与工厂共享。额度仅覆盖建连至 `LANE_ATTACH`，失败或取消即释放，直连和 STUN 沿用各自预算。
    - 在 [sender_lifecycle.go](../../connectivity/v2peer/sender_lifecycle.go) 的 `runSessionControls` 中同步注册 `SetTURNControlHandler`：
-      - 合并同会话同模式的重复全量请求，对定向刷新限频。全量请求复用仍有效的授权，定向刷新异步调用 `TURNProvider.Issue` 换新。为新签发项分配随机 16 字节 `GrantID`，在会话内限量缓存并按期淘汰。`Grants` 回传签发状态和 `HasFallback`，无配置且无待发现端点时直接回复 `unconfigured`。
+      - 合并同会话同模式的重复全量请求，对定向刷新限频。全量请求复用距到期仍有协商余量的授权，定向刷新异步调用 `TURNProvider.Issue` 换新。为新签发项分配随机 16 字节 `GrantID`，在会话内限量缓存。已受理的 Offer 持有本次授权直到签发方到期，排队期间的轮换不撤销该授权。`Grants` 回传签发状态和 `HasFallback`，无配置且无待发现端点时直接回复 `unconfigured`。
    - 在 `startAttempt` / `attempt.go` / [sender_admission.go](../../connectivity/v2peer/sender_admission.go#L314-L324) 中：
      - 收到 `PEER_OFFER` 时，显式按 `offer.Binding.Purpose == v2signal.TURNRelay` 分流：命中有效 `offer.TURNGrantID` 时直接调用 `pionpeer.NewTURNPeerConnection` 创建应答端连接（不走 `nativepeer.PrepareAttempt`，不消耗直连 socket 租约与 UPnP 映射；未命中/过期时以 `PeerOperationCodeNegotiation` 拒绝对方以便接收端定向刷新重试）；非 `TURNRelay` 恒走直连路径；
      - 通道打开后走完全相同的 `LANE_ATTACH` 鉴权与 `FrameChannel` 交接流程；`acceptAdmission` 对 `TURNRelay` 跳过 `factory.native.SetAdmitted` 并将观测路由记录为 `transferlanes.RouteTURN`。
@@ -348,7 +349,7 @@ sequenceDiagram
    - [docs/deploy/cloudflare-relay.md](../deploy/cloudflare-relay.md) 与 [docs/deploy/cloudflare-api-token.zh-CN.md](../deploy/cloudflare-api-token.zh-CN.md)：在顶部醒目说明默认开启托管 TURN、1,000 GB/月免费额度与超额计费规则、所需 `Account / Cloudflare Calls / Edit` 权限、管理台暂停开关语义以及通过 `CLOUDFLARE_TURN_ENABLED=false` 关闭的方法。
    - [docs/plans/global-service/global-network.md](global-service/global-network.md)：移除对旧版 9 消息 `TURN_CONTROL` 和 DO 租约模型的过时引用，保持与当前轻量化设计一致。
 3. **测试与真实环境验证策略**（控制本地单测耗时，不新增脆弱 UI 测试）：
-   - **纯函数与契约**。共享 Go/TS 向量覆盖 `TURN_CONTROL` 方向、CBOR 和三种状态，以及 `v2signal` v5。签发器用假时钟与 HTTP 替身覆盖四种来源、`parallel` 零兜底调用、发现未定、全数暂时失败、部分成功、拒绝重定向与 `turn_disabled`。原生覆盖跨任务协商限额及释放、直连 `PathTerminal` 和 32s 预算。保留 Worker/Miniflare 的鉴权、开关、429、能力宣告与零写入测试，以及部署脚本的建 Key、复用、回收、关闭和缺权限用例。
+   - **纯函数与契约**。共享 Go/TS 向量覆盖 `TURN_CONTROL` 方向、CBOR 和四种状态，以及 `v2signal` v5。签发器用假时钟与 HTTP 替身覆盖四种来源、`parallel` 零兜底调用、发现未定、全数暂时失败、部分成功、拒绝重定向与 `turn_disabled`。原生覆盖跨任务协商限额及释放、直连 `PathTerminal` 和 32s 预算。保留 Worker/Miniflare 的鉴权、开关、429、能力宣告与零写入测试，以及部署脚本的建 Key、复用、回收、关闭和缺权限用例。
    - **同端口 STUN（轨道 A）**。在 [connectivity/pionpeer/baseline_test.go](../../connectivity/pionpeer/baseline_test.go) 验证两轮探测均从已分配端口实际发包，守住 64 端口预算。在生产信令测试中延迟 STUN 回包，先收到实际 Go Offer/Answer 并确认均无 `a=end-of-candidates`，再放行回包并验证远端收到 `srflx`。覆盖超时、取消和回调替换时的顺序与清理。
    - **本地多路并行集成测试（轨道 B）**：使用 [go.mod](../../go.mod) 已有的上游 `github.com/pion/turn/v5` 仅在测试进程内拉起 2 个本地 TURN 服务器 + 1 个本地 `wsrelay`，分别覆盖 Go↔Go 与 Go↔Chromium：
      - 验证 2 条 TURN + 1 条 `wsrelay` 真正并行分块下载且最终文件 SHA-256 一致；

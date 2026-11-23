@@ -31,6 +31,7 @@ func TestReauthorizationCommitsCredentialAndDetectsConcurrentCredentialImport(t 
 				}
 				store := FileStore{Settings: settings}
 				pending := pendingCredential(now).Pending
+				pending.ManagedTurn = true
 				pending.Operation = operation
 				pending.SettingsRevision = config.SettingsRevision()
 				if _, err := store.Update(t.Context(), func(current *Snapshot) error {
@@ -67,13 +68,13 @@ func TestReauthorizationCommitsCredentialAndDetectsConcurrentCredentialImport(t 
 				}
 				if scenario == "concurrent-credential-import" {
 					if !errors.Is(runErr, ErrSettingsChanged) || current.Profiles[0].AccessKey != importedKey ||
-						current.Pending == nil || current.Pending.credential().AccessKey != pending.credential().AccessKey {
+						current.Pending == nil || !current.Pending.ManagedTurn || current.Pending.credential().AccessKey != pending.credential().AccessKey {
 						t.Fatalf("concurrent credential import lost its authority or cancellation checkpoint: %v", runErr)
 					}
 					return
 				}
 				if runErr != nil || result.CredentialID != pending.credential().ID || current.Pending != nil ||
-					current.Profiles[0].AccessKey != pending.credential().AccessKey {
+					!current.Profiles[0].ManagedTurn || current.Profiles[0].AccessKey != pending.credential().AccessKey {
 					t.Fatalf("successful reauthorization did not persist the approved credential: %v", runErr)
 				}
 			})

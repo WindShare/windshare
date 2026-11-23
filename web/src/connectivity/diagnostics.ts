@@ -192,8 +192,18 @@ type PeerRecoveryBase = Readonly<{
   }>
 }>
 
-export type PeerRecoveryTraceEvent = PeerRecoveryBase & (
-  | Readonly<{ stage: TURNTraceStage; serviceId?: string; grantId?: string; status?: string; mode?: string }>
+type TURNTraceEvent = Readonly<{
+  eventName: 'peer_recovery'
+  correlation: ProtocolCorrelation & Readonly<{ protocolSessionId: ProtocolSessionIdentity }>
+  stage: TURNTraceStage
+  serviceId?: string
+  grantId?: string
+  status?: string
+  mode?: string
+  reason?: 'owner_closed' | 'lane_lost'
+}>
+
+export type PeerRecoveryTraceEvent = TURNTraceEvent | (PeerRecoveryBase & (
   | Readonly<{ stage: 'parallelism'; action: string; reason: string;
       networkWaitingBytes: number; inFlightBytes: number; remainingBytes: number; remainingKnown: boolean;
       paths: number; queuedBytes: number; unfinishedBytes: number; capacityWaitingBytes: number;
@@ -252,7 +262,7 @@ export type PeerRecoveryTraceEvent = PeerRecoveryBase & (
         { readonly type: 'stop-session' }
       >['terminal']['code']
     }>
-)
+))
 
 export type ConnectivityTraceEvent =
   | PeerAttemptTraceEvent

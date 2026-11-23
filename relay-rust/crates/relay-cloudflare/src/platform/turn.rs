@@ -1,49 +1,41 @@
 use super::access;
-use serde::Deserialize;
+use crate::turn_credentials::{Key, select};
+use futures_util::StreamExt;
+use js_sys::Uint8Array;
 use serde_json::{Value, json};
+use wasm_bindgen::JsCast;
 use windshare_relay_access::Digest;
 use worker::{
-    Env, Fetch, Headers, Method, Request, RequestInit, RequestRedirect, Response, Result,
+    Env, Fetch, Headers, Method, Request, RequestInit, RequestRedirect, Response, ResponseBody,
+    Result,
 };
 
 const TTL_SECONDS: u32 = 1800;
 const UPSTREAM_TIMEOUT_MS: u32 = 15_000;
-const MAX_URLS: usize = 8;
-const MAX_CREDENTIAL: usize = 1024;
-#[derive(Deserialize)]
-struct Key {
-    key_id: String,
-    api_token: String,
-}
-#[derive(Deserialize)]
-struct Server {
-    urls: Vec<String>,
-    #[serde(default)]
-    username: String,
-    #[serde(default)]
-    credential: String,
-}
-fn valid_url(raw: &str) -> bool {
-    let Some((scheme, tail)) = raw.split_once(':') else {
-        return false;
+const MAX_UPSTREAM_BYTES: usize = 32 * 1024;
+
+async fn upstream_json(response: &Response) -> Option<Value> {
+    let ResponseBody::Stream(stream) = response.body() else {
+        return None;
     };
-    if !matches!(scheme, "turn" | "turns")
-        || raw.len() > 512
-        || tail.contains(['@', '#', '/', '\\', '%'])
-        || tail.chars().any(char::is_whitespace)
-    {
-        return false;
+    let mut chunks = wasm_streams::ReadableStream::from_raw(stream.clone())
+        .try_into_stream()
+        .ok()?;
+    let mut bytes = Vec::new();
+    while let Some(item) = chunks.next().await {
+        // Check the JS buffer before copying it into Wasm. The stream cancels on early return.
+        let chunk = item.ok()?.dyn_into::<Uint8Array>().ok()?;
+        let start = bytes.len();
+        let length = chunk.length() as usize;
+        if length > MAX_UPSTREAM_BYTES - start {
+            return None;
+        }
+        bytes.resize(start + length, 0);
+        chunk.copy_to(&mut bytes[start..]);
     }
-    let host = match tail.split_once('?') {
-        None => tail,
-        Some((host, "transport=udp" | "transport=tcp")) => host,
-        Some(_) => return false,
-    };
-    !host.is_empty()
-        && !host.ends_with(':')
-        && url::Url::parse(&format!("https://{host}"))
-            .is_ok_and(|u| u.host().is_some() && u.port() != Some(0))
+    serde_json::from_slice(&bytes).ok()
 }
+
 fn refused(reason: &str, status: u16) -> Result<Response> {
     worker::console_log!(
         "{}",
@@ -82,12 +74,7 @@ pub(super) async fn issue(env: &Env, req: &Request) -> Result<Response> {
     let Ok(key) = serde_json::from_str::<Key>(&secret.to_string()) else {
         return refused("turn_unavailable", 503);
     };
-    if key.key_id.is_empty()
-        || !key
-            .key_id
-            .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || c == b'-')
-    {
+    if !key.valid() {
         return refused("turn_unavailable", 503);
     }
     let headers = Headers::new();
@@ -105,47 +92,24 @@ pub(super) async fn issue(env: &Env, req: &Request) -> Result<Response> {
             .with_body(Some(json!({"ttl":TTL_SECONDS}).to_string().into())),
     )?;
     let timeout = worker::web_sys::AbortSignal::timeout_with_u32(UPSTREAM_TIMEOUT_MS).into();
-    let Ok(mut response) = Fetch::Request(request).send_with_signal(&timeout).await else {
+    let Ok(response) = Fetch::Request(request).send_with_signal(&timeout).await else {
         return refused("turn_unavailable", 503);
     };
     if !(200..300).contains(&response.status_code()) {
         return refused("turn_unavailable", 503);
     }
-    let Ok(mut body) = response.json::<Value>().await else {
+    let Some(body) = upstream_json(&response).await else {
         return refused("turn_unavailable", 503);
     };
-    let servers = body["iceServers"].take();
-    let entries = match servers {
-        Value::Array(entries) => entries,
-        Value::Object(_) => vec![servers],
-        _ => return refused("turn_unavailable", 503),
+    let Some(credential) = select(&body["iceServers"]) else {
+        return refused("turn_unavailable", 503);
     };
-    for entry in entries {
-        let Ok(s) = serde_json::from_value::<Server>(entry) else {
-            continue;
-        };
-        let urls: Vec<_> = s
-            .urls
-            .into_iter()
-            .filter(|u| valid_url(u))
-            .take(MAX_URLS)
-            .collect();
-        if urls.is_empty()
-            || s.username.is_empty()
-            || s.credential.is_empty()
-            || s.username.len() > MAX_CREDENTIAL
-            || s.credential.len() > MAX_CREDENTIAL
-        {
-            continue;
-        }
-        worker::console_log!(
-            "{}",
-            json!({"event":"turn_credentials_issued","url_count":urls.len(),"ttl_seconds":TTL_SECONDS})
-        );
-        return access::reply(
-            &json!({"urls":urls,"username":s.username,"password":s.credential,"ttl_seconds":TTL_SECONDS}),
-            200,
-        );
-    }
-    refused("turn_unavailable", 503)
+    worker::console_log!(
+        "{}",
+        json!({"event":"turn_credentials_issued","url_count":credential.urls.len(),"ttl_seconds":TTL_SECONDS})
+    );
+    access::reply(
+        &json!({"urls":credential.urls,"username":credential.username,"password":credential.password,"ttl_seconds":TTL_SECONDS}),
+        200,
+    )
 }

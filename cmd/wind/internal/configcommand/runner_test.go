@@ -74,6 +74,7 @@ func TestImportFailureDoesNotSaveOrExposePrivateInput(t *testing.T) {
 		{name: "unreadable file", args: []string{"import", filepath.Join(t.TempDir(), "secret-canary")}, want: command.ExitFailure},
 		{name: "invalid input", args: []string{"import", "-"}, input: "secret-canary", want: command.ExitUsage},
 		{name: "empty set", args: []string{"import", "-"}, input: `{"profiles":null}`, want: command.ExitUsage},
+		{name: "invalid TURN key ID", args: []string{"import", "-", "-v"}, input: `{"profiles":[],"turn_services":[{"id":"cloud","kind":"cloudflare","key_id":"..","api_token":"secret-canary"}]}`, want: command.ExitUsage},
 		{name: "empty frontend override", args: []string{"import", "-", "--front-url", ""}, input: importedConfiguration, want: command.ExitUsage},
 		{name: "invalid frontend override", args: []string{"import", "-", "--front-url", "wss://secret-canary"}, input: importedConfiguration, want: command.ExitUsage},
 		{name: "invalid frontend document", args: []string{"import", "-"}, input: `{"front_url":"https://front.example#secret-canary","profiles":[{"url":"https://relay.example"}]}`, want: command.ExitUsage},

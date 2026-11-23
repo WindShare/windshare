@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/windshare/windshare/connectivity/pionpeer"
 	"github.com/windshare/windshare/connectivity/turnsession"
 
 	pion "github.com/pion/webrtc/v4"
@@ -84,6 +83,7 @@ type ReceiverFactoryConfig struct {
 }
 
 type ReceiverFactory struct {
+	turnPeers             turnPeerFactory
 	turnCapacity          *turnsession.Capacity
 	native                *nativepeer.NativePeerConnectivity
 	configuration         pion.Configuration
@@ -151,7 +151,7 @@ func NewReceiverFactory(config ReceiverFactoryConfig) (*ReceiverFactory, error) 
 		config.TURNCapacity = turnsession.NewCapacity()
 	}
 	factory := &ReceiverFactory{
-		turnCapacity:  config.TURNCapacity,
+		turnPeers: openTURNPeer, turnCapacity: config.TURNCapacity,
 		native:        config.Native,
 		configuration: config.Configuration, peerConnections: config.PeerConnections,
 		dataChannels:      config.DataChannels,
@@ -204,6 +204,7 @@ func (factory *ReceiverFactory) CompleteObservations() ReceiverObservationComple
 }
 
 type ReceiverAttempt struct {
+	releaseTURN func()
 	turnGrantID protocolsession.TURNGrantID
 	factory     *ReceiverFactory
 	signaling   ReceiverSignaling
@@ -298,11 +299,7 @@ func (factory *ReceiverFactory) startBinding(parent context.Context, signaling R
 			return fail(capacityErr, nil, nil)
 		}
 		release = permit
-		var connection *pionpeer.Connection
-		connection, err = openTURNPeer(request, *grant)
-		if connection != nil {
-			peer = connection
-		}
+		peer, err = factory.turnPeers(request, *grant)
 		grantID = grant.GrantID
 	case factory.peerConnections != nil:
 		peer, err = factory.peerConnections.NewReceiverPeerConnection(phaseContext, request)
@@ -335,14 +332,14 @@ func (factory *ReceiverFactory) startBinding(parent context.Context, signaling R
 	}
 	transport := newOwnedPeerDataChannel(peer, channel)
 	attempt := &ReceiverAttempt{
-		factory: factory, signaling: signaling, lanes: lanes, peer: peer, turnGrantID: grantID,
+		factory: factory, signaling: signaling, lanes: lanes, peer: peer, turnGrantID: grantID, releaseTURN: release,
 		channel: transport, transport: transport, binding: binding,
 		events: make(chan receiverEvent, factory.maxCandidates*2+attemptEventReserve),
 		ctx:    ctx, cancel: cancel, done: make(chan struct{}), ready: make(chan struct{}),
 		phases: phases, phaseContext: phaseContext,
 	}
 	attempt.registerCallbacks()
-	go func() { defer release(); attempt.run() }()
+	go attempt.run()
 	return attempt, nil
 }
 
@@ -589,6 +586,7 @@ func (attempt *ReceiverAttempt) run() {
 		channelDrainFailed:       executionResult.teardown.channelDrainFailed(),
 	}
 	attempt.emitTerminationTrace(trace)
+	attempt.releaseTURN()
 	// Close/Done are producer quiescence boundaries: publication admission must
 	// happen first so factory completion cannot overtake the terminal fact.
 	close(attempt.done)

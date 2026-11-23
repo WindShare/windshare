@@ -562,8 +562,15 @@ func (lanes *runtimeLanes) detach(identity session.LaneIdentity) bool {
 		lanes.mu.Unlock()
 		return false
 	}
+	lanes.detachAndUnlock(lane)
+	return true
+}
+
+// Remove this exact epoch before dropping the registry lock. Transport teardown
+// can re-enter the runtime or wait for the pump to finish retiring the lane.
+func (lanes *runtimeLanes) detachAndUnlock(lane *RuntimeLane) {
 	lane.closing = true
-	delete(lanes.active, identity.ID)
+	delete(lanes.active, lane.identity.ID)
 	cancel, channel := lane.cancel, lane.channel
 	lanes.mu.Unlock()
 	if cancel != nil {
@@ -575,7 +582,6 @@ func (lanes *runtimeLanes) detach(identity session.LaneIdentity) bool {
 	} else {
 		lanes.completeLane(lane)
 	}
-	return true
 }
 
 func (lanes *runtimeLanes) len() int {

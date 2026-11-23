@@ -94,6 +94,8 @@ type PeerSession interface {
 		protocolsession.FrameChannel,
 		PeerAdmissionControl,
 	) (PeerAdmissionResult, error)
+	// RetireReplacedLane closes the predecessor only while this exact successor is usable.
+	RetireReplacedLane(previous, successor session.LaneIdentity) bool
 
 	// Passing nil removes the path-control callback for the handler's Run lifetime.
 	SetPeerPathControlHandler(func(context.Context, []byte) error)
@@ -202,6 +204,10 @@ func (peer senderPeerSession) AdmitPeerChannel(
 		return silentSenderPeerAdmission(), session.ErrRuntimeClosed
 	}
 	return peer.runtime.AdmitPeerChannel(ctx, channel, control)
+}
+
+func (peer senderPeerSession) RetireReplacedLane(previous, successor session.LaneIdentity) bool {
+	return peer.runtime != nil && peer.runtime.core.RetireLaneIfCovered(previous, &successor)
 }
 
 func (peer senderPeerSession) FailPeerOperation(

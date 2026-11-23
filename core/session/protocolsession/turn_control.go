@@ -38,6 +38,7 @@ const (
 	TURNOK TURNStatus = iota + 1
 	TURNUnconfigured
 	TURNRetryLater
+	TURNPartialRetryable
 )
 
 var ErrTURNControl = errors.New("invalid TURN control")
@@ -82,6 +83,7 @@ type TURNGrants struct {
 	Grants      []TURNGrant
 }
 
+// Service IDs preserve internal spaces and reject Unicode White_Space at either boundary.
 func ValidTURNServiceID(id string) bool {
 	return len(id) > 0 && len(id) <= MaxTURNServiceIDBytes && strings.TrimSpace(id) == id && utf8.ValidString(id) && norm.NFC.IsNormalString(id)
 }
@@ -143,8 +145,31 @@ func DecodeTURNDemand(body []byte) (TURNDemand, error) {
 	return d, nil
 }
 
+// TURNRetryStatus preserves successful grants while other requested services retry.
+func TURNRetryStatus(grants int) TURNStatus {
+	if grants == 0 {
+		return TURNRetryLater
+	}
+	return TURNPartialRetryable
+}
+
+func (g TURNGrants) validStatus() bool {
+	switch g.Status {
+	case TURNOK:
+		return true
+	case TURNUnconfigured:
+		return len(g.Grants) == 0 && !g.HasFallback
+	case TURNRetryLater:
+		return len(g.Grants) == 0
+	case TURNPartialRetryable:
+		return len(g.Grants) > 0
+	default:
+		return false
+	}
+}
+
 func EncodeTURNGrants(g TURNGrants) ([]byte, error) {
-	if g.RequestID == 0 || g.Status < TURNOK || g.Status > TURNRetryLater || len(g.Grants) > MaxGrantsPerMessage || (g.Status != TURNOK && len(g.Grants) != 0) || (g.Status == TURNUnconfigured && g.HasFallback) {
+	if g.RequestID == 0 || len(g.Grants) > MaxGrantsPerMessage || !g.validStatus() {
 		return nil, ErrTURNControl
 	}
 	seen := make(map[string]bool)

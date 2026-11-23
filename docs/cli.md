@@ -80,9 +80,21 @@ CLI and desktop senders use the same `config.json`. Configure up to eight servic
 
 ```json
 {
+  "profiles": [],
   "turn_services": [
-    {"id": "office", "kind": "coturn", "role": "parallel", "urls": ["turn:office.example:3478"], "shared_secret": "<secret>"},
-    {"id": "backup", "kind": "cloudflare", "role": "fallback", "key_id": "<key-id>", "api_token": "<turn-key-token>"}
+    {
+      "id": "office",
+      "kind": "coturn",
+      "urls": ["turn:office.example:3478"],
+      "shared_secret": "your-coturn-secret"
+    },
+    {
+      "id": "backup",
+      "kind": "cloudflare",
+      "role": "fallback",
+      "key_id": "0123456789abcdef0123456789abcdef",
+      "api_token": "your-turn-key-token"
+    }
   ]
 }
 ```

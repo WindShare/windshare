@@ -1,26 +1,43 @@
+import { CloudflareRequestError } from './cloudflare.mjs';
+
 const SECRET = 'TURN_KEY';
-const WARNING = 'Managed TURN provisioning was skipped. Enable Realtime TURN for this account and grant the API token Account / Cloudflare Calls / Edit, or set CLOUDFLARE_TURN_ENABLED=false.';
+const PROVISION_WARNING = 'Managed TURN provisioning was skipped. Enable Realtime TURN for this account and grant the API token Account / Cloudflare Calls / Edit, or set CLOUDFLARE_TURN_ENABLED=false.';
+const CLEANUP_WARNING = 'Managed TURN cleanup is incomplete. Check the Worker secret binding and the deployment-owned TURN key.';
 
 export async function provisionTURN({ client, workerName, deploymentId, enabled, log }) {
   const name = `windshare-${workerName}-${deploymentId.slice(0, 8)}`;
   try {
     const settings = await client.settings();
+    if (!Array.isArray(settings?.bindings)) {
+      const warning = 'Managed TURN provisioning was skipped because the Worker bindings could not be verified.';
+      log('turn_provisioning_skipped', { reason: warning });
+      return warning;
+    }
     const bound = settings.bindings.some(binding => binding.name === SECRET && binding.type === 'secret_text');
-    if (enabled && bound) { log('turn_provisioning_reused'); return; }
+    if (enabled && bound) {
+      log('turn_provisioning_reused');
+      return;
+    }
     if (!enabled && bound) await client.deleteSecret(SECRET);
-    const owned = (await client.turnKeys()).filter(key => key.name === name);
-    // The secret is write-only. A key without its binding cannot be recovered.
-    for (const key of owned) await client.deleteTURNKey(key.uid);
-    if (!enabled) { log('turn_provisioning_skipped', { reason: 'disabled' }); return; }
-    const key = await client.createTURNKey(name);
-    if (!key?.uid || !key.key) throw new Error('Missing generated key material');
-    await client.putSecret(SECRET, JSON.stringify({ key_id: key.uid, api_token: key.key }));
-    log('turn_provisioning_ready');
+    const keys = await client.turnKeys().catch(error => {
+      // An opted-out Worker without a secret needs no Calls access to operate.
+      if (!enabled && !bound && error instanceof CloudflareRequestError && error.status === 403) return [];
+      throw error;
+    });
+    // The secret is write-only. Once an orphan is known, any deletion failure needs attention.
+    for (const key of keys.filter(key => key.name === name)) await client.deleteTURNKey(key.uid);
+    if (enabled) {
+      const key = await client.createTURNKey(name);
+      if (!key?.uid || !key.key) throw new Error('Missing generated key material');
+      await client.putSecret(SECRET, JSON.stringify({ key_id: key.uid, api_token: key.key }));
+      log('turn_provisioning_ready');
+      return;
+    }
   } catch (error) {
-    // Only status and API error codes from the client are safe to publish.
-    const diagnostic = /^Cloudflare request failed \(HTTP \d+, codes [0-9,none]+\)\.$/.test(error.message) ? ' ' + error.message : '';
-    const warning = WARNING + diagnostic;
+    const diagnostic = error instanceof CloudflareRequestError ? ' ' + error.message : '';
+    const warning = (enabled ? PROVISION_WARNING : CLEANUP_WARNING) + diagnostic;
     log('turn_provisioning_skipped', { reason: warning });
     return warning;
   }
+  log('turn_provisioning_skipped', { reason: 'disabled' });
 }

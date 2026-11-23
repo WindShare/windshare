@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { expect, test, type Page } from '@playwright/test'
+import { nativeTURNReceiveFailure } from './fixtures/turn-receive-failure'
 import { DirectProcess } from './fixtures/direct-process'
 import { DirectProductStack, relayReceiverUrl, type DirectShare } from './fixtures/direct-product-stack'
 import type { HotSwitchPageEvent } from './fixtures/hot-switch-contract'
@@ -104,20 +105,22 @@ test('Go and Chromium download over two TURN servers and the application relay',
     expect(before.every((s) => s.bytes > 256 * 1024)).toBe(true)
     await expect.poll(async () => (await counters()).map((s) => s.allocations)).toEqual([0, 0])
 
-    const native = await execute(receiver, ['-test.run=^TestTURNNetworkReceive$'], {
+    const capability = link + '#' + share.key
+    const { stdout } = await execute(receiver, ['-test.run=^TestTURNNetworkReceive$'], {
       cwd: root,
       windowsHide: true,
       timeout: 65_000,
-      env: { ...process.env, WINDSHARE_TURN_TEST_DESTINATION: dir, WINDSHARE_TEST_CAPABILITY: link + '#' + share.key },
-    }).then(
-      (result) => JSON.parse(result.stdout.split(/\r?\n/).find((line) => line.startsWith('{'))!) as Connectivity,
-      () => undefined,
-    )
-    expect(native, 'native download completed').toBeDefined()
+      env: { ...process.env, WINDSHARE_TURN_TEST_DESTINATION: dir, WINDSHARE_TEST_CAPABILITY: capability },
+    }).catch(error => {
+      throw nativeTURNReceiveFailure(error, dir, { completeUrl: capability, fragment: '#' + share.key, separateKey: share.key })
+    })
+    const summary = stdout.split(/\r?\n/).find((line) => line.startsWith('{'))
+    if (!summary) throw new Error('Native TURN receiver exited without transfer metrics')
+    const native = JSON.parse(summary) as Connectivity
     expect(hash(await readFile(join(dir, name)))).toBe(expected)
-    expect(native?.DirectBytes).toBe(0)
-    expect(native?.ApplicationRelayBytes).toBeGreaterThan(0)
-    expect(native?.TURNBytes, JSON.stringify(await counters())).toBeGreaterThan(0)
+    expect(native.DirectBytes).toBe(0)
+    expect(native.ApplicationRelayBytes).toBeGreaterThan(0)
+    expect(native.TURNBytes, JSON.stringify(await counters())).toBeGreaterThan(0)
     const after = await counters()
     expect(after.every((s, i) => s.bytes - before[i]!.bytes > 256 * 1024)).toBe(true)
     await expect.poll(async () => (await counters()).map((s) => s.allocations)).toEqual([0, 0])
@@ -159,8 +162,8 @@ test('Go and Chromium download over two TURN servers and the application relay',
         sha256: expected,
         bytes: bytes.length,
         browserTurnLanes: lanes.size,
-        nativeRelayBytes: native!.ApplicationRelayBytes,
-        nativeTurnBytes: native!.TURNBytes,
+        nativeRelayBytes: native.ApplicationRelayBytes,
+        nativeTurnBytes: native.TURNBytes,
         recoveredBytes: Number(checkpoint[1]),
       }),
     )

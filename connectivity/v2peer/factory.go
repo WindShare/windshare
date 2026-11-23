@@ -127,6 +127,7 @@ type Config struct {
 }
 
 type Factory struct {
+	turnPeers             turnPeerFactory
 	trace                 diagnostics.Sink
 	turnCapacity          *turnsession.Capacity
 	turnProvider          turnsession.Provider
@@ -218,7 +219,7 @@ func NewFactory(config Config) (*Factory, error) {
 		config.TURNCapacity = turnsession.NewCapacity()
 	}
 	factory := &Factory{
-		trace: config.Trace, turnCapacity: config.TURNCapacity, turnProvider: config.TURNProvider,
+		trace: config.Trace, turnPeers: openTURNPeer, turnCapacity: config.TURNCapacity, turnProvider: config.TURNProvider,
 		native:        config.Native,
 		configuration: config.Configuration, peerConnections: config.PeerConnections,
 		dataChannels:      config.DataChannels,
@@ -258,7 +259,7 @@ func (factory *Factory) NewSenderPeerHandler(
 		turn:    turnsession.NewSender(turngrant.Trace{Sink: factory.trace, Session: session.ProtocolSessionID()}, factory.turnProvider, factory.now),
 		factory: factory, session: session, events: make(chan handlerEvent, capacity),
 		attempts:          make(map[protocolsession.OperationID]*peerAttempt),
-		bindings:          make(map[v2signal.Binding]protocolsession.OperationID),
+		paths:             make(map[v2signal.PeerPathID]senderPathAttempts),
 		evidenceAuthority: newSenderEvidenceAuthority(factory.maxPeerPaths),
 		retiredOperations: make(map[protocolsession.OperationID]retiredBinding),
 		retiredBindings:   make(map[v2signal.Binding]retiredBinding),
@@ -369,7 +370,7 @@ type senderHandler struct {
 
 	mu       sync.Mutex
 	attempts map[protocolsession.OperationID]*peerAttempt
-	bindings map[v2signal.Binding]protocolsession.OperationID
+	paths    map[v2signal.PeerPathID]senderPathAttempts
 	// Evidence identity is scoped to the ProtocolSession, while replay
 	// tombstones intentionally expire. Keeping these authorities separate is
 	// what makes one (session,path,attempt,side) stream terminal exactly once.

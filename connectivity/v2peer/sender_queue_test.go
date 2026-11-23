@@ -14,6 +14,7 @@ import (
 	"github.com/windshare/windshare/connectivity/pionpeer"
 	"github.com/windshare/windshare/connectivity/reachability"
 	"github.com/windshare/windshare/connectivity/socketauthority"
+	"github.com/windshare/windshare/connectivity/turnsession"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
@@ -144,7 +145,7 @@ func newResourceQueuedHandshake(t *testing.T, sockets *socketauthority.Authority
 		h.operation.bindReceiverSignalingOperation(binding)
 		var work sync.WaitGroup
 		work.Add(1)
-		h.sender.start(context.Background(), &work)
+		h.sender.start(context.Background(), &work, turnsession.OfferGrant{})
 		return h.operation, nil
 	}}
 	h.receiver, err = receiverFactory.StartBinding(context.Background(), signaling, processPhaseLanes{newReceiverTestLanes()}, testBinding(99))

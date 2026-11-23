@@ -27,18 +27,44 @@ func turnControlCases(t *testing.T) []any {
 		}
 		cases = append(cases, map[string]any{"name": name, "sender": sender, "bodyB64": b64(body)})
 	}
-	for _, d := range []p.TURNDemand{{RequestID: 1, Mode: p.TURNParallel}, {RequestID: 2, Mode: p.TURNAll, ServiceIDs: []string{"home"}}} {
+	for _, d := range []p.TURNDemand{
+		{RequestID: 1, Mode: p.TURNParallel},
+		{RequestID: 2, Mode: p.TURNAll, ServiceIDs: []string{"home"}},
+		{RequestID: 3, Mode: p.TURNAll, ServiceIDs: []string{"\ufeffhome\ufeff", "home\u0085relay", "caf?"}},
+	} {
 		b, err := p.EncodeTURNDemand(d)
 		add("demand", false, b, err)
 	}
+	home := p.TURNGrant{ServiceID: "home", GrantID: p.TURNGrantID{1}, URLs: []string{"turn:localhost:3478", "turns:example.org:443?transport=tcp"}, Username: "guest", Password: "fixture", ValidForMS: 1800000}
 	for _, g := range []p.TURNGrants{
 		{RequestID: 1, Status: p.TURNOK, HasFallback: true},
-		{RequestID: 2, Status: p.TURNOK, Grants: []p.TURNGrant{{ServiceID: "home", GrantID: p.TURNGrantID{1}, URLs: []string{"turn:localhost:3478", "turns:example.org:443?transport=tcp"}, Username: "guest", Password: "fixture", ValidForMS: 1800000}}},
+		{RequestID: 2, Status: p.TURNOK, Grants: []p.TURNGrant{home}},
 		{RequestID: 3, Status: p.TURNUnconfigured}, {RequestID: 4, Status: p.TURNRetryLater, HasFallback: true},
+		{RequestID: 5, Status: p.TURNPartialRetryable, Grants: []p.TURNGrant{home}},
 	} {
 		b, err := p.EncodeTURNGrants(g)
 		add("grants", true, b, err)
 	}
+	reject := func(name string, sender bool, wire []any) {
+		t.Helper()
+		body := canonical(t, wire)
+		if _, err := p.DecodeTURNDemand(body); err == nil {
+			t.Fatal(name, "accepted invalid demand")
+		}
+		if _, err := p.DecodeTURNGrants(body); err == nil {
+			t.Fatal(name, "accepted invalid grants")
+		}
+		cases = append(cases, map[string]any{"name": name, "sender": sender, "bodyB64": b64(body), "valid": false})
+	}
+	reject("unknown demand mode", false, []any{1, 1, 1, 3, []string{}})
+	for _, id := range []string{"\u0085home", "home\u0085", "home\u00a0", "cafe\u0301"} {
+		reject("invalid service ID", false, []any{1, 1, 1, 2, []string{id}})
+	}
+	reject("unknown grant status", true, []any{1, 2, 1, 5, false, []p.TURNGrant{}})
+	reject("partial without grants", true, []any{1, 2, 1, 4, true, []p.TURNGrant{}})
+	reject("retry with grants", true, []any{1, 2, 1, 3, true, []p.TURNGrant{home}})
+	reject("unconfigured with grants", true, []any{1, 2, 1, 2, false, []p.TURNGrant{home}})
+	reject("unconfigured with fallback", true, []any{1, 2, 1, 2, true, []p.TURNGrant{}})
 	return cases
 }
 

@@ -2,6 +2,15 @@ const API_BASE = 'https://api.cloudflare.com/client/v4';
 const REQUEST_TIMEOUT_MS = 30_000;
 const WORKER_NOT_FOUND = 10007;
 
+export class CloudflareRequestError extends Error {
+  constructor(status, codes) {
+    super(codes === undefined
+      ? `Cloudflare returned invalid JSON (HTTP ${status}).`
+      : `Cloudflare request failed (HTTP ${status}, codes ${codes || 'none'}).`);
+    this.status = status;
+  }
+}
+
 export function cloudflareClient({ accountId, workerName, apiToken, fetchImpl = fetch }) {
   if (!apiToken?.trim()) throw new Error('Set the CLOUDFLARE_API_TOKEN repository secret.');
   const accountPath = `/accounts/${accountId}/workers`;
@@ -16,7 +25,7 @@ export function cloudflareClient({ accountId, workerName, apiToken, fetchImpl = 
     });
     let body;
     try { body = await response.json(); } catch {
-      throw new Error(`Cloudflare returned invalid JSON (HTTP ${response.status}).`);
+      throw new CloudflareRequestError(response.status);
     }
     // A permission error, unknown account or transient failure is never proof
     // that the deployment is absent. Only the script-specific absence permits creation.
@@ -24,7 +33,7 @@ export function cloudflareClient({ accountId, workerName, apiToken, fetchImpl = 
         body.errors?.length === 1 && body.errors[0].code === WORKER_NOT_FOUND) return null;
     if (!response.ok || body.success !== true || (body.result == null && method === 'GET')) {
       const codes = (body.errors ?? []).map(error => Number(error.code)).join(',');
-      throw new Error(`Cloudflare request failed (HTTP ${response.status}, codes ${codes || 'none'}).`);
+      throw new CloudflareRequestError(response.status, codes);
     }
     return body.result;
   }

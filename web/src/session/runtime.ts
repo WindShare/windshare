@@ -51,6 +51,7 @@ import {
 import { OperationQueue, OperationRouter } from './operation-router'
 import {
   type LaneChange,
+  type SessionLaneIdentity,
   type LaneTermination,
   OPERATION_CANCEL_REASON,
   type OperationCancellation,
@@ -505,6 +506,20 @@ export class ReceiverSessionRuntime {
       operation.id,
       encodeBody([cancellation.protocolReason]),
     )).catch(() => undefined)
+  }
+
+  // Return the drain only after the registry has claimed retirement of this epoch.
+  // Callers can reserve a spare when the predecessor still owns the last usable lane.
+  retireLaneIfCovered(predecessor: SessionLaneIdentity, successor?: SessionLaneIdentity): Promise<void> | undefined {
+    const registered = this.#lanes.get(predecessor.laneId)
+    const old = registered?.epoch === predecessor.laneEpoch ? registered : undefined
+    if (successor) {
+      const next = this.#lanes.get(successor.laneId)
+      if (this.#closed || !next?.available || next.epoch !== successor.laneEpoch || next === old) return
+    } else if (old?.available && ![...this.#lanes.values()].some(lane => lane !== old && lane.available)) {
+      return
+    }
+    return old?.close('retired') ?? Promise.resolve()
   }
 
   async retireLane(laneId: number, laneEpoch: number): Promise<void> {

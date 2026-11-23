@@ -2,10 +2,7 @@ package peerset
 
 import (
 	"context"
-	"io"
 	"time"
-
-	"github.com/windshare/windshare/core/session/turngrant"
 
 	"github.com/windshare/windshare/connectivity/turnsession"
 	"github.com/windshare/windshare/connectivity/v2signal"
@@ -13,78 +10,80 @@ import (
 	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/peerslot"
 	p "github.com/windshare/windshare/core/session/protocolsession"
+	"github.com/windshare/windshare/core/session/turngrant"
 	"github.com/windshare/windshare/core/transfer/lanes"
 )
 
-const grantResponseTimeout = 8 * time.Second
-const renewalLead = 30 * time.Second
+const (
+	grantResponseTimeout = 8 * time.Second
+	turnSettlingPeriod   = 2 * time.Second
+)
 
 var turnBackoff = [...]time.Duration{2 * time.Second, 10 * time.Second, 30 * time.Second}
 
 type turnRuntime interface {
-	ContentLaneOwner
+	DetachLane(session.LaneIdentity) bool
 	SetTURNControlHandler(func(context.Context, []byte) error)
 	SendTURNControl(context.Context, []byte) error
-	AttachedLanes() int
-	LaneDone(session.LaneIdentity) (<-chan struct{}, bool)
-}
-type turnLeg struct {
-	counted     bool
-	slot        *peerslot.Lease
-	stop        context.CancelFunc
-	done, ready chan struct{}
-	lane        session.LaneIdentity
-	refresh     time.Time
+	UsableLaneDone(session.LaneIdentity) (<-chan struct{}, bool)
+	RetireLaneIfCovered(session.LaneIdentity, *session.LaneIdentity) bool
 }
 
-func (l *turnLeg) retire() {
-	if l.stop != nil {
-		l.stop()
-		<-l.done
-		l.stop = nil
+type turnRetry struct {
+	failures int
+	due      time.Time
+}
+
+func (r *turnRetry) failed(now time.Time) {
+	if r.failures < len(turnBackoff) {
+		r.due = now.Add(turnBackoff[r.failures])
+	}
+	if !r.exhausted() {
+		r.failures++
 	}
 }
-func (l *turnLeg) close() {
-	if l != nil {
-		l.retire()
-		l.slot.Close()
-	}
-}
-func signalled(ch <-chan struct{}) bool {
-	select {
-	case <-ch:
-		return true
-	default:
-		return false
-	}
-}
+
+func (r turnRetry) exhausted() bool          { return r.failures > len(turnBackoff) }
+func (r turnRetry) ready(now time.Time) bool { return !r.exhausted() && !now.Before(r.due) }
 
 type turnService struct {
 	current, next *turnLeg
-	retries       int
-	due           time.Time
+	retry         turnRetry
 }
+
+type fullTURNDemand struct {
+	mode     p.TURNMode
+	complete bool
+	retry    turnRetry
+}
+
+// Escalation opens its own bounded budget. Once fallback was requested only
+// renewed fallback pressure can spend that budget on another full request.
+func (f fullTURNDemand) needed(now time.Time, mode p.TURNMode) bool {
+	return mode > f.mode || (mode != 0 && mode == f.mode && !f.complete && f.retry.ready(now))
+}
+
 type requestState struct {
 	mode    p.TURNMode
 	service string
 	until   time.Time
 }
 type turnManager struct {
-	owner         *ReceiverSession
-	trace         turngrant.Trace
-	negotiate     func(context.Context, v2signal.Binding, p.TURNGrant) (Attempt, error)
-	runtime       turnRuntime
-	pool          *peerslot.Pool
-	paths         [peerslot.Count]v2signal.PeerPathID
-	in            chan p.TURNGrants
-	serial        uint64
-	wait          map[uint64]requestState
-	services      map[string]*turnService
-	policy        turnsession.Demand
-	asked         p.TURNMode
-	disabled      bool
-	retries       int
-	due, settling time.Time
+	owner     *ReceiverSession
+	trace     turngrant.Trace
+	negotiate func(context.Context, v2signal.Binding, p.TURNGrant) (Attempt, error)
+	runtime   turnRuntime
+	pool      *peerslot.Pool
+	paths     [peerslot.Count]v2signal.PeerPathID
+	in        chan p.TURNGrants
+	serial    uint64
+	wait      map[uint64]requestState
+	services  map[string]*turnService
+	exhausted map[string]struct{}
+	policy    turnsession.Demand
+	full      fullTURNDemand
+	disabled  bool
+	settling  time.Time
 }
 
 func newTURNManager(s *ReceiverSession, r turnRuntime) *turnManager {
@@ -95,7 +94,8 @@ func newTURNManager(s *ReceiverSession, r turnRuntime) *turnManager {
 	config := s.config
 	m := &turnManager{
 		owner: s, trace: turngrant.Trace{Sink: config.Trace, Session: id}, runtime: r, pool: pool,
-		in: make(chan p.TURNGrants, 16), wait: make(map[uint64]requestState), services: make(map[string]*turnService),
+		in: make(chan p.TURNGrants, 16), wait: make(map[uint64]requestState),
+		services: make(map[string]*turnService), exhausted: make(map[string]struct{}),
 		negotiate: func(ctx context.Context, binding v2signal.Binding, grant p.TURNGrant) (Attempt, error) {
 			return config.Factory.StartTURNBinding(ctx, config.Signaling, config.Lanes, binding, grant)
 		},
@@ -118,23 +118,23 @@ func (m *turnManager) settlingAt(now time.Time) bool {
 }
 
 func (m *turnManager) close() { m.runtime.SetTURNControlHandler(nil); m.reset() }
+
 func (m *turnManager) reset() {
 	for _, s := range m.services {
 		s.next.close()
 		s.current.close()
 	}
 	clear(m.services)
+	clear(m.exhausted)
 	clear(m.wait)
-	m.asked = 0
-	m.retries = 0
-	m.due = time.Time{}
+	m.full = fullTURNDemand{}
 	m.policy = turnsession.Demand{}
+	m.settling = time.Time{}
 }
+
 func (m *turnManager) step(now time.Time, active bool, d lanes.SchedulingDemand) {
-	if !active {
-		if len(m.services)+len(m.wait) > 0 || m.asked != 0 {
-			m.reset()
-		}
+	if !active || m.owner.ctx.Err() != nil {
+		m.reset()
 		return
 	}
 	for {
@@ -149,50 +149,65 @@ drained:
 	for id, r := range m.wait {
 		if !now.Before(r.until) {
 			delete(m.wait, id)
-			m.retry(now, r)
+			m.failed(now, r)
 		}
 	}
-	mode := m.policy.Observe(now, d)
-	if !m.disabled && mode > m.asked && m.retries <= len(turnBackoff) && !now.Before(m.due) && !m.pending("") {
-		m.request(now, mode, "")
+	if !m.disabled {
+		mode := m.policy.Observe(now, d)
+		if len(m.services) < p.MaxGrantsPerMessage && !m.pending("") && m.full.needed(now, mode) {
+			m.request(now, mode, "")
+		}
 	}
 	for id, service := range m.services {
 		m.maintainService(now, id, service, d.UnfinishedBytes > 0 || d.NetworkWaitingBytes > 0)
 	}
 }
 
-func (m *turnManager) maintainService(now time.Time, id string, s *turnService, networkDemand bool) {
-	if s.next != nil {
-		if signalled(s.next.ready) && !signalled(s.next.done) {
-			s.current.close()
-			s.current, s.next = s.next, nil
-			s.retries = 0
-			m.settling = now.Add(2 * time.Second)
-		} else if signalled(s.next.done) {
-			s.next.close()
-			s.next = nil
-			m.retry(now, requestState{service: id})
-		}
-	}
-	l := s.current
-	if l != nil && !l.counted && signalled(l.ready) {
-		l.counted = true
-		s.retries = 0
-		m.settling = now.Add(2 * time.Second)
-	}
-	if l == nil || s.next != nil {
+func (m *turnManager) settleReplacement(now time.Time, s *turnService) {
+	next := s.next
+	if next == nil {
 		return
 	}
+	ended := signalled(next.done)
+	if !ended && !signalled(next.ready) {
+		return
+	}
+	s.next = nil
+	// A successor can start closing between admission and this handoff.
+	if !ended && m.runtime.RetireLaneIfCovered(s.current.lane, &next.lane) {
+		s.current.close()
+		s.current = next
+		return
+	}
+	next.close()
+	s.retry.failed(now)
+}
+
+func (m *turnManager) maintainService(now time.Time, id string, s *turnService, networkDemand bool) {
+	m.settleReplacement(now, s)
+	l := s.current
 	if l.stop != nil && signalled(l.done) {
 		l.retire()
-		m.settling = now.Add(2 * time.Second)
-		m.retry(now, requestState{service: id})
+		m.settling = now.Add(turnSettlingPeriod)
+		s.retry.failed(now)
+	} else if l.stop != nil && !l.counted && signalled(l.ready) {
+		l.counted = true
+		s.retry = turnRetry{}
+		m.settling = now.Add(turnSettlingPeriod)
 	}
-	if l.stop != nil && !signalled(l.ready) {
+	if l.stop == nil && s.next == nil && s.retry.exhausted() && !m.pending(id) {
+		l.close()
+		// New service IDs can appear after discovery. Remember exhausted IDs
+		// across the bounded full requests without charging them a service place.
+		delete(m.services, id)
+		m.exhausted[id] = struct{}{}
+		return
+	}
+	if s.next != nil || (l.stop != nil && !signalled(l.ready)) {
 		return
 	}
 	due := l.stop == nil || (!l.refresh.IsZero() && !now.Before(l.refresh))
-	if due && networkDemand && !m.disabled && s.retries <= len(turnBackoff) && !now.Before(s.due) && !m.pending(id) {
+	if due && networkDemand && !m.disabled && s.retry.ready(now) && !m.pending(id) {
 		m.request(now, p.TURNAll, id)
 	}
 }
@@ -205,21 +220,18 @@ func (m *turnManager) pending(id string) bool {
 	}
 	return false
 }
-func (m *turnManager) retry(now time.Time, r requestState) {
-	retries, due := &m.retries, &m.due
-	if r.service != "" {
-		s := m.services[r.service]
-		if s == nil {
-			return
-		}
-		retries, due = &s.retries, &s.due
+func (m *turnManager) failed(now time.Time, r requestState) {
+	if r.service == "" {
+		m.full.retry.failed(now)
+	} else if s := m.services[r.service]; s != nil {
+		s.retry.failed(now)
 	}
-	if *retries < len(turnBackoff) {
-		*due = now.Add(turnBackoff[*retries])
-	}
-	*retries++
 }
+
 func (m *turnManager) request(now time.Time, mode p.TURNMode, service string) {
+	if service == "" && mode > m.full.mode {
+		m.full = fullTURNDemand{mode: mode}
+	}
 	m.serial++
 	d := p.TURNDemand{RequestID: m.serial, Mode: mode}
 	if service != "" {
@@ -241,141 +253,66 @@ func (m *turnManager) accept(now time.Time, g p.TURNGrants) {
 		return
 	}
 	delete(m.wait, g.RequestID)
-	m.trace.Event("turn_grants_received", r.service, diag.Fields{"request_id": diag.Uint(g.RequestID), "status": diag.Uint(uint64(g.Status)), "has_fallback": diag.Bool(g.HasFallback)})
+	m.trace.Event("turn_grants_received", r.service, diag.Fields{
+		"request_id": diag.Uint(g.RequestID), "mode": diag.Uint(uint64(r.mode)),
+		"status": diag.Uint(uint64(g.Status)), "has_fallback": diag.Bool(g.HasFallback),
+	})
 	if g.Status == p.TURNUnconfigured {
 		m.disabled = true
 		return
 	}
 	if g.Status == p.TURNRetryLater {
-		m.retry(now, r)
+		m.failed(now, r)
 		return
+	}
+	matched := false
+	for _, grant := range g.Grants {
+		if r.service == "" || r.service == grant.ServiceID {
+			m.acceptService(now, grant, r.service != "")
+			matched = true
+		}
 	}
 	if r.service == "" {
-		m.asked = max(m.asked, r.mode)
-		m.retries = 0
-	} else if len(g.Grants) == 0 {
-		m.retry(now, r)
-	}
-	for _, grant := range g.Grants {
-		id := grant.ServiceID
-		s := m.services[id]
-		if r.service != "" && r.service != id {
-			continue
-		}
-		if s == nil {
-			if r.service != "" || len(m.services) >= p.MaxGrantsPerMessage {
-				continue
-			}
-			s = &turnService{current: &turnLeg{}}
-			m.services[id] = s
-		} else if r.service == "" {
-			continue
-		}
-		target := s.current
-		if target.stop != nil && signalled(target.ready) && m.runtime.AttachedLanes() == 1 {
-			slot, err := m.pool.Acquire()
-			if err != nil {
-				m.retry(now, r)
-				continue
-			}
-			s.next = &turnLeg{slot: slot}
-			target = s.next
+		if g.Status == p.TURNPartialRetryable {
+			m.full.retry.failed(now)
 		} else {
-			target.retire()
+			m.full.complete = true
 		}
-		if target.slot == nil {
-			slot, err := m.pool.Acquire()
-			if err != nil {
-				m.retry(now, requestState{service: id})
-				continue
-			}
-			target.slot = slot
-		}
-		m.start(now, target, grant)
+	} else if !matched {
+		m.failed(now, r)
 	}
-}
-func (m *turnManager) start(now time.Time, l *turnLeg, g p.TURNGrant) {
-	ctx, cancel := context.WithCancel(m.owner.ctx)
-	l.stop, l.ready, l.done = cancel, make(chan struct{}), make(chan struct{})
-	l.lane = session.LaneIdentity{}
-	l.counted = false
-	l.refresh = time.Time{}
-	if g.ValidForMS > 0 {
-		ttl := time.Duration(min(g.ValidForMS, uint64(86400000))) * time.Millisecond
-		l.refresh = now.Add(ttl - min(ttl/4, renewalLead))
-	}
-	ordinal, err := l.slot.Next()
-	if err != nil {
-		close(l.done)
-		return
-	}
-	path := &m.paths[ordinal.Slot]
-	var attempt v2signal.AttemptID
-	m.owner.owner.mu.Lock()
-	if *path == (v2signal.PeerPathID{}) {
-		_, err = io.ReadFull(m.owner.owner.config.Random, path[:])
-	}
-	if err == nil {
-		_, err = io.ReadFull(m.owner.owner.config.Random, attempt[:])
-	}
-	m.owner.owner.mu.Unlock()
-	if err != nil {
-		close(l.done)
-		return
-	}
-	binding := v2signal.Binding{Purpose: v2signal.TURNRelay, PeerPathID: *path, PeerSlot: ordinal.Slot, AttemptID: attempt, AttemptSequence: ordinal.Sequence}
-	go func() {
-		defer close(l.done)
-		reason := "negotiation_failed"
-		defer func() {
-			m.tracePath("turn_path_closed", g, binding, l.lane, reason)
-		}()
-		a, err := m.negotiate(ctx, binding, g)
-		if err != nil {
-			return
-		}
-		defer a.Close()
-		select {
-		case <-a.Done():
-		case <-a.Ready():
-		case <-ctx.Done():
-		}
-		// Join the single negotiation before checking for a racing authenticated attachment.
-		if ctx.Err() != nil {
-			_ = a.Close()
-		}
-		lane, ok := a.Lane()
-		if !ok {
-			return
-		}
-		defer m.runtime.DetachLane(lane)
-		done, ok := m.runtime.LaneDone(lane)
-		if !ok {
-			return
-		}
-		l.lane = lane
-		close(l.ready)
-		m.tracePath("turn_path_admitted", g, binding, lane, "")
-		select {
-		case <-ctx.Done():
-			reason = "owner_closed"
-		case <-done:
-			reason = "lane_lost"
-		}
-	}()
 }
 
-func (m *turnManager) tracePath(event string, grant p.TURNGrant, binding v2signal.Binding, lane session.LaneIdentity, reason string) {
-	if !m.trace.Sink.Enabled() {
+func (m *turnManager) acceptService(now time.Time, grant p.TURNGrant, refresh bool) {
+	s := m.services[grant.ServiceID]
+	if s == nil {
+		if _, spent := m.exhausted[grant.ServiceID]; spent || refresh || len(m.services) >= p.MaxGrantsPerMessage {
+			return
+		}
+		s = &turnService{current: &turnLeg{}}
+		m.services[grant.ServiceID] = s
+	} else if !refresh || s.next != nil {
+		// Full responses can replay live grants and must not renew their lanes.
 		return
 	}
-	fields := diag.Fields{"grant_id": diag.Identity(grant.GrantID[:]), "peer_path_id": diag.Identity(binding.PeerPathID[:]), "attempt_sequence": diag.Uint(binding.AttemptSequence)}
-	if lane.ID != 0 {
-		fields["lane_id"] = diag.Uint(uint64(lane.ID))
-		fields["lane_epoch"] = diag.Uint(uint64(lane.Epoch))
+	target := s.current
+	protect := target.stop != nil && signalled(target.ready) && !signalled(target.done) &&
+		!m.runtime.RetireLaneIfCovered(target.lane, nil)
+	if protect {
+		target = &turnLeg{}
+	} else {
+		target.retire()
 	}
-	if reason != "" {
-		fields["reason"] = diag.Text(reason)
+	if target.slot == nil {
+		slot, err := m.pool.Acquire()
+		if err != nil {
+			s.retry.failed(now)
+			return
+		}
+		target.slot = slot
 	}
-	m.trace.Event(event, grant.ServiceID, fields)
+	if protect {
+		s.next = target
+	}
+	m.start(now, target, grant)
 }

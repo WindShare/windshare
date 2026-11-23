@@ -385,6 +385,21 @@ func (runtime *Runtime) DetachLane(identity session.LaneIdentity) bool {
 	return runtime.lanes.detach(identity)
 }
 
+// RetireLaneIfCovered permits reuse of an absent or draining predecessor.
+// Retiring a usable one requires another usable carrier. A named successor
+// must be selectable at the exact epoch in either case.
+func (runtime *Runtime) RetireLaneIfCovered(identity session.LaneIdentity, successor *session.LaneIdentity) bool {
+	return runtime.lanes.retireIfCovered(identity, successor)
+}
+
+func (runtime *Runtime) UsableLaneDone(identity session.LaneIdentity) (<-chan struct{}, bool) {
+	if !runtime.lanes.transportOpen(identity) {
+		return nil, false
+	}
+	lane, err := runtime.lanes.selectLane(&identity)
+	return lane.done, err == nil
+}
+
 func (runtime *Runtime) AttachedLanes() int { return runtime.lanes.len() }
 
 func (runtime *Runtime) LaneDone(identity session.LaneIdentity) (<-chan struct{}, bool) {

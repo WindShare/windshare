@@ -14,6 +14,7 @@ import type {
 } from '../../src/connectivity/peer-offer'
 import type { PeerChannel } from '../../src/connectivity/peer-channel'
 import { CandidateLimitExceededError, PeerNegotiationError } from '../../src/connectivity/errors'
+import { PeerSlotPool } from '../../src/session/peer-slots/slots'
 import { PeerTabAdmission } from '../../src/connectivity/peer-set/tab-admission'
 import { SIGNAL_KIND_OFFER } from '../../src/connectivity/signaling'
 import { decodePeerPathControl, PEER_PATH_CONTROL_KIND } from '../../src/protocol/peer-path-control'
@@ -57,11 +58,7 @@ describe('content path policy authority', () => {
     const retire = vi.spyOn(session, 'retireLane')
     const stopSampling = vi.spyOn(lanes, 'stopSampling')
     const sampleLane = vi.spyOn(lanes, 'sampleLane')
-    vi.spyOn(lanes, 'schedulingDemand').mockImplementation(() => ({
-      queuedBytes: 100, queuedBlocks: 10, networkWaitingBytes: 100, capacityWaitingBytes: 0,
-      inFlightBytes: 100, unfinishedBytes: 100, usefulBytes: clock.now(), outputBytes: clock.now(),
-      remainingBytes: 1_000_000, remainingKnown: true,
-    }))
+    mockNetworkDemand(lanes, clock)
     const activation = connectivity.begin('download')
     await waitForMicrotaskCondition('initial path', () => lanes.eligibleSize(activation.routes) === 1)
     await turn()
@@ -93,6 +90,7 @@ describe('content path policy authority', () => {
     expect(events).toContainEqual(expect.objectContaining({ stage: 'parallelism', action: 'retire', reason }))
     expect(retire).toHaveBeenCalledWith(sample.trialPath.laneId, sample.trialPath.laneEpoch)
     expect(offers.calls).toBe(2)
+    expect(session.sendTURNControl).not.toHaveBeenCalled()
     await connectivity.close()
   })
 
@@ -108,11 +106,7 @@ describe('content path policy authority', () => {
         return fakePeer()
       },
     }, undefined, { policy: 'p2p-only', peerRecovery: { clock } })
-    vi.spyOn(lanes, 'schedulingDemand').mockImplementation(() => ({
-      queuedBytes: 100, queuedBlocks: 10, networkWaitingBytes: 100, capacityWaitingBytes: 0,
-      inFlightBytes: 100, unfinishedBytes: 100, usefulBytes: clock.now(), outputBytes: clock.now(),
-      remainingBytes: 1_000_000, remainingKnown: false,
-    }))
+    mockNetworkDemand(lanes, clock, false)
     const activation = connectivity.begin('download')
     await waitForMicrotaskCondition('initial path', () => lanes.eligibleSize(activation.routes) === 1)
     await turn()
@@ -121,6 +115,27 @@ describe('content path policy authority', () => {
     expect(lanes.eligibleSize(activation.routes)).toBe(1)
     expect(activation.routes.active).toBe(true)
     await connectivity.close()
+  })
+
+  it('keeps sampling when an optional direct path cannot lease a negotiation slot', async () => {
+    const clock = new ManualRecoveryClock(), offers = new SuccessfulOffers()
+    const { connectivity, lanes } = fixture(offers, undefined, { policy: 'p2p-only', peerRecovery: { clock } })
+    const samples = mockNetworkDemand(lanes, clock)
+    const active = connectivity.begin('download')
+    await waitForMicrotaskCondition('direct path', () => lanes.eligibleSize(active.routes) === 1)
+    await turn()
+    const acquire = vi.spyOn(PeerSlotPool.prototype, 'tryAcquire').mockReturnValueOnce(undefined)
+    try {
+      for (let i = 0; i < 5; i++) await clock.advance(1000)
+      expect(acquire).toHaveBeenCalledTimes(1)
+      expect(offers.calls).toBe(1)
+      for (let i = 0; i < 20; i++) await clock.advance(1000)
+      expect(samples.mock.calls.length).toBeGreaterThan(20)
+      expect(offers.calls).toBe(2)
+    } finally {
+      acquire.mockRestore()
+      await connectivity.close()
+    }
   })
 
   it('terminates p2p-only within one wave despite repeated network notices during ICE', async () => {
@@ -200,11 +215,16 @@ describe('content path policy authority', () => {
 
   it('keeps relay-only browse and content entirely outside the ICE owner', async () => {
     const offers = new SuccessfulOffers()
-    const { connectivity } = fixture(offers, undefined, { policy: 'relay-only' })
+    const clock = new ManualRecoveryClock()
+    const { connectivity, session, lanes } = fixture(offers, undefined, { policy: 'relay-only', peerRecovery: { clock } })
+    const demand = lanes.schedulingDemand()
+    vi.spyOn(lanes, 'schedulingDemand').mockReturnValue({ ...demand, remainingBytes: 8 << 20, networkWaitingBytes: 1 })
     connectivity.beginBrowse()
     const activation = connectivity.begin('download')
-    await turn()
+    for (let i = 0; i < 6; i++) await clock.advance(1000)
     expect(offers.calls).toBe(0)
+    expect(session.sendTURNControl).not.toHaveBeenCalled()
+    expect(activation.routes.allows('turn')).toBe(false)
     expect(activation.routes.allows('application-relay')).toBe(true)
     expect(activation.routes.allows('direct')).toBe(false)
     activation.close()
@@ -220,12 +240,15 @@ describe('content path policy authority', () => {
     expect(lanes.laneIds()).toEqual([1, grant.laneId])
     expect(lanes.eligibleSize(activation.routes)).toBe(0)
     expect(activation.routes.allows('direct')).toBe(true)
+    expect(activation.routes.allows('turn')).toBe(false)
     activation.close()
     await connectivity.close()
   })
 })
 
 class FakeSession {
+  readonly sendTURNControl = vi.fn(async () => undefined)
+  subscribeTURNControls(): () => void { return () => undefined }
   subscribePeerPathControls(): () => void { return () => undefined }
   readonly pathControls: ReturnType<typeof decodePeerPathControl>[] = []
   async sendPeerPathControl(body: Uint8Array): Promise<void> {
@@ -640,6 +663,14 @@ function fixture(
     ...(onContentLaneAdmitted === undefined ? {} : { onContentLaneAdmitted }),
   })
   return { connectivity, errors, lanes, session }
+}
+
+function mockNetworkDemand(lanes: LaneSet, clock: ManualRecoveryClock, remainingKnown = true) {
+  return vi.spyOn(lanes, 'schedulingDemand').mockImplementation(() => ({
+    queuedBytes: 100, queuedBlocks: 10, networkWaitingBytes: 100, capacityWaitingBytes: 0,
+    inFlightBytes: 100, unfinishedBytes: 100, usefulBytes: clock.now(), outputBytes: clock.now(),
+    remainingBytes: 1_000_000, remainingKnown,
+  }))
 }
 
 async function turn(): Promise<void> {

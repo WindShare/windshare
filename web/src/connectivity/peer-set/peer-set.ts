@@ -1,7 +1,9 @@
 import { encodeBase64Url } from '../../crypto/bytes'
 import type { PeerPathIdentity } from '../../session/identities'
-import { PeerSlotPool } from '../../session/peer-slots/slots'
+import { PeerSlotPool, type PeerSlotLease } from '../../session/peer-slots/slots'
 import { PeerRecoverySupervisor, type PeerRecoverySupervisorOptions } from './path'
+
+type PathOptions = Omit<PeerRecoverySupervisorOptions, 'slot'>
 
 /** One session owner indexes independent paths; a path never cancels another path's wave. */
 export class PeerSet {
@@ -26,11 +28,19 @@ export class PeerSet {
     return this.#paths.get(encodeBase64Url(identity.copyBytes()))
   }
 
-  add(options: Omit<PeerRecoverySupervisorOptions, 'slot'>): PeerRecoverySupervisor {
+  add(options: PathOptions): PeerRecoverySupervisor {
+    return this.path(options.peerPathId) ?? this.#install(options, this.#slots.acquire())
+  }
+
+  tryAdd(options: PathOptions): PeerRecoverySupervisor | undefined {
+    const existing = this.path(options.peerPathId)
+    if (existing) return existing
+    const slot = this.#slots.tryAcquire()
+    return slot && this.#install(options, slot)
+  }
+
+  #install(options: PathOptions, slot: PeerSlotLease): PeerRecoverySupervisor {
     const key = encodeBase64Url(options.peerPathId.copyBytes())
-    const existing = this.#paths.get(key)
-    if (existing !== undefined) return existing
-    const slot = this.#slots.acquire()
     let path: PeerRecoverySupervisor
     try {
       path = new PeerRecoverySupervisor({ ...options, slot })
