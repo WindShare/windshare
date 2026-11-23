@@ -77,6 +77,7 @@ export interface ReceiveCoordinatorOptions extends ReceiveRuntimePorts {
 export class ReceiveCoordinator {
   readonly #options: ReceiveCoordinatorOptions
   readonly #listeners = new Set<() => void>()
+  readonly #lifetimeAbort = new AbortController()
   #storePromise: Promise<ReceiveStore> | undefined
   #store: ReceiveStore | undefined
   #capabilities: BrowserOutputCapabilities | undefined
@@ -371,6 +372,7 @@ export class ReceiveCoordinator {
   async dispose(): Promise<void> {
     if (this.#disposed) return
     this.#disposed = true
+    this.#lifetimeAbort.abort()
     this.#offerAbort?.abort()
     this.#activeJob?.stop()
     if (this.#progressTimer !== undefined) {
@@ -391,7 +393,7 @@ export class ReceiveCoordinator {
   ): Promise<void> {
     try {
       const [capabilities, shape] = await Promise.all([
-        this.#ensureCapabilities(signal),
+        this.#ensureCapabilities(),
         joined.inspectSelection(frozen, signal),
       ])
       if (signal.aborted || this.#disposed || epoch !== this.#offerEpoch) return
@@ -652,23 +654,42 @@ export class ReceiveCoordinator {
     }
   }
 
-  async #ensureCapabilities(signal: AbortSignal): Promise<BrowserOutputCapabilities> {
+  async #ensureCapabilities(): Promise<BrowserOutputCapabilities> {
     if (this.#capabilities !== undefined) return this.#capabilities
-    this.#capabilitiesPromise ??= probeBrowserOutputCapabilities(this.#options.windowPort, signal)
-    const caps = await this.#capabilitiesPromise
-    this.#capabilities = caps
-    return caps
+    // Capability probing is coordinator-scoped rather than selection-scoped so
+    // switching selections cannot cancel and poison the shared probe promise.
+    const pending = this.#capabilitiesPromise ??= probeBrowserOutputCapabilities(
+      this.#options.windowPort,
+      this.#lifetimeAbort.signal,
+    )
+    try {
+      const caps = await pending
+      this.#capabilities = caps
+      return caps
+    } catch (error) {
+      if (this.#capabilitiesPromise === pending) this.#capabilitiesPromise = undefined
+      throw error
+    }
   }
 
   async #requireStore(): Promise<ReceiveStore> {
     if (this.#store !== undefined) return this.#store
-    this.#storePromise ??= ReceiveStore.open(
+    const pending = this.#storePromise ??= ReceiveStore.open(
       this.#options.databaseName ?? RECEIVE_DATABASE_NAME,
       this.#options.windowPort.indexedDB,
     )
-    const store = await this.#storePromise
-    this.#store = store
-    return store
+    try {
+      const store = await pending
+      if (this.#disposed) {
+        store.close()
+        throw new DOMException('Receive coordinator disposed', 'AbortError')
+      }
+      this.#store = store
+      return store
+    } catch (error) {
+      if (this.#storePromise === pending) this.#storePromise = undefined
+      throw error
+    }
   }
 
   async #openStoreOptional(): Promise<ReceiveStore | undefined> {

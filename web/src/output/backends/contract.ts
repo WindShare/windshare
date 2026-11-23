@@ -59,11 +59,12 @@ export async function probeBrowserOutputCapabilities(
   const storage = windowPort.navigator?.storage
   const hasOpfsDir = typeof storage?.getDirectory === 'function'
   const nativeWorker = hasOpfsDir && indexedDb && portable
-    ? await probeNativeObjectSupport(windowPort)
+    ? await probeNativeObjectSupport(windowPort, signal)
     : false
   signal?.throwIfAborted()
   const opfs = nativeWorker && hasOpfsDir && indexedDb && portable
   const availableStorageBytes = opfs ? await estimateAvailableBytes(storage) : null
+  signal?.throwIfAborted()
   return Object.freeze({ indexedDb, fsa, opfs, portable, availableStorageBytes })
 }
 

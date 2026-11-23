@@ -12,12 +12,16 @@ export interface NativeSupportRuntime {
 }
 
 /** Window API presence cannot establish a Dedicated Worker's sync-access capability. */
-export function probeNativeObjectSupport(runtime: NativeSupportRuntime): Promise<boolean> {
+export function probeNativeObjectSupport(
+  runtime: NativeSupportRuntime,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  if (signal?.aborted) return Promise.reject(abortReason(signal))
   // Vite recognizes Worker entries by this constructor name and the direct URL expression.
   // Keep the injected constructor under that name so production emits compiled, same-origin JS.
   const Worker = runtime.Worker
   if (Worker === undefined) return Promise.resolve(false)
-  return new Promise(resolve => {
+  return new Promise((resolve, reject) => {
     let worker: NativeSupportWorker
     try {
       worker = new Worker(new URL('./support-worker.ts', import.meta.url), { type: 'module' })
@@ -25,17 +29,35 @@ export function probeNativeObjectSupport(runtime: NativeSupportRuntime): Promise
       resolve(false)
       return
     }
+    if (signal?.aborted) {
+      worker.terminate()
+      reject(abortReason(signal))
+      return
+    }
     let settled = false
-    const finish = (supported: boolean) => {
+    const onAbort = () => {
       if (settled) return
       settled = true
       clearTimeout(timer)
       worker.terminate()
+      reject(abortReason(signal))
+    }
+    const finish = (supported: boolean) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
+      worker.terminate()
       resolve(supported)
     }
     const timer = setTimeout(() => finish(false), NATIVE_SUPPORT_PROBE_TIMEOUT_MS)
+    signal?.addEventListener('abort', onAbort, { once: true })
     worker.onmessage = event => finish(event.data === true)
     worker.onerror = () => finish(false)
     worker.onmessageerror = () => finish(false)
   })
+}
+
+function abortReason(signal: AbortSignal | undefined): unknown {
+  return signal?.reason ?? new DOMException('Native support probe aborted', 'AbortError')
 }

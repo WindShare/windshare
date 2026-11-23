@@ -12,7 +12,41 @@ import type { JoinedBrowserShare } from '../../src/application/browser-share/gat
 import { SelectionPolicy, type FrozenSelectionPolicy } from '../../src/catalog/selection'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import type { BrowserOutputWindow } from '../../src/output/backends/contract'
+import type { NativeSupportWorker } from '../../src/output/native-object/support'
 import { initialReceiveState, transitionReceiveState } from '../../src/transfer/state'
+
+function createDeferredProbeWorker() {
+  const workers: Array<NativeSupportWorker & { terminated: boolean }> = []
+  class FakeSupportWorker implements NativeSupportWorker {
+    onmessage: ((event: MessageEvent<unknown>) => void) | null = null
+    onerror: ((event: ErrorEvent) => void) | null = null
+    onmessageerror: ((event: MessageEvent<unknown>) => void) | null = null
+    terminated = false
+    constructor() {
+      workers.push(this)
+    }
+    terminate(): void {
+      this.terminated = true
+    }
+  }
+  return { Worker: FakeSupportWorker as unknown as NonNullable<BrowserOutputWindow['Worker']>, workers }
+}
+
+function createSingleFileShare(name = 'report.pdf'): JoinedBrowserShare {
+  return {
+    descriptor: { shareInstanceId: 'share-1', syntheticRootId: 'root-1' },
+    selection: new SelectionPolicy(true),
+    inspectSelection: async (_policy: unknown, signal?: AbortSignal) => {
+      signal?.throwIfAborted()
+      return {
+        kind: 'single-file' as const,
+        file: { kind: 'file' as const, id: new Uint8Array(16).fill(1), idText: 'file-1', name, expectedSize: 2_048n },
+        sourcePath: [name],
+        exactBytes: 2_048n,
+      }
+    },
+  } as unknown as JoinedBrowserShare
+}
 
 describe('receive admission and coordinator', () => {
   it('computes accurate actions and readiness across backends and share contexts', () => {
@@ -231,6 +265,135 @@ describe('receive admission and coordinator', () => {
     expect(coordinator.startDownload(offers.primary.choiceId)).toBe(true)
     await vi.waitFor(() => expect(jobSelection).toBeDefined())
     expect(jobSelection?.draftRules?.[0]?.ancestry).toEqual(['root-1', 'sub-1'])
+
+    await coordinator.dispose()
+  })
+
+  it('keeps the shared capability probe alive when selection changes mid-probe', async () => {
+    const { Worker, workers } = createDeferredProbeWorker()
+    const onActionError = vi.fn()
+    const windowPort: BrowserOutputWindow = {
+      indexedDB: { open: vi.fn() } as unknown as IDBFactory,
+      URL: { createObjectURL: vi.fn(), revokeObjectURL: vi.fn() },
+      document: { createElement: vi.fn() } as unknown as Document,
+      navigator: {
+        storage: { getDirectory: vi.fn() } as unknown as StorageManager,
+      },
+      Worker,
+    }
+    const shareA = createSingleFileShare('a.pdf')
+    const shareB = createSingleFileShare('b.pdf')
+    let activeShare = shareA
+
+    const coordinator = new ReceiveCoordinator({
+      windowPort,
+      currentJoinedShare: () => activeShare,
+      onActionError,
+    })
+
+    coordinator.refreshOffers(shareA)
+    expect(workers).toHaveLength(1)
+    expect(coordinator.getSnapshot().offers?.kind).toBe('confirming')
+
+    // Switch selection and share while the initial Worker capability probe is still pending.
+    coordinator.refreshOffers(shareA)
+    coordinator.suspendForNewShare()
+    activeShare = shareB
+    coordinator.refreshOffers(shareB)
+    expect(workers).toHaveLength(1)
+    expect(workers[0]!.terminated).toBe(false)
+
+    workers[0]!.onmessage?.({ data: true } as MessageEvent<unknown>)
+    await vi.waitFor(() => expect(coordinator.getSnapshot().offers?.kind).toBe('ready'))
+
+    const offers = coordinator.getSnapshot().offers
+    if (offers?.kind !== 'ready') throw new Error('expected ready offers')
+    expect(offers.primary.backend).toBe('opfs')
+    expect(offers.primary.suggestedName).toBe('b.pdf')
+    expect(workers[0]!.terminated).toBe(true)
+    expect(onActionError).not.toHaveBeenCalled()
+
+    await coordinator.dispose()
+  })
+
+  it('clears a failed capability probe so retryOffers can re-probe and recover', async () => {
+    let storageReads = 0
+    const windowPort: BrowserOutputWindow = {
+      indexedDB: { open: vi.fn() } as unknown as IDBFactory,
+      URL: { createObjectURL: vi.fn(), revokeObjectURL: vi.fn() },
+      document: { createElement: vi.fn() } as unknown as Document,
+      get navigator() {
+        storageReads += 1
+        if (storageReads === 1) throw new Error('transient capability read failure')
+        return {}
+      },
+    }
+    const joined = createSingleFileShare('notes.txt')
+    const coordinator = new ReceiveCoordinator({
+      windowPort,
+      currentJoinedShare: () => joined,
+    })
+
+    coordinator.refreshOffers(joined)
+    await vi.waitFor(() => expect(coordinator.getSnapshot().offers?.kind).toBe('retry-required'))
+
+    coordinator.retryOffers()
+    await vi.waitFor(() => expect(coordinator.getSnapshot().offers?.kind).toBe('ready'))
+    expect(storageReads).toBe(2)
+
+    await coordinator.dispose()
+  })
+
+  it('terminates an in-flight capability probe worker on coordinator dispose', async () => {
+    const { Worker, workers } = createDeferredProbeWorker()
+    const onActionError = vi.fn()
+    const windowPort: BrowserOutputWindow = {
+      indexedDB: { open: vi.fn() } as unknown as IDBFactory,
+      URL: { createObjectURL: vi.fn(), revokeObjectURL: vi.fn() },
+      document: { createElement: vi.fn() } as unknown as Document,
+      navigator: {
+        storage: { getDirectory: vi.fn() } as unknown as StorageManager,
+      },
+      Worker,
+    }
+    const joined = createSingleFileShare('video.mp4')
+    const coordinator = new ReceiveCoordinator({
+      windowPort,
+      currentJoinedShare: () => joined,
+      onActionError,
+    })
+
+    coordinator.refreshOffers(joined)
+    expect(workers).toHaveLength(1)
+    expect(workers[0]!.terminated).toBe(false)
+
+    await coordinator.dispose()
+    expect(workers[0]!.terminated).toBe(true)
+    expect(onActionError).not.toHaveBeenCalled()
+  })
+
+  it('clears a rejected store open promise so subsequent loads can retry', async () => {
+    const open = vi.fn(() => {
+      const target = new EventTarget()
+      const request = Object.assign(target, {
+        error: new DOMException('Database upgrade blocked', 'InvalidStateError'),
+      })
+      queueMicrotask(() => target.dispatchEvent(new Event('error')))
+      return request as unknown as IDBOpenDBRequest
+    })
+    const windowPort: BrowserOutputWindow = {
+      indexedDB: { open } as unknown as IDBFactory,
+      URL: { createObjectURL: vi.fn(), revokeObjectURL: vi.fn() },
+      document: { createElement: vi.fn() } as unknown as Document,
+    }
+    const coordinator = new ReceiveCoordinator({
+      windowPort,
+      currentJoinedShare: () => undefined,
+    })
+
+    await coordinator.loadRetained()
+    await coordinator.loadRetained()
+    expect(open).toHaveBeenCalledTimes(2)
 
     await coordinator.dispose()
   })
