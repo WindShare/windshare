@@ -41,7 +41,7 @@ func sourceDriftJob(t *testing.T) transfer.JobResult {
 	}
 }
 
-func reportSourceDrift(t *testing.T, job transfer.JobResult, contextErr error) (int, string, receivecontract.OperationID) {
+func reportSourceDrift(t *testing.T, job transfer.JobResult, contextErr error, retention engine.ReceiveProgressRetention) (int, string, receivecontract.OperationID) {
 	t.Helper()
 	operation, err := receivecontract.OperationIDFromBytes(bytes.Repeat([]byte{7}, 16))
 	if err != nil {
@@ -59,7 +59,7 @@ func reportSourceDrift(t *testing.T, job transfer.JobResult, contextErr error) (
 		t.Fatal(err)
 	}
 	// Retained-output settlement happens in the engine's operation loop.
-	settled.Value.Recovery.Retention = engine.ReceiveRetentionCheckpoints
+	settled.Value.Recovery.Retention = retention
 	code := app.reportEngineReceive(settled, receiveSelection{}, getObservation{runtime: runtime})
 	runtime.Close()
 	return code, stderr.String(), operation
@@ -82,13 +82,13 @@ func requireLines(t *testing.T, output string, present, absent []string) {
 // The sender never re-admits a changed source under the same link, so when
 // nothing else is unfinished the receiver points at a new link, not a retry.
 func TestSourceDriftGuidesToNewLinkInsteadOfSameLinkRetry(t *testing.T) {
-	code, output, operation := reportSourceDrift(t, sourceDriftJob(t), nil)
+	code, output, operation := reportSourceDrift(t, sourceDriftJob(t), nil, engine.ReceiveRetentionCheckpoints)
 	if code != ExitDrift {
 		t.Fatalf("exit=%d stderr=%q", code, output)
 	}
 	requireLines(t, output, []string{
 		`"e/b.txt": changed at the source`,
-		"The changed items cannot be finished from this link. Ask the sender to share again and download the new link;",
+		changedSourceGuidance,
 		fmt.Sprintf("Look for operation ID %x in wind resume list -o <original-directory>.", operation.Bytes()),
 		"The source content changed during transfer.",
 	}, []string{"wind resume retry", "Saved partials", "transfer or output failure"})
@@ -100,16 +100,42 @@ func TestSourceDriftBesideInterruptionKeepsRetryHint(t *testing.T) {
 	job.TerminationCause, job.TerminationInterruption = context.Canceled, transfer.TransferInterruptionCanceled
 	job.Progress.DiscoveredFiles++
 	job.Progress.FileOutcomes.PausedFiles++
-	code, output, operation := reportSourceDrift(t, job, context.Canceled)
+	code, output, operation := reportSourceDrift(t, job, context.Canceled, engine.ReceiveRetentionCheckpoints)
 	if code != ExitDrift {
 		t.Fatalf("exit=%d stderr=%q", code, output)
 	}
 	requireLines(t, output, []string{
 		`"e/b.txt": changed at the source`,
 		"Saved partials: 4096 bytes.",
-		"Items changed at the source need a new link from the sender; retrying this link can finish the rest.",
+		"Items changed at the source need a new link from the sender.\n",
 		fmt.Sprintf("Retry with wind resume retry -o <original-directory> --operation %x", operation.Bytes()),
 	}, []string{"cannot be finished from this link"})
+}
+
+// Discard is the first offered action, so its report still names the new link.
+func TestSourceDriftDiscardStillGuidesToNewLink(t *testing.T) {
+	code, output, _ := reportSourceDrift(t, sourceDriftJob(t), nil, engine.ReceiveRetentionDiscarded)
+	if code != ExitDrift {
+		t.Fatalf("exit=%d stderr=%q", code, output)
+	}
+	requireLines(t, output, []string{
+		"Unfinished owned output was discarded; completed files were kept.\n" + changedSourceGuidance,
+	}, []string{"wind resume"})
+}
+
+// Without retained checkpoints a retry restarts the download, so the report
+// names the changed items without promising that this link finishes the rest.
+func TestSourceDriftBesideOtherWorkWithoutCheckpointsOmitsRetry(t *testing.T) {
+	job := sourceDriftJob(t)
+	job.Progress.DiscoveredFiles++
+	code, output, _ := reportSourceDrift(t, job, nil, engine.ReceiveRetentionLiveReleased)
+	if code != ExitDrift {
+		t.Fatalf("exit=%d stderr=%q", code, output)
+	}
+	requireLines(t, output, []string{
+		"Download stopped; unfinished progress could not be retained after exit.",
+		"Items changed at the source need a new link from the sender.\n",
+	}, []string{"Retry", "wind resume retry", "cannot be finished from this link"})
 }
 
 func TestSourceDriftPauseOffersOnlyDiscardOrExit(t *testing.T) {
@@ -145,7 +171,29 @@ func TestSourceDriftBesideOtherWorkPauseKeepsRetry(t *testing.T) {
 	}
 	requireLines(t, output, []string{
 		"Download paused: a transfer or output failure.",
-		"Items changed at the source need a new link from the sender; retrying this link can finish the rest.",
+		"Items changed at the source need a new link from the sender. Retry can finish the rest.",
 		"Choose retry, discard unfinished output, exit [r/d/e]:",
 	}, []string{"cannot be finished from this link"})
+}
+
+// A stopped share offers no retry, so the prompt must not promise one.
+func TestSourceDriftAfterShareStopPausePromisesNoRetry(t *testing.T) {
+	app, stderr := newSourceDriftReportingApp(t)
+	job := sourceDriftJob(t)
+	job.Progress.DiscoveredFiles++
+	pause := engine.ReceivePause{
+		Recovery: engine.ReceiveRecoveryOutcome{Retention: engine.ReceiveRetentionCheckpoints, Reason: engine.ReceiveRecoveryTransferFailure, ShareStop: engine.ReceiveShareStopSender},
+		Actions:  []engine.ReceiveRecoveryAction{engine.ReceiveRecoveryDiscard, engine.ReceiveRecoveryExit},
+		Transfer: job,
+	}
+	action, err := app.promptReceiveRecovery(t.Context(), bufio.NewReader(strings.NewReader("e\n")), pause)
+	output := stderr.String()
+	if err != nil || action != engine.ReceiveRecoveryExit {
+		t.Fatalf("action=%d err=%v stderr=%q", action, err, output)
+	}
+	requireLines(t, output, []string{
+		"Download stopped. The share has ended.",
+		`"e/b.txt": changed at the source`,
+		"Choose discard unfinished output, exit [d/e]:",
+	}, []string{"Retry", "retry", "new link"})
 }

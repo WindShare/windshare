@@ -115,6 +115,9 @@ func (a *App) reportReceiveRecovery(result engine.ReceiveResult, selection recei
 		a.writeCompleteLine("Download stopped; unfinished progress could not be retained after exit.")
 	case engine.ReceiveRetentionDiscarded:
 		a.writeCompleteLine("Unfinished owned output was discarded; completed files were kept.")
+		if recovery.Reason == engine.ReceiveRecoverySourceChanged {
+			a.writeCompleteLine(changedSourceGuidance)
+		}
 		return
 	}
 	if recovery.ShareStopped() {
@@ -134,7 +137,7 @@ func (a *App) reportReceiveRecovery(result engine.ReceiveResult, selection recei
 		a.reportRetainedOperationCleanup(result)
 	default:
 		if result.Transfer.SourceDriftFault.Valid() {
-			a.writeCompleteLine(partialSourceChangeGuidance)
+			a.writeCompleteLine(partialSourceChangeNote)
 		}
 		if recovery.Retention == engine.ReceiveRetentionCheckpoints && recovery.Retryable() {
 			a.writeCompleteLine("Retry with wind resume retry -o <original-directory> --operation %x and the same link and selection.", result.Operation.Bytes())
@@ -153,10 +156,10 @@ func (a *App) reportStoppedReceiveRecovery(result engine.ReceiveResult) {
 // The sender never re-admits a changed source under the same link, so these
 // items need a new link while any other unfinished work can still be retried.
 const (
-	changedSourceLabel          = "changed at the source"
-	changedSourceStopped        = "The changed items cannot be finished from this link."
-	changedSourceGuidance       = changedSourceStopped + " Ask the sender to share again and download the new link; --only <path> limits it to those items, saved in the -o directory rather than inside the shared folder."
-	partialSourceChangeGuidance = "Items " + changedSourceLabel + " need a new link from the sender; retrying this link can finish the rest."
+	changedSourceLabel      = "changed at the source"
+	changedSourceStopped    = "The changed items cannot be finished from this link."
+	changedSourceGuidance   = changedSourceStopped + " Ask the sender to share again and download the new link."
+	partialSourceChangeNote = "Items " + changedSourceLabel + " need a new link from the sender."
 )
 
 func (a *App) reportRetainedOperationCleanup(result engine.ReceiveResult) {
@@ -267,8 +270,9 @@ func (a *App) promptReceiveRecovery(ctx context.Context, reader *bufio.Reader, p
 		a.writeCompleteLine("Download paused: %s. Saved partials: %d bytes. Previously delivered: %d files (%d bytes).", reason, pause.Transfer.Progress.RestartReusableBytes, pause.Transfer.Progress.FileOutcomes.PreviouslyPublishedFiles, pause.Transfer.Progress.PreviouslyPublishedBytes)
 	}
 	a.reportBlockedReceiveItems(pause.Transfer)
-	if pause.Recovery.Reason != engine.ReceiveRecoverySourceChanged && pause.Transfer.SourceDriftFault.Valid() {
-		a.writeCompleteLine(partialSourceChangeGuidance)
+	// Only an offered retry can finish the rest; a stopped share cannot.
+	if pause.Allows(engine.ReceiveRecoveryRetry) && pause.Transfer.SourceDriftFault.Valid() {
+		a.writeCompleteLine("%s Retry can finish the rest.", partialSourceChangeNote)
 	}
 	if pause.Recovery.Retention == engine.ReceiveRetentionLiveReleased {
 		a.writeCompleteLine("Exit releases unfinished progress on this destination.")
@@ -300,7 +304,7 @@ func (a *App) reportBlockedReceiveItems(result transfer.JobResult) {
 		switch {
 		case item.Settlement.Kind() == transfer.FileCollision:
 			reason = "destination collision"
-		case engine.ReceiveSourceChanged(item.Fault):
+		case item.Fault.SourceChanged():
 			reason = changedSourceLabel
 		}
 		if _, blocked, ok := item.Settlement.ItemBlock(); ok {
@@ -315,7 +319,7 @@ func (a *App) reportBlockedReceiveItems(result transfer.JobResult) {
 	}
 	for _, item := range result.Directories {
 		reason := "directory unavailable"
-		if engine.ReceiveSourceChanged(item.Fault) {
+		if item.Fault.SourceChanged() {
 			reason = changedSourceLabel
 		}
 		a.writeCompleteLine("  %q: %s", item.Path, reason)
