@@ -1,9 +1,8 @@
 use super::*;
 use crate::{
-    Database, Endpoint,
-    node::{ContributionLimits, MonthlyBudget, Settings, WriteOrigin, budget::WriteAttempt, now},
+    Endpoint,
+    node::{Settings, now},
 };
-use std::task::Poll;
 use windshare_relay_access::Attribution;
 use windshare_relay_core::identifiers::ShareId;
 
@@ -20,63 +19,6 @@ fn verify_envelope(body: &serde_json::Value, identity: &Identity) -> serde_json:
     let verified = trust::verify(DESCRIPTOR_DOMAIN, &signed, &key).unwrap();
     assert_eq!(verified, payload.as_slice());
     serde_json::from_slice(&payload).unwrap()
-}
-
-#[test]
-fn descriptor_releases_state_lock_before_maintenance_check_and_signing() {
-    let directory = tempfile::tempdir().unwrap();
-    let endpoint = Endpoint::parse("wss://node.example/v2/ws").unwrap();
-    let store = Database::open(&directory.path().join("node.sqlite"), endpoint.identity).unwrap();
-    let identity = Identity::generate().unwrap();
-    let settings = Settings {
-        relay_budget: Some(MonthlyBudget {
-            bytes: 128,
-            reset_day_utc: 1,
-        }),
-        contribution: ContributionLimits {
-            daily_bytes: Some(128),
-            bytes_per_second: None,
-        },
-        ..Settings::default()
-    };
-    let node = Runtime::default();
-    node.identify(identity.clone()).unwrap();
-    node.configure(settings, store).unwrap();
-
-    let origin = WriteOrigin::test_public();
-    node.refill_budgets(&origin, 64, now()).unwrap();
-
-    // Executing budgeted egress inside the maintenance hook would deadlock on
-    // `Runtime::state` if `descriptor_with` still held the mutex across `fstat`/signing.
-    let mut forwarded = 0;
-    let body = node
-        .descriptor_with(&endpoint, || {
-            let guard = node
-                .state
-                .try_lock()
-                .expect("descriptor must release Runtime::state before maintenance/signing");
-            drop(guard);
-            let attempt = node
-                .write_egress(node.epoch(), &origin, 16, now(), |length| {
-                    Poll::Ready(Ok(length))
-                })
-                .unwrap();
-            let WriteAttempt::Socket(Poll::Ready(Ok(written))) = attempt else {
-                panic!("budgeted egress should complete immediately");
-            };
-            forwarded = written;
-            true
-        })
-        .unwrap();
-
-    assert_eq!(forwarded, 16);
-    let descriptor = verify_envelope(&body, &identity);
-    assert_eq!(descriptor["node_id"], identity.id());
-    assert_eq!(
-        descriptor["node_key"],
-        URL_SAFE_NO_PAD.encode(identity.key().verifying_key().to_bytes())
-    );
-    assert_eq!(descriptor["relay_available"], true);
 }
 
 #[test]

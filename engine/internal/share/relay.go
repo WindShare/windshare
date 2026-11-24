@@ -7,11 +7,22 @@ import (
 	"github.com/windshare/windshare/engine/relayprofile"
 
 	"github.com/windshare/windshare/connectivity/networkstate"
+	"github.com/windshare/windshare/connectivity/relayplan"
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/liveshare"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
 )
+
+func PlannedRelays(plan relayplan.Plan, observeFallback func(relayset.Fallback)) func(context.Context, []string, relayset.SenderFactory) (Relays, error) {
+	return func(ctx context.Context, _ []string, create relayset.SenderFactory) (Relays, error) {
+		value, err := relayset.NewPlannedSender(ctx, plan, create, observeFallback)
+		if err != nil {
+			return nil, err
+		}
+		return nativeRelays{value}, nil
+	}
+}
 
 func prepareRelay(prepared Prepared, candidate relayprofile.Registration, d Dependencies, o *observations) (Relay, error) {
 	material := prepared.Registration()

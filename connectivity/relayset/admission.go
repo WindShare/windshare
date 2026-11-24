@@ -15,9 +15,13 @@ type AttemptControl interface {
 	Unavailable()
 }
 
+// AttemptPermit tracks one in-flight handshake slot. ReleaseFailed records an
+// actual handshake failure for in-share backup ranking, whereas Release frees
+// the slot without penalizing the candidate (admitted, parked, auth wait, cancel).
 type AttemptPermit interface {
 	Admit() bool
 	Release()
+	ReleaseFailed()
 }
 
 // NetworkAdmissions coordinates only directory candidates. Configured endpoints
@@ -29,6 +33,7 @@ type NetworkAdmissions struct {
 	states        []admissionState
 	changed       chan struct{}
 	primary       int
+	target        int
 	inflight      int
 	active        int
 	clock         Clock
@@ -74,32 +79,45 @@ func (a *NetworkAdmissions) record(index int, state, reason string) {
 	a.observe(Admission{Endpoint: a.candidates[index].URL, Primary: primary, State: state, Reason: reason, Count: a.active})
 }
 
+type candidateHealth uint8
+
+const (
+	candidateHealthInitial candidateHealth = iota
+	candidateHealthFailed
+	candidateHealthCleared
+)
+
 type admissionState struct {
 	eligible, admitted bool
 	notBefore          time.Time
+	health             candidateHealth
 }
 type admissionControl struct {
 	owner *NetworkAdmissions
 	index int
 }
 type admissionPermit struct {
-	control  admissionControl
-	released bool
+	control   admissionControl
+	completed bool
+	released  bool
 }
 
 func NewNetworkAdmissions(plan relayplan.Plan, clock Clock, serverRetryAt func(string) time.Time) *NetworkAdmissions {
 	if clock == nil {
 		clock = SystemClock{}
 	}
-	a := &NetworkAdmissions{clock: clock, serverRetryAt: serverRetryAt, candidates: append([]relayplan.Candidate(nil), plan.Network...), policy: plan.Policy,
-		states: make([]admissionState, len(plan.Network)), changed: make(chan struct{}), primary: -1}
-	started := clock.Now()
+	candidates := append(append([]relayplan.Candidate(nil), plan.Network...), plan.Standby...)
+	a := &NetworkAdmissions{clock: clock, serverRetryAt: serverRetryAt, candidates: candidates, policy: plan.Policy,
+		target: min(relayplan.TargetNetworkRegistrations, MaximumEndpoints-len(plan.Configured)),
+		states: make([]admissionState, len(candidates)), changed: make(chan struct{}), primary: -1}
 	for i, candidate := range a.candidates {
 		at := candidate.ServerRetryAt
 		if !plan.Decision.CooldownFallback && candidate.CooldownUntil.After(at) {
 			at = candidate.CooldownUntil
 		}
-		a.states[i] = admissionState{notBefore: at, eligible: !at.After(started)}
+		// Eligibility is entered only from Begin so candidates that fail or stop
+		// before dialing cannot occupy backup ranking.
+		a.states[i] = admissionState{notBefore: at}
 	}
 	return a
 }
@@ -137,7 +155,7 @@ func (c admissionControl) Begin(ctx context.Context) (AttemptPermit, error) {
 			state.eligible = eligible
 			a.notify()
 		}
-		if state.eligible && a.active < relayplan.TargetNetworkRegistrations && a.inflight < relayplan.MaximumConcurrentAttempts &&
+		if state.eligible && a.active < a.target && a.inflight < relayplan.MaximumConcurrentAttempts &&
 			(a.primary < 0 || a.backup() == c.index) {
 			a.inflight++
 			a.mu.Unlock()
@@ -197,7 +215,11 @@ func (p *admissionPermit) Admit() bool {
 		a.record(index, AdmissionParked, AdmissionReasonPermitReleased)
 		return false
 	}
-	if a.active >= relayplan.TargetNetworkRegistrations {
+	p.completed = true
+	// Completing a handshake proves current reachability before backup ranking,
+	// even if the connection ends up parked.
+	a.states[index].health = candidateHealthCleared
+	if a.active >= a.target {
 		a.record(index, AdmissionParked, AdmissionReasonTargetReached)
 		return false
 	}
@@ -217,7 +239,11 @@ func (p *admissionPermit) Admit() bool {
 	return true
 }
 
-func (p *admissionPermit) Release() {
+func (p *admissionPermit) Release() { p.release(false) }
+
+func (p *admissionPermit) ReleaseFailed() { p.release(true) }
+
+func (p *admissionPermit) release(failed bool) {
 	a, index := p.control.owner, p.control.index
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -227,6 +253,9 @@ func (p *admissionPermit) Release() {
 	p.released = true
 	a.inflight--
 	if !a.states[index].admitted {
+		if failed && !p.completed {
+			a.states[index].health = candidateHealthFailed
+		}
 		a.releaseSoftCooldown()
 	}
 	a.states[index].eligible = false
@@ -241,14 +270,14 @@ func (a *NetworkAdmissions) releaseSoftCooldown() {
 	}
 }
 
-// Backoff candidates are absent here: their lifecycle re-enters eligibility only
-// after its existing retry clock expires, allowing another candidate to take over.
+// Backoff candidates stay ineligible while sleeping, and candidates whose
+// handshake failed in this share lose priority once their retry clock wakes them.
 func (a *NetworkAdmissions) backup() int {
 	var candidates []relayplan.Candidate
 	var indexes []int
 	for i, state := range a.states {
 		if state.eligible && !state.admitted {
-			candidates = append(candidates, a.candidates[i])
+			candidates = append(candidates, a.candidateForBackup(i))
 			indexes = append(indexes, i)
 		}
 	}
@@ -256,6 +285,18 @@ func (a *NetworkAdmissions) backup() int {
 		return -1
 	}
 	return indexes[relayplan.BackupIndex(a.candidates[a.primary], candidates, a.policy)]
+}
+
+func (a *NetworkAdmissions) candidateForBackup(index int) relayplan.Candidate {
+	candidate := a.candidates[index]
+	switch a.states[index].health {
+	case candidateHealthFailed:
+		return candidate.WithRegistrationFailure()
+	case candidateHealthCleared:
+		return candidate.WithoutRegistrationFailure()
+	default:
+		return candidate
+	}
 }
 
 func (a *NetworkAdmissions) notify() { close(a.changed); a.changed = make(chan struct{}) }

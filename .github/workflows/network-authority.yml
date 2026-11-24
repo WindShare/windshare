@@ -79,9 +79,7 @@ jobs:
           npm ci --prefix relay-rust/crates/relay-cloudflare
       - name: Verify authority Worker boundary flows
         working-directory: relay-rust/crates/network-authority
-        run: |
-          worker-build --dev --locked
-          node --test tests/mail.test.mjs tests/registration-email.test.mjs tests/password-edge.test.mjs tests/fleet-edge.test.mjs tests/worker.mjs
+        run: node tests/run.mjs
 
   deploy:
     needs: [console, verify]
@@ -114,10 +112,8 @@ jobs:
           AUTHORITY_ALLOWED_ORIGINS: ${{ vars.AUTHORITY_ALLOWED_ORIGINS }}
           AUTHORITY_TRUSTED_PROXY_IPS: ${{ vars.AUTHORITY_TRUSTED_PROXY_IPS }}
           DIRECTORY_KV_ID: ${{ vars.DIRECTORY_KV_ID }}
-          FLEET_MAINTENANCE_TOKEN: ${{ secrets.FLEET_MAINTENANCE_TOKEN }}
           DIRECTORY_CERTIFICATE: ${{ vars.DIRECTORY_CERTIFICATE }}
           DIRECTORY_SIGNING_SEED: ${{ secrets.DIRECTORY_SIGNING_SEED }}
-          VANTAGE_KEYS: ${{ vars.VANTAGE_KEYS }}
           AUTHORITY_TRUST: ${{ vars.AUTHORITY_TRUST }}
           EMAIL_WEBHOOK_URL: ${{ vars.EMAIL_WEBHOOK_URL }}
           EMAIL_WEBHOOK_TOKEN: ${{ secrets.EMAIL_WEBHOOK_TOKEN }}

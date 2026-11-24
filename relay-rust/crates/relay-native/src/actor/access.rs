@@ -1,8 +1,5 @@
 use super::{Actor, Environment, Persistence};
-use crate::node::{
-    access::{Authorization, Refusal, RefusalReason},
-    maintenance::GateError,
-};
+use crate::node::access::{Authorization, Refusal, RefusalReason};
 use anyhow::{Result, anyhow};
 use windshare_relay_core::{
     access::{Attribution, RegistrationDecision, RegistrationRequest},
@@ -12,9 +9,6 @@ use windshare_relay_core::{
     lifecycle::ConnectionRef,
     share::Input,
 };
-
-pub(super) const MAINTENANCE_RETRY: windshare_relay_core::error_frame::RetryAfter =
-    windshare_relay_core::error_frame::RetryAfter::from_millis(1000).expect("one second retry");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum RevocationReason {
@@ -102,34 +96,6 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
         }
     }
 
-    fn maintenance_refusal(
-        &self,
-        connection: ConnectionRef,
-        attribution: Attribution,
-    ) -> Option<Refusal> {
-        let gate = self.node.maintenance.get()?;
-        let probe = self
-            .node
-            .access
-            .is_probe(self.identity.share, Some(attribution));
-        match gate.check(probe) {
-            Ok(()) => None,
-            Err(GateError::Maintenance) => {
-                Some(Refusal::unavailable(RefusalReason::LocalMaintenance))
-            }
-            Err(GateError::Io(error)) => {
-                tracing::warn!(
-                    event = "maintenance_gate_io_error",
-                    share = ?self.identity.share,
-                    attempt = ?connection,
-                    operation = "authorize",
-                    %error,
-                );
-                Some(Refusal::unavailable(RefusalReason::MaintenanceGateError))
-            }
-        }
-    }
-
     pub(super) fn authorize(&mut self, request: &RegistrationRequest) -> RegistrationDecision {
         let connection = request.connection();
         let Some(port) = self.ports.get(&connection) else {
@@ -152,11 +118,7 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
                 class,
                 allowance,
             } => {
-                // Stop non-owner registrations before reserving residency or writing SQLite
-                // when the local maintenance fence or daily public budget refuses admission.
-                if let Some(refusal) = self.maintenance_refusal(connection, attribution) {
-                    Authorization::Refused(refusal)
-                } else if self.node.public_budget_refuses_attribution(attribution) {
+                if self.node.public_budget_refuses_attribution(attribution) {
                     Authorization::Refused(Refusal {
                         decision: RegistrationDecision::Unavailable(
                             crate::node::SERVICE_RETRY_AFTER,

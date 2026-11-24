@@ -47,15 +47,27 @@ func (s *Sender) statusLocked() SenderStatus {
 
 func (s *Sender) setRegistration(url string, registration routeRegistration) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if current := s.routes[url]; current == registration || current.terminal {
-		return
+	notifyFallback := s.setRegistrationLocked(url, registration)
+	s.mu.Unlock()
+	if notifyFallback != nil {
+		notifyFallback()
+	}
+}
+
+func (s *Sender) setRegistrationLocked(url string, registration routeRegistration) func() {
+	if current, exists := s.routes[url]; !exists || current == registration || current.terminal {
+		return nil
 	}
 	s.routes[url] = registration
 	s.everReady = s.everReady || registration.state == RegistrationAvailable
+	var notifyFallback func()
+	if registration.terminal || registration.state == RegistrationRetrying || registration.state == RegistrationNeedsUserAuthorization {
+		notifyFallback = s.initialFailureLocked(url)
+	}
 	if !s.stopping && s.ctx.Err() == nil && s.observer != nil {
 		s.observer(s.statusLocked())
 	}
+	return notifyFallback
 }
 
 func (s *Sender) ObserveStatus(observer func(SenderStatus)) {

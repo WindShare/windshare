@@ -7,9 +7,9 @@ import { useCopy } from '../ui/use-locale'
 import type { AuthorityClient } from './api'
 import { encode } from './identity'
 import { networkCopy } from './locales'
-import type { Discovery, NodeDetails, Publication, Role, Zone } from './model'
+import type { Discovery, NodeDetails, NodeSetup, Role, Zone } from './model'
 
-type Props = { api: AuthorityClient; saved: (node: NodeDetails) => void; setup: Publication['setup'] | undefined }
+type Props = { api: AuthorityClient; saved: (node: NodeDetails) => void; refresh: () => Promise<void>; setup?: NodeSetup }
 type SetupOptions = { zone: Zone; capacityMbps: number }
 
 const BYTES_PER_MBPS = 125_000
@@ -60,7 +60,7 @@ function parseCapacityMbps(raw: string): number | undefined {
   return Number.isSafeInteger(value) && value >= 1 && value <= MAX_CAPACITY_MBPS ? value : undefined
 }
 
-function setupCommand(target: URL, trust: Publication['setup'], { zone, capacityMbps }: SetupOptions): string {
+function setupCommand(target: URL, trust: NodeSetup, { zone, capacityMbps }: SetupOptions): string {
   const config = {
     listen: '127.0.0.1:8484',
     database: '/var/lib/windshare-network/relay.sqlite',
@@ -115,7 +115,7 @@ function SetupCommandOutput({ command }: { command: string }) {
 
 function FreshNodeSetup({ origin, setup, zone, onZoneChange, capacity, onCapacityChange }: {
   origin: URL
-  setup: Publication['setup']
+  setup: NodeSetup
   zone: '' | Zone
   onZoneChange: (zone: '' | Zone) => void
   capacity: string
@@ -144,7 +144,7 @@ function FreshNodeSetup({ origin, setup, zone, onZoneChange, capacity, onCapacit
   </details>
 }
 
-export function EnrollNode({ api, saved, setup }: Props) {
+export function EnrollNode({ api, saved, refresh, setup }: Props) {
   const t = useCopy(networkCopy)
   const action = useAction()
   const [address, setAddress] = useState('')
@@ -175,6 +175,7 @@ export function EnrollNode({ api, saved, setup }: Props) {
           zone: data.get('zone') as Zone, region: String(data.get('region')).trim(), provider: String(data.get('provider')).trim(),
           roles, capacity_mbps: Number(data.get('capacity')) })
         saved(added)
+        await refresh()
         location.hash = 'node/' + encode(added.key)
       })
     }}>

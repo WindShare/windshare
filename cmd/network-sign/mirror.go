@@ -13,15 +13,14 @@ import (
 
 	"github.com/windshare/windshare/core/nodedirectory"
 	"github.com/windshare/windshare/engine/networkdirectory"
-	"github.com/windshare/windshare/internal/networkprobe"
 )
 
 const directoryRoute = "/.well-known/windshare-network"
 
 func fetchMirror(authority string) ([]byte, error) {
-	client := networkprobe.ReleaseClient()
+	client := releaseClient()
 	defer client.CloseIdleConnections()
-	return networkprobe.Fetch(context.Background(), client, strings.TrimSuffix(authority, "/")+directoryRoute, nodedirectory.MaximumEnvelopeBytes)
+	return fetchHTTPS(context.Background(), client, strings.TrimSuffix(authority, "/")+directoryRoute, nodedirectory.MaximumEnvelopeBytes)
 }
 
 func mirror(args []string) error {
@@ -44,14 +43,14 @@ func mirrorWithFetch(args []string, fetch func(string) ([]byte, error)) error {
 	if *local && *authority != "" {
 		return errors.New("mirror --authority cannot be combined with --local-only")
 	}
-	config, err := networkprobe.LoadRelease(*releasePath)
+	config, err := loadRelease(*releasePath)
 	if err != nil {
 		return err
 	}
 	var remote []byte
 	var refreshErr error
 	if !*local {
-		authorityURL, err := networkprobe.ResolveAuthority(config, *authority)
+		authorityURL, err := resolveAuthority(config, *authority)
 		if err != nil {
 			return err
 		}

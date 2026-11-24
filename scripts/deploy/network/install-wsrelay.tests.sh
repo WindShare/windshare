@@ -1,840 +1,107 @@
 #!/usr/bin/env bash
 set -euo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
+work=$(mktemp -d)
+trap 'rm -rf -- "$work"' EXIT
+export WS_TEST_ROOT="$work/host" WS_TEST_CONFIG="$work/node.json" WS_TEST_LOG="$work/restarts" WS_TEST_UNIT_LOG="$work/systemctl" WS_TEST_FAILED="$work/unit-failed"
+mkdir -p "$work/bin"
+touch "$WS_TEST_CONFIG"
+sed -e "s|^readonly root=.*|readonly root=$WS_TEST_ROOT|" \
+    -e "s|^readonly config=.*|readonly config=$WS_TEST_CONFIG|" "$here/install-wsrelay.sh" > "$work/install"
+export PATH="$work/bin:$PATH"
 
-readonly script_dir=$(cd -- "$(dirname -- "$0")" && pwd)
-readonly repo_root=$(cd -- "$script_dir/../../.." && pwd)
-readonly source_script="$script_dir/install-wsrelay.sh"
-readonly unit_file="$repo_root/deploy/network/windshare-network.service"
-readonly rollout_file="$repo_root/cmd/network-upgrade/rollout.go"
-readonly node_key="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-readonly rev_a="1111111111111111111111111111111111111111"
-readonly rev_b="2222222222222222222222222222222222222222"
-
-fail() {
-    echo "wsrelay install contract: $*" >&2
-    exit 1
-}
-
-make_fake_wsrelay() {
-    local target=$1
-    cat >"$target" <<'EOF'
+cat > "$work/bin/id" <<'SH'
 #!/usr/bin/env bash
-if [[ -n ${FAKE_WSRELAY_LOG:-} ]]; then
-    printf '%s\n' "$0 $*" >>"$FAKE_WSRELAY_LOG"
-fi
-case "${1:-}" in
-    --help) echo "Usage: wsrelay --enter-maintenance <config> <node_key> <operation> <policy_version> <reconnect_budget_ms>" ;;
-    --check-config) exit "${FAKE_WSRELAY_CHECK_CONFIG_EXIT:-0}" ;;
-    --check-hold) exit "${FAKE_WSRELAY_CHECK_HOLD_EXIT:-0}" ;;
-    --enter-maintenance) exit "${FAKE_WSRELAY_ENTER_EXIT:-0}" ;;
-    --release-maintenance) exit "${FAKE_WSRELAY_RELEASE_EXIT:-0}" ;;
-    *) exit 1 ;;
-esac
-EOF
-    chmod 0755 "$target"
-}
-
-prepare_harness() {
-    local base=$1 root_path=$2
-    local bin_dir="$base/bin" state_dir="$base/mock" wrapped="$base/install.sh"
-    mkdir -p "$bin_dir" "$state_dir/proc"
-    touch "$base/node.json"
-
-    # Rewrite only the two hardcoded host paths in a temporary copy so the privileged
-    # production helper never accepts environment overrides for its root or config path.
-    sed \
-        -e "s|^readonly root=/opt/windshare-network\$|readonly root=\"$root_path\"|" \
-        -e "s|^readonly config=/etc/windshare-network/node.json\$|readonly config=\"$base/node.json\"|" \
-        "$source_script" >"$wrapped"
-    grep -Fq "readonly root=\"$root_path\"" "$wrapped" || fail "failed to rewrite root in harness"
-    grep -Fq "readonly config=\"$base/node.json\"" "$wrapped" || fail "failed to rewrite config in harness"
-    chmod 0755 "$wrapped"
-
-    local real_id real_readlink real_install real_sleep
-    real_id=$(command -v id)
-    real_readlink=$(command -v readlink)
-    real_install=$(command -v install)
-    real_sleep=$(command -v sleep)
-
-    cat >"$bin_dir/id" <<EOF
+[[ $1 == -u ]] && echo 0
+SH
+cat > "$work/bin/runuser" <<'SH'
 #!/usr/bin/env bash
-if [[ \${1:-} == -u ]]; then echo "\${FAKE_UID:-0}"; exit 0; fi
-exec "$real_id" "\$@"
-EOF
-    case "$(uname -s)" in
-        MSYS*|CYGWIN*|MINGW*)
-            # MSYS/Cygwin noacl mounts reject chmod 0700 on directories; keep Linux on real install.
-            cat >"$bin_dir/install" <<EOF
-#!/usr/bin/env bash
-if [[ \${1:-} == -d && \${2:-} == -m && \${3:-} == 0700 ]]; then
-    shift 3
-    exec mkdir -p -- "\$@"
-fi
-exec "$real_install" "\$@"
-EOF
-            ;;
-    esac
-    cat >"$bin_dir/runuser" <<'EOF'
-#!/usr/bin/env bash
-if { : >&9; } 2>/dev/null; then
-    echo "lock FD 9 leaked into runuser" >&2
-    exit 99
-fi
-[[ ${1:-} == -u && ${3:-} == -- ]] || exit 98
+set -eu
+[[ ! -e /proc/$$/fd/9 && $1 == -u && $2 == windshare-network && $3 == -- ]]
 shift 3
 exec "$@"
-EOF
-    cat >"$bin_dir/sleep" <<'EOF'
+SH
+cat > "$work/bin/systemctl" <<'SH'
+#!/usr/bin/env bash
+set -eu
+[[ ! -e /proc/$$/fd/9 && $# == 2 && $2 == windshare-network.service ]]
+case "$1" in
+    reset-failed)
+        rm -f -- "$WS_TEST_FAILED"
+        echo "reset-failed" >> "$WS_TEST_UNIT_LOG"
+        exit 0
+        ;;
+    stop)
+        target=$(basename "$(readlink "$WS_TEST_ROOT/current")")
+        [[ -x $WS_TEST_ROOT/releases/$target/wsrelay ]]
+        echo "stop:$target" >> "$WS_TEST_UNIT_LOG"
+        exit 0
+        ;;
+    restart)
+        [[ ! -e $WS_TEST_FAILED ]]
+        target=$(basename "$(readlink "$WS_TEST_ROOT/current")")
+        echo "restart:$target" >> "$WS_TEST_UNIT_LOG"
+        echo "$target" >> "$WS_TEST_LOG"
+        [[ $target != "${FAIL_RESTART:-}" ]]
+        ;;
+    *)
+        exit 1
+        ;;
+esac
+SH
+cat > "$work/bin/curl" <<'SH'
+#!/usr/bin/env bash
+[[ ${*: -1} == http://127.0.0.1:8484/healthz ]] || exit 2
+target=$(basename "$(readlink "$WS_TEST_ROOT/current")")
+if [[ $target == "${FAIL_HEALTH:-}" ]]; then echo 503; else echo 200; fi
+SH
+cat > "$work/bin/sleep" <<'SH'
 #!/usr/bin/env bash
 exit 0
-EOF
-    cat >"$bin_dir/readlink" <<EOF
+SH
+cat > "$work/wsrelay" <<'SH'
 #!/usr/bin/env bash
-if [[ \${1:-} =~ ^/proc/([0-9]+)/exe\$ ]]; then
-    exe_file="$state_dir/proc/\${BASH_REMATCH[1]}.exe"
-    [[ -f "\$exe_file" ]] || exit 1
-    cat "\$exe_file"
-    exit 0
-fi
-exec "$real_readlink" "\$@"
-EOF
-    cat >"$bin_dir/systemctl" <<EOF
-#!/usr/bin/env bash
-set -euo pipefail
-if { : >&9; } 2>/dev/null; then
-    echo "lock FD 9 leaked into systemctl" >&2
-    exit 99
-fi
-state="$state_dir"
-if [[ \${1:-} == restart ]]; then
-    echo "restart" >>"\$state/systemctl.log"
-    exit 0
-fi
-if [[ \${1:-} == show ]]; then
-    shift
-    case "\$*" in
-        "--property=InvocationID --value windshare-network.service")
-            cat "\$state/current_invocation"
-            exit 0
-            ;;
-        "--property=MainPID --value windshare-network.service")
-            cat "\$state/current_pid"
-            exit 0
-            ;;
-        "--property=InvocationID --property=MainPID windshare-network.service")
-            count=\$(<"\$state/poll_count")
-            count=\$((count + 1))
-            printf '%s\n' "\$count" >"\$state/poll_count"
-            if [[ -n \${FAKE_SYSTEMCTL_DELAY:-} ]]; then
-                "$real_sleep" "\$FAKE_SYSTEMCTL_DELAY"
-            fi
-            mapfile -t polls <"\$state/polls"
-            idx=\$((count - 1))
-            if (( idx >= \${#polls[@]} )); then
-                idx=\$((\${#polls[@]} - 1))
-            fi
-            line=\${polls[\$idx]}
-            IFS='|' read -r order inv pid exe <<< "\$line"
-            printf '%s\n' "\$inv" >"\$state/current_invocation"
-            printf '%s\n' "\$pid" >"\$state/current_pid"
-            if [[ -n \$pid && -n \$exe ]]; then
-                printf '%s\n' "\$exe" >"\$state/proc/\$pid.exe"
-            fi
-            if [[ \$order == pid_first ]]; then
-                printf 'MainPID=%s\nInvocationID=%s\n' "\$pid" "\$inv"
-            else
-                printf 'InvocationID=%s\nMainPID=%s\n' "\$inv" "\$pid"
-            fi
-            exit 0
-            ;;
-    esac
-fi
-echo "unexpected systemctl args: \$*" >&2
-exit 97
-EOF
-    chmod 0755 "$bin_dir"/*
-    printf '0\n' >"$state_dir/poll_count"
-}
-
-override_restart_wait() {
-    local wrapped=$1 seconds=$2
-    sed "s|^readonly restart_wait_seconds=[0-9][0-9]*\$|readonly restart_wait_seconds=$seconds|" "$wrapped" >"$wrapped.tmp"
-    mv -f "$wrapped.tmp" "$wrapped"
-    chmod 0755 "$wrapped"
-    grep -Fq "readonly restart_wait_seconds=$seconds" "$wrapped" || fail "failed to override restart_wait_seconds"
-}
-
-run_case_same_binary_waits_for_fresh_invocation() (
-    local tmp
-    tmp=$(mktemp -d)
-    trap 'rm -rf -- "$tmp"' EXIT
-
-    local root_path="$tmp/opt/windshare-network"
-    prepare_harness "$tmp" "$root_path"
-    mkdir -p "$root_path/releases/$rev_a"
-    make_fake_wsrelay "$root_path/releases/$rev_a/wsrelay"
-    ln -sfn -- "$root_path/releases/$rev_a" "$root_path/current"
-
-    local canonical_a
-    canonical_a=$(realpath -e "$root_path/releases/$rev_a")
-    local sha_a
-    sha_a=$(sha256sum "$canonical_a/wsrelay" | awk '{print $1}')
-
-    printf 'inv-old\n' >"$tmp/mock/current_invocation"
-    printf '101\n' >"$tmp/mock/current_pid"
-    printf '%s/wsrelay\n' "$canonical_a" >"$tmp/mock/proc/101.exe"
-    cat >"$tmp/mock/polls" <<EOF
-inv_first|inv-old|101|$canonical_a/wsrelay
-pid_first|inv-new|0|
-pid_first|inv-new|202|$canonical_a/wsrelay
-EOF
-
-    local op="op-same-binary-restart-01"
-    PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "$op" "$node_key" "$rev_a" "$sha_a" <"$canonical_a/wsrelay"
-    PATH="$tmp/bin:$PATH" "$tmp/install.sh" switch "$op" "$node_key"
-
-    [[ $(cat "$tmp/mock/poll_count") == 3 ]] || fail "same-binary switch matched retiring PID early: polls=$(cat "$tmp/mock/poll_count")"
-    printf 'PASS: same-binary restart waits for fresh InvocationID\n'
-)
-
-run_case_rollback_fails_when_invocation_never_advances() (
-    local tmp
-    tmp=$(mktemp -d)
-    trap 'rm -rf -- "$tmp"' EXIT
-
-    local root_path="$tmp/opt/windshare-network"
-    prepare_harness "$tmp" "$root_path"
-    # Isolate poll-cap verification from slow MSYS2 subprocess startup on busy hosts.
-    override_restart_wait "$tmp/install.sh" 60
-    mkdir -p "$root_path/releases/$rev_a"
-    make_fake_wsrelay "$root_path/releases/$rev_a/wsrelay"
-    ln -sfn -- "$root_path/releases/$rev_a" "$root_path/current"
-    make_fake_wsrelay "$tmp/candidate-bin"
-    printf '# candidate-b\n' >>"$tmp/candidate-bin"
-
-    local canonical_a sha_b
-    canonical_a=$(realpath -e "$root_path/releases/$rev_a")
-    sha_b=$(sha256sum "$tmp/candidate-bin" | awk '{print $1}')
-
-    printf 'inv-retiring\n' >"$tmp/mock/current_invocation"
-    printf '101\n' >"$tmp/mock/current_pid"
-    printf '%s/wsrelay\n' "$canonical_a" >"$tmp/mock/proc/101.exe"
-    printf 'inv_first|inv-retiring|101|%s/wsrelay\n' "$canonical_a" >"$tmp/mock/polls"
-
-    local op="op-rollback-retiring-01"
-    PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "$op" "$node_key" "$rev_b" "$sha_b" <"$tmp/candidate-bin"
-
-    local status=0 output
-    output=$(PATH="$tmp/bin:$PATH" "$tmp/install.sh" rollback "$op" "$node_key" 2>&1) || status=$?
-    [[ $status != 0 ]] || fail "rollback unexpectedly succeeded against retiring PID"
-    [[ $output == *"restart_timeout old_invocation=inv-retiring invocation=inv-retiring pid=101 polls=50"* ]] \
-        || fail "missing restart_timeout diagnostic: $output"
-    [[ $output == *"selected binary did not start"* ]] || fail "unexpected rollback error: $output"
-    [[ $(cat "$tmp/mock/poll_count") == 50 ]] || fail "expected 50 polls before timeout, got $(cat "$tmp/mock/poll_count")"
-    printf 'PASS: rollback rejects retiring previous PID when InvocationID stays unchanged\n'
-)
-
-run_case_restart_timeout_contract_and_wall_clock_deadline() (
-    local stop_raw stop_sec wait_sec poll_interval max_polls switch_sec
-    stop_raw=$(sed -n 's/^TimeoutStopSec=\([0-9][0-9]*\)s\?$/\1/p' "$unit_file")
-    [[ -n $stop_raw ]] || fail "windshare-network.service must declare TimeoutStopSec"
-    stop_sec=$stop_raw
-
-    wait_sec=$(sed -n 's/^readonly restart_wait_seconds=\([0-9][0-9]*\)$/\1/p' "$source_script")
-    poll_interval=$(sed -n 's/^readonly restart_poll_interval=\([0-9.]*\)$/\1/p' "$source_script")
-    max_polls=$(sed -n 's/^readonly restart_max_polls=\([0-9][0-9]*\)$/\1/p' "$source_script")
-    switch_sec=$(sed -n 's/^[[:space:]]*switchBudget[[:space:]]*=[[:space:]]*\([0-9][0-9]*\) \* time\.Second$/\1/p' "$rollout_file")
-    [[ -n $wait_sec && -n $poll_interval && -n $max_polls && -n $switch_sec ]] \
-        || fail "failed to parse restart timeout budget constants"
-
-    # Keep at least 2s after systemd SIGKILL for fresh spawn, and room inside switchBudget for enter + probe.
-    (( stop_sec + 2 <= wait_sec )) || fail "restart_wait_seconds ($wait_sec) must exceed TimeoutStopSec ($stop_sec) by >= 2s"
-    (( wait_sec + 4 <= switch_sec )) || fail "restart_wait_seconds ($wait_sec) leaves insufficient room inside switchBudget ($switch_sec)"
-    awk -v polls="$max_polls" -v interval="$poll_interval" -v wait="$wait_sec" \
-        'BEGIN { exit (polls * interval + 1e-9 >= wait) ? 0 : 1 }' \
-        || fail "restart_max_polls ($max_polls) * restart_poll_interval ($poll_interval) < restart_wait_seconds ($wait_sec)"
-
-    local tmp
-    tmp=$(mktemp -d)
-    trap 'rm -rf -- "$tmp"' EXIT
-
-    local root_path="$tmp/opt/windshare-network"
-    prepare_harness "$tmp" "$root_path"
-    override_restart_wait "$tmp/install.sh" 1
-
-    mkdir -p "$root_path/releases/$rev_a"
-    make_fake_wsrelay "$root_path/releases/$rev_a/wsrelay"
-    ln -sfn -- "$root_path/releases/$rev_a" "$root_path/current"
-
-    local canonical_a sha_a
-    canonical_a=$(realpath -e "$root_path/releases/$rev_a")
-    sha_a=$(sha256sum "$canonical_a/wsrelay" | awk '{print $1}')
-
-    printf 'inv-stalled\n' >"$tmp/mock/current_invocation"
-    printf '101\n' >"$tmp/mock/current_pid"
-    printf '%s/wsrelay\n' "$canonical_a" >"$tmp/mock/proc/101.exe"
-    printf 'inv_first|inv-stalled|101|%s/wsrelay\n' "$canonical_a" >"$tmp/mock/polls"
-
-    local op="op-wall-clock-deadline-01"
-    PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "$op" "$node_key" "$rev_a" "$sha_a" <"$canonical_a/wsrelay"
-
-    # Simulate slow systemctl show (1s per poll) so wall-clock deadline stops the loop well before 50 polls.
-    local status=0 output polls
-    output=$(FAKE_SYSTEMCTL_DELAY=1 PATH="$tmp/bin:$PATH" "$tmp/install.sh" switch "$op" "$node_key" 2>&1) || status=$?
-    polls=$(cat "$tmp/mock/poll_count")
-    [[ $status != 0 && $output == *"selected binary did not start"* ]] \
-        || fail "expected wall-clock timeout failure, got status=$status output=$output"
-    (( polls >= 1 && polls <= 3 )) || fail "expected wall-clock deadline to cap slow polls (<=3), got $polls"
-    [[ $output == *"restart_timeout old_invocation=inv-stalled invocation=inv-stalled pid=101 polls=$polls"* ]] \
-        || fail "missing wall-clock restart_timeout diagnostic: $output"
-    printf 'PASS: TimeoutStopSec/restart_wait/switchBudget contract and wall-clock deadline\n'
-)
-
-run_case_empty_old_invocation_requires_non_empty_new_invocation() (
-    local tmp
-    tmp=$(mktemp -d)
-    trap 'rm -rf -- "$tmp"' EXIT
-
-    local root_path="$tmp/opt/windshare-network"
-    prepare_harness "$tmp" "$root_path"
-    mkdir -p "$root_path/releases/$rev_a"
-    make_fake_wsrelay "$root_path/releases/$rev_a/wsrelay"
-    ln -sfn -- "$root_path/releases/$rev_a" "$root_path/current"
-
-    local canonical_a sha_a
-    canonical_a=$(realpath -e "$root_path/releases/$rev_a")
-    sha_a=$(sha256sum "$canonical_a/wsrelay" | awk '{print $1}')
-
-    : >"$tmp/mock/current_invocation"
-    printf '0\n' >"$tmp/mock/current_pid"
-    cat >"$tmp/mock/polls" <<EOF
-inv_first||101|$canonical_a/wsrelay
-inv_first|inv-fresh|102|$canonical_a/wsrelay
-EOF
-
-    local op="op-empty-invocation-01"
-    PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "$op" "$node_key" "$rev_a" "$sha_a" <"$canonical_a/wsrelay"
-    PATH="$tmp/bin:$PATH" "$tmp/install.sh" switch "$op" "$node_key"
-
-    [[ $(cat "$tmp/mock/poll_count") == 2 ]] || fail "expected empty InvocationID to be rejected, polls=$(cat "$tmp/mock/poll_count")"
-    printf 'PASS: never-started unit requires non-empty InvocationID\n'
-)
-
-run_case_symlinked_root_and_releases_canonicalized() (
-    local tmp
-    tmp=$(mktemp -d)
-    trap 'rm -rf -- "$tmp"' EXIT
-
-    mkdir -p "$tmp/data/opt/windshare-network" "$tmp/data/releases-store/$rev_a"
-    ln -sfn -- "$tmp/data/opt" "$tmp/opt-link"
-    ln -sfn -- "$tmp/data/releases-store" "$tmp/data/opt/windshare-network/releases"
-
-    local root_path="$tmp/opt-link/windshare-network"
-    prepare_harness "$tmp" "$root_path"
-    make_fake_wsrelay "$tmp/data/releases-store/$rev_a/wsrelay"
-    ln -sfn -- "$tmp/data/releases-store/$rev_a" "$root_path/current"
-    make_fake_wsrelay "$tmp/candidate-bin"
-    printf '# candidate-b\n' >>"$tmp/candidate-bin"
-
-    local canonical_releases canonical_a canonical_b sha_b
-    canonical_releases=$(realpath -e "$tmp/data/releases-store")
-    canonical_a="$canonical_releases/$rev_a"
-    canonical_b="$canonical_releases/$rev_b"
-    sha_b=$(sha256sum "$tmp/candidate-bin" | awk '{print $1}')
-
-    printf 'inv-1\n' >"$tmp/mock/current_invocation"
-    printf '101\n' >"$tmp/mock/current_pid"
-    printf '%s/wsrelay\n' "$canonical_a" >"$tmp/mock/proc/101.exe"
-    cat >"$tmp/mock/polls" <<EOF
-inv_first|inv-1|101|$canonical_a/wsrelay
-inv_first|inv-2|202|$canonical_b/wsrelay
-EOF
-
-    local op="op-symlink-releases-01"
-    PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "$op" "$node_key" "$rev_b" "$sha_b" <"$tmp/candidate-bin"
-
-    local state_dir="$root_path/operations/$op"
-    [[ $(cat "$state_dir/previous") == "$canonical_a" ]] || fail "previous not canonical: $(cat "$state_dir/previous")"
-    [[ $(cat "$state_dir/candidate") == "$canonical_b" ]] || fail "candidate not canonical: $(cat "$state_dir/candidate")"
-
-    PATH="$tmp/bin:$PATH" "$tmp/install.sh" switch "$op" "$node_key"
-    PATH="$tmp/bin:$PATH" "$tmp/install.sh" inspect "$op" "$node_key"
-
-    printf '0\n' >"$tmp/mock/poll_count"
-    cat >"$tmp/mock/polls" <<EOF
-pid_first|inv-2|202|$canonical_b/wsrelay
-pid_first|inv-3|303|$canonical_a/wsrelay
-EOF
-    PATH="$tmp/bin:$PATH" "$tmp/install.sh" rollback "$op" "$node_key"
-    [[ $(realpath -e "$root_path/current") == "$canonical_a" ]] || fail "rollback did not restore canonical previous release"
-    printf 'PASS: symlinked root and releases stay canonical across stage/switch/inspect/rollback\n'
-)
-
-run_case_enter_switch_release_lifecycle_and_guards() (
-    local tmp
-    tmp=$(mktemp -d)
-    trap 'rm -rf -- "$tmp"' EXIT
-
-    local root_path="$tmp/opt/windshare-network"
-    prepare_harness "$tmp" "$root_path"
-    mkdir -p "$root_path/releases/$rev_a"
-    make_fake_wsrelay "$root_path/releases/$rev_a/wsrelay"
-    ln -sfn -- "$root_path/releases/$rev_a" "$root_path/current"
-    make_fake_wsrelay "$tmp/candidate-bin"
-    printf '# candidate-b\n' >>"$tmp/candidate-bin"
-
-    local canonical_a canonical_b sha_b
-    canonical_a=$(realpath -e "$root_path/releases/$rev_a")
-    canonical_b="$(realpath -e "$root_path/releases")/$rev_b"
-    sha_b=$(sha256sum "$tmp/candidate-bin" | awk '{print $1}')
-
-    printf 'inv-1\n' >"$tmp/mock/current_invocation"
-    printf '101\n' >"$tmp/mock/current_pid"
-    printf '%s/wsrelay\n' "$canonical_a" >"$tmp/mock/proc/101.exe"
-    printf 'inv_first|inv-2|202|%s/wsrelay\n' "$canonical_b" >"$tmp/mock/polls"
-
-    local op="op-full-lifecycle-01"
-    local log="$tmp/wsrelay.log"
-    FAKE_WSRELAY_LOG="$log" PATH="$tmp/bin:$PATH" \
-        "$tmp/install.sh" stage "$op" "$node_key" "$rev_b" "$sha_b" <"$tmp/candidate-bin"
-
-    # Active sessions defer enter with exit code 75 without mutating the current symlink.
-    local status=0
-    FAKE_WSRELAY_LOG="$log" FAKE_WSRELAY_ENTER_EXIT=75 PATH="$tmp/bin:$PATH" \
-        "$tmp/install.sh" enter "$op" "$node_key" 7 58000 || status=$?
-    [[ $status == 75 ]] || fail "expected busy exit 75 from enter, got $status"
-
-    FAKE_WSRELAY_LOG="$log" PATH="$tmp/bin:$PATH" "$tmp/install.sh" enter "$op" "$node_key" 7 58000
-    grep -Fxq "$canonical_a/wsrelay --enter-maintenance $tmp/node.json $node_key $op 7 58000" "$log" \
-        || fail "enter did not forward expected maintenance args: $(cat "$log")"
-
-    FAKE_WSRELAY_LOG="$log" PATH="$tmp/bin:$PATH" "$tmp/install.sh" switch "$op" "$node_key"
-    grep -Fxq "$canonical_a/wsrelay --check-hold $tmp/node.json $node_key $op" "$log" \
-        || fail "switch did not check durable maintenance hold"
-
-    FAKE_WSRELAY_LOG="$log" PATH="$tmp/bin:$PATH" "$tmp/install.sh" inspect "$op" "$node_key"
-    FAKE_WSRELAY_LOG="$log" PATH="$tmp/bin:$PATH" "$tmp/install.sh" release "$op" "$node_key"
-    grep -Fxq "$canonical_a/wsrelay --release-maintenance $tmp/node.json $node_key $op" "$log" \
-        || fail "release did not clear durable maintenance hold"
-    [[ -e "$root_path/operations/$op/released" ]] || fail "release did not record released marker"
-
-    # Re-entering after release must fail even if current is moved back to previous.
-    ln -sfn -- "$canonical_a" "$root_path/current"
-    local output
-    status=0
-    output=$(PATH="$tmp/bin:$PATH" "$tmp/install.sh" enter "$op" "$node_key" 7 58000 2>&1) || status=$?
-    [[ $status != 0 && $output == *"operation already released"* ]] || fail "unexpected re-enter result: $status $output"
-
-    # Staging a fresh op and switching current out from under it must block enter.
-    local op2="op-moved-current-01"
-    PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "$op2" "$node_key" "$rev_b" "$sha_b" <"$tmp/candidate-bin"
-    ln -sfn -- "$canonical_b" "$root_path/current"
-    status=0
-    output=$(PATH="$tmp/bin:$PATH" "$tmp/install.sh" enter "$op2" "$node_key" 8 58000 2>&1) || status=$?
-    [[ $status != 0 && $output == *"release changed after staging"* ]] || fail "unexpected moved-current enter result: $status $output"
-    printf 'PASS: enter/switch/inspect/release lifecycle, args, exit 75, and guards\n'
-)
-
-run_case_stage_validation_collisions_and_cleanup() (
-    local tmp
-    tmp=$(mktemp -d)
-    trap 'rm -rf -- "$tmp"' EXIT
-
-    local root_path="$tmp/opt/windshare-network"
-    prepare_harness "$tmp" "$root_path"
-    mkdir -p "$root_path/releases/$rev_a"
-    make_fake_wsrelay "$root_path/releases/$rev_a/wsrelay"
-    ln -sfn -- "$root_path/releases/$rev_a" "$root_path/current"
-    make_fake_wsrelay "$tmp/candidate-b"
-    printf '# candidate-b\n' >>"$tmp/candidate-b"
-    make_fake_wsrelay "$tmp/candidate-b2"
-    printf '# candidate-b-modified\n' >>"$tmp/candidate-b2"
-
-    local rev_c="3333333333333333333333333333333333333333"
-    local sha_b sha_b2 bad_sha
-    sha_b=$(sha256sum "$tmp/candidate-b" | awk '{print $1}')
-    sha_b2=$(sha256sum "$tmp/candidate-b2" | awk '{print $1}')
-    bad_sha="0000000000000000000000000000000000000000000000000000000000000000"
-
-    local status=0 output
-    output=$(PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "op-bad-checksum-01" "$node_key" "$rev_b" "$bad_sha" <"$tmp/candidate-b" 2>&1) || status=$?
-    [[ $status != 0 && $output == *"checksum mismatch"* ]] || fail "expected checksum mismatch: $status $output"
-    [[ -z $(find "$root_path/releases" -maxdepth 1 -name '.stage-*') ]] || fail "checksum failure leaked temp stage dir"
-
-    # Candidate lacking reconnect_budget_ms in --help is rejected and cleaned up.
-    cat >"$tmp/legacy-bin" <<'EOF'
-#!/usr/bin/env bash
-case "${1:-}" in
-    --help) echo "Usage: wsrelay --config <node.json>" ;;
-    --check-config) exit 0 ;;
-    *) exit 1 ;;
-esac
-EOF
-    chmod 0755 "$tmp/legacy-bin"
-    local sha_legacy
-    sha_legacy=$(sha256sum "$tmp/legacy-bin" | awk '{print $1}')
-    status=0
-    output=$(PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "op-legacy-proto-01" "$node_key" "$rev_b" "$sha_legacy" <"$tmp/legacy-bin" 2>&1) || status=$?
-    [[ $status != 0 && $output == *"incompatible maintenance protocol"* ]] || fail "expected protocol mismatch: $status $output"
-    [[ -z $(find "$root_path/releases" -maxdepth 1 -name '.stage-*') ]] || fail "protocol failure leaked temp stage dir"
-
-    # Valid stage is idempotent on retry, rejects different bytes for the same revision, and rejects operation reuse.
-    local op="op-stage-collision-01"
-    PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "$op" "$node_key" "$rev_b" "$sha_b" <"$tmp/candidate-b"
-    PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "$op" "$node_key" "$rev_b" "$sha_b" <"$tmp/candidate-b"
-
-    status=0
-    output=$(PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "op-rev-collision-01" "$node_key" "$rev_b" "$sha_b2" <"$tmp/candidate-b2" 2>&1) || status=$?
-    [[ $status != 0 && $output == *"revision collision"* ]] || fail "expected revision collision: $status $output"
-
-    status=0
-    output=$(PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "$op" "$node_key" "$rev_c" "$sha_b2" <"$tmp/candidate-b2" 2>&1) || status=$?
-    [[ $status != 0 && $output == *"operation collision"* ]] || fail "expected operation collision: $status $output"
-    printf 'PASS: stage checksum, protocol, idempotency, collisions, and temp cleanup\n'
-)
-
-run_case_auth_hold_inspect_and_lock_guards() (
-    local tmp
-    tmp=$(mktemp -d)
-    trap 'rm -rf -- "$tmp"' EXIT
-
-    local root_path="$tmp/opt/windshare-network"
-    prepare_harness "$tmp" "$root_path"
-    mkdir -p "$root_path/releases/$rev_a" "$root_path/releases/3333333333333333333333333333333333333333"
-    make_fake_wsrelay "$root_path/releases/$rev_a/wsrelay"
-    make_fake_wsrelay "$root_path/releases/3333333333333333333333333333333333333333/wsrelay"
-    ln -sfn -- "$root_path/releases/$rev_a" "$root_path/current"
-    make_fake_wsrelay "$tmp/candidate-b"
-    printf '# candidate-b\n' >>"$tmp/candidate-b"
-
-    local canonical_a sha_b
-    canonical_a=$(realpath -e "$root_path/releases/$rev_a")
-    sha_b=$(sha256sum "$tmp/candidate-b" | awk '{print $1}')
-
-    local status=0 output
-    output=$(FAKE_UID=1000 PATH="$tmp/bin:$PATH" "$tmp/install.sh" inspect "op-nonroot-check-01" "$node_key" 2>&1) || status=$?
-    [[ $status != 0 && $output == *"root required"* ]] || fail "expected root required: $status $output"
-
-    status=0
-    output=$(PATH="$tmp/bin:$PATH" "$tmp/install.sh" inspect "short" "$node_key" 2>&1) || status=$?
-    [[ $status != 0 && $output == *"invalid operation or node key"* ]] || fail "expected invalid op error: $status $output"
-
-    local op="op-hold-and-inspect-01"
-    PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "$op" "$node_key" "$rev_b" "$sha_b" <"$tmp/candidate-b"
-
-    # Failing --check-hold must abort before changing current or restarting systemd.
-    status=0
-    FAKE_WSRELAY_CHECK_HOLD_EXIT=1 PATH="$tmp/bin:$PATH" "$tmp/install.sh" switch "$op" "$node_key" 2>/dev/null || status=$?
-    [[ $status != 0 ]] || fail "switch succeeded despite failed hold check"
-    [[ $(realpath -e "$root_path/current") == "$canonical_a" ]] || fail "switch mutated current after failed hold check"
-    [[ ! -e "$tmp/mock/systemctl.log" ]] || fail "switch invoked systemctl after failed hold check"
-
-    # inspect rejects mismatched running binary and unexpected current revision.
-    printf '101\n' >"$tmp/mock/current_pid"
-    printf '/some/other/wsrelay\n' >"$tmp/mock/proc/101.exe"
-    status=0
-    output=$(PATH="$tmp/bin:$PATH" "$tmp/install.sh" inspect "$op" "$node_key" 2>&1) || status=$?
-    [[ $status != 0 && $output == *"selected release is not running"* ]] || fail "expected exe mismatch: $status $output"
-
-    ln -sfn -- "$root_path/releases/3333333333333333333333333333333333333333" "$root_path/current"
-    status=0
-    output=$(PATH="$tmp/bin:$PATH" "$tmp/install.sh" inspect "$op" "$node_key" 2>&1) || status=$?
-    [[ $status != 0 && $output == *"unexpected running revision"* ]] || fail "expected unexpected revision: $status $output"
-
-    # Concurrent invocation while .lock is held exits with busy code 75.
-    (
-        exec 8>"$root_path/operations/.lock"
-        flock 8
-        status=0
-        PATH="$tmp/bin:$PATH" "$tmp/install.sh" inspect "$op" "$node_key" 8>&- 2>/dev/null || status=$?
-        [[ $status == 75 ]] || fail "expected lock contention exit 75, got $status"
-    )
-    printf 'PASS: auth, check-hold, inspect mismatch, and lock contention guards\n'
-)
-
-run_case_recover_hold_states_and_guards() (
-    local tmp
-    tmp=$(mktemp -d)
-    trap 'rm -rf -- "$tmp"' EXIT
-
-    local root_path="$tmp/opt/windshare-network"
-    prepare_harness "$tmp" "$root_path"
-    mkdir -p "$root_path/releases/$rev_a"
-    make_fake_wsrelay "$root_path/releases/$rev_a/wsrelay"
-    ln -sfn -- "$root_path/releases/$rev_a" "$root_path/current"
-    make_fake_wsrelay "$tmp/candidate-bin"
-    printf '# candidate-b\n' >>"$tmp/candidate-bin"
-
-    local canonical_a canonical_b sha_b
-    canonical_a=$(realpath -e "$root_path/releases/$rev_a")
-    canonical_b="$(realpath -e "$root_path/releases")/$rev_b"
-    sha_b=$(sha256sum "$tmp/candidate-bin" | awk '{print $1}')
-
-    # Active local hold reports "held" without releasing or sealing the operation.
-    local op_held="op-recover-held-01"
-    local log="$tmp/wsrelay-recover.log"
-    PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "$op_held" "$node_key" "$rev_b" "$sha_b" <"$tmp/candidate-bin"
-    local stdout
-    stdout=$(FAKE_WSRELAY_LOG="$log" FAKE_WSRELAY_CHECK_HOLD_EXIT=0 PATH="$tmp/bin:$PATH" \
-        "$tmp/install.sh" recover "$op_held" "$node_key")
-    [[ $stdout == "held" ]] || fail "expected held state, got: $stdout"
-    [[ ! -e "$root_path/operations/$op_held/released" ]] || fail "held recover prematurely marked released"
-    if grep -Fq -- '--release-maintenance' "$log"; then
-        fail "held recover unexpectedly called --release-maintenance"
-    fi
-
-    # Unentered operation still on previous verifies empty hold, seals released, and reports "released".
-    local op_unentered="op-recover-unentered-01"
-    : >"$log"
-    PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "$op_unentered" "$node_key" "$rev_b" "$sha_b" <"$tmp/candidate-bin"
-    stdout=$(FAKE_WSRELAY_LOG="$log" FAKE_WSRELAY_CHECK_HOLD_EXIT=1 PATH="$tmp/bin:$PATH" \
-        "$tmp/install.sh" recover "$op_unentered" "$node_key")
-    [[ $stdout == "released" ]] || fail "expected released state for unentered op, got: $stdout"
-    [[ -e "$root_path/operations/$op_unentered/released" ]] || fail "unentered recover did not record released marker"
-    grep -Fxq "$canonical_a/wsrelay --release-maintenance $tmp/node.json $node_key $op_unentered" "$log" \
-        || fail "unentered recover did not verify empty gate via --release-maintenance"
-    local status=0 output
-    output=$(PATH="$tmp/bin:$PATH" "$tmp/install.sh" enter "$op_unentered" "$node_key" 7 58000 2>&1) || status=$?
-    [[ $status != 0 && $output == *"operation already released"* ]] || fail "late enter succeeded after recover sealed released: $status $output"
-
-    # Already-released operation on candidate closes cleanly as "released".
-    local op_released="op-recover-released-01"
-    PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "$op_released" "$node_key" "$rev_b" "$sha_b" <"$tmp/candidate-bin"
-    ln -sfn -- "$canonical_b" "$root_path/current"
-    touch "$root_path/operations/$op_released/released"
-    stdout=$(FAKE_WSRELAY_CHECK_HOLD_EXIT=1 PATH="$tmp/bin:$PATH" \
-        "$tmp/install.sh" recover "$op_released" "$node_key")
-    [[ $stdout == "released" ]] || fail "expected released state for post-release op, got: $stdout"
-
-    # Unheld operation switched to candidate without a released marker must fail closed.
-    local op_missing="op-recover-missing-hold-01"
-    : >"$log"
-    ln -sfn -- "$canonical_a" "$root_path/current"
-    PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "$op_missing" "$node_key" "$rev_b" "$sha_b" <"$tmp/candidate-bin"
-    ln -sfn -- "$canonical_b" "$root_path/current"
-    status=0
-    output=$(FAKE_WSRELAY_LOG="$log" FAKE_WSRELAY_CHECK_HOLD_EXIT=1 PATH="$tmp/bin:$PATH" \
-        "$tmp/install.sh" recover "$op_missing" "$node_key" 2>&1) || status=$?
-    [[ $status != 0 && $output == *"local hold missing for switched release"* ]] \
-        || fail "expected missing-hold guard failure, got: $status $output"
-    [[ ! -e "$root_path/operations/$op_missing/released" ]] || fail "missing-hold failure still marked released"
-    if grep -Fq -- '--release-maintenance' "$log"; then
-        fail "missing-hold guard should abort before --release-maintenance"
-    fi
-
-    # Foreign local hold and busy gate errors abort before marking released.
-    ln -sfn -- "$canonical_a" "$root_path/current"
-    local op_foreign="op-recover-foreign-01"
-    PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "$op_foreign" "$node_key" "$rev_b" "$sha_b" <"$tmp/candidate-bin"
-    status=0
-    FAKE_WSRELAY_CHECK_HOLD_EXIT=1 FAKE_WSRELAY_RELEASE_EXIT=1 PATH="$tmp/bin:$PATH" \
-        "$tmp/install.sh" recover "$op_foreign" "$node_key" >/dev/null 2>&1 || status=$?
-    [[ $status == 1 ]] || fail "expected foreign hold failure exit 1, got $status"
-    [[ ! -e "$root_path/operations/$op_foreign/released" ]] || fail "foreign hold failure marked released"
-
-    status=0
-    FAKE_WSRELAY_CHECK_HOLD_EXIT=1 FAKE_WSRELAY_RELEASE_EXIT=75 PATH="$tmp/bin:$PATH" \
-        "$tmp/install.sh" recover "$op_foreign" "$node_key" >/dev/null 2>&1 || status=$?
-    [[ $status == 75 ]] || fail "expected busy gate exit 75 during recover, got $status"
-    [[ ! -e "$root_path/operations/$op_foreign/released" ]] || fail "busy gate failure marked released"
-
-    (
-        exec 8>"$root_path/operations/.lock"
-        flock 8
-        status=0
-        PATH="$tmp/bin:$PATH" "$tmp/install.sh" recover "$op_foreign" "$node_key" 8>&- >/dev/null 2>&1 || status=$?
-        [[ $status == 75 ]] || fail "expected lock contention exit 75 for recover, got $status"
-    )
-    printf 'PASS: recover hold classification, sealing, and fail-closed guards\n'
-)
-
-run_case_release_prunes_stale_releases_operations_and_stages() (
-    local tmp
-    tmp=$(mktemp -d)
-    trap 'rm -rf -- "$tmp"' EXIT
-
-    local root_path="$tmp/opt/windshare-network"
-    prepare_harness "$tmp" "$root_path"
-
-    local rev_1="1111111111111111111111111111111111111111"
-    local rev_2="2222222222222222222222222222222222222222"
-    local rev_3="3333333333333333333333333333333333333333"
-    local rev_4="4444444444444444444444444444444444444444"
-    local rev_5="5555555555555555555555555555555555555555"
-    local rev_symlink="6666666666666666666666666666666666666666"
-
-    mkdir -p "$root_path/releases" "$root_path/operations" "$tmp/external-dir"
-    local r ts=10
-    for r in "$rev_1" "$rev_2" "$rev_3" "$rev_4"; do
-        mkdir -p "$root_path/releases/$r"
-        make_fake_wsrelay "$root_path/releases/$r/wsrelay"
-        printf '# %s\n' "$r" >>"$root_path/releases/$r/wsrelay"
-        touch -d "2026-01-01 00:00:$ts UTC" "$root_path/releases/$r"
-        ts=$((ts + 1))
-    done
-
-    # Non-40-hex bootstrap dir and 40-hex symlink must remain untouched; orphan stage dir must be pruned.
-    mkdir -p "$root_path/releases/20261114-6eb7bdee" "$root_path/releases/.stage-AbCd1234"
-    make_fake_wsrelay "$root_path/releases/20261114-6eb7bdee/wsrelay"
-    ln -sfn -- "$tmp/external-dir" "$root_path/releases/$rev_symlink"
-    ln -sfn -- "$root_path/releases/$rev_4" "$root_path/current"
-
-    # Seed 21 older operations (exceeding retain_operations=20 once op_current is staged) plus a non-matching dir.
-    local i op_name
-    for i in $(seq -w 1 21); do
-        op_name="op-historical-0000$i"
-        mkdir -p "$root_path/operations/$op_name"
-        printf '%s\n' "$node_key" >"$root_path/operations/$op_name/node"
-        touch -d "2026-01-01 00:01:$i UTC" "$root_path/operations/$op_name"
-    done
-    mkdir -p "$root_path/operations/manual"
-
-    make_fake_wsrelay "$tmp/candidate-5"
-    printf '# %s\n' "$rev_5" >>"$tmp/candidate-5"
-    local sha_5 canonical_4 canonical_5
-    sha_5=$(sha256sum "$tmp/candidate-5" | awk '{print $1}')
-    canonical_4=$(realpath -e "$root_path/releases/$rev_4")
-    canonical_5="$(realpath -e "$root_path/releases")/$rev_5"
-
-    printf 'inv-1\n' >"$tmp/mock/current_invocation"
-    printf '101\n' >"$tmp/mock/current_pid"
-    printf '%s/wsrelay\n' "$canonical_4" >"$tmp/mock/proc/101.exe"
-    printf 'inv_first|inv-2|202|%s/wsrelay\n' "$canonical_5" >"$tmp/mock/polls"
-
-    local op_current="op-release-prune-active01"
-    PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "$op_current" "$node_key" "$rev_5" "$sha_5" <"$tmp/candidate-5"
-    PATH="$tmp/bin:$PATH" "$tmp/install.sh" switch "$op_current" "$node_key"
-
-    local output
-    output=$(PATH="$tmp/bin:$PATH" "$tmp/install.sh" release "$op_current" "$node_key" 2>&1)
-    [[ $output == *"pruned releases=2 operations=2 stages=1"* ]] \
-        || fail "unexpected prune summary log: $output"
-
-    # Retain current (rev_5), previous (rev_4), and 3rd newest (rev_3); prune rev_1 and rev_2.
-    [[ -d "$root_path/releases/$rev_5" ]] || fail "current release was pruned"
-    [[ -d "$root_path/releases/$rev_4" ]] || fail "previous release was pruned"
-    [[ -d "$root_path/releases/$rev_3" ]] || fail "3rd newest release was pruned"
-    [[ ! -e "$root_path/releases/$rev_2" ]] || fail "stale rev_2 was not pruned"
-    [[ ! -e "$root_path/releases/$rev_1" ]] || fail "stale rev_1 was not pruned"
-    [[ -d "$root_path/releases/20261114-6eb7bdee" ]] || fail "legacy non-40-hex release was pruned"
-    [[ -L "$root_path/releases/$rev_symlink" ]] || fail "40-hex symlink was pruned"
-    [[ ! -e "$root_path/releases/.stage-AbCd1234" ]] || fail "orphan .stage dir was not pruned"
-
-    # Retain current op + 19 newest historical ops (20 total); prune oldest 2 and keep non-matching dirs.
-    [[ -e "$root_path/operations/$op_current/released" ]] || fail "current operation was pruned"
-    [[ ! -e "$root_path/operations/op-historical-000001" ]] || fail "oldest operation 01 was not pruned"
-    [[ ! -e "$root_path/operations/op-historical-000002" ]] || fail "oldest operation 02 was not pruned"
-    [[ -d "$root_path/operations/op-historical-000003" ]] || fail "retained operation 03 was pruned"
-    [[ -d "$root_path/operations/op-historical-000021" ]] || fail "retained operation 21 was pruned"
-    [[ -d "$root_path/operations/manual" ]] || fail "non-operation dir was pruned"
-
-    # Post-release recovery must still succeed after pruning if authority release failed right after host release.
-    local stdout
-    stdout=$(FAKE_WSRELAY_CHECK_HOLD_EXIT=1 PATH="$tmp/bin:$PATH" "$tmp/install.sh" recover "$op_current" "$node_key")
-    [[ $stdout == "released" ]] || fail "post-release recover failed after pruning: $stdout"
-
-    # Re-staging an older revision refreshes its mtime, and an ancient previous release stays pinned.
-    local rev_ancient="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    mkdir -p "$root_path/releases/$rev_ancient"
-    make_fake_wsrelay "$root_path/releases/$rev_ancient/wsrelay"
-    touch -d "2020-01-01 00:00:00 UTC" "$root_path/releases/$rev_ancient"
-    touch -d "2026-01-01 00:00:20 UTC" "$root_path/releases/$rev_3"
-    touch -d "2026-01-01 00:00:30 UTC" "$root_path/releases/$rev_4"
-    touch -d "2026-01-01 00:00:40 UTC" "$root_path/releases/$rev_5"
-    ln -sfn -- "$root_path/releases/$rev_ancient" "$root_path/current"
-
-    local sha_3 canonical_3
-    sha_3=$(sha256sum "$root_path/releases/$rev_3/wsrelay" | awk '{print $1}')
-    canonical_3=$(realpath -e "$root_path/releases/$rev_3")
-    printf '0\n' >"$tmp/mock/poll_count"
-    printf 'inv-2\n' >"$tmp/mock/current_invocation"
-    printf 'inv_first|inv-3|303|%s/wsrelay\n' "$canonical_3" >"$tmp/mock/polls"
-
-    local op_redeploy="op-redeploy-old-rev-0001"
-    PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "$op_redeploy" "$node_key" "$rev_3" "$sha_3" <"$root_path/releases/$rev_3/wsrelay"
-    PATH="$tmp/bin:$PATH" "$tmp/install.sh" switch "$op_redeploy" "$node_key"
-    output=$(PATH="$tmp/bin:$PATH" "$tmp/install.sh" release "$op_redeploy" "$node_key" 2>&1)
-    [[ $output == *"pruned releases=1 operations=1 stages=0"* ]] \
-        || fail "unexpected redeploy prune summary: $output"
-
-    # Kept: rev_3 (current, refreshed), rev_ancient (pinned previous), rev_5 (newest remaining). Pruned: rev_4.
-    [[ -d "$root_path/releases/$rev_3" ]] || fail "redeployed current rev_3 was pruned"
-    [[ -d "$root_path/releases/$rev_ancient" ]] || fail "pinned ancient previous release was pruned"
-    [[ -d "$root_path/releases/$rev_5" ]] || fail "newest remaining rev_5 was pruned"
-    [[ ! -e "$root_path/releases/$rev_4" ]] || fail "older unpinned rev_4 was not pruned"
-    printf 'PASS: release prunes stale releases, operations, and orphan stages while preserving recovery\n'
-)
-
-run_case_release_prune_failure_is_best_effort() (
-    local tmp
-    tmp=$(mktemp -d)
-    trap 'rm -rf -- "$tmp"' EXIT
-
-    local root_path="$tmp/opt/windshare-network"
-    prepare_harness "$tmp" "$root_path"
-
-    local rev_1="1111111111111111111111111111111111111111"
-    local rev_2="2222222222222222222222222222222222222222"
-    local rev_3="3333333333333333333333333333333333333333"
-    local rev_4="4444444444444444444444444444444444444444"
-    local r ts=10
-    for r in "$rev_1" "$rev_2" "$rev_3"; do
-        mkdir -p "$root_path/releases/$r"
-        make_fake_wsrelay "$root_path/releases/$r/wsrelay"
-        touch -d "2026-01-01 00:00:$ts UTC" "$root_path/releases/$r"
-        ts=$((ts + 1))
-    done
-    ln -sfn -- "$root_path/releases/$rev_3" "$root_path/current"
-
-    make_fake_wsrelay "$tmp/candidate-4"
-    printf '# candidate-4\n' >>"$tmp/candidate-4"
-    local sha_4 canonical_3 canonical_4
-    sha_4=$(sha256sum "$tmp/candidate-4" | awk '{print $1}')
-    canonical_3=$(realpath -e "$root_path/releases/$rev_3")
-    canonical_4="$(realpath -e "$root_path/releases")/$rev_4"
-
-    printf 'inv-1\n' >"$tmp/mock/current_invocation"
-    printf '101\n' >"$tmp/mock/current_pid"
-    printf '%s/wsrelay\n' "$canonical_3" >"$tmp/mock/proc/101.exe"
-    printf 'inv_first|inv-2|202|%s/wsrelay\n' "$canonical_4" >"$tmp/mock/polls"
-
-    local op="op-prune-best-effort-001"
-    PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "$op" "$node_key" "$rev_4" "$sha_4" <"$tmp/candidate-4"
-    PATH="$tmp/bin:$PATH" "$tmp/install.sh" switch "$op" "$node_key"
-
-    # Inject a failing rm for rev_1 to verify cleanup errors warn without failing release.
-    local real_rm
-    real_rm=$(command -v rm)
-    cat >"$tmp/bin/rm" <<EOF
-#!/usr/bin/env bash
-for arg in "\$@"; do
-    if [[ \$arg == *"$rev_1" ]]; then
-        echo "simulated rm failure for \$arg" >&2
-        exit 1
-    fi
+[[ $# == 2 && $1 == --check-config && $2 == "$WS_TEST_CONFIG" && -f $2 && -z ${FAIL_CONFIG:-} ]]
+SH
+chmod +x "$work"/bin/*
+digest=$(sha256sum "$work/wsrelay" | cut -d' ' -f1)
+revision() { printf '%040x' "$1"; }
+install_node() { bash "$work/install" "$(revision "$1")" "${2:-$digest}" < "$work/wsrelay"; }
+selected() { basename "$(readlink "$WS_TEST_ROOT/current")"; }
+fails() { if "$@"; then echo "unexpected success: $*" >&2; exit 1; fi; }
+
+for failure in FAIL_RESTART FAIL_HEALTH; do
+    : > "$WS_TEST_UNIT_LOG"
+    export "$failure=$(revision 1)"
+    fails install_node 1
+    unset "$failure"
+    [[ ! -e $WS_TEST_ROOT/current && ! -L $WS_TEST_ROOT/current && ! -d $WS_TEST_ROOT/releases/$(revision 1) ]]
+    [[ $(cat "$WS_TEST_UNIT_LOG") == $'reset-failed\nrestart:'"$(revision 1)"$'\nstop:'"$(revision 1)"$'\nreset-failed' ]]
 done
-exec "$real_rm" "\$@"
-EOF
-    chmod 0755 "$tmp/bin/rm"
-
-    local log="$tmp/wsrelay.log" output
-    output=$(FAKE_WSRELAY_LOG="$log" PATH="$tmp/bin:$PATH" "$tmp/install.sh" release "$op" "$node_key" 2>&1)
-    [[ $output == *"prune_warning pruned_releases=0 pruned_operations=0 pruned_stages=0 errors=1"* ]] \
-        || fail "expected prune_warning on rm failure: $output"
-    [[ -e "$root_path/operations/$op/released" ]] || fail "release marker missing after prune warning"
-    grep -Fxq "$canonical_3/wsrelay --release-maintenance $tmp/node.json $node_key $op" "$log" \
-        || fail "release did not clear local maintenance hold before prune warning"
-    printf 'PASS: release prune failures emit warning without failing release\n'
-)
-
-run_case_same_binary_waits_for_fresh_invocation
-run_case_rollback_fails_when_invocation_never_advances
-run_case_restart_timeout_contract_and_wall_clock_deadline
-run_case_empty_old_invocation_requires_non_empty_new_invocation
-run_case_symlinked_root_and_releases_canonicalized
-run_case_enter_switch_release_lifecycle_and_guards
-run_case_stage_validation_collisions_and_cleanup
-run_case_auth_hold_inspect_and_lock_guards
-run_case_recover_hold_states_and_guards
-run_case_release_prunes_stale_releases_operations_and_stages
-run_case_release_prune_failure_is_best_effort
+install_node 2
+fails install_node 3 "$(printf '%064d' 0)"
+FAIL_CONFIG=1 fails install_node 3
+[[ $(selected) == "$(revision 2)" && ! -d $WS_TEST_ROOT/releases/$(revision 3) ]]
+for failure in FAIL_RESTART FAIL_HEALTH; do
+    export "$failure=$(revision 3)"
+    fails install_node 3
+    unset "$failure"
+    [[ $(selected) == "$(revision 2)" && $(tail -2 "$WS_TEST_LOG") == "$(revision 3)"$'\n'"$(revision 2)" ]]
+done
+# A bad rollback must also surface as a failed installation and discard the failed release.
+FAIL_RESTART=$(revision 2) FAIL_HEALTH=$(revision 3) fails install_node 3
+[[ $(selected) == "$(revision 2)" && ! -d $WS_TEST_ROOT/releases/$(revision 3) ]]
+# Clear any prior start-limit/failed state before restarting a hotfix release.
+touch "$WS_TEST_FAILED"
+install_node 3
+[[ ! -e $WS_TEST_FAILED && $(selected) == "$(revision 3)" ]]
+install_node 4
+install_node 5
+[[ $(selected) == "$(revision 5)" && $(find "$WS_TEST_ROOT/releases" -mindepth 1 -maxdepth 1 -type d | wc -l) == 3 ]]
+[[ -x $WS_TEST_ROOT/releases/$(revision 4)/wsrelay ]]
+# The same revision can be retried, but cannot be silently rebound.
+install_node 5
+echo '#other build' >> "$work/wsrelay"
+fails install_node 5 "$(sha256sum "$work/wsrelay" | cut -d' ' -f1)"
+[[ $(selected) == "$(revision 5)" ]]
+echo "wsrelay install, preflight, rollback and retention passed"

@@ -184,6 +184,12 @@ fn advance_head(store: &mut SharedStore, signer: &Publisher, now: u64) -> String
 #[test]
 fn pending_only_publishes_new_head_and_skips_kv_audit_on_unchanged_head() {
     let (mut store, _signer, h1) = bootstrap_store();
+    let digest = crate::fleet::publication::current(&store)
+        .unwrap()
+        .revision()
+        .unwrap()
+        .digest;
+    assert!(crate::directory_reconcile::sync_pending(&store, &digest).unwrap());
     let mirror = FakeMirror::default();
     let clock = TestClock::new(10_000);
 
@@ -197,6 +203,8 @@ fn pending_only_publishes_new_head_and_skips_kv_audit_on_unchanged_head() {
         .unwrap(),
         ReconcileOutcome::Published
     );
+    assert!(!crate::directory_reconcile::sync_pending(&store, &digest).unwrap());
+    assert_eq!(ReconcileOutcome::Published.retry_after_ms(), None);
     assert_eq!(mirror.0.borrow().reads, 0);
     assert_eq!(mirror.0.borrow().writes, vec![h1.clone()]);
 
@@ -706,66 +714,4 @@ fn backward_clock_step_does_not_wedge_cooldown_or_audit() {
         ReconcileOutcome::Published
     );
     assert_eq!(mirror.0.borrow().writes, vec![h1, h2]);
-}
-
-#[test]
-fn outcome_retry_and_mirror_defer_mappings_cover_all_variants() {
-    assert_eq!(ReconcileOutcome::Published.retry_after_ms(), None);
-    assert_eq!(
-        ReconcileOutcome::Published.mirror_defer_reason(),
-        Some("kv_just_published")
-    );
-    assert_eq!(ReconcileOutcome::Settling.retry_after_ms(), None);
-    assert_eq!(
-        ReconcileOutcome::Settling.mirror_defer_reason(),
-        Some("kv_settling")
-    );
-    assert_eq!(ReconcileOutcome::UpToDate.retry_after_ms(), None);
-    assert_eq!(ReconcileOutcome::UpToDate.mirror_defer_reason(), None);
-    assert_eq!(
-        ReconcileOutcome::Cooldown {
-            retry_after_ms: 1_500
-        }
-        .retry_after_ms(),
-        Some(1_500)
-    );
-    assert_eq!(
-        ReconcileOutcome::Cooldown {
-            retry_after_ms: 1_500
-        }
-        .mirror_defer_reason(),
-        Some("kv_publish_deferred")
-    );
-    assert_eq!(
-        ReconcileOutcome::RetryPending {
-            retry_after_ms: Some(2_000),
-            attempts: 1,
-        }
-        .retry_after_ms(),
-        Some(2_000)
-    );
-    assert_eq!(
-        ReconcileOutcome::RetryPending {
-            retry_after_ms: Some(2_000),
-            attempts: 1,
-        }
-        .mirror_defer_reason(),
-        Some("kv_retry_pending")
-    );
-    assert_eq!(
-        ReconcileOutcome::RetryPending {
-            retry_after_ms: None,
-            attempts: 4,
-        }
-        .retry_after_ms(),
-        None
-    );
-    assert_eq!(
-        ReconcileOutcome::RetryPending {
-            retry_after_ms: None,
-            attempts: 4,
-        }
-        .mirror_defer_reason(),
-        None
-    );
 }

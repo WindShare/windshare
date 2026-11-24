@@ -1,4 +1,4 @@
-package networkprobe
+package main
 
 import (
 	"errors"
@@ -39,10 +39,10 @@ func parseHTTPSOrigin(raw string) (*url.URL, error) {
 	return base, nil
 }
 
-// AuthorityOrigin validates and canonicalizes an authority HTTPS origin so
+// authorityOrigin validates and canonicalizes an authority HTTPS origin so
 // operator overrides cannot transmit credentials over plaintext HTTP or inject
 // paths, queries, or fragments.
-func AuthorityOrigin(raw string) (string, error) {
+func authorityOrigin(raw string) (string, error) {
 	base, err := parseHTTPSOrigin(raw)
 	if err != nil {
 		return "", errors.New("invalid authority HTTPS origin")
@@ -50,9 +50,9 @@ func AuthorityOrigin(raw string) (string, error) {
 	return base.String(), nil
 }
 
-// LoadRelease returns the compiled-in release configuration when path is empty,
+// loadRelease returns the compiled-in release configuration when path is empty,
 // or reads and verifies an explicit release manifest file for operator tools.
-func LoadRelease(path string) (*networkconfig.Config, error) {
+func loadRelease(path string) (*networkconfig.Config, error) {
 	if path == "" {
 		return builtinnetwork.Config("")
 	}
@@ -71,14 +71,14 @@ func LoadRelease(path string) (*networkconfig.Config, error) {
 	return builtinnetwork.Parse(data, "")
 }
 
-// ResolveAuthority selects an explicit authority override when provided, or
+// resolveAuthority selects an explicit authority override when provided, or
 // falls back to the release manifest's authority URL.
-func ResolveAuthority(config *networkconfig.Config, override string) (string, error) {
+func resolveAuthority(config *networkconfig.Config, override string) (string, error) {
 	if override != "" {
-		return AuthorityOrigin(override)
+		return authorityOrigin(override)
 	}
 	if config == nil || config.Authority == nil || config.Authority.URL == "" {
 		return "", errors.New("release does not specify an authority")
 	}
-	return AuthorityOrigin(config.Authority.URL)
+	return authorityOrigin(config.Authority.URL)
 }

@@ -89,11 +89,10 @@ func (lifecycle *SenderLifecycle) recoverRegistration(callerContext, recoveryCon
 		event := Attempt{ShareInstance: lifecycle.config.Fresh.ShareInstance, Number: attempt, State: AttemptStarted, Generation: lifecycle.generation, Slow: slow, Resume: resume}
 		lifecycle.observeRecoveryAttempt(event)
 		dialErr := lifecycle.connectAttempt(callerContext, recoveryContext, resume, permit, &event, authorization)
-		if permit != nil {
-			permit.Release()
-		}
+		cause := lifecycle.recoveryCause(callerContext, recoveryContext)
+		releaseAttemptPermit(permit, cause, dialErr)
 		event.Duration = lifecycle.config.Clock.Now().Sub(started)
-		if cause := lifecycle.recoveryCause(callerContext, recoveryContext); cause != nil {
+		if cause != nil {
 			return cause
 		}
 		if dialErr == nil {
@@ -113,6 +112,15 @@ func (lifecycle *SenderLifecycle) recoverRegistration(callerContext, recoveryCon
 		if lifecycle.registrationFailed(&event, dialErr) {
 			return dialErr
 		}
+		lifecycle.mu.Lock()
+		if lifecycle.stopping {
+			lifecycle.mu.Unlock()
+			return ErrStopped
+		}
+		if lifecycle.generation == 0 {
+			lifecycle.setRegistrationLocked(RegistrationRetrying)
+		}
+		lifecycle.mu.Unlock()
 		now := lifecycle.config.Clock.Now()
 		slow = slow || !now.Add(delay).Before(deadline)
 		wait := max(lifecycle.retryDelay(delay, slow), event.ServerRetryAt.Sub(now))
@@ -140,6 +148,17 @@ func (lifecycle *SenderLifecycle) beginAttempt(ctx context.Context) (AttemptPerm
 		return nil, nil
 	}
 	return lifecycle.config.Attempts.Begin(ctx)
+}
+
+func releaseAttemptPermit(permit AttemptPermit, cause, dialErr error) {
+	if permit == nil {
+		return
+	}
+	if cause == nil && dialErr != nil && !errors.Is(dialErr, errParked) {
+		permit.ReleaseFailed()
+		return
+	}
+	permit.Release()
 }
 
 func (lifecycle *SenderLifecycle) registrationFailed(event *Attempt, failure error) bool {

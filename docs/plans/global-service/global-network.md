@@ -195,8 +195,8 @@ Deployment templates and procedures live in
 
 | Node | Roles |
 |---|---|
-| CN-A, CN-B (100 Mbps) | Mainland line of `ws.` and `api.`; STUN, relay from P2; health vantage points |
-| Overseas 50 Mbps | Relay, optional STUN; one is a health vantage point |
+| CN-A, CN-B (100 Mbps) | Mainland line of `ws.` and `api.`; STUN and relay from P2 |
+| Overseas 50 Mbps | Relay and optional STUN |
 | Overseas 5–10 Mbps | Low-weight relay, optional STUN |
 | Cloudflare | `windshare.cc`, the other lines of `ws.` and `api.`, the authority (Worker and Durable Object SQLite), directory mirror |
 

@@ -1,5 +1,5 @@
 use super::{Identity, Runtime, Services, usage::Reporter};
-use anyhow::{Result, anyhow, ensure};
+use anyhow::{Result, anyhow};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use ed25519_dalek::SigningKey;
 use windshare_relay_access::{Credential, trust};
@@ -12,7 +12,6 @@ const DESCRIPTOR_SECONDS: u64 = 300;
 pub(super) struct InstalledIdentity {
     raw: Identity,
     signing_key: SigningKey,
-    verifying_key: [u8; 32],
     id: String,
     key_b64: String,
 }
@@ -26,7 +25,6 @@ impl InstalledIdentity {
         Self {
             raw,
             signing_key,
-            verifying_key,
             id,
             key_b64,
         }
@@ -38,10 +36,6 @@ impl InstalledIdentity {
 
     pub(super) const fn signing_key(&self) -> &SigningKey {
         &self.signing_key
-    }
-
-    pub(super) const fn verifying_key(&self) -> [u8; 32] {
-        self.verifying_key
     }
 
     pub(super) fn id(&self) -> &str {
@@ -71,18 +65,9 @@ impl Runtime {
     /// # Errors
     /// The identity must be installed once before ingress starts.
     pub fn identify(&self, identity: Identity) -> Result<()> {
-        let writer = self.lock_control()?;
-        ensure!(
-            self.identity.get().is_none(),
-            "node identity already installed"
-        );
-        let installed = InstalledIdentity::new(identity);
-        self.access.identify(installed.verifying_key());
         self.identity
-            .set(installed)
-            .map_err(|_| anyhow!("node identity already installed"))?;
-        drop(writer);
-        Ok(())
+            .set(InstalledIdentity::new(identity))
+            .map_err(|_| anyhow!("node identity already installed"))
     }
 
     pub(crate) fn open_console(
@@ -151,28 +136,15 @@ impl Runtime {
     }
 
     pub(crate) fn descriptor(&self, endpoint: &crate::Endpoint) -> Result<serde_json::Value> {
-        self.descriptor_with(endpoint, || {
-            self.maintenance
-                .get()
-                .is_none_or(super::maintenance::Gate::open_to_users)
-        })
-    }
-
-    fn descriptor_with(
-        &self,
-        endpoint: &crate::Endpoint,
-        open_to_users: impl FnOnce() -> bool,
-    ) -> Result<serde_json::Value> {
         let identity = self
             .identity
             .get()
             .ok_or_else(|| anyhow!("missing node identity"))?;
         let timestamp = super::now();
         let now = timestamp.unsigned_abs();
-        // Snapshot only in-memory settings and budget availability under `Runtime::state`;
-        // access locks, maintenance `fstat`, JSON serialization, and Ed25519 signing run unlocked.
+        // Snapshot settings together so signing and access checks can run outside the state lock.
         let snapshot = self.descriptor_snapshot(timestamp)?;
-        let accepting = self.access.public_enabled() && open_to_users();
+        let accepting = self.access.public_enabled();
         let login_page = self
             .console
             .get()

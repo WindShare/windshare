@@ -1,36 +1,25 @@
-// Package networkprobe checks an operator-enrolled node through its public ingress.
-package networkprobe
+package main
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"time"
 )
 
-const requestTimeout = 8 * time.Second
+const releaseTimeout = 10 * time.Second
 
-// ReleaseClient follows the host's DNS policy for release-configured authority URLs.
-func ReleaseClient() *http.Client {
-	return &http.Client{Timeout: 10 * time.Second, CheckRedirect: refuseRedirect}
+// releaseClient follows the host's DNS policy for release-configured authority URLs.
+func releaseClient() *http.Client {
+	return &http.Client{Timeout: releaseTimeout, CheckRedirect: refuseRedirect}
 }
 
 func refuseRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
-func Client() *http.Client {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Proxy = nil
-	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
-		return dialPublic(ctx, network, address, (&net.Dialer{}).DialContext)
-	}
-	return &http.Client{Transport: transport, Timeout: requestTimeout, CheckRedirect: refuseRedirect}
-}
-
-func Fetch(ctx context.Context, client *http.Client, address string, limit int64) ([]byte, error) {
+func fetchHTTPS(ctx context.Context, client *http.Client, address string, limit int64) ([]byte, error) {
 	parsed, err := url.Parse(address)
 	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil || parsed.Fragment != "" {
 		return nil, errors.New("invalid public HTTPS URL")

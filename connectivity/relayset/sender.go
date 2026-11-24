@@ -49,6 +49,8 @@ type Sender struct {
 	pendingRegistrations  int
 	registrationErrors    []*RegistrationFailure
 	routes                map[string]routeRegistration
+	startup               *startupFallback
+	cancelRoute           map[string]context.CancelFunc
 	stopping              bool
 	observer              func(SenderStatus)
 	everReady             bool
@@ -63,32 +65,48 @@ type Sender struct {
 }
 
 func NewSender(parent context.Context, urls []string, dial SenderFactory) (*Sender, error) {
+	return newSender(parent, urls, nil, dial)
+}
+
+func newSender(parent context.Context, urls []string, fallback *startupFallback, dial SenderFactory) (*Sender, error) {
 	if parent == nil || dial == nil || len(urls) == 0 || len(urls) > MaximumEndpoints {
 		return nil, ErrConfig
 	}
-	seen := make(map[string]bool, len(urls))
-	for _, url := range urls {
+	all := slices.Clone(urls)
+	if fallback != nil {
+		all = append(all, fallback.canaries...)
+	}
+	seen := make(map[string]bool, len(all))
+	for _, url := range all {
 		if url == "" || seen[url] {
 			return nil, ErrConfig
 		}
 		seen[url] = true
 	}
 	ctx, cancel := context.WithCancel(parent)
-	set := &Sender{ctx: ctx, cancel: cancel, pendingRegistrations: len(urls), ready: make(chan struct{}),
-		incoming: make(chan *relayv2.Channel, len(urls)), cleanupDone: make(chan struct{}), routes: make(map[string]routeRegistration, len(urls))}
+	set := &Sender{ctx: ctx, cancel: cancel, ready: make(chan struct{}), startup: fallback,
+		incoming: make(chan *relayv2.Channel, MaximumEndpoints), cleanupDone: make(chan struct{}),
+		routes: make(map[string]routeRegistration), cancelRoute: make(map[string]context.CancelFunc)}
+	set.mu.Lock()
 	for _, url := range urls {
-		set.routes[url] = routeRegistration{}
+		set.startLocked(url, dial)
 	}
-	for _, url := range urls {
-		set.workers.Add(1)
-		go set.run(url, dial)
-	}
+	set.mu.Unlock()
 	return set, nil
 }
 
-func (s *Sender) run(url string, dial SenderFactory) {
+func (s *Sender) startLocked(url string, dial SenderFactory) {
+	ctx, cancel := context.WithCancel(s.ctx)
+	s.cancelRoute[url] = cancel
+	s.routes[url] = routeRegistration{}
+	s.pendingRegistrations++
+	s.workers.Add(1)
+	go s.run(ctx, url, dial)
+}
+
+func (s *Sender) run(ctx context.Context, url string, dial SenderFactory) {
 	defer s.workers.Done()
-	endpoint, err := dial(s.ctx, url)
+	endpoint, err := dial(ctx, url)
 	s.mu.Lock()
 	if endpoint != nil {
 		s.endpoints = append(s.endpoints, endpoint)
@@ -101,27 +119,35 @@ func (s *Sender) run(url string, dial SenderFactory) {
 		endpoint.ObserveRegistration(func(state RegistrationState) {
 			s.setRegistration(url, routeRegistration{state: state})
 		})
-		err = endpoint.WaitReady(s.ctx)
+		err = endpoint.WaitReady(ctx)
 	}
 	s.mu.Lock()
 	s.pendingRegistrations--
-	if err == nil {
+	_, selected := s.routes[url]
+	var notifyFallback func()
+	if selected && err == nil {
 		if s.firstReady == "" {
 			s.firstReady = url
 		}
-	} else {
+	} else if selected {
 		s.registrationErrors = append(s.registrationErrors, &RegistrationFailure{URL: url, Cause: err})
+		notifyFallback = s.setRegistrationLocked(url, routeRegistration{terminal: true})
 	}
 	if s.firstReady != "" || s.pendingRegistrations == 0 {
 		s.readyOnce.Do(func() { close(s.ready) })
 	}
 	s.mu.Unlock()
-	if endpoint == nil || err != nil {
-		s.setRegistration(url, routeRegistration{terminal: true})
+	if notifyFallback != nil {
+		notifyFallback()
+	}
+	if !selected || endpoint == nil || err != nil {
+		if !selected && endpoint != nil {
+			endpoint.StopRecovery()
+		}
 		return
 	}
 	for {
-		channel, err := endpoint.Accept(s.ctx)
+		channel, err := endpoint.Accept(ctx)
 		if err != nil {
 			s.setRegistration(url, routeRegistration{terminal: true})
 			return
@@ -132,7 +158,7 @@ func (s *Sender) run(url string, dial SenderFactory) {
 		}
 		select {
 		case s.incoming <- channel:
-		case <-s.ctx.Done():
+		case <-ctx.Done():
 			_ = channel.Close()
 			return
 		}
@@ -155,8 +181,10 @@ func (s *Sender) ReadyRelayURL() string {
 }
 
 type SenderRegistrations struct {
-	Admitted []string
-	Rejected []string
+	// Candidates includes pending and previously admitted routes selected for this share.
+	Candidates []string
+	Admitted   []string
+	Rejected   []string
 }
 
 // Registrations freezes what is known at publication. Pending candidates can
@@ -165,14 +193,19 @@ func (s *Sender) Registrations() SenderRegistrations {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var snapshot SenderRegistrations
+	for _, failure := range s.registrationErrors {
+		snapshot.Rejected = append(snapshot.Rejected, failure.URL)
+	}
 	for url, registration := range s.routes {
+		// An outage after a successful registration does not revoke its link hint.
+		if !slices.Contains(snapshot.Rejected, url) {
+			snapshot.Candidates = append(snapshot.Candidates, url)
+		}
 		if registration.state == RegistrationAvailable {
 			snapshot.Admitted = append(snapshot.Admitted, url)
 		}
 	}
-	for _, failure := range s.registrationErrors {
-		snapshot.Rejected = append(snapshot.Rejected, failure.URL)
-	}
+	slices.Sort(snapshot.Candidates)
 	slices.Sort(snapshot.Admitted)
 	slices.Sort(snapshot.Rejected)
 	return snapshot

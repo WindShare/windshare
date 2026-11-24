@@ -1,9 +1,6 @@
 use super::{Actor, Environment, Event, Persistence};
-use crate::node::maintenance::GateError;
 use anyhow::{Context, Result};
 use windshare_relay_core::{
-    clock::UnixMillis,
-    error_frame::ErrorFrame,
     ingress::{Control, FrameKind},
     lifecycle::ConnectionRef,
     sessions::OpaqueHeader,
@@ -31,16 +28,6 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
                     }
                     Control::Ready(input) => {
                         let kind = FrameKind::classify(&frame);
-                        if Self::requires_resident_access(kind)
-                            && let Err(gate_error) = self.admit_maintenance(connection, kind)
-                        {
-                            return self.refuse_maintenance_control(
-                                connection,
-                                kind,
-                                &gate_error,
-                                now,
-                            );
-                        }
                         if Self::requires_resident_access(kind)
                             && let Some(revocation) = self.resident_revocation()
                         {
@@ -141,67 +128,6 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
                     .outputs,
             );
         }
-    }
-
-    fn admit_maintenance(
-        &mut self,
-        connection: ConnectionRef,
-        kind: FrameKind,
-    ) -> Result<(), GateError> {
-        let Some(gate) = self.node.maintenance.get() else {
-            return Ok(());
-        };
-        let probe = self
-            .node
-            .access
-            .is_probe(self.identity.share, self.attribution());
-        if kind == FrameKind::Join {
-            let lease = gate.admit_join(probe)?;
-            self.ports
-                .get_mut(&connection)
-                .expect("connected port")
-                .join_lease = Some(lease);
-            Ok(())
-        } else {
-            gate.check(probe)
-        }
-    }
-
-    fn refuse_maintenance_control(
-        &mut self,
-        connection: ConnectionRef,
-        kind: FrameKind,
-        gate_error: &GateError,
-        now: UnixMillis,
-    ) -> Result<()> {
-        match gate_error {
-            GateError::Maintenance => {
-                tracing::debug!(
-                    event = "share_control_maintenance_refused",
-                    share = ?self.identity.share,
-                    ?connection,
-                    ?kind,
-                    reason = "maintenance",
-                );
-            }
-            GateError::Io(error) => {
-                tracing::warn!(
-                    event = "maintenance_gate_io_error",
-                    share = ?self.identity.share,
-                    ?connection,
-                    ?kind,
-                    %error,
-                );
-            }
-        }
-        let error = ErrorFrame::AccessUnavailable(super::access::MAINTENANCE_RETRY);
-        if let Some(port) = self.ports.remove(&connection)
-            && port.control(error.encode().to_vec()).is_ok()
-        {
-            port.finish();
-        }
-        let step = self.relay.handle(Input::Disconnected(connection), now);
-        self.outputs(step)
     }
 
     // Steady-state transfer controls (`DeliveryConsumed`, `ConnectionProbe`,

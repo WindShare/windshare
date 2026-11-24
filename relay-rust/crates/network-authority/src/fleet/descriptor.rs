@@ -59,7 +59,15 @@ struct Services {
     stun: bool,
 }
 #[derive(Deserialize)]
+struct Authority {
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    issuer: String,
+}
+#[derive(Deserialize)]
 struct Descriptor {
+    authority: Option<Authority>,
     version: u8,
     node_id: String,
     node_key: String,
@@ -220,14 +228,76 @@ fn validate_services(
     Ok((roles, stun))
 }
 
+fn authority_origin(raw: &str) -> Option<String> {
+    if raw.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}') != raw
+        || raw.bytes().any(|byte| byte.is_ascii_control())
+        || raw.contains(['?', '#', '\\', '@'])
+    {
+        return None;
+    }
+    let url = url::Url::parse(raw).ok()?;
+    if !matches!(url.scheme(), "https" | "http")
+        || url.host().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.port() == Some(0)
+        || url.path() != "/"
+    {
+        return None;
+    }
+    // Reject dot segments and extra slashes that `url::Url::parse` folds to `/`.
+    let after_scheme = raw.split_once("://")?.1;
+    if after_scheme
+        .split_once('/')
+        .is_some_and(|(_, path)| !path.is_empty())
+    {
+        return None;
+    }
+    Some(url.origin().ascii_serialization())
+}
+
+fn matches_authority(
+    authority: Option<&Authority>,
+    issuer: &str,
+    authority_origins: &[&str],
+) -> bool {
+    let Some(authority) = authority else {
+        return false;
+    };
+    if authority.issuer != issuer {
+        return false;
+    }
+    let Some(actual) = authority_origin(&authority.url) else {
+        return false;
+    };
+    authority_origins
+        .iter()
+        .filter_map(|origin| authority_origin(origin))
+        .any(|expected| expected == actual)
+}
+
 /// # Errors
 /// Rejects invalid or stale signatures, mismatched endpoint identities and unusable service settings.
-pub fn inspect(origin: &str, bytes: &[u8], now: u64) -> Result<Discovery, DescriptorError> {
+pub fn inspect(
+    origin: &str,
+    bytes: &[u8],
+    now: u64,
+    issuer: &str,
+    authority_origins: &[&str],
+) -> Result<Discovery, DescriptorError> {
     let origin = public_origin(origin)
         .map_err(|_| DescriptorError::new(DiscoveryFailure::InvalidUrl, "invalid public origin"))?;
     let (value, key) = decode_verified(bytes)?;
     validate_identity_and_endpoint(&origin, &value, &key)?;
     validate_freshness(&value, now)?;
+    if !matches_authority(value.authority.as_ref(), issuer, authority_origins) {
+        return Err(DescriptorError::new(
+            DiscoveryFailure::AuthorityMismatch,
+            "node authority issuer or URL does not match this authority",
+        ));
+    }
     let (roles, stun) = validate_services(&origin, &value)?;
     let capacity_mbps = value
         .capacity_bytes_per_second

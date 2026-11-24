@@ -72,7 +72,7 @@ func (engine *Engine) StartShare(ctx context.Context, request ShareRequest) (*Sh
 		return nil, err
 	}
 	controller := share.NewController()
-	execution := share.Request{Source: request.Source, Relays: selection.Relays, ChunkSize: request.ChunkSize, Diagnostics: request.Diagnostics}
+	execution := share.Request{Source: request.Source, Relays: selection.Relays, Standby: selection.Standby, ChunkSize: request.ChunkSize, Diagnostics: request.Diagnostics}
 	admissions := relayset.NewNetworkAdmissions(selection.Plan, engine.config.Clock, engine.network.ServerRetryAt)
 	injected := engine.config.Share
 	pollNetwork := injected.PollNetwork
@@ -110,6 +110,17 @@ func (engine *Engine) StartShare(ctx context.Context, request ShareRequest) (*Sh
 				}
 			})
 		}
+		if injected.Relays == nil {
+			var observeFallback func(relayset.Fallback)
+			if control.Diagnostics.Enabled() {
+				observeFallback = func(value relayset.Fallback) {
+					if control.Diagnostics.Enabled() {
+						control.Diagnostics.Emit(networkruntime.FallbackRecord(value))
+					}
+				}
+			}
+			dependencies.Relays = share.PlannedRelays(selection.Plan, observeFallback)
+		}
 		dependencies.Control = control
 		execution.Diagnostics = control.Diagnostics
 		return share.Run(ctx, execution, dependencies)
@@ -134,9 +145,9 @@ func (current *ShareTask) Ready(ctx context.Context) (ShareReady, error) {
 	if err != nil {
 		return ShareReady{}, err
 	}
-	current.selection.PublishRelayHints(&value.Capability, value.Registrations.Rejected)
 	decision := current.selection.Decision
-	decision.Candidates, decision.Filters = slices.Clone(decision.Candidates), slices.Clone(decision.Filters)
+	decision.Candidates = current.selection.PublishRelayHints(&value.Capability, value.Registrations.Candidates)
+	decision.Filters = slices.Clone(decision.Filters)
 	return ShareReady{Capability: value.Capability, SelectedRootSummary: value.SelectedRootSummary, RelayOrigin: origin,
 		FrozenCandidates: slices.Clone(decision.Candidates), InitialAdmissions: slices.Clone(value.Registrations.Admitted),
 		Frontend: current.selection.Frontend, AlternateFrontend: current.selection.AlternateFrontend, Decision: decision}, nil

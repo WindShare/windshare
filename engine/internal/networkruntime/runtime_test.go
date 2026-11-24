@@ -114,15 +114,16 @@ func TestPublicationKeepsPendingHintsAndOmitsRejectedRegistrations(t *testing.T)
 	selection := Selection{useAliases: true, Plan: relayplan.Plan{
 		Configured: []relayplan.Candidate{{URL: "ready"}, {URL: "rejected"}, {URL: "pending"}},
 		Network:    []relayplan.Candidate{{URL: "failed-node", Alias: "one"}, {URL: "pending-node", Alias: "two"}},
+		Standby:    []relayplan.Candidate{{URL: "standby", Alias: "three"}, {URL: "dormant", Alias: "four"}},
 	}}
 	capability := link.Link{Relays: []string{"ready", "rejected", "pending", "failed-node", "pending-node"}}
-	selection.PublishRelayHints(&capability, []string{"rejected", "failed-node"})
-	if !slices.Equal(capability.Relays, []string{"ready", "pending"}) || !slices.Equal(capability.NodeAliases, []string{"two"}) {
+	selection.PublishRelayHints(&capability, []string{"ready", "pending", "pending-node", "standby"})
+	if !slices.Equal(capability.Relays, []string{"ready", "pending"}) || !slices.Equal(capability.NodeAliases, []string{"two", "three"}) {
 		t.Fatal(capability.Relays, capability.NodeAliases)
 	}
 	selection.useAliases = false
 	custom := link.Link{Relays: []string{"ready", "pending-node"}}
-	selection.PublishRelayHints(&custom, nil)
+	selection.PublishRelayHints(&custom, []string{"ready", "pending-node"})
 	if !slices.Contains(custom.Relays, "pending-node") || len(custom.NodeAliases) != 0 {
 		t.Fatal("custom frontend lost the explicit network endpoint", custom)
 	}

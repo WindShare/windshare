@@ -133,8 +133,8 @@ func TestSelectionOrdersCapacityAndHandshakeBuckets(t *testing.T) {
 		t.Fatal("canary bypassed active")
 	}
 	input.Observations[0].Admitted = false
-	if selected(t, input).Network[0].URL != b.Relay {
-		t.Fatal("recent failure bypassed successful canary")
+	if wave := selected(t, input).Network; len(wave) != 2 || wave[0].URL != a.Relay || wave[1].URL != b.Relay {
+		t.Fatal("dialable active and canary should race for the two open registrations", wave)
 	}
 }
 
@@ -263,5 +263,68 @@ func TestCandidateRetainsObservationHistoryAndHandshakeDuration(t *testing.T) {
 	}
 	if _, ok := byAlias[unmeasured.Alias].ObservedHandshake(); ok || byAlias[unmeasured.Alias].HistoryState() != "unmeasured" {
 		t.Fatalf("unmeasured candidate exposed handshake duration: %+v", byAlias[unmeasured.Alias])
+	}
+}
+
+func TestCanariesFillOnlyOpenRegistrationSlots(t *testing.T) {
+	input := Input{Now: time.Now()}
+	for i := range 5 {
+		node := planNode(i, "global")
+		if i >= 2 {
+			node.Status = nodedirectory.Canary
+		}
+		input.Directory.Nodes = append(input.Directory.Nodes, node)
+	}
+	plan := selected(t, input)
+	if len(plan.Network) != 2 || plan.Network[0].Canary || plan.Network[1].Canary ||
+		len(plan.Standby) != TargetNetworkRegistrations || !plan.Standby[0].Canary || !plan.Standby[1].Canary {
+		t.Fatal(plan)
+	}
+	input.Directory.Nodes = input.Directory.Nodes[1:]
+	plan = selected(t, input)
+	if len(plan.Network) != 2 || plan.Network[0].Canary || !plan.Network[1].Canary || len(plan.Standby) != 0 {
+		t.Fatal(plan)
+	}
+	for i := range MaximumEndpoints - 1 {
+		input.Configured = append(input.Configured, planNode(i+20, "cn").Relay)
+	}
+	plan = selected(t, input)
+	if len(plan.Network) != 1 || plan.Network[0].Canary || len(plan.Standby) != 1 {
+		t.Fatal(plan)
+	}
+	input.Configured = nil
+	input.Directory.Nodes = input.Directory.Nodes[1:]
+	plan = selected(t, input)
+	if len(plan.Network) != TargetNetworkRegistrations || len(plan.Standby) != 0 {
+		t.Fatal(plan)
+	}
+}
+
+func TestBackupPrioritizesHealthThenActiveThenZone(t *testing.T) {
+	primary := Candidate{Zone: "global"}
+	options := []Candidate{{Canary: true, Zone: "cn"}, {Zone: "global"}}
+	if BackupIndex(primary, options, Policy{}) != 1 {
+		t.Fatal("healthy active should precede a zone-diverse canary")
+	}
+	options[1] = options[1].WithRegistrationFailure()
+	if options[1].HistoryState() != "failed" {
+		t.Fatalf("failed history = %q", options[1].HistoryState())
+	}
+	if BackupIndex(primary, options, Policy{}) != 0 {
+		t.Fatal("healthy canary should precede a recently failed active")
+	}
+	options[1] = options[1].WithoutRegistrationFailure()
+	if _, observed := options[1].ObservedHandshake(); observed || options[1].HistoryState() != "unmeasured" {
+		t.Fatalf("cleared failure invented duration: %+v", options[1])
+	}
+	if BackupIndex(primary, options, Policy{}) != 1 {
+		t.Fatal("recovered active should regain priority over canary")
+	}
+	admitted := Candidate{history: recentlyAdmitted, ObservedDuration: 125 * time.Millisecond}
+	if d, ok := admitted.WithoutRegistrationFailure().ObservedHandshake(); !ok || d != 125*time.Millisecond {
+		t.Fatalf("clearing non-failed candidate lost measured duration: %v, %t", d, ok)
+	}
+	if _, ok := admitted.WithRegistrationFailure().ObservedHandshake(); ok {
+		t.Fatal("failed candidate retained measured duration")
 	}
 }

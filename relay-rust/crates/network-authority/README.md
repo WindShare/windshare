@@ -48,30 +48,19 @@ response confirms acceptance. Its timeout is 15 seconds.
 
 ## Enroll and publish
 
-1. Generate a separate probe key for each vantage point with `network-sign keygen --id cn-a --private probe.pem --public probe.json`.
-   Configure `VANTAGE_KEYS` as a JSON array of `{"id":"cn-a","key":"<probe.json key>","zone":"cn"}` entries (`cn` or `global`).
-   Install `./cmd/network-vantage` in that zone and run `network-vantage --key probe.pem`. Roll out matching agent and authority builds when the signed probe protocol changes.
-   Configure up to two CN probes and one overseas probe. The authority assigns the split-DNS mirror check to CN agents.
-2. In **Nodes**, choose **Add node** and enter the public HTTPS origin. For a fresh host with a working reverse proxy,
-   use the setup command after installing the [official unit and binary](../../../deploy/network/operations.md#provisioning). Keep its generated identity and database.
-   For existing nodes, configure `node.authority` and `node.access.trusted_issuers` using the same public trust.
-3. Inspect the signed descriptor, confirm the alias, location, provider, roles and capacity, and enroll.
-   A staging node can report immediately. Its signed load report includes its locally enforced metered budget.
-   A vantage in the selected zone tests the advertised services. Promote to **Canary** or **Active** once verification passes
-   and both Cloudflare mirrors and the mainland mirror report the current signed revision.
+1. In **Nodes → Add node**, enter the public HTTPS origin. The setup command configures a freshly provisioned host with the authority URL, issuer and certificate. Existing nodes can set `node.authority` and `node.access.trusted_issuers` directly.
+2. Inspect the signed descriptor, confirm the alias, location, roles and capacity, and enroll. The authority verifies the issuer and authority origin, binds the alias permanently and signs the directory with the new node listed as **Canary**. Submitting the same settings again preserves its state and directory revision.
+3. Wait for a heartbeat confirming the policy, [test the advertised services](../../../deploy/network/operations.md#test-a-new-node), then choose **Activate**. A Canary can fill a vacant registration slot or take over when all initial Active candidates fail before link publication.
 
-The console shows the signed generation/serial, mirror state, silent vantages and upcoming directory or ticket certificate expiry.
-Use [directory export](../../../deploy/network/README.md) to capture a verified revision for Git and embedded clients.
-
-After an accepting native node receives a verified usage reply advertising browser login, Desktop and the CLI offer service-account sign-in when adding it. The authority serves `/device`, and the node serves `/device/complete`. Keep both routes on their respective public HTTPS origins.
+The authority serves the signed head at `/.well-known/windshare-network`. A transaction records directory changes before delivery to KV. The console shows the signed generation and serial, pending KV delivery and certificate expiry. Alarms retry pending writes, and an hourly pass reconciles KV and renews the 90-day directory near expiry. See the [directory export guide](../../../deploy/network/README.md) for Git history and embedded releases.
 
 ## Fleet operations
 
-Vantages poll for enrollment every minute and send one signed fleet report every five minutes. **Nodes** shows per-vantage reachability, WebSocket, STUN and TLS expiry. Three consecutive agreeing cycles from at least two reporting vantages, including one in the node's zone, can withdraw or restore a service. A fleet-wide fault, conflicting evidence or loss of the last healthy active service in a zone holds routing steady.
+**Drain** stops fresh relay registrations while existing shares can resume and accept receivers. **Disable** withdraws all advertised services. **Remove** retires a disabled node and retains its policy version and permanent alias. Disable and removal require a fresh confirmation of the current policy and zero resident shares, or an explicit early cutoff. Activate can restore a Canary, draining or disabled node. STUN-only nodes always refuse new relay registrations.
 
-Use **Drain** to stop new registrations while existing links continue serving, and **Resume service** to return a draining node to active traffic without waiting for mirror propagation. Disable or remove after a fresh signed report confirms the policy version and zero resident shares, or confirm early cutoff. Removing a node preserves its published alias binding. A disabled node must pass verification again before promotion.
+Nodes report load every minute. The console marks a previously reporting node offline after three minutes, and shows policy updates awaiting application. For binary updates, follow the [host upgrade procedure](../../../deploy/network/operations.md#official-node-upgrades).
 
-During a [host upgrade](../../../deploy/network/operations.md#official-node-upgrades), the maintenance hold keeps the node probe-accessible. A disable requested during the hold takes effect on release. An administrator can abort a stuck maintenance hold from the console, leaving a listed node draining or completing a queued disable without clearing any local host fence. Use the operation ID and node key to correlate authority, vantage and host logs.
+Before upgrading an existing authority, finish outstanding maintenance operations on the previous release, including releasing the host hold. The first access converts listed nodes and withdraws staging drafts in one transaction. The signed directory, alias ledger and policy version history remain authoritative.
 
 ## Operations
 
@@ -94,5 +83,4 @@ PoW defaults to 28 bits, about 16 seconds at 16M attempts/s. Calibrate with
 `go test ./engine/account -run '^$' -bench BenchmarkProofAttempt`; difficulty
 remains operator-controlled. Run `make rust vectors web` for shared contracts and hosts.
 
-From this crate run `worker-build --dev --locked`, then `node --test tests/*.test.mjs tests/worker.mjs` with the relay-cloudflare npm dependencies installed.
-The tests use isolated local Workers, signed node descriptors, SQLite and a local mail webhook.
+From the repository root, run `node relay-rust/crates/network-authority/tests/run.mjs` with `worker-build` and the relay-cloudflare npm dependencies installed. It builds the isolated test Worker and exercises signed discovery, enrollment, management and KV retries with Miniflare.

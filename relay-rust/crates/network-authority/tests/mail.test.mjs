@@ -4,10 +4,10 @@ import { randomBytes } from 'node:crypto';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { TEST_PASSWORD_PEPPER } from './local-worker.mjs';
+import { TEST_PASSWORD_PEPPER, resolveTestBuild } from './local-worker.mjs';
 
 const crate = fileURLToPath(new URL('../', import.meta.url));
 const { Miniflare, Log, LogLevel, convertV4MiniflareOptions } =
@@ -18,7 +18,7 @@ test('the Worker changes email only after the provider accepts delivery and the 
   t.after(() => rm(keys, { recursive: true, force: true }));
   execFileSync('cargo', ['run', '--quiet', '--locked', '--bin', 'network-authority-keys', '--', keys, '1'], { cwd: crate });
   const trust = JSON.parse(await readFile(join(keys, 'trust-1.json'), 'utf8'));
-  const build = resolve(crate, process.env.AUTHORITY_TEST_BUILD || 'build');
+  const build = resolveTestBuild();
   let delivered;
   let rejectDelivery = false;
   const mf = new Miniflare(convertV4MiniflareOptions({

@@ -1,11 +1,10 @@
 use super::{
-    NodeState, attach,
     signature::{Certificate, Envelope, Grant, Payload, RENEW_BEFORE, Root},
     topology::Spec,
 };
 use crate::{
-    Fault, Store,
-    store::{load, save},
+    Fault, Node, Store,
+    store::{key, load, save},
 };
 use anyhow::{Context, Result, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as B64};
@@ -143,15 +142,8 @@ impl Publication {
             next.reserve(&entry.spec)?;
         }
         for entry in payload.nodes {
-            attach(
-                store,
-                entry.spec,
-                NodeState::Listed {
-                    status: entry.status,
-                    maintenance: None,
-                },
-                "release-import".into(),
-            )?;
+            let node = Node::new(entry.spec, entry.status.into(), 1)?;
+            save(store, &key("node", &node.key), &node)?;
         }
         tracing::info!(
             event = "directory_imported",
@@ -165,10 +157,13 @@ impl Publication {
     }
     /// # Errors
     /// Propagates storage and signed release verification errors.
-    pub fn load_or_import(store: &mut impl Store) -> Result<Self> {
-        if let Some(current) = load(store, DIRECTORY)? {
-            return Ok(current);
-        }
+    pub fn load(store: &impl Store) -> Result<Option<Self>> {
+        load(store, DIRECTORY)
+    }
+
+    /// # Errors
+    /// Propagates storage and signed release verification errors.
+    pub fn import_bundled(store: &mut impl Store) -> Result<Self> {
         Self::bootstrap(store, &Release::bundled()?, HISTORY)
     }
     pub(super) fn check_alias(&self, spec: &Spec) -> Result<()> {

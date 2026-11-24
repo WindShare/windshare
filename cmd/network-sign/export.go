@@ -151,5 +151,9 @@ func exportSource(path string, rawAuthority json.RawMessage) ([]byte, error) {
 	if authority.URL == "" {
 		return nil, errors.New("release has no public authority")
 	}
-	return fetchMirror(authority.URL)
+	origin, err := authorityOrigin(authority.URL)
+	if err != nil {
+		return nil, err
+	}
+	return fetchMirror(origin)
 }

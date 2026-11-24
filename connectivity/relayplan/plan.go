@@ -56,6 +56,24 @@ func (c Candidate) HistoryState() string {
 	}
 }
 
+// WithRegistrationFailure marks a candidate copy as failed so live backup
+// arbitration within the same share applies the same ranking rule as Build.
+func (c Candidate) WithRegistrationFailure() Candidate {
+	c.history = recentlyFailed
+	c.ObservedDuration = 0
+	return c
+}
+
+// WithoutRegistrationFailure clears a failed state once a candidate completes
+// a registration handshake, without inventing a measured duration sample.
+func (c Candidate) WithoutRegistrationFailure() Candidate {
+	if c.history == recentlyFailed {
+		c.history = unmeasured
+		c.ObservedDuration = 0
+	}
+	return c
+}
+
 type registrationHistory int8
 
 const (
@@ -128,6 +146,7 @@ type Decision struct {
 type Plan struct {
 	Configured []Candidate
 	Network    []Candidate
+	Standby    []Candidate
 	Policy     Policy
 	Decision   Decision
 }
@@ -219,6 +238,7 @@ func backupIndex(primary Candidate, candidates []Candidate, policy Policy, eligi
 		otherOperator = 1 << iota
 		otherProvider
 		pairZone
+		notCanary
 		withoutFailure
 	)
 	best, score := 0, -1
@@ -233,6 +253,9 @@ func backupIndex(primary Candidate, candidates []Candidate, policy Policy, eligi
 		value := 0
 		if candidate.history != recentlyFailed {
 			value += withoutFailure
+		}
+		if !candidate.Canary {
+			value += notCanary
 		}
 		if candidate.Zone == preferredZone {
 			value += pairZone

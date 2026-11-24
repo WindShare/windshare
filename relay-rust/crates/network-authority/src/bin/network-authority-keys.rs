@@ -37,14 +37,6 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    if let [command, path] = args.as_slice()
-        && command == "verify-vantages"
-    {
-        use windshare_network_authority::fleet::vantage::{Agent, validate_agents};
-        let agents: Vec<Agent> =
-            serde_json::from_slice(&std::fs::read(path)?).context("invalid VANTAGE_KEYS")?;
-        return validate_agents(&agents);
-    }
     if let [command, document, seed] = args.as_slice()
         && command == "verify-publisher"
     {

@@ -17,10 +17,8 @@ pub const WRITE_COOLDOWN_MS: u64 = 2_000;
 /// ledger instead of reading KV's 60 s eventually-consistent edge cache.
 pub const AUDIT_SETTLE_MS: u64 = 120_000;
 
-/// Bounded alarm retry delays for failed KV writes before handing long-term recovery
-/// back to the 5-minute scheduled tick, preventing alarm storms during KV outages or
-/// daily write-quota exhaustion.
-pub const RETRY_BACKOFF_MS: [u64; 3] = [2_000, 5_000, 15_000];
+/// Spread retries across a transient KV outage before the hourly audit takes over.
+pub const RETRY_BACKOFF_MS: [u64; 6] = [2_000, 5_000, 15_000, 60_000, 300_000, 900_000];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReconcileMode {
@@ -57,23 +55,6 @@ impl ReconcileOutcome {
             Self::Cooldown { retry_after_ms } => Some(retry_after_ms),
             Self::RetryPending { retry_after_ms, .. } => retry_after_ms,
             Self::Published | Self::Settling | Self::UpToDate => None,
-        }
-    }
-
-    pub const fn mirror_defer_reason(self) -> Option<&'static str> {
-        match self {
-            Self::Published => Some("kv_just_published"),
-            Self::Settling => Some("kv_settling"),
-            Self::Cooldown { .. } => Some("kv_publish_deferred"),
-            Self::RetryPending {
-                retry_after_ms: Some(_),
-                ..
-            } => Some("kv_retry_pending"),
-            Self::UpToDate
-            | Self::RetryPending {
-                retry_after_ms: None,
-                ..
-            } => None,
         }
     }
 }
@@ -135,6 +116,11 @@ impl DeliveryState {
             .checked_sub(elapsed)
             .filter(|&remaining| remaining > 0)
     }
+}
+
+pub fn sync_pending(store: &impl Store, digest: &str) -> Result<bool> {
+    let state = DeliveryState::load(store)?;
+    Ok(!state.matches(digest) || state.failed_attempts > 0)
 }
 
 struct Snapshot {

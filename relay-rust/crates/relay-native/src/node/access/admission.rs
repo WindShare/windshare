@@ -77,11 +77,8 @@ pub enum RefusalReason {
     TicketExpired,
     TicketUntrusted,
     TicketGenerationMismatch,
-    ProbeScopeMismatch,
     NodePublicDisabled,
     NodeDraining,
-    LocalMaintenance,
-    MaintenanceGateError,
     IssuerInactive,
     ShareRestricted,
     AccountRestricted,
@@ -104,10 +101,7 @@ impl RefusalReason {
             Self::TicketExpired => "ticket_expired",
             Self::TicketUntrusted => "ticket_untrusted",
             Self::TicketGenerationMismatch => "ticket_generation_mismatch",
-            Self::ProbeScopeMismatch => "probe_scope_mismatch",
             Self::NodeDraining => "node_draining",
-            Self::LocalMaintenance => "local_maintenance",
-            Self::MaintenanceGateError => "maintenance_gate_error",
             Self::NodePublicDisabled => "node_public_disabled",
             Self::IssuerInactive => "issuer_inactive",
             Self::ShareRestricted => "share_restricted",
@@ -203,7 +197,7 @@ impl Service {
                 state
                     .authorized_identity(share, Some(bearer), Some(Ok(proof.as_ref())), now)
                     .map_or(AdmissionPriority::Anonymous, |identity| {
-                        state.priority_for(share, identity.attribution())
+                        state.priority_for(identity.attribution())
                     })
             });
         drop(state);
@@ -255,19 +249,7 @@ impl Service {
             .as_ref()
             .map(|result| result.as_deref().map_err(|error| *error));
         let mut state = self.write();
-        if state.admission() == super::Admission::Draining
-            && !proof
-                .and_then(Result::ok)
-                .and_then(|p| p.current(&state.authorities.trusted, now).ok())
-                .is_some_and(|t| {
-                    state.scoped_probe(share, t.attribution())
-                        && windshare_relay_access::probe::permits(
-                            t,
-                            state.node_key.as_ref(),
-                            share.as_bytes(),
-                        )
-                })
-        {
+        if state.admission() == super::Admission::Draining {
             return Authorization::Refused(Refusal::unavailable(RefusalReason::NodeDraining));
         }
         let identity = match state.authorized_identity(share, bearer, proof, now) {
@@ -283,8 +265,6 @@ impl Service {
         match identity {
             AuthorizedIdentity::Anonymous => {}
             AuthorizedIdentity::Local { entry, .. } => entry.record_use(now.saturating_mul(1000)),
-            AuthorizedIdentity::Ticket(ticket)
-                if ticket.account == windshare_relay_access::probe::PROBE_ACCOUNT => {}
             AuthorizedIdentity::Ticket(ticket) => {
                 state.quotas.advance(
                     (ticket.issuer, ticket.account),
@@ -314,7 +294,7 @@ impl State {
             });
         let local = bearer.and_then(|bearer| self.credentials.get(bearer.digest));
         let local_attribution = local.and_then(|entry| self.local_attribution(entry));
-        if resident.is_some_and(|attribution| self.has_reserved_admission(share, attribution))
+        if resident.is_some_and(|attribution| self.owner(attribution))
             || local_attribution.is_some_and(|attribution| self.owner(attribution))
         {
             Some(AdmissionPriority::Owner)
@@ -350,13 +330,6 @@ impl State {
                         .ok_or(AdmissionRefusal::Denied(RefusalReason::TicketEncoding))?
                         .and_then(|proof| proof.current(&self.authorities.trusted, now))
                         .map_err(AdmissionRefusal::Ticket)?;
-                    if !windshare_relay_access::probe::permits(
-                        ticket,
-                        self.node_key.as_ref(),
-                        share.as_bytes(),
-                    ) {
-                        return Err(AdmissionRefusal::Denied(RefusalReason::ProbeScopeMismatch));
-                    }
                     AuthorizedIdentity::Ticket(ticket)
                 }
             }

@@ -307,7 +307,7 @@ func TestDiagnosticRecordsIncludeReadableAttemptStatesPlanTimingsAndAdmissionRea
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, err := planned.DiagnosticRecord().Payload().Get("published_candidates").MarshalJSON()
+	raw, err := planned.DiagnosticRecord().Payload().Get("initial_candidates").MarshalJSON()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,6 +333,25 @@ func TestDiagnosticRecordsIncludeReadableAttemptStatesPlanTimingsAndAdmissionRea
 	})
 	if admission.Payload().Get("reason").Text() != relayset.AdmissionReasonBackupNotChosen {
 		t.Fatalf("admission record lost reason: %+v", admission.Payload())
+	}
+
+	fallback := FallbackRecord(relayset.Fallback{
+		Active:   []string{"https://active.example"},
+		Canaries: []string{"https://canary.example"},
+	})
+	if fallback.Name() != "network_canary_fallback" {
+		t.Fatalf("fallback record name = %q", fallback.Name())
+	}
+	rawActive, err := fallback.Payload().Get("active_relays").MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawCanaries, err := fallback.Payload().Get("canary_relays").MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(rawActive) != `["https://active.example"]` || string(rawCanaries) != `["https://canary.example"]` {
+		t.Fatalf("unexpected fallback payload: active=%s canaries=%s", rawActive, rawCanaries)
 	}
 }
 

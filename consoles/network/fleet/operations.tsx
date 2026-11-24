@@ -1,71 +1,14 @@
 import { useState } from 'react'
 import { useAction } from '../../ui/activity'
-import { Badge, DateStamp, Notice } from '../../ui/layout'
+import { Notice } from '../../ui/layout'
 import { Confirm } from '../../ui/forms'
 import { RequestError } from '../../ui/request'
 import { useCopy } from '../../ui/use-locale'
 import { networkCopy } from '../locales'
 import type { AuthorityClient } from '../api'
-import { servesRelay, type FleetAction, type NodeDetails, type NodeState, type Publication } from '../model'
+import { servesRelay, type FleetAction, type NodeDetails } from '../model'
 
-const CERTIFICATE_WARNING_SECONDS = 14 * 86400
-const LISTED_STATUS_TONES = { active: 'good', canary: 'info', draining: 'warning' } as const
-
-function probeBadge(
-  role: string,
-  ok: boolean,
-  expectRelay: boolean,
-  t: typeof networkCopy.en,
-): { tone: 'good' | 'neutral' | 'warning'; label: string } {
-  if (ok) return { tone: 'good', label: t.passed }
-  // Intentionally draining or maintenance-held nodes advertise relay_available=false.
-  if (role === 'Relay' && !expectRelay) return { tone: 'neutral', label: t.admissions.draining }
-  return { tone: 'warning', label: t.probeFailed }
-}
-
-export function ProbeWarnings({ node, directory }: { node: NodeDetails; directory: Publication }) {
-  const t = useCopy(networkCopy)
-  if (node.state.kind !== 'listed') return null
-  const rows = directory.vantages.filter(v => !directory.silent_vantages.includes(v.id) &&
-    v.nodes[node.spec.node_key]?.operation_id === node.operation_id)
-  const expiring = rows.some(v => {
-    const expiry = v.nodes[node.spec.node_key].tls_expires
-    return expiry !== null && expiry - v.at <= CERTIFICATE_WARNING_SECONDS
-  })
-  const expectRelay = node.admission === 'accepting'
-  const failed = rows.filter(v => {
-    const s = v.nodes[node.spec.node_key]
-    return !s.tcp || !s.https || (expectRelay && s.relay === false) || s.stun === false
-  })
-  return <>{expiring && <Badge tone="warning">{t.tlsExpiring}</Badge>}
-    {failed.length > 0 && <Badge tone="warning">{t.probeWarning} · {failed.map(v => v.id).join(', ')}</Badge>}</>
-}
-
-export function ProbeResults({ node, directory }: { node: NodeDetails; directory: Publication }) {
-  const t = useCopy(networkCopy)
-  const id = node.spec.node_key
-  const rows = directory.vantages.filter(v => v.nodes[id] && v.nodes[id].operation_id === node.operation_id)
-  if (!rows.length) return null
-  const expectRelay = node.admission === 'accepting'
-  return <section className="panel padded stack"><h2>{t.probes}</h2>
-    {rows.map(v => {
-      const s = v.nodes[id]
-      const checks = Object.entries({ TCP: s.tcp, HTTPS: s.https, Relay: s.relay, STUN: s.stun })
-        .filter((entry): entry is [string, boolean] => entry[1] !== null)
-      return <div key={v.id} className="setting-row"><div><h3>{v.id}</h3><DateStamp millis={v.at * 1000} /></div><div className="actions">
-        {directory.silent_vantages.includes(v.id) && <Badge tone="warning">{t.silentVantages}</Badge>}
-        {checks.map(([role, ok]) => {
-          const badge = probeBadge(role, ok, expectRelay, t)
-          return <Badge key={role} tone={badge.tone}>{role} · {badge.label}</Badge>
-        })}
-        {s.tls_expires !== null && <Badge tone={s.tls_expires - v.at <= CERTIFICATE_WARNING_SECONDS ? 'warning' : 'neutral'}>
-          TLS · <DateStamp millis={s.tls_expires * 1000} /></Badge>}
-      </div></div>
-    })}
-  </section>
-}
-
-type PendingAction = { kind: 'disable' | 'remove'; earlyCutoff: boolean }
+type PendingAction = { kind: 'disable' | 'remove'; earlyCutoff: boolean; node: NodeDetails }
 
 function confirmDetails(t: typeof networkCopy.en, pending: PendingAction) {
   if (pending.kind === 'remove') {
@@ -88,64 +31,29 @@ function canEscalateDrainPending(
     (command.kind === 'disable' || command.kind === 'remove') && !command.early_cutoff
 }
 
-function FleetConfirmDialogs({ pending, aborting, onCancelPending, onConfirmPending, onCancelAbort, onConfirmAbort }: {
-  pending: PendingAction | null
-  aborting: string | null
-  onCancelPending: () => void
-  onConfirmPending: (action: PendingAction) => void
-  onCancelAbort: () => void
-  onConfirmAbort: (maintenanceId: string) => void
-}) {
-  const t = useCopy(networkCopy)
-  const details = pending ? confirmDetails(t, pending) : null
-  return <>
-    {pending && details && <Confirm title={details.title} confirm={details.confirm}
-      onCancel={onCancelPending} onConfirm={() => onConfirmPending(pending)}>
-      <p>{details.body}</p></Confirm>}
-    {aborting && <Confirm title={t.confirmAbortMaintenance} confirm={t.abortMaintenance}
-      onCancel={onCancelAbort} onConfirm={() => onConfirmAbort(aborting)}>
-      <p>{t.abortMaintenanceEffect}</p></Confirm>}
-  </>
-}
-
-function fleetStatusBadge(
-  state: Exclude<NodeState, { kind: 'staging' }>,
-  t: typeof networkCopy.en,
-): { tone: 'good' | 'info' | 'warning'; label: string } {
-  if (state.kind === 'disabled') return { tone: 'warning', label: t.admissions.disabled }
-  return { tone: LISTED_STATUS_TONES[state.status], label: t.states[state.status] }
+function listingToken(node: Pick<NodeDetails, 'state' | 'version'>): string {
+  return `${node.state}:${node.version}`
 }
 
 export function FleetControls({ node, api, refresh }: { node: NodeDetails; api: AuthorityClient; refresh: () => Promise<void> }) {
   const t = useCopy(networkCopy)
   const action = useAction()
   const [pending, setPending] = useState<PendingAction | null>(null)
-  const [aborting, setAborting] = useState<string | null>(null)
-  if (node.state.kind === 'staging') return null
-  const { spec, state, operation_id } = node
-  const disabled = state.kind === 'disabled'
-  const listed = state.kind === 'listed' ? state : null
-  const maintenance = listed?.maintenance ?? null
-  const hasRelay = servesRelay(node)
-  const status = fleetStatusBadge(state, t)
-  const canPromoteActive = Boolean(listed && listed.status === 'canary')
-  const canResume = listed?.status === 'draining'
-  const canDrain = Boolean(hasRelay && listed && listed.status !== 'draining')
-  function promoteActive() {
+  const [feedbackListing, setFeedbackListing] = useState<string | null>(null)
+  const currentListing = listingToken(node)
+  const disabled = node.state === 'disabled'
+  const canDrain = servesRelay(node) && (node.state === 'canary' || node.state === 'active')
+  const details = pending && confirmDetails(t, pending)
+  function run(command: FleetAction, observed = node) {
     void action.run(async () => {
-      await api.promote(spec.node_key, operation_id, 'active')
-      await refresh()
-    })
-  }
-  function run(command: FleetAction) {
-    void action.run(async () => {
+      setFeedbackListing(listingToken(observed))
       try {
-        await api.manage(spec.node_key, operation_id, command)
+        await api.manage(observed, command)
       } catch (error) {
         if (canEscalateDrainPending(error, command)) {
           // Escalate a stale-snapshot drain conflict straight into the early-cutoff confirmation
           // without leaving a raw error banner behind the dialog.
-          setPending({ kind: command.kind, earlyCutoff: true })
+          setPending({ kind: command.kind, earlyCutoff: true, node: observed })
           return
         }
         throw error
@@ -155,27 +63,22 @@ export function FleetControls({ node, api, refresh }: { node: NodeDetails; api: 
     })
   }
   const next = disabled ? 'remove' : 'disable'
-  return <section className="panel padded stack"><div className="section-title"><h2>{t.fleetOperations}</h2>
-    <Badge tone={status.tone}>{status.label}</Badge></div>
-    {maintenance && <Badge tone="info">{t.maintenance} · {maintenance}</Badge>}
+  // Manage preconditions bind to (state, version), so errors expire once a refresh advances either.
+  const feedback = feedbackListing === currentListing ? action.feedback : null
+  return <section className="panel padded stack"><h2>{t.fleetOperations}</h2>
     <div className="actions">
-      {canPromoteActive &&
-        <button type="button" disabled={action.busy} onClick={promoteActive}>{t.publishActive}</button>}
-      {canResume &&
-        <button type="button" disabled={action.busy} onClick={() => run({ kind: 'resume' })}>{t.resume}</button>}
-      {canDrain &&
-        <button type="button" className="secondary" disabled={action.busy} onClick={() => run({ kind: 'drain' })}>{t.drain}</button>}
-      {maintenance && <button type="button" className="secondary" disabled={action.busy}
-        onClick={() => setAborting(maintenance)}>{t.abortMaintenance}</button>}
-      {disabled && <button type="button" className="secondary" disabled={action.busy} onClick={() => run({ kind: 'verify' })}>{t.verifyAgain}</button>}
-      <button type="button" className="secondary danger-text" disabled={action.busy || Boolean(maintenance)}
-        onClick={() => setPending({ kind: next, earlyCutoff: !node.cutoff_ready })}>{disabled ? t.removeNode : t.disable}</button>
+      {node.state !== 'active' && <button type="button" disabled={action.busy}
+        onClick={() => run({ kind: 'activate' })}>{t.activate}</button>}
+      {canDrain && <button type="button" className="secondary" disabled={action.busy}
+        onClick={() => run({ kind: 'drain' })}>{t.drain}</button>}
+      <button type="button" className="secondary danger-text" disabled={action.busy}
+        onClick={() => setPending({ kind: next, earlyCutoff: !node.cutoff_ready, node })}>{disabled ? t.removeNode : t.disable}</button>
     </div>
-    <FleetConfirmDialogs pending={pending} aborting={aborting}
-      onCancelPending={() => setPending(null)}
-      onConfirmPending={confirmed => { setPending(null); run({ kind: confirmed.kind, early_cutoff: confirmed.earlyCutoff }) }}
-      onCancelAbort={() => setAborting(null)}
-      onConfirmAbort={maintenanceId => { run({ kind: 'abort_maintenance', maintenance_id: maintenanceId }); setAborting(null) }} />
-    <Notice feedback={action.feedback} />
+    {pending && details && <Confirm title={details.title} confirm={details.confirm}
+      onCancel={() => setPending(null)} onConfirm={() => {
+        setPending(null)
+        run({ kind: pending.kind, early_cutoff: pending.earlyCutoff }, pending.node)
+      }}><p>{details.body}</p></Confirm>}
+    <Notice feedback={feedback} />
   </section>
 }

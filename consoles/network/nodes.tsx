@@ -1,6 +1,5 @@
 import { useCallback } from 'react'
-import { FleetControls, ProbeResults, ProbeWarnings } from './fleet/operations'
-import { Verification } from './verification'
+import { FleetControls } from './fleet/operations'
 import { useAction, useResource } from '../ui/activity'
 import { message } from '../ui/locale'
 import { useCopy, useLocale } from '../ui/use-locale'
@@ -12,10 +11,9 @@ import type { AuthorityClient } from './api'
 import { encode } from './identity'
 import { servesRelay, type LoadReport, type NodeDetails, type NodePage, type NodeSpec, type NodeState, type PolicyChange, type Publication, type RelayNode } from './model'
 
-type Directory = Publication | null | undefined
 type BadgeTone = 'neutral' | 'good' | 'warning' | 'info'
 
-const STAGING_TONES = { queued: 'neutral', running: 'neutral', passed: 'good', failed: 'warning' } as const
+const STATE_TONES = { canary: 'info', active: 'good', draining: 'warning', disabled: 'neutral' } as const
 
 function relayPolicyStatus(node: RelayNode, t: typeof networkCopy.en): { tone: BadgeTone; label: string } {
   if (servesRelay(node)) {
@@ -24,13 +22,7 @@ function relayPolicyStatus(node: RelayNode, t: typeof networkCopy.en): { tone: B
       label: t.admissions[node.admission],
     }
   }
-  // Authority keeps STUN-only fleet nodes at admission=draining (fail-closed for relay)
-  // so they reject public relay traffic while remaining eligible for probes and maintenance.
-  if (node.state.kind === 'disabled') return { tone: 'warning', label: t.admissions.disabled }
-  if (node.state.kind === 'listed') {
-    if (node.state.maintenance) return { tone: 'info', label: t.maintenance }
-    if (node.state.status === 'draining') return { tone: 'warning', label: t.states.draining }
-  }
+  if (node.state === 'disabled') return { tone: 'warning', label: t.admissions.disabled }
   return { tone: 'neutral', label: t.stunOnly }
 }
 
@@ -42,20 +34,18 @@ function RelayPolicyCell({ node }: { node: RelayNode }) {
     <small>{servesRelay(node) ? `${access} · v${node.version}` : `v${node.version}`}</small></>
 }
 
-function DirectoryStatus({ directory, id, state }: { directory: Directory; id: string; state: NodeState }) {
+function DirectoryStatus({ directory, id, state }: { directory: Publication; id: string; state: NodeState }) {
   const t = useCopy(networkCopy)
-  if (state.kind === 'staging') {
-    const { kind } = state.check
-    let note = t.notListed
-    if (directory === undefined) note = t.checkingMirror
-    else if (directory === null) note = t.unverified
-    return <><Badge tone={STAGING_TONES[kind]}>{t.states[kind]}</Badge><small>{note}</small></>
-  }
-  if (directory === undefined) return <span>{t.checkingMirror}</span>
-  if (directory === null) return <span>{t.unverified}</span>
-  const listed = directory.keys.includes(id)
-  return <><Badge tone={listed ? 'info' : 'neutral'}>{listed ? t.listed : t.notListed}</Badge>
-    <small>{t.directoryVersion(directory.generation, directory.serial)}</small></>
+  const version = directory.keys.includes(id) ? t.directoryVersion(directory.generation, directory.serial) : t.notListed
+  return <><Badge tone={STATE_TONES[state]}>{t.states[state]}</Badge>
+    <small>{version}</small></>
+}
+
+function HeartbeatStatus({ node }: { node: NodeDetails }) {
+  const t = useCopy(networkCopy)
+  if (node.state === 'disabled' || !node.report) return null
+  if (node.report_stale) return <Badge tone="danger">{t.offline}</Badge>
+  return node.report.load.applied_policy_version < node.version ? <Badge tone="info">{t.policySyncPending}</Badge> : null
 }
 
 function Latest({ report }: { report: LoadReport | null }) {
@@ -65,25 +55,25 @@ function Latest({ report }: { report: LoadReport | null }) {
 }
 
 function NodeOverview({ nodes, complete, directory }: {
-  nodes: NodeDetails[]; complete: boolean; directory: Directory
+  nodes: NodeDetails[]; complete: boolean; directory: Publication
 }) {
   const { locale } = useLocale()
   const t = networkCopy[locale]
-  const published = new Set(directory?.keys)
-  const listed = directory ? nodes.filter(node => published.has(encode(node.key))).length : null
-  const metrics: { icon: IconName; label: string; value: number | null }[] = [
+  const published = new Set(directory.keys)
+  const listed = nodes.filter(node => published.has(encode(node.key))).length
+  const metrics: { icon: IconName; label: string; value: number }[] = [
     { icon: 'server', label: complete ? t.enrolledCount : t.loadedNodes, value: nodes.length },
     { icon: 'clock', label: complete ? t.awaitingReport : t.loadedAwaitingReport, value: nodes.filter(node => !node.report).length },
     { icon: 'book', label: complete ? t.listedCount : t.loadedListed, value: listed },
   ]
   return <dl className="panel node-overview">{metrics.map(({ icon, label, value }) => <div key={icon}>
     <dt><span className="metric-icon"><Icon name={icon} /></span>{label}</dt>
-    <dd>{value === null ? <small>{directory === undefined ? t.checkingMirror : t.unverified}</small> : value.toLocaleString(locale)}</dd>
+    <dd>{value.toLocaleString(locale)}</dd>
   </div>)}</dl>
 }
 
 export function Nodes({ page, directory, loading, loadMore }: {
-  page: NodePage; directory: Directory; loading: boolean; loadMore: () => void
+  page: NodePage; directory: Publication; loading: boolean; loadMore: () => void
 }) {
   const t = useCopy(networkCopy)
   const shared = useCopy(sharedCopy)
@@ -91,12 +81,11 @@ export function Nodes({ page, directory, loading, loadMore }: {
   const enroll = <a className="button" href="#enroll"><Icon name="plus" size={17} />{t.enroll}</a>
   return <div className="view"><div className="page-title"><h1 id="node-heading">{t.nodes}</h1>
     {nodes.length > 0 && enroll}</div>
-    {directory && <div className="actions"><Badge>{t.directoryVersion(directory.generation, directory.serial)}</Badge>
-      {!directory.mirrors_current && <Badge tone="warning">{t.mirrorLag}</Badge>}
+    <div className="actions"><Badge>{t.directoryVersion(directory.generation, directory.serial)}</Badge>
+      {directory.kv_sync_pending && <Badge tone="warning">{t.kvSyncPending}</Badge>}
       {directory.expiring_certificates.directory !== null && <Badge tone="warning">{t.directoryCertExpiry} · <DateStamp millis={directory.expiring_certificates.directory * 1000} /></Badge>}
       {directory.expiring_certificates.ticket !== null && <Badge tone="warning">{t.ticketCertExpiry} · <DateStamp millis={directory.expiring_certificates.ticket * 1000} /></Badge>}
-      {directory.silent_vantages.length > 0 && <Badge tone="warning">{t.silentVantages} · {directory.silent_vantages.join(', ')}</Badge>}
-    </div>}
+    </div>
     {nodes.length === 0 ? <div className="panel"><EmptyState icon="network" title={t.noNodes}>
       <p>{t.registerHint}</p>{enroll}</EmptyState></div>
       : <><NodeOverview nodes={nodes} complete={cursor === null} directory={directory} />
@@ -110,8 +99,8 @@ export function Nodes({ page, directory, loading, loadMore }: {
                 <span className="row-icon"><Icon name="server" size={19} /></span>
                 <span>{node.spec.alias}<small>{t.zones[node.spec.zone]} · <code>{id.slice(0, 8)}</code></small></span></a></th>
               <td data-label={t.savedRelayPolicy}><div><RelayPolicyCell node={node} /></div></td>
-              <td data-label={t.lastReport}><div><Latest report={node.report} /></div></td>
-              <td data-label={t.directory}><div><DirectoryStatus directory={directory} id={id} state={node.state} />{directory && <ProbeWarnings node={node} directory={directory} />}</div></td>
+              <td data-label={t.lastReport}><div><Latest report={node.report} /><HeartbeatStatus node={node} /></div></td>
+              <td data-label={t.directory}><div><DirectoryStatus directory={directory} id={id} state={node.state} /></div></td>
             </tr>
           })}</tbody>
         </table>
@@ -121,7 +110,7 @@ export function Nodes({ page, directory, loading, loadMore }: {
   </div>
 }
 
-type NodeDetailActions = { refresh: () => Promise<void>; directory: Directory; api: AuthorityClient; saved: (node: NodeDetails) => void }
+type NodeDetailActions = { refresh: () => Promise<void>; directory: Publication; api: AuthorityClient; saved: (node: NodeDetails) => void }
 
 export function LookupNode({ id, api, directory, saved, refresh }: NodeDetailActions & { id: string }) {
   const t = useCopy(networkCopy)
@@ -169,7 +158,7 @@ export function NodeDetail({ node, directory, api, saved, refresh }: NodeDetailA
       <dl className="facts"><NodeSpecFacts spec={spec} />
         <dt>{t.region}</dt><dd>{spec.region}</dd><dt>{t.zone}</dt><dd>{t.zones[spec.zone]}</dd><dt>{t.publicKey}</dt><dd><code>{id}</code></dd>
         <dt>{t.directory}</dt><dd><DirectoryStatus directory={directory} id={id} state={node.state} /></dd>
-        <dt>{t.lastReport}</dt><dd>{report ? <DateStamp millis={report.reported_at * 1000} /> : t.awaitingReport}</dd>
+        <dt>{t.lastReport}</dt><dd>{report ? <DateStamp millis={report.reported_at * 1000} /> : t.awaitingReport} <HeartbeatStatus node={node} /></dd>
         {report?.load.relay_budget && <><dt>{t.relayBudget}</dt><dd><Bytes value={report.load.relay_budget.bytes} /> · {t.resetsDay(report.load.relay_budget.reset_day_utc)}</dd></>}
         {report && <><dt>{t.appliedPolicy}</dt><dd>v{report.load.applied_policy_version} / v{node.version}</dd>
           <dt>{t.residentShares}</dt><dd>{report.load.resident_shares}</dd>
@@ -183,8 +172,6 @@ export function NodeDetail({ node, directory, api, saved, refresh }: NodeDetailA
           {node.anonymous ? t.requireAccount : t.allowAnonymous}</button></div>}
       <Notice feedback={action.feedback} />
     </section></div>
-    <Verification node={node} api={api} refresh={refresh} />
     <FleetControls node={node} api={api} refresh={refresh} />
-    {directory && <ProbeResults node={node} directory={directory} />}
   </div>
 }

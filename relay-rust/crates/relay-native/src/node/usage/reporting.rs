@@ -33,6 +33,14 @@ impl Authority {
     }
     pub fn validate(&self) -> Result<()> {
         self.issuer()?;
+        ensure!(
+            self.url
+                .trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}')
+                == self.url
+                && !self.url.bytes().any(|byte| byte.is_ascii_control())
+                && !self.url.contains(['?', '#', '\\', '@']),
+            "authority must use its public API host"
+        );
         let url = url::Url::parse(&self.url)?;
         let loopback = url.host_str().is_some_and(|host| {
             host == "localhost"
@@ -49,6 +57,11 @@ impl Authority {
                 && url.password().is_none()
                 && url.query().is_none()
                 && url.fragment().is_none()
+                && url.port() != Some(0)
+                && url.path() == "/"
+                && self.url.split_once("://").is_some_and(|(_, rest)| {
+                    rest.split_once('/').is_none_or(|(_, path)| path.is_empty())
+                })
                 && !url
                     .host_str()
                     .is_some_and(|host| host.ends_with(".workers.dev")),

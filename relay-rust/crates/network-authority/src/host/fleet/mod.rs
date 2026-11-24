@@ -1,5 +1,4 @@
 mod edge;
-mod maintenance;
 mod public_directory;
 mod public_dns;
 mod reconcile;
@@ -12,26 +11,20 @@ use super::{
 use crate::{
     Authority, Environment, Fault,
     fleet::{
-        publication::{self, KV_KEY, Publication, Publisher, Release},
-        signature::Envelope,
+        publication::{KV_KEY, Publication, Publisher, Release},
         topology::Spec,
-        vantage::{self, Agent},
     },
-    store::{load, save},
 };
 use anyhow::Result;
 pub(super) use edge::{handle_edge, handles_edge};
 pub(super) use public_directory::serve as public_directory;
 use reconcile::{DirectoryMirror, ReconcileMode, ReconcileOutcome};
+use route::PostCommitReconcile;
 pub(super) use route::Route;
-use route::{AdminRoute, InternalRoute, PostCommitReconcile, VantageRoute};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{Value, json};
 use worker::{Env, Method, Request, RequestInit, Response, ScheduleContext, ScheduledEvent, event};
 const AUTHORITY_OBJECT: &str = "network-authority-v1";
-const DIRECTORY_PATH: &str = "/.well-known/windshare-network";
-const MIRRORS: &str = "directory/mirrors";
-const MIRROR_DEFER_HEADER: &str = "X-Directory-Mirror-Defer";
 // Cloudflare Workers KV enforces a 60 s minimum cache_ttl on reads.
 const KV_AUDIT_CACHE_SECONDS: u64 = 60;
 const EXPIRY_ALERT_SECONDS: u64 = 14 * 86400;
@@ -75,52 +68,44 @@ impl DirectoryMirror for KvMirror {
             .map_err(|error| anyhow::anyhow!("{error}"))
     }
 }
-fn release() -> Result<Release> {
+
+// Keep TEST_DIRECTORY_RELEASE overrides out of release Worker deployments so
+// production binaries stay pinned to the compiled offline root keys.
+#[cfg(all(feature = "test-release", not(debug_assertions)))]
+compile_error!("`test-release` feature must not be enabled in release Worker builds");
+
+fn release(#[allow(unused_variables)] env: &Env) -> Result<Release> {
+    #[cfg(feature = "test-release")]
+    if let Ok(value) = env.var("TEST_DIRECTORY_RELEASE") {
+        return Ok(serde_json::from_str(&value.to_string())?);
+    }
     Release::bundled()
 }
-fn origins() -> Result<[String; vantage::ORIGIN_COUNT]> {
-    let release = release()?;
-    Ok([
-        release.link_host,
-        release.backup_entry,
-        "https://self-hosted.example".into(),
-    ])
-}
-fn agents(env: &Env) -> Result<Vec<Agent>> {
-    let agents = env.var("VANTAGE_KEYS").map_or_else(
-        |_| Ok(vec![]),
-        |v| serde_json::from_str::<Vec<Agent>>(&v.to_string()),
-    )?;
-    vantage::validate_agents(&agents)?;
-    Ok(agents)
+
+fn directory(store: &mut Database, #[allow(unused_variables)] env: &Env) -> Result<Publication> {
+    if let Some(head) = Publication::load(store)? {
+        return Ok(head);
+    }
+    #[cfg(feature = "test-release")]
+    if let Ok(value) = env.var("TEST_DIRECTORY_RELEASE") {
+        return Publication::bootstrap(store, &serde_json::from_str(&value.to_string())?, &[]);
+    }
+    Publication::import_bundled(store)
 }
 fn signer(env: &Env) -> Result<Publisher> {
     Publisher::new(
-        &release()?,
+        &release(env)?,
         serde_json::from_str(&env.var("DIRECTORY_CERTIFICATE")?.to_string())?,
         &env.secret("DIRECTORY_SIGNING_SEED")?.to_string(),
     )
 }
 type Service = Authority<Database, WorkerEnvironment>;
 pub(super) fn console(authority: &mut Service, env: &Env) -> Result<Value> {
-    let publication = Publication::load_or_import(&mut authority.store)?;
+    let publication = directory(&mut authority.store, env)?;
     let revision = publication.revision()?;
     let now = authority.environment.now();
-    let mirrors = load::<MirrorCheck>(&authority.store, MIRRORS)?;
-    let enrolled = agents(env)?;
-    let mainland = vantage::mainland_current(&authority.store, &enrolled, &revision.digest, now)?;
     let mut value = serde_json::to_value(&revision)?;
-    value["mirrors_current"] = json!(
-        mainland
-            && mirrors.is_some_and(|m| m.matches
-                && m.digest == revision.digest
-                && now.saturating_sub(m.at) <= vantage::SILENT_SECONDS * 2)
-    );
-    value["silent_vantages"] = json!(vantage::silent(&authority.store, &enrolled, now)?);
-    value["vantages"] = json!(crate::fleet::monitoring::reports(
-        &authority.store,
-        &enrolled
-    )?);
+    value["kv_sync_pending"] = json!(reconcile::sync_pending(&authority.store, &revision.digest)?);
     let ticket_expiry = authority.signing.generation.expires_at;
     let alert_time = now + EXPIRY_ALERT_SECONDS;
     value["expiring_certificates"] = json!({
@@ -132,13 +117,6 @@ pub(super) fn console(authority: &mut Service, env: &Env) -> Result<Value> {
     }
     Ok(value)
 }
-#[derive(Deserialize, Serialize)]
-struct MirrorCheck {
-    digest: String,
-    matches: bool,
-    at: u64,
-}
-
 async fn internal(
     env: &Env,
     route: Route,
@@ -174,45 +152,15 @@ async fn internal(
 pub async fn scheduled(_event: ScheduledEvent, env: Env, context: ScheduleContext) {
     super::telemetry::install(&env);
     context.wait_until(async move {
-        if let Err(error) = maintenance(&env).await {
-            tracing::error!(event="directory_maintenance_failed",%error);
+        if let Err(error) = scheduled_tick(&env).await {
+            tracing::error!(event="directory_tick_failed",%error);
         }
     });
 }
-async fn maintenance(env: &Env) -> worker::Result<()> {
-    let mut response = internal(
-        env,
-        Route::Internal(InternalRoute::Tick),
-        (None, None),
-        &json!({}),
-    )
-    .await?;
+async fn scheduled_tick(env: &Env) -> worker::Result<()> {
+    let response = internal(env, Route::Tick, (None, None), &json!({})).await?;
     if response.status_code() != 200 {
-        return Err(failure("directory maintenance unavailable"));
-    }
-    if let Some(reason) = response.headers().get(MIRROR_DEFER_HEADER)? {
-        // Frontend mirrors cache KV reads for 60 s, so probing before KV settles
-        // or while a write retry is queued would observe the previous revision.
-        tracing::info!(event = "directory_mirror_check_deferred", %reason);
-        return Ok(());
-    }
-    let expected: Envelope = response.json().await?;
-    let digest = publication::digest(&expected).map_err(failure)?;
-    let matches = edge::mirrors_match(&expected, &digest, None).await;
-    let check = MirrorCheck {
-        digest,
-        matches,
-        at: worker::Date::now().as_millis() / 1000,
-    };
-    let response = internal(
-        env,
-        Route::Internal(InternalRoute::Mirrors),
-        (None, None),
-        &check,
-    )
-    .await?;
-    if response.status_code() != 200 {
-        return Err(failure("mirror report unavailable"));
+        return Err(failure("directory tick unavailable"));
     }
     Ok(())
 }
@@ -229,7 +177,7 @@ impl NetworkAuthority {
         let ctx = Context::new(req, &self.env)?;
         let bytes = bytes.to_vec();
         // A rejected fleet command rolls back the whole transaction, including
-        // bootstrap and lease writes. Network reads and KV writes run outside it.
+        // bootstrap and projection writes. Network reads and KV writes run outside it.
         let result = self.transact(false, move |service, env| {
             dispatch(service, env, route, &ctx, &bytes)
         });
@@ -241,20 +189,11 @@ impl NetworkAuthority {
             }
             PostCommitReconcile::OnCommitPending | PostCommitReconcile::None => None,
         };
-        let outcome = match reconcile_mode {
-            Some(mode) => self.reconcile_and_schedule(mode).await,
-            None => None,
-        };
+        if let Some(mode) = reconcile_mode {
+            self.reconcile_and_schedule(mode).await;
+        }
         match result {
-            Ok(value) => {
-                let mut response = Response::from_json(&value)?;
-                if route == Route::Internal(InternalRoute::Tick)
-                    && let Some(reason) = outcome.and_then(ReconcileOutcome::mirror_defer_reason)
-                {
-                    response.headers_mut().set(MIRROR_DEFER_HEADER, reason)?;
-                }
-                Ok(response)
-            }
+            Ok(value) => Response::from_json(&value),
             Err(error) => error.downcast_ref::<Fault>().map_or_else(
                 || {
                     tracing::error!(event="fleet_command_failed",%error);
@@ -351,122 +290,32 @@ fn dispatch(
     ctx: &Context,
     bytes: &[u8],
 ) -> Result<Value> {
-    match route {
-        Route::Maintenance(action) => maintenance::dispatch(service, env, action, ctx, bytes),
-        Route::Vantage(action) => dispatch_vantage(service, env, action, bytes),
-        Route::Admin(action) => dispatch_admin(service, env, action, ctx, bytes),
-        Route::Internal(action) => dispatch_internal(service, env, action, bytes),
+    if route != Route::Tick {
+        routes::verify_admin_csrf(&ctx.session, &ctx.csrf)?;
+        service.require_admin(&ctx.session)?;
     }
-}
-
-fn dispatch_vantage(
-    service: &mut Service,
-    env: &Env,
-    route: VantageRoute,
-    bytes: &[u8],
-) -> Result<Value> {
     match route {
-        VantageRoute::Targets => Ok(json!(
-            service.fleet_targets(&agents(env)?, &routes::parse(bytes)?,)?
-        )),
-        VantageRoute::Cycle => {
-            service.record_cycle(&agents(env)?, &routes::parse(bytes)?)?;
-            Ok(json!({}))
-        }
-        VantageRoute::Poll => {
-            let origins = origins()?;
-            Ok(json!(service.claim(
-                &agents(env)?,
-                &routes::parse(bytes)?,
-                origins
-            )?))
-        }
-        VantageRoute::Result => {
-            service.complete_probe(&agents(env)?, &routes::parse(bytes)?)?;
-            Ok(json!({}))
-        }
-    }
-}
-
-fn dispatch_admin(
-    service: &mut Service,
-    env: &Env,
-    route: AdminRoute,
-    ctx: &Context,
-    bytes: &[u8],
-) -> Result<Value> {
-    routes::verify_admin_csrf(&ctx.session, &ctx.csrf)?;
-    service.require_admin(&ctx.session)?;
-    let head = Publication::load_or_import(&mut service.store)?;
-    match route {
-        AdminRoute::Prepare => Ok(json!(head.envelope)),
-        AdminRoute::Manage => {
-            service.manage(&ctx.session, &routes::parse(bytes)?, &signer(env)?)?;
-            Ok(json!({}))
-        }
-        AdminRoute::Stage => {
+        Route::Prepare => {}
+        Route::Enroll => {
+            directory(&mut service.store, env)?;
             let spec: Spec = routes::parse(bytes)?;
-            anyhow::ensure!(
-                !agents(env)?.iter().any(|agent| agent.key == spec.node_key),
-                Fault::Conflict {
-                    reason: "vantage_key_bound".into()
-                }
-            );
-            let node = service.stage(&ctx.session, spec)?;
-            Ok(json!(service.node_details(node)?))
+            let node = service.enroll(&ctx.session, spec, &signer(env)?)?;
+            return Ok(json!(service.node_details(node)?));
         }
-        AdminRoute::Promote => {
-            #[derive(Deserialize)]
-            struct Promotion {
-                command: crate::fleet::Promote,
-                observed_digest: String,
-            }
-            let Promotion {
-                command,
-                observed_digest,
-            } = routes::parse(bytes)?;
-            service.promote(
-                &ctx.session,
-                &command,
-                &agents(env)?,
-                &observed_digest,
-                &signer(env)?,
-            )?;
-            Ok(json!({}))
+        Route::Manage => {
+            directory(&mut service.store, env)?;
+            service.manage(&ctx.session, &routes::parse(bytes)?, &signer(env)?)?;
+        }
+        Route::Tick => {
+            let mut head = directory(&mut service.store, env)?;
+            return tick(service, env, &mut head);
         }
     }
-}
-
-fn dispatch_internal(
-    service: &mut Service,
-    env: &Env,
-    route: InternalRoute,
-    bytes: &[u8],
-) -> Result<Value> {
-    let mut head = Publication::load_or_import(&mut service.store)?;
-    match route {
-        InternalRoute::Tick => tick(service, env, &mut head),
-        InternalRoute::Mirrors => {
-            let check: MirrorCheck = routes::parse(bytes)?;
-            if publication::digest(&head.envelope)? == check.digest {
-                save(&mut service.store, MIRRORS, &check)?;
-            }
-            Ok(json!({}))
-        }
-    }
+    Ok(json!({}))
 }
 
 fn tick(service: &mut Service, env: &Env, head: &mut Publication) -> Result<Value> {
     let now = service.environment.now();
-    match agents(env) {
-        Ok(agents) => {
-            let missing = vantage::silent(&service.store, &agents, now)?;
-            if !missing.is_empty() {
-                tracing::warn!(event="vantage_silent", vantages=?missing);
-            }
-        }
-        Err(error) => tracing::error!(event="vantage_configuration_invalid", %error),
-    }
     let expiry = head.revision()?.certificate_expires;
     if expiry <= i64::try_from(now + EXPIRY_ALERT_SECONDS)?
         || service.signing.generation.expires_at <= now + EXPIRY_ALERT_SECONDS
@@ -485,5 +334,5 @@ fn tick(service: &mut Service, env: &Env, head: &mut Publication) -> Result<Valu
         }
         Err(error) => tracing::error!(event="directory_renewal_failed", %error),
     }
-    Ok(json!(head.envelope))
+    Ok(json!({}))
 }

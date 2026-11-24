@@ -8,7 +8,6 @@ mod credential;
 pub mod device_login;
 pub mod entitlement;
 pub mod governor;
-pub mod probe;
 pub mod restrictions;
 pub mod ticket;
 pub mod trust;

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 
 	"github.com/windshare/windshare/engine/relayprofile"
@@ -87,12 +88,14 @@ func (s *activeShare) run(ctx, resourceContext context.Context, request Request)
 		return task.FailureUsage, fmt.Errorf("%w: %d; use 0 for the default or a power of two from %d to %d bytes",
 			ErrInvalidChunkSize, request.ChunkSize, catalog.MinChunkSize, catalog.MaxChunkSize)
 	}
-	urls, err := relayprofile.RegistrationURLs(request.Relays)
-	if err != nil || len(urls) > relayset.MaximumEndpoints {
+	all := slices.Concat(request.Relays, request.Standby)
+	urls, err := relayprofile.RegistrationURLs(all)
+	if err != nil || len(request.Relays) > relayset.MaximumEndpoints {
 		return task.FailureUsage, errors.Join(ErrConfiguration, err)
 	}
-	candidates := make(map[string]relayprofile.Registration, len(request.Relays))
-	for _, candidate := range request.Relays {
+	urls = urls[:len(request.Relays)]
+	candidates := make(map[string]relayprofile.Registration, len(all))
+	for _, candidate := range all {
 		candidates[candidate.PublicURL] = candidate
 	}
 	config := liveshare.SenderConfig{
@@ -153,10 +156,10 @@ func (s *activeShare) run(ctx, resourceContext context.Context, request Request)
 	if err := s.relays.WaitReady(ctx); err != nil {
 		return task.FailureNetwork, err
 	}
-	return s.serve(ctx, resourceContext)
+	return s.serve(ctx, resourceContext, urls)
 }
 
-func (s *activeShare) serve(ctx, resourceContext context.Context) (task.FailureClass, error) {
+func (s *activeShare) serve(ctx, resourceContext context.Context, initial []string) (task.FailureClass, error) {
 	d, o := s.dependencies, s.observations
 	endpoint, err := v2.NormalizeRelayEndpoint(s.relays.ReadyRelayURL())
 	if err != nil {
@@ -190,7 +193,7 @@ func (s *activeShare) serve(ctx, resourceContext context.Context) (task.FailureC
 	// Admission belongs to the share lifetime, so callers need no presentation
 	// acknowledgement to make a returned capability usable.
 	s.server = startSessionServer(resourceContext, s.factory, s.relays, o)
-	registrations := relayset.SenderRegistrations{Admitted: []string{s.relays.ReadyRelayURL()}}
+	registrations := relayset.SenderRegistrations{Candidates: initial, Admitted: []string{s.relays.ReadyRelayURL()}}
 	if source, ok := s.relays.(interface {
 		Registrations() relayset.SenderRegistrations
 	}); ok {

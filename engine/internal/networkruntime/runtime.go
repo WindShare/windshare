@@ -108,6 +108,7 @@ func (r *Runtime) Close() {
 
 type Selection struct {
 	Relays            []relayprofile.Registration
+	Standby           []relayprofile.Registration
 	authorization     *account.ShareAuthorization
 	Plan              relayplan.Plan
 	Frontend          string
@@ -164,7 +165,10 @@ func (r *Runtime) Plan(ctx context.Context, intent relayprofile.Intent, frontend
 	}
 	for _, candidate := range plan.Network {
 		result.Relays = append(result.Relays, relayprofile.Registration{PublicURL: candidate.URL, Authorization: result.authorization.Source(candidate.URL)})
-		result.Decision.Candidates = append(result.Decision.Candidates, networkconfig.Candidate{URL: candidate.URL, Alias: candidate.Alias, CooldownUntil: candidate.CooldownUntil, ServerRetryAt: candidate.ServerRetryAt})
+		result.Decision.Candidates = append(result.Decision.Candidates, decisionCandidate(candidate))
+	}
+	for _, candidate := range plan.Standby {
+		result.Standby = append(result.Standby, relayprofile.Registration{PublicURL: candidate.URL, Authorization: result.authorization.Source(candidate.URL)})
 	}
 	for _, filter := range plan.Decision.Filters {
 		result.Decision.Filters = append(result.Decision.Filters, networkconfig.Filter{Endpoint: filter.Endpoint, Reason: filter.Reason})

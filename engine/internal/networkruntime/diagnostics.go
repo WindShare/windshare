@@ -3,6 +3,7 @@ package networkruntime
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"time"
 
@@ -40,15 +41,34 @@ func (s Selection) DiagnosticRecord() diagnostics.Record {
 	for _, filter := range s.Decision.Filters {
 		filters = append(filters, diagnostics.Object(diagnostics.Fields{"endpoint": diagnostics.Text(filter.Endpoint), "reason": diagnostics.Text(filter.Reason)}))
 	}
+	standby := make([]diagnostics.Value, 0, len(s.Plan.Standby))
+	for _, candidate := range s.Plan.Standby {
+		standby = append(standby, diagnostics.Text(candidate.URL))
+	}
 	return diagnostics.New("share_network_plan", diagnostics.Fields{"generation": diagnostics.Uint(s.Decision.DirectoryGeneration), "serial": diagnostics.Uint(s.Decision.DirectorySerial),
 		"network_generation": diagnostics.Text(s.Decision.NetworkGeneration), "configured_only": diagnostics.Bool(s.Decision.ConfiguredOnly),
-		"cooldown_fallback": diagnostics.Bool(s.Decision.CooldownFallback), "published_candidates": diagnostics.Array(candidates...), "filters": diagnostics.Array(filters...), "frontend": diagnostics.Text(s.Frontend),
+		"cooldown_fallback": diagnostics.Bool(s.Decision.CooldownFallback), "initial_candidates": diagnostics.Array(candidates...), "standby_canaries": diagnostics.Array(standby...), "filters": diagnostics.Array(filters...), "frontend": diagnostics.Text(s.Frontend),
 		"alternate_frontend": diagnostics.Text(s.AlternateFrontend), "frontend_reason": diagnostics.Text(s.Decision.FrontendReason)})
 }
 
 func AdmissionRecord(value relayset.Admission) diagnostics.Record {
 	return diagnostics.New("network_relay_admission", diagnostics.Fields{"endpoint": diagnostics.Text(value.Endpoint), "primary": diagnostics.Text(value.Primary),
 		"state": diagnostics.Text(value.State), "reason": diagnostics.Text(value.Reason), "admissions": diagnostics.Int(int64(value.Count))})
+}
+
+func FallbackRecord(value relayset.Fallback) diagnostics.Record {
+	return diagnostics.New("network_canary_fallback", diagnostics.Fields{
+		"active_relays": textArray(value.Active),
+		"canary_relays": textArray(value.Canaries),
+	})
+}
+
+func textArray(values []string) diagnostics.Value {
+	items := make([]diagnostics.Value, 0, len(values))
+	for _, value := range values {
+		items = append(items, diagnostics.Text(value))
+	}
+	return diagnostics.Array(items...)
 }
 
 func (r *Runtime) emitDirectoryInitFailure(network string, err error) {
@@ -73,7 +93,7 @@ func deadlineField(fields diagnostics.Fields, key string, deadline time.Time) {
 
 func (r *Runtime) Observer(selection Selection, sink diagnostics.Sink) func(string, relayset.Attempt) {
 	identities := make(map[string]string, len(selection.Plan.Network))
-	for _, candidate := range selection.Plan.Network {
+	for _, candidate := range slices.Concat(selection.Plan.Network, selection.Plan.Standby) {
 		identities[candidate.URL] = candidate.Identity
 	}
 	var mu sync.Mutex

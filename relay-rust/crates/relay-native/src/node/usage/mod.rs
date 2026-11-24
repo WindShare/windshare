@@ -33,12 +33,8 @@ impl Collector {
             issuer, account, ..
         } = attribution
         {
-            // Accepting an external issuer does not make a self-hosted node its billing agent,
-            // and synthetic probe traffic is never billable usage.
-            if self.issuer.get() != Some(&issuer)
-                || account == windshare_relay_access::probe::PROBE_ACCOUNT
-                || bytes == 0
-            {
+            // Self-hosted nodes only bill their reporting authority.
+            if self.issuer.get() != Some(&issuer) || bytes == 0 {
                 return;
             }
             let mut records = self.records.lock().expect("usage collector");

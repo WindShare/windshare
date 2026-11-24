@@ -95,6 +95,7 @@ type RegistrationState uint8
 const (
 	RegistrationPending RegistrationState = iota
 	RegistrationNeedsUserAuthorization
+	RegistrationRetrying
 	RegistrationAvailable
 )
 
@@ -234,7 +235,8 @@ func (lifecycle *SenderLifecycle) ObserveRegistration(observer func(Registration
 }
 
 func (lifecycle *SenderLifecycle) setRegistrationLocked(state RegistrationState) {
-	if lifecycle.registration == state {
+	// Once stopped, recovery must never move registration out of Pending again.
+	if (lifecycle.stopping && state != RegistrationPending) || lifecycle.registration == state {
 		return
 	}
 	lifecycle.registration = state
@@ -285,6 +287,19 @@ func (lifecycle *SenderLifecycle) detachForRecovery() (SenderConnection, error) 
 	return old, nil
 }
 
+func (lifecycle *SenderLifecycle) installCauseLocked(
+	callerContext context.Context,
+	recoveryContext context.Context,
+) error {
+	if lifecycle.stopping {
+		return ErrStopped
+	}
+	if err := callerContext.Err(); err != nil {
+		return err
+	}
+	return recoveryContext.Err()
+}
+
 func (lifecycle *SenderLifecycle) installRecovered(
 	connection SenderConnection,
 	callerContext context.Context,
@@ -292,18 +307,19 @@ func (lifecycle *SenderLifecycle) installRecovered(
 ) error {
 	lifecycle.mu.Lock()
 	defer lifecycle.mu.Unlock()
-	if lifecycle.stopping {
-		return ErrStopped
-	}
-	if err := callerContext.Err(); err != nil {
+	if err := lifecycle.installCauseLocked(callerContext, recoveryContext); err != nil {
 		return err
 	}
-	if err := recoveryContext.Err(); err != nil {
+	lifecycle.setRegistrationLocked(RegistrationAvailable)
+	// Route retirement cancels callerContext before releasing Sender.mu, so
+	// rechecking after the callback closes the retirement race and lets
+	// connectAttempt retire the unserved connection immediately.
+	if err := lifecycle.installCauseLocked(callerContext, recoveryContext); err != nil {
+		lifecycle.setRegistrationLocked(RegistrationPending)
 		return err
 	}
 	lifecycle.connection = connection
 	lifecycle.generation++
-	lifecycle.setRegistrationLocked(RegistrationAvailable)
 	return nil
 }
 
@@ -344,6 +360,9 @@ func (lifecycle *SenderLifecycle) StopRecovery() {
 		lifecycle.setRegistrationLocked(RegistrationPending)
 	}
 	lifecycle.mu.Unlock()
+	if lifecycle.config.Attempts != nil {
+		lifecycle.config.Attempts.Unavailable()
+	}
 }
 
 func (lifecycle *SenderLifecycle) Cleanup(ctx context.Context) error {
