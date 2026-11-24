@@ -49,11 +49,11 @@ pub struct ShareIntent {
 
 impl ShareIntent {
     pub fn new(source: EntrySource, roots: Vec<PathBuf>) -> Self {
-        Self {
-            id: IntentId::new(),
-            source,
-            roots,
-        }
+        Self::with_id(IntentId::new(), source, roots)
+    }
+
+    pub const fn with_id(id: IntentId, source: EntrySource, roots: Vec<PathBuf>) -> Self {
+        Self { id, source, roots }
     }
 
     /// # Errors

@@ -12,8 +12,11 @@ fn deliberate_actions_have_distinct_ids_and_retries_preserve_native_paths() {
     assert_eq!(selection, retry);
     assert_ne!(
         selection.id,
-        ShareIntent::new(EntrySource::Explorer, selection.roots).id
+        ShareIntent::new(EntrySource::Explorer, selection.roots.clone()).id
     );
+    let preserved = ShareIntent::with_id(selection.id, EntrySource::ShareTarget, selection.roots);
+    assert_eq!(preserved.id, selection.id);
+    assert_eq!(preserved.source, EntrySource::ShareTarget);
 }
 
 #[cfg(windows)]

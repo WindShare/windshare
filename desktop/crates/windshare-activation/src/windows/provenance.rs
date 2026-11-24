@@ -39,14 +39,62 @@ pub const SAVE_LOCALLY: &str = "Save these items to a regular local folder first
 pub const CLOUD_PLACEHOLDER: &str = "This item isn’t fully downloaded on this device. Make it available on this device, then share it again.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AcquisitionContext {
+    pub intent_id: crate::IntentId,
+    pub item_index: usize,
+    pub item_count: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AttributeDurability {
     Durable,
     CloudPlaceholder,
     NonDurable,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EphemeralRootKind {
+    Temp,
+    LocalAppDataTemp,
+    AppPackages,
+    LocalLowTemp,
+    WindowsTemp,
+    InternetCache,
+    #[cfg(test)]
+    Custom,
+}
+
+impl EphemeralRootKind {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Temp => "temp",
+            Self::LocalAppDataTemp => "local_app_data_temp",
+            Self::AppPackages => "app_packages",
+            Self::LocalLowTemp => "local_low_temp",
+            Self::WindowsTemp => "windows_temp",
+            Self::InternetCache => "internet_cache",
+            #[cfg(test)]
+            Self::Custom => "custom",
+        }
+    }
+}
+
+struct EphemeralRoot {
+    kind: EphemeralRootKind,
+    path: PathBuf,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum RejectionDetail<'a> {
+    None,
+    Attributes(u32),
+    IoErrorKind(std::io::ErrorKind),
+    EphemeralRoot(EphemeralRootKind),
+    Provider(Option<&'a str>),
+}
+
 pub struct Provenance {
-    ephemeral_roots: Vec<PathBuf>,
+    ephemeral_roots: Vec<EphemeralRoot>,
 }
 
 impl Provenance {
@@ -54,90 +102,125 @@ impl Provenance {
         Self::from_ephemeral_roots(default_ephemeral_roots())
     }
 
-    fn from_ephemeral_roots(roots: Vec<PathBuf>) -> Self {
+    fn from_ephemeral_roots(roots: Vec<(EphemeralRootKind, PathBuf)>) -> Self {
         // Record both the canonical target and the un-resolved long verbatim path
         // of each ephemeral root so containment catches junctions entering a
         // scratch directory as well as ephemeral aliases pointing out to durable storage.
-        let mut ephemeral_roots: Vec<PathBuf> = Vec::with_capacity(roots.len());
-        for root in roots {
+        let mut ephemeral_roots: Vec<EphemeralRoot> = Vec::with_capacity(roots.len());
+        for (kind, root) in roots {
             for normalized in normalize_ephemeral_root(&root).into_iter().flatten() {
                 if !ephemeral_roots
                     .iter()
-                    .any(|existing| same_path(existing, &normalized))
+                    .any(|existing| same_path(&existing.path, &normalized))
                 {
-                    ephemeral_roots.push(normalized);
+                    ephemeral_roots.push(EphemeralRoot {
+                        kind,
+                        path: normalized,
+                    });
                 }
             }
         }
         Self { ephemeral_roots }
     }
 
-    pub fn acquire(&self, item: &IStorageItem, deadline: Instant) -> anyhow::Result<PathBuf> {
+    pub fn acquire(
+        &self,
+        item: &IStorageItem,
+        deadline: Instant,
+        context: AcquisitionContext,
+    ) -> anyhow::Result<PathBuf> {
         let native_path = item.Path()?;
         let raw_path = PathBuf::from(OsString::from_wide(&native_path));
         if !is_direct_absolute(&raw_path) {
-            return Err(reject("non_filesystem_path", &raw_path, None));
+            return Err(reject(
+                context,
+                "non_filesystem_path",
+                RejectionDetail::None,
+                &raw_path,
+                None,
+            ));
         }
         // Inspect attributes before opening or canonicalizing so offline cloud
         // placeholders are rejected without triggering on-demand hydration.
-        match check_attribute_durability(&raw_path) {
-            AttributeDurability::Durable => {}
-            AttributeDurability::CloudPlaceholder => {
-                return Err(reject_cloud_placeholder(
-                    "cloud_placeholder",
-                    &raw_path,
-                    None,
-                ));
-            }
-            AttributeDurability::NonDurable => {
-                return Err(reject("non_durable_attributes", &raw_path, None));
-            }
-        }
-        let canonical = std::fs::canonicalize(&raw_path)
-            .map_err(|_| reject("canonicalize_failed", &raw_path, None))?;
-        match check_attribute_durability(&canonical) {
-            AttributeDurability::Durable => {}
-            AttributeDurability::CloudPlaceholder => {
-                return Err(reject_cloud_placeholder(
-                    "cloud_placeholder_target",
-                    &raw_path,
-                    Some(&canonical),
-                ));
-            }
-            AttributeDurability::NonDurable => {
-                return Err(reject(
-                    "non_durable_target_attributes",
-                    &raw_path,
-                    Some(&canonical),
-                ));
-            }
-        }
+        check_durable_path(
+            context,
+            &raw_path,
+            None,
+            "cloud_placeholder",
+            "non_durable_attributes",
+        )?;
+        let canonical = std::fs::canonicalize(&raw_path).map_err(|error| {
+            reject(
+                context,
+                "canonicalize_failed",
+                RejectionDetail::IoErrorKind(error.kind()),
+                &raw_path,
+                None,
+            )
+        })?;
+        check_durable_path(
+            context,
+            &raw_path,
+            Some(&canonical),
+            "cloud_placeholder_target",
+            "non_durable_target_attributes",
+        )?;
         // Expand 8.3 short aliases for clean display names while leaving any leaf
         // symlink intact so Go osfs enforces one uniform no-follow boundary.
         let handoff = long_path(&raw_path).unwrap_or_else(|| raw_path.clone());
-        if self.is_ephemeral(&canonical) {
-            return Err(reject("ephemeral_location", &handoff, Some(&canonical)));
+        if let Some(root) = self.ephemeral_kind(&canonical) {
+            return Err(reject(
+                context,
+                "ephemeral_location",
+                RejectionDetail::EphemeralRoot(root),
+                &handoff,
+                Some(&canonical),
+            ));
         }
         // Even when the resolved target is durable, handing off an alias under an
         // ephemeral root binds the share (and later repeat shares) to a transient path.
-        if self.is_ephemeral_handoff(&handoff) {
-            return Err(reject("ephemeral_handoff_path", &handoff, Some(&canonical)));
+        if let Some(root) = self.ephemeral_handoff_kind(&handoff) {
+            return Err(reject(
+                context,
+                "ephemeral_handoff_path",
+                RejectionDetail::EphemeralRoot(root),
+                &handoff,
+                Some(&canonical),
+            ));
         }
         // Reopening by filesystem path and comparing WinRT item identity rejects
         // virtual/streamed proxies that depend on the source app's lifetime.
         let Some((provider, same)) = verify_independent_item(item, &native_path, deadline)? else {
-            return Err(reject("unsupported_item_type", &handoff, Some(&canonical)));
+            return Err(reject(
+                context,
+                "unsupported_item_type",
+                RejectionDetail::None,
+                &handoff,
+                Some(&canonical),
+            ));
         };
+        // Default support logs stay path-free to match host/engine support-log privacy rules;
+        // explicit debug logging (RUST_LOG) retains concrete paths for local diagnosis.
         tracing::info!(
             event = "activation.source_provenance",
+            intent_id = %context.intent_id,
+            item_index = context.item_index,
+            item_count = context.item_count,
+            provider = provider.as_deref(),
+            same,
+        );
+        tracing::debug!(
+            event = "activation.source_provenance_paths",
+            intent_id = %context.intent_id,
+            item_index = context.item_index,
             path = ?handoff,
             canonical = ?canonical,
-            provider = ?provider,
-            same
         );
         if !same {
             return Err(reject(
+                context,
                 "reopen_identity_mismatch",
+                RejectionDetail::Provider(provider.as_deref()),
                 &handoff,
                 Some(&canonical),
             ));
@@ -145,14 +228,15 @@ impl Provenance {
         Ok(handoff)
     }
 
-    fn is_ephemeral(&self, verbatim_path: &Path) -> bool {
+    fn ephemeral_kind(&self, verbatim_path: &Path) -> Option<EphemeralRootKind> {
         self.ephemeral_roots
             .iter()
-            .any(|root| beneath(verbatim_path, root))
+            .find(|root| beneath(verbatim_path, &root.path))
+            .map(|root| root.kind)
     }
 
-    fn is_ephemeral_handoff(&self, handoff: &Path) -> bool {
-        verbatim_dos_path(handoff).is_some_and(|verbatim| self.is_ephemeral(&verbatim))
+    fn ephemeral_handoff_kind(&self, handoff: &Path) -> Option<EphemeralRootKind> {
+        verbatim_dos_path(handoff).and_then(|verbatim| self.ephemeral_kind(&verbatim))
     }
 }
 
@@ -192,22 +276,28 @@ fn verbatim_dos_path(path: &Path) -> Option<PathBuf> {
     }
 }
 
-fn default_ephemeral_roots() -> Vec<PathBuf> {
-    let mut roots = vec![std::env::temp_dir()];
+fn default_ephemeral_roots() -> Vec<(EphemeralRootKind, PathBuf)> {
+    let mut roots = vec![(EphemeralRootKind::Temp, std::env::temp_dir())];
     if let Some(local_app_data) = known_folder(&FOLDERID_LocalAppData) {
-        roots.push(local_app_data.join("Temp"));
+        roots.push((
+            EphemeralRootKind::LocalAppDataTemp,
+            local_app_data.join("Temp"),
+        ));
         // Packaged apps write transient share exports under TempState/AC/LocalCache;
         // their sandbox roots are app-managed rather than user-owned file locations.
-        roots.push(local_app_data.join("Packages"));
+        roots.push((
+            EphemeralRootKind::AppPackages,
+            local_app_data.join("Packages"),
+        ));
     }
     if let Some(local_low) = known_folder(&FOLDERID_LocalAppDataLow) {
-        roots.push(local_low.join("Temp"));
+        roots.push((EphemeralRootKind::LocalLowTemp, local_low.join("Temp")));
     }
     if let Some(windows_dir) = known_folder(&FOLDERID_Windows) {
-        roots.push(windows_dir.join("Temp"));
+        roots.push((EphemeralRootKind::WindowsTemp, windows_dir.join("Temp")));
     }
     if let Some(internet_cache) = known_folder(&FOLDERID_InternetCache) {
-        roots.push(internet_cache);
+        roots.push((EphemeralRootKind::InternetCache, internet_cache));
     }
     roots
 }
@@ -253,38 +343,98 @@ fn verify_independent_item(
     }
 }
 
-fn reject(reason: &'static str, path: &Path, canonical: Option<&Path>) -> anyhow::Error {
-    reject_with(reason, path, canonical, SAVE_LOCALLY)
+fn check_durable_path(
+    context: AcquisitionContext,
+    raw_path: &Path,
+    canonical: Option<&Path>,
+    cloud_reason: &'static str,
+    non_durable_reason: &'static str,
+) -> anyhow::Result<()> {
+    let checked = canonical.unwrap_or(raw_path);
+    let (durability, attributes) = check_attribute_durability(checked);
+    match durability {
+        AttributeDurability::Durable => Ok(()),
+        AttributeDurability::CloudPlaceholder => Err(reject_cloud_placeholder(
+            context,
+            cloud_reason,
+            RejectionDetail::Attributes(attributes),
+            raw_path,
+            canonical,
+        )),
+        AttributeDurability::NonDurable => Err(reject(
+            context,
+            non_durable_reason,
+            RejectionDetail::Attributes(attributes),
+            raw_path,
+            canonical,
+        )),
+    }
 }
 
-fn reject_cloud_placeholder(
+fn reject(
+    context: AcquisitionContext,
     reason: &'static str,
+    detail: RejectionDetail<'_>,
     path: &Path,
     canonical: Option<&Path>,
 ) -> anyhow::Error {
-    reject_with(reason, path, canonical, CLOUD_PLACEHOLDER)
+    reject_with(context, reason, detail, path, canonical, SAVE_LOCALLY)
+}
+
+fn reject_cloud_placeholder(
+    context: AcquisitionContext,
+    reason: &'static str,
+    detail: RejectionDetail<'_>,
+    path: &Path,
+    canonical: Option<&Path>,
+) -> anyhow::Error {
+    reject_with(context, reason, detail, path, canonical, CLOUD_PLACEHOLDER)
 }
 
 fn reject_with(
+    context: AcquisitionContext,
     reason: &'static str,
+    detail: RejectionDetail<'_>,
     path: &Path,
     canonical: Option<&Path>,
     message: &'static str,
 ) -> anyhow::Error {
+    let (attributes, error_kind, ephemeral_root, provider) = match detail {
+        RejectionDetail::None => (None, None, None, None),
+        RejectionDetail::Attributes(bits) => (Some(format!("{bits:#010x}")), None, None, None),
+        RejectionDetail::IoErrorKind(kind) => (None, Some(kind), None, None),
+        RejectionDetail::EphemeralRoot(root) => (None, None, Some(root.as_str()), None),
+        RejectionDetail::Provider(provider) => (None, None, None, provider),
+    };
+    // Default support logs keep rejection reasons and correlation fields only;
+    // raw filesystem paths stay behind explicit debug tracing (RUST_LOG).
     tracing::warn!(
         event = "activation.source_provenance_rejected",
+        intent_id = %context.intent_id,
+        item_index = context.item_index,
+        item_count = context.item_count,
+        reason,
+        attributes = attributes.as_deref(),
+        error_kind = error_kind.map(tracing::field::debug),
+        ephemeral_root,
+        provider,
+    );
+    tracing::debug!(
+        event = "activation.source_provenance_rejected_paths",
+        intent_id = %context.intent_id,
+        item_index = context.item_index,
         reason,
         path = ?path,
-        canonical = ?canonical
+        canonical = ?canonical,
     );
     anyhow::anyhow!(message)
 }
 
-fn check_attribute_durability(path: &Path) -> AttributeDurability {
+fn check_attribute_durability(path: &Path) -> (AttributeDurability, u32) {
     let native = wide(path);
     // SAFETY: terminated native path; only file metadata attributes are queried.
     let attributes = unsafe { GetFileAttributesW(PCWSTR(native.as_ptr())) };
-    classify_get_file_attributes(attributes)
+    (classify_get_file_attributes(attributes), attributes)
 }
 
 const fn classify_get_file_attributes(attributes: u32) -> AttributeDurability {

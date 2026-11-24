@@ -1,8 +1,8 @@
 use super::{
     Scope, dispatch,
-    provenance::{Provenance, SAVE_LOCALLY},
+    provenance::{AcquisitionContext, Provenance, SAVE_LOCALLY},
 };
-use crate::{Activation, EntrySource, MAX_SELECTED_ROOTS, ShareIntent};
+use crate::{Activation, EntrySource, IntentId, MAX_SELECTED_ROOTS, ShareIntent};
 use std::time::{Duration, Instant};
 use windows::{
     ApplicationModel::{
@@ -44,19 +44,20 @@ fn handle_on_mta() -> anyhow::Result<bool> {
     if kind != ActivationKind::ShareTarget {
         return Ok(false);
     }
+    let intent_id = IntentId::new();
     let operation = arguments
         .cast::<IShareTargetActivatedEventArgs>()?
         .ShareOperation()?;
     operation.ReportStarted()?;
-    let result = acquire_and_handoff(&operation);
+    let result = acquire_and_handoff(&operation, intent_id);
     if let Err(error) = &result {
-        tracing::error!(event = "activation.system_share_failed", %error);
+        tracing::error!(event = "activation.system_share_failed", %intent_id, %error);
         let _ = operation.ReportError(&format!("{error:#}").into());
     }
     result.map(|()| true)
 }
 
-fn acquire_and_handoff(operation: &ShareOperation) -> anyhow::Result<()> {
+fn acquire_and_handoff(operation: &ShareOperation, intent_id: IntentId) -> anyhow::Result<()> {
     let started = Instant::now();
     let deadline = started + ACQUISITION_TIMEOUT;
     let data = operation.Data()?;
@@ -71,11 +72,17 @@ fn acquire_and_handoff(operation: &ShareOperation) -> anyhow::Result<()> {
         "Select between 1 and {MAX_SELECTED_ROOTS} local files or folders."
     );
     let provenance = Provenance::new();
-    let mut roots = Vec::with_capacity(count as usize);
+    let item_count = count as usize;
+    let mut roots = Vec::with_capacity(item_count);
     for index in 0..count {
-        roots.push(provenance.acquire(&items.GetAt(index)?, deadline)?);
+        let context = AcquisitionContext {
+            intent_id,
+            item_index: index as usize,
+            item_count,
+        };
+        roots.push(provenance.acquire(&items.GetAt(index)?, deadline, context)?);
     }
-    let intent = ShareIntent::new(EntrySource::ShareTarget, roots);
+    let intent = ShareIntent::with_id(intent_id, EntrySource::ShareTarget, roots);
     intent.validate().map_err(anyhow::Error::msg)?;
     // Every source is independently owned by the user's filesystem. No stream,
     // broker lease, temporary copy, or source-process object remains necessary.
