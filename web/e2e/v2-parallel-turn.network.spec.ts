@@ -9,14 +9,15 @@ import { expect, test, type Page } from '@playwright/test'
 import { nativeTURNReceiveFailure } from './fixtures/turn-receive-failure'
 import { DirectProcess } from './fixtures/direct-process'
 import { DirectProductStack, relayReceiverUrl, type DirectShare } from './fixtures/direct-product-stack'
-import type { HotSwitchPageEvent } from './fixtures/hot-switch-contract'
-import { releasePageOutput, startPageTransfer } from './fixtures/hot-switch-page-transfer'
+import { sameLaneIdentity, type HotSwitchPageEvent } from './fixtures/hot-switch-contract'
+import { releasePageOutput, sealPageRelayCut, startPageTransfer } from './fixtures/hot-switch-page-transfer'
 import { NetworkEventLog } from './fixtures/network-event-log'
 
 const execute = promisify(execFile)
 const root = fileURLToPath(new URL('../../', import.meta.url))
 const hash = (data: Uint8Array) => createHash('sha256').update(data).digest('hex')
 type ServerStats = Array<{ bytes: number; allocations: number }>
+type TCPServerStats = { bytes: number; allocations: number; credentials: number }
 type Connectivity = { ApplicationRelayBytes: number; TURNBytes: number; DirectBytes: number }
 
 async function browserDownload(
@@ -63,9 +64,24 @@ async function startTURNFixture(directory: string) {
   })
   try {
     const ready = await processOwner.waitFor('stdout', /^\{[^\r\n]+\}$/mu)
-    const { services, stats } = JSON.parse(ready[0]) as { services: object[]; stats: string }
+    const parsed = JSON.parse(ready[0]) as {
+      services: object[]
+      stats: string
+      tcpService: object
+      tcpStats: string
+      tcpRenewService: object
+      tcpRenewStats: string
+    }
     processOwner.consumeReadiness('stdout')
-    return { processOwner, services, counters: async () => (await (await fetch(stats)).json()) as ServerStats }
+    return {
+      processOwner,
+      services: parsed.services,
+      tcpService: parsed.tcpService,
+      tcpRenewService: parsed.tcpRenewService,
+      counters: async () => (await (await fetch(parsed.stats)).json()) as ServerStats,
+      tcpCounter: async () => (await (await fetch(parsed.tcpStats)).json()) as TCPServerStats,
+      tcpRenewCounter: async () => (await (await fetch(parsed.tcpRenewStats)).json()) as TCPServerStats,
+    }
   } catch (error) {
     await processOwner.stop(5000)
     throw error
@@ -169,6 +185,176 @@ test('Go and Chromium download over two TURN servers and the application relay',
     )
   } finally {
     await Promise.allSettled([interrupted?.stop(5000), stack.dispose(), server?.stop(5000)])
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+async function browserTCPTURNRenewal(
+  page: Page,
+  share: DirectShare,
+  proxy: Awaited<ReturnType<DirectProductStack['createRelayCutProxy']>>,
+  size: number,
+  expected: string,
+) {
+  const events = new NetworkEventLog(90_000)
+  await page.exposeFunction('__windshareHotSwitchEvent', (event: HotSwitchPageEvent) => {
+    events.accept(event)
+  })
+  await page.goto(relayReceiverUrl(share, proxy.url))
+  await startPageTransfer(page, {
+    expectedHash: expected,
+    key: share.key,
+    nativePeerUsable: true,
+    rtcConfiguration: { iceServers: [], iceTransportPolicy: 'relay' },
+    transferBytes: size,
+  })
+  await releasePageOutput(page)
+
+  await events.waitFor('dispatch', (event) => event.observation.route === 'application-relay', 'initial relay dispatch')
+  const initialLane = await events.waitFor(
+    'lane-admitted',
+    (event) => event.observation.route === 'turn',
+    'initial TCP TURN lane admission',
+  )
+
+  // Sever the application relay so credential rotation must ride over the sole surviving TCP TURN lane.
+  await proxy.cut()
+  await sealPageRelayCut(page)
+  const cut = await events.waitFor('relay-ineligible', () => true, 'relay ineligibility')
+
+  const replacement = await events.waitFor(
+    'lane-admitted',
+    (event) => event.observation.route === 'turn' && !sameLaneIdentity(event.observation, initialLane.observation),
+    'replacement TCP TURN lane admission over surviving channel',
+  )
+  const retirement = await events.waitFor(
+    'lane-detached',
+    (event) => sameLaneIdentity(event.observation, initialLane.observation),
+    'initial TCP TURN lane retirement',
+  )
+  const replacementDispatch = await events.waitForLaneDispatch(
+    replacement.observation,
+    cut.dispatchSequenceBoundary,
+  )
+  const delivery = await events.waitFor('delivery', () => true, 'TCP TURN renewed delivery')
+  const runtime = await events.waitFor('runtime-settled', () => true, 'TCP TURN renewed settlement')
+
+  expect(runtime.error).toBeUndefined()
+  expect(delivery).toMatchObject({
+    outcome: 'succeeded',
+    evidence: {
+      expectedBytes: size,
+      receivedBytes: size,
+      expectedSha256: expected,
+      receivedSha256: expected,
+      terminal: 'succeeded',
+    },
+    jobOutcome: { status: 'Succeeded', failureCount: 0 },
+  })
+  expect(replacementDispatch.observation).toMatchObject({
+    laneId: replacement.observation.laneId,
+    laneEpoch: replacement.observation.laneEpoch,
+    route: 'turn',
+  })
+
+  const observed = events.snapshot()
+  const retirementIndex = observed.indexOf(retirement)
+  expect(observed.indexOf(replacement)).toBeLessThan(retirementIndex)
+  expect(
+    observed
+      .slice(retirementIndex + 1)
+      .filter((event) => event.kind === 'dispatch' && sameLaneIdentity(event.observation, initialLane.observation)),
+  ).toEqual([])
+  expect(
+    observed.filter(
+      (event) =>
+        event.kind === 'dispatch' &&
+        event.observation.route === 'application-relay' &&
+        event.observation.dispatchSequence > cut.dispatchSequenceBoundary,
+    ),
+  ).toEqual([])
+}
+
+test('Go and Chromium transfer over TCP-only TURN and renew credentials over the surviving lane', async ({ page }) => {
+  test.setTimeout(240_000)
+  const dir = await mkdtemp(join(tmpdir(), 'windshare-tcp-turn-handoff-'))
+  const receiver = join(dir, process.platform === 'win32' ? 'receive.exe' : 'receive')
+  const stack = new DirectProductStack('tcp-turn-handoff')
+  let server: DirectProcess | undefined
+  try {
+    await Promise.all([
+      stack.start(),
+      execute('go', ['test', '-c', '-o', receiver, './engine'], { cwd: root, windowsHide: true }),
+    ])
+    const fixture = await startTURNFixture(dir)
+    server = fixture.processOwner
+
+    const nativeBytes = randomBytes(8 * 1024 * 1024)
+    const nativeExpected = hash(nativeBytes)
+    const nativeName = 'tcp-native.bin'
+    const nativeSource = await stack.createFile(nativeName, nativeBytes)
+    const nativeShare = await stack.share(nativeSource, {
+      turnServices: [fixture.tcpService],
+      blockSizeBytes: 256 * 1024,
+    })
+    const nativeProxy = await stack.createRelayCutProxy(undefined, 1 * 1024 * 1024)
+    const nativeCapability = relayReceiverUrl(nativeShare, nativeProxy.url) + '#' + nativeShare.key
+    const { stdout } = await execute(receiver, ['-test.run=^TestTURNNetworkReceive$'], {
+      cwd: root,
+      windowsHide: true,
+      timeout: 65_000,
+      env: { ...process.env, WINDSHARE_TURN_TEST_DESTINATION: dir, WINDSHARE_TEST_CAPABILITY: nativeCapability },
+    }).catch((error) => {
+      throw nativeTURNReceiveFailure(error, dir, {
+        completeUrl: nativeCapability,
+        fragment: '#' + nativeShare.key,
+        separateKey: nativeShare.key,
+      })
+    })
+    const summary = stdout.split(/\r?\n/).find((line) => line.startsWith('{'))
+    if (!summary) throw new Error('Native TCP TURN receiver exited without transfer metrics')
+    const native = JSON.parse(summary) as Connectivity
+    expect(hash(await readFile(join(dir, nativeName)))).toBe(nativeExpected)
+    expect(native.DirectBytes).toBe(0)
+    expect(native.ApplicationRelayBytes).toBeGreaterThan(0)
+    expect(native.TURNBytes).toBeGreaterThan(0)
+    const tcpStats = await fixture.tcpCounter()
+    expect(tcpStats.bytes).toBeGreaterThan(256 * 1024)
+    expect(tcpStats.credentials).toBeGreaterThanOrEqual(1)
+    await expect.poll(async () => (await fixture.tcpCounter()).allocations).toBe(0)
+    await stack.stopSharing(nativeShare)
+
+    const renewBytes = randomBytes(13 * 1024 * 1024)
+    const renewExpected = hash(renewBytes)
+    const renewSource = await stack.createFile('tcp-renew.bin', renewBytes)
+    const renewShare = await stack.share(renewSource, {
+      turnServices: [fixture.tcpRenewService],
+      senderTrace: true,
+      blockSizeBytes: 256 * 1024,
+    })
+    const renewProxy = await stack.createRelayCutProxy(undefined, 256 * 1024)
+    await browserTCPTURNRenewal(page, renewShare, renewProxy, renewBytes.length, renewExpected)
+
+    const renewStats = await fixture.tcpRenewCounter()
+    expect(renewStats.bytes).toBeGreaterThan(256 * 1024)
+    expect(renewStats.credentials).toBeGreaterThanOrEqual(2)
+    await expect.poll(async () => (await fixture.tcpRenewCounter()).allocations).toBe(0)
+
+    const trace = (await stack.senderTraceRecords(renewShare)) as ReadonlyArray<{ event: string }>
+    expect(trace.filter((record) => record.event === 'turn_demand_received').length).toBeGreaterThanOrEqual(2)
+    expect(trace.filter((record) => record.event === 'turn_grant_issued').length).toBeGreaterThanOrEqual(2)
+    console.info(
+      JSON.stringify({
+        scenario: 'tcp-turn-handoff',
+        nativeTurnBytes: native.TURNBytes,
+        tcpOnlyBytes: tcpStats.bytes,
+        renewedBytes: renewBytes.length,
+        renewedTurnBytes: renewStats.bytes,
+        renewedCredentials: renewStats.credentials,
+      }),
+    )
+  } finally {
+    await Promise.allSettled([stack.dispose(), server?.stop(5000)])
     await rm(dir, { recursive: true, force: true })
   }
 })

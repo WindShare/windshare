@@ -3,7 +3,7 @@ import { defineConfig } from '@playwright/test'
 import { DIRECT_PRODUCT_BUILD_TIMEOUT_MILLISECONDS } from './e2e/fixtures/direct-product-binaries.ts'
 
 const NETWORK_TEST_TIMEOUT_MILLISECONDS = 80_000
-const NETWORK_HARD_TIMEOUT_MILLISECONDS = 240_000
+const NETWORK_HARD_TIMEOUT_MILLISECONDS = 360_000
 
 export default defineConfig({
   testDir: './e2e',
