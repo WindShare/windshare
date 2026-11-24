@@ -142,10 +142,10 @@ impl Language {
                 "This item isn’t fully downloaded on this device. Make it available on this device, then share it again.".into()
             }
             (Self::SimplifiedChinese, Some(name)) => format!(
-                "“{name}”尚未完全下载到此设备。请在右键菜单选择“始终保留在此设备上”，待下载完成后再重新分享。"
+                "“{name}”尚未完全下载到此设备。请先将其下载到本地，再重新分享。"
             ),
             (Self::SimplifiedChinese, None) => {
-                "所选项目尚未完全下载到此设备。请先选择“始终保留在此设备上”，待下载完成后再重新分享。".into()
+                "所选项目尚未完全下载到此设备。请先将其下载到本地，再重新分享。".into()
             }
         }
     }
