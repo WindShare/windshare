@@ -177,6 +177,58 @@ jobs:
           name: browser-network-diagnostics
           path: web/test-results/network-routes/
 
+  cloudflare-managed-turn:
+    name: Managed TURN Worker browser route (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          check-latest: true
+          cache-dependency-path: go.sum
+      - name: Prepare Rust native and Wasm toolchains
+        run: rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: relay-rust -> .target
+          cache-bin: false
+          cmd-format: rustup run stable {0}
+      - name: Install Worker builder
+        run: cargo +stable install worker-build --version 0.8.7 --locked
+      - uses: pnpm/action-setup@v6
+        with:
+          version: latest
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Install frozen web dependencies
+        run: pnpm -C web install --frozen-lockfile
+      - name: Install pinned Worker runtime dependencies
+        working-directory: relay-rust/crates/relay-cloudflare
+        run: npm ci
+      - name: Install Chromium runtime
+        uses: ./.github/actions/setup-browser
+        with:
+          browsers: chromium
+      - name: Verify Cloudflare Worker access and managed TURN contract
+        working-directory: relay-rust/crates/relay-cloudflare
+        run: npm run test:access
+      - name: Run managed TURN Worker browser scenario
+        working-directory: relay-rust/crates/relay-cloudflare
+        run: node tests/managed-turn-browser.mjs
+      - name: Preserve managed TURN failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cloudflare-managed-turn-diagnostics
+          path: web/test-results/network-routes/
+
   browser-interop:
     name: D1/D2 browser-Pion interop (Linux)
     runs-on: ubuntu-latest

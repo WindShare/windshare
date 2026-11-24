@@ -7,7 +7,8 @@
     "build": "worker-build --release",
     "dev": "wrangler dev",
     "preview": "wrangler preview",
-    "test:access": "worker-build --release --locked && node --test tests/access.test.mjs"
+    "test:access": "worker-build --release --locked && node --test tests/access.test.mjs",
+    "test:managed-turn:browser": "worker-build --release --locked && node tests/managed-turn-browser.mjs"
   },
   "devDependencies": {
     "wrangler": "4.151.1",

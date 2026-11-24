@@ -275,20 +275,34 @@ test('pending enrollments remain discoverable past 1001 installed receipts', asy
   assert.deepEqual((await afterApprove.json()).enrollments, []);
 });
 
-test('production Go protocol clients observe revocation and durable administrative termination', { timeout: 60_000 }, async () => {
-  const mf = new Miniflare(options());
+test('production Go protocol clients observe revocation, managed TURN contract and durable administrative termination', { timeout: 60_000 }, async () => {
+  let upstream = 0;
+  const provider = async request => {
+    assert.equal(request.url, 'https://rtc.live.cloudflare.com/v1/turn/keys/fixture/credentials/generate-ice-servers');
+    assert.equal(request.headers.get('authorization'), 'Bearer test-token');
+    assert.deepEqual(await request.json(), { ttl: 1800 });
+    upstream++;
+    return Response.json({
+      iceServers: [
+        { urls: 'stun:localhost' },
+        { urls: ['turn:127.0.0.1:3478?transport=udp'], username: 'ephemeral-user', credential: 'ephemeral-pass' },
+      ],
+    }, { status: 201 });
+  };
+  const mf = new Miniflare(options(password, origin, 'https://127.0.0.1', false, provider));
   try {
     const address = await mf.ready;
     const relayOrigin = address.origin;
     const consoleAddress = new URL(relayOrigin);
     consoleAddress.hostname = 'localhost';
-    await mf.setOptions({ ...options(password, consoleAddress.origin, relayOrigin), port: Number(address.port) });
+    await mf.setOptions({ ...options(password, consoleAddress.origin, relayOrigin, false, provider), port: Number(address.port) });
     const { stdout } = await promisify(execFile)('go', ['run', './relay-rust/tests/_goclient',
       '-endpoint', relayOrigin + '/v2/ws', '-access-console', consoleAddress.origin], {
       cwd: fileURLToPath(new URL('../../../../', import.meta.url)), timeout: 45_000, windowsHide: true,
       env: { ...process.env, WINDSHARE_OWNER_PASSWORD: password }, maxBuffer: 128 * 1024,
     });
     assert.match(stdout, /PASS:/);
+    assert.equal(upstream, 1, 'only the active fallback escalation may mint upstream TURN credentials');
   } finally { await mf.dispose(); }
 });
 

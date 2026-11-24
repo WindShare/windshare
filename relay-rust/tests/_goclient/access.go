@@ -5,14 +5,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/windshare/windshare/engine/relayconfig"
-	"github.com/windshare/windshare/engine/relaysetup"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
+	p "github.com/windshare/windshare/core/session/protocolsession"
+	"github.com/windshare/windshare/core/session/turngrant"
+	"github.com/windshare/windshare/engine/relayconfig"
+	"github.com/windshare/windshare/engine/relayprofile"
+	"github.com/windshare/windshare/engine/relaysetup"
+	"github.com/windshare/windshare/engine/turnissuer"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
 
@@ -70,10 +75,11 @@ func accessScenario(endpoint, console string) {
 		_ = os.Remove(path + ".state")
 		_ = os.Remove(directory)
 	}()
+	baseURL := strings.TrimSuffix(endpoint, v2.WebSocketPath)
 	store := relaysetup.FileStore{Settings: relayconfig.FileStore{Path: path}}
 	service := relaysetup.New(relaysetup.Dependencies{Store: store})
 	installed, err := service.Run(context.Background(), relaysetup.Request{
-		URL:        strings.TrimSuffix(endpoint, v2.WebSocketPath),
+		URL:        baseURL,
 		DeviceName: "Enrolled device",
 		Operation:  relaysetup.AuthorizeDevice,
 	}, func(progress relaysetup.Progress) {
@@ -85,8 +91,10 @@ func accessScenario(endpoint, console string) {
 	saved, err := store.Load()
 	check(err)
 	require(saved.Pending == nil && len(saved.Profiles) == 1 && len(saved.ActiveRelays) == 1, "automatic setup did not commit private selection")
+	require(saved.Profiles[0].ManagedTurn, "automatic setup did not record advertised managed TURN capability")
 	first := managedCredential{AccessKey: saved.Profiles[0].AccessKey}
 	first.Credential.ID = installed.CredentialID
+	verifyManagedTURN(baseURL, first.AccessKey, &admin)
 	second := admin.create("Independent device")
 	check(os.Setenv("WINDSHARE_RELAY_ACCESS_KEY", first.AccessKey))
 	// A routed socket may not attribute a different share to its credential.
@@ -110,6 +118,8 @@ func accessScenario(endpoint, console string) {
 	admin.revoke(first.Credential.ID, false)
 	send(staleSocket, unregistered.init)
 	refusal(staleSocket, v2.ErrorAccessDenied)
+	revokedTURN := issueManagedTURN(baseURL, first.AccessKey, true, p.TURNAll)
+	require(revokedTURN.Status == p.TURNRetryLater && len(revokedTURN.Credentials) == 0, fmt.Sprintf("revoked credential unexpectedly issued managed TURN: status=%v count=%d", revokedTURN.Status, len(revokedTURN.Credentials)))
 	probe(sender, 2)
 	stop(endpoint, stopped)
 	check(sender.CloseNow())
@@ -141,5 +151,46 @@ func accessScenario(endpoint, console string) {
 	send(resumed, v2.ResumeCredential{Token: f.token})
 	refusal(resumed, v2.ErrorStopped)
 	stop(endpoint, independent)
-	fmt.Println("PASS: fresh admission rechecks revocation, RESUME and STOP retain authority, administrative termination is durable and credential-scoped")
+	fmt.Println("PASS: fresh admission rechecks revocation, managed TURN discovery/issuance/pause match Worker, RESUME and STOP retain authority, administrative termination is durable and credential-scoped")
+}
+
+func issueManagedTURN(baseURL, accessKey string, advertised bool, mode p.TURNMode) turngrant.IssueResult {
+	candidate := relayprofile.Candidate{PublicURL: baseURL, AccessKey: accessKey, ManagedTurn: advertised}
+	sources, err := turnissuer.SelectSources(nil, []relayprofile.Registration{candidate.Registration()}, []relayprofile.Candidate{candidate})
+	check(err)
+	ctx, cancel := context.WithTimeout(context.Background(), operationTimeout)
+	defer cancel()
+	resolver := sources.Open(ctx, turnissuer.Options{})
+	defer resolver.Close()
+	return resolver.Issue(ctx, turngrant.IssueRequest{Mode: mode})
+}
+
+func verifyManagedTURN(baseURL, accessKey string, admin *accessAdmin) {
+	// Parallel demand must leave managed fallback untouched.
+	parallel := issueManagedTURN(baseURL, accessKey, true, p.TURNParallel)
+	require(parallel.Status == p.TURNOK && parallel.HasFallback && len(parallel.Credentials) == 0, "parallel demand unexpectedly issued managed fallback credentials")
+
+	// Start without cached capability so Resolver performs live /.well-known/windshare discovery.
+	issued := issueManagedTURN(baseURL, accessKey, false, p.TURNAll)
+	require(issued.Status == p.TURNOK && issued.HasFallback && len(issued.Credentials) == 1, fmt.Sprintf("managed TURN issuance failed: status=%v fallback=%v count=%d", issued.Status, issued.HasFallback, len(issued.Credentials)))
+	credential := issued.Credentials[0]
+	require(slices.Equal(credential.URLs, []string{"turn:127.0.0.1:3478?transport=udp"}), fmt.Sprintf("unexpected managed TURN URLs: %v", credential.URLs))
+	require(credential.Username == "ephemeral-user" && credential.Password == "ephemeral-pass", "unexpected managed TURN credentials")
+	remaining := time.Until(credential.ExpiresAt)
+	require(remaining > 25*time.Minute && remaining <= 30*time.Minute, fmt.Sprintf("unexpected managed TURN expiry window: %s", remaining))
+
+	// Pausing managed TURN must surface turn_disabled and cache the share-lifetime disable decision.
+	admin.call("turn/toggle", map[string]any{"enabled": false}, nil)
+	defer admin.call("turn/toggle", map[string]any{"enabled": true}, nil)
+	candidate := relayprofile.Candidate{PublicURL: baseURL, AccessKey: accessKey, ManagedTurn: true}
+	sources, err := turnissuer.SelectSources(nil, []relayprofile.Registration{candidate.Registration()}, []relayprofile.Candidate{candidate})
+	check(err)
+	ctx, cancel := context.WithTimeout(context.Background(), operationTimeout)
+	defer cancel()
+	resolver := sources.Open(ctx, turnissuer.Options{})
+	defer resolver.Close()
+	paused := resolver.Issue(ctx, turngrant.IssueRequest{Mode: p.TURNAll})
+	require(paused.Status == p.TURNUnconfigured && !paused.HasFallback && len(paused.Credentials) == 0, fmt.Sprintf("paused managed TURN did not disable cleanly: status=%v fallback=%v", paused.Status, paused.HasFallback))
+	cached := resolver.Issue(ctx, turngrant.IssueRequest{Mode: p.TURNAll})
+	require(cached.Status == p.TURNUnconfigured && len(cached.Credentials) == 0, "cached managed TURN disable did not persist")
 }

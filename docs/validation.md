@@ -97,16 +97,19 @@ Coverage is gated on the core and non-core totals and on each package, with no p
 | FAT/exFAT (Linux) | Disposable image remounts verify partial reuse, publication, and owned cleanup after native IDs change. |
 | macOS (arm64 and amd64) | Each runner builds its native CLI and relay, runs the output/recovery suites, and captures APFS evidence for CLI file/folder downloads and SIGKILL recovery. |
 
-The opt-in [Cloudflare deployment workflow](deploy/cloudflare-relay.md) runs independently
-on relay/frontend updates to `main` or manual dispatch. `make hygiene` covers its offline
-first-deploy/update/failure-recovery contracts. To run its opt-in live check, install
-`worker-build`, Go, pnpm, Web dependencies and the pinned Wrangler, set
+The [Cloudflare deployment workflow](deploy/cloudflare-relay.md) verifies deployment contracts
+and local Miniflare access/managed-TURN tests (`npm run test:access` in
+`relay-rust/crates/relay-cloudflare`, requiring no Cloudflare account) on pull requests and
+pushes; deployment itself remains opt-in on `main` or manual dispatch. `make hygiene` also
+covers its offline first-deploy/update/failure-recovery contracts. To run its opt-in live
+check, install `worker-build`, Go, pnpm, Web dependencies and the pinned Wrangler, set
 `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID`, then run
 `node scripts/deploy/cloudflare/smoke.mjs`. It creates an isolated relay and companion console,
 imports a per-device credential, verifies separate origins, registration and permanent
 STOP across `full` → `relay-only` → `full` updates, then deletes its Workers and temporary files.
-Local SQLite/API and Go protocol access tests run with `npm run test:access` in
-`relay-rust/crates/relay-cloudflare`; they require no Cloudflare account.
+A standalone local-Worker browser check (`npm run test:managed-turn:browser` in
+`relay-rust/crates/relay-cloudflare`) exercises discovery, credential issuance, and Chromium
+transfer without a Cloudflare account.
 
 CI calls the reusable [native output workflow](../.github/workflows/native-output.yml) on every pull request and `main` push. It also supports manual reruns. Each macOS architecture caches the Go toolchain from `go.mod` and its Cargo dependencies.
 
@@ -117,7 +120,7 @@ CI calls the reusable [native output workflow](../.github/workflows/native-outpu
 - Linux and Windows integration tests;
 - named long-running Go E2E and catalog tests;
 - Linux and Windows output and process-restart tests;
-- progressive catalog, direct and parallel TURN routes, and browser/Pion interoperability scenarios;
+- progressive catalog, direct and parallel TURN routes, isolated local-Worker managed TURN browser transfer, and browser/Pion interoperability scenarios;
 - Firefox and WebKit product scenarios and component contracts (including native-size relay bursts);
 - Windows browser and process smoke tests;
 - Linux and Windows native-output release-artifact checks, plus the Linux relay container build/probe.
