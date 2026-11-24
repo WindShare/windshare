@@ -1,8 +1,11 @@
 import { expect, it } from 'vitest'
 import { TURNPaths } from '../../src/connectivity/turn-paths'
 import { decodeTURNDemand, encodeTURNGrants, type TURNDemand, type TURNStatus } from '../../src/protocol/turn-control'
+import { EnvelopeSealer } from '../../src/session/envelope'
 import { createPeerAttemptIdentity } from '../../src/session/identities'
+import { encodeBody, encodeMessage, MESSAGE_KIND } from '../../src/session/message'
 import { PeerSlotPool } from '../../src/session/peer-slots/slots'
+import { BINDING, deferred, KEY, openSent, runtimeFixture } from '../session/v2-send-fixture'
 
 const demand = {
   queuedBytes: 1, queuedBlocks: 1, networkWaitingBytes: 1, capacityWaitingBytes: 0, unfinishedBytes: 0,
@@ -85,5 +88,150 @@ it('discards prior grants when a reply observer ends the activation', async () =
     expect(f.admitted).toEqual([])
   } finally {
     await f.manager.reset()
+  }
+})
+
+function queuedFixture(start?: ConstructorParameters<typeof TURNPaths>[0]['start']) {
+  const { runtime, channel, events } = runtimeFixture()
+  let now = 0
+  const manager = new TURNPaths({
+    session: runtime,
+    slots: new PeerSlotPool(),
+    now: () => now,
+    identity: () => new Uint8Array(16).fill(1),
+    hasDelivered: () => false,
+    start: start ?? (() => ({
+      attemptId: createPeerAttemptIdentity(new Uint8Array(16).fill(2)),
+      result: Promise.resolve({ type: 'lifecycle-cancelled', owner: 'last-activation' }),
+      cancel: () => {},
+    })),
+    release: async () => {},
+  })
+  return {
+    runtime, channel, events, manager,
+    step: (time: number, usefulBytes = 0) => {
+      now = time
+      manager.step({ ...demand, usefulBytes })
+    },
+    sentTURNDemands: async () => (await openSent(channel))
+      .filter(entry => entry.message.kind === MESSAGE_KIND.turnControl)
+      .map(entry => decodeTURNDemand(entry.message.body)),
+  }
+}
+
+it('withdraws timed-out queued TURN requests from the real session writer without double-charging backoff', async () => {
+  const f = queuedFixture()
+  try {
+    const blocker = f.runtime.beginOperation(MESSAGE_KIND.listChildren, encodeBody([]))
+    await f.channel.sending.promise
+
+    const MiB = 1024 * 1024
+    f.step(0, 0)
+    f.step(2000, 4 * MiB)
+    f.step(4000, 8 * MiB)
+    f.step(6000, 12 * MiB)
+    f.step(8000, 16 * MiB)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    f.step(9999, 20 * MiB)
+    f.step(10_000, 20 * MiB)
+
+    const sentinel = f.runtime.beginOperation(MESSAGE_KIND.listChildren, encodeBody([]))
+    f.channel.unblock()
+    await Promise.all([blocker, sentinel])
+
+    expect(await f.sentTURNDemands()).toEqual([{ requestId: 2n, mode: 'parallel', serviceIds: [] }])
+    expect(f.channel.state).toBe('open')
+    expect(f.runtime.availableLaneIds()).toEqual([1])
+    expect(f.events.some(event => event.eventName === 'protocol_operation' &&
+      event.requestKind === 'turn_control' && event.transition === 'send_withdrawn')).toBe(true)
+  } finally {
+    await f.manager.reset()
+    await f.runtime.close()
+  }
+})
+
+it('withdraws queued TURN requests on reset while leaving the session lane open', async () => {
+  const f = queuedFixture()
+  try {
+    const blocker = f.runtime.beginOperation(MESSAGE_KIND.listChildren, encodeBody([]))
+    await f.channel.sending.promise
+
+    f.step(0)
+    await f.manager.reset()
+
+    const followUp = f.runtime.beginOperation(MESSAGE_KIND.listChildren, encodeBody([]))
+    f.channel.unblock()
+    await Promise.all([blocker, followUp])
+
+    const sent = await openSent(f.channel)
+    expect(sent.map(entry => [entry.sequence, entry.message.kind])).toEqual([
+      [0n, MESSAGE_KIND.listChildren],
+      [1n, MESSAGE_KIND.listChildren],
+    ])
+    expect(f.channel.state).toBe('open')
+    expect(f.runtime.availableLaneIds()).toEqual([1])
+    expect(f.events.some(event => event.eventName === 'protocol_operation' &&
+      event.requestKind === 'turn_control' && event.transition === 'send_withdrawn')).toBe(true)
+  } finally {
+    await f.manager.reset()
+    await f.runtime.close()
+  }
+})
+
+it('withdraws other queued TURN requests when an authenticated reply marks TURN unconfigured', async () => {
+  const second = deferred<{ type: 'lifecycle-cancelled'; owner: 'last-activation' }>()
+  const f = queuedFixture((grant) => ({
+    attemptId: createPeerAttemptIdentity(new Uint8Array(16).fill(2)),
+    result: grant.serviceId === 'b'
+      ? second.promise
+      : Promise.resolve({ type: 'lifecycle-cancelled', owner: 'last-activation' }),
+    cancel: () => second.resolve({ type: 'lifecycle-cancelled', owner: 'last-activation' }),
+  }))
+  try {
+    const server = new EnvelopeSealer(KEY, { ...BINDING, direction: 1 })
+    const deliver = async (requestId: bigint, status: TURNStatus, services: string[] = []) => {
+      const grants = encodeTURNGrants({
+        requestId, status, hasFallback: false,
+        grants: services.map((serviceId, index) => ({
+          serviceId, grantId: new Uint8Array(16).fill(index + 3), urls: ['turn:localhost'],
+          username: 'u', password: 'p', validForMs: 0n,
+        })),
+      })
+      f.channel.receive(await server.seal(encodeMessage(MESSAGE_KIND.turnControl, undefined, grants).plaintext))
+    }
+
+    f.channel.unblock()
+    f.step(0)
+    await deliver(1n, 'ok', ['a', 'b'])
+    await new Promise<void>(resolve => setTimeout(resolve, 0))
+
+    f.step(2000)
+    second.resolve({ type: 'lifecycle-cancelled', owner: 'last-activation' })
+    await new Promise<void>(resolve => setTimeout(resolve, 0))
+
+    f.channel.block()
+    const blocker = f.runtime.beginOperation(MESSAGE_KIND.listChildren, encodeBody([]))
+    await f.channel.sending.promise
+
+    f.step(4000)
+    await deliver(2n, 'unconfigured')
+    await new Promise<void>(resolve => setTimeout(resolve, 0))
+
+    const followUp = f.runtime.beginOperation(MESSAGE_KIND.listChildren, encodeBody([]))
+    f.channel.unblock()
+    await Promise.all([blocker, followUp])
+
+    expect(await f.sentTURNDemands()).toEqual([
+      { requestId: 1n, mode: 'parallel', serviceIds: [] },
+      { requestId: 2n, mode: 'all', serviceIds: ['a'] },
+    ])
+    expect(f.channel.state).toBe('open')
+    expect(f.events.some(event => event.eventName === 'protocol_operation' &&
+      event.requestKind === 'turn_control' && event.transition === 'send_withdrawn')).toBe(true)
+  } finally {
+    await f.manager.reset()
+    await f.runtime.close()
   }
 })

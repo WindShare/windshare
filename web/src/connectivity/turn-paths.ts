@@ -16,7 +16,7 @@ const REFRESH_MARGIN_MS = 30_000
 
 interface Retry { failures: number; due: number }
 interface FullRequest extends Retry { mode: TURNMode; complete: boolean }
-interface Request { mode: TURNMode; owner: Service | FullRequest; until: number }
+interface Request { mode: TURNMode; owner: Service | FullRequest; until: number; cancel: AbortController }
 interface Leg {
   slot?: PeerSlotLease
   identity?: PeerPathIdentity
@@ -80,6 +80,7 @@ export class TURNPaths {
     for (const [id, request] of this.#requests) {
       if (now < request.until) continue
       this.#requests.delete(id)
+      request.cancel.abort()
       this.#retry(request.owner)
     }
     this.#observeDeliveries()
@@ -117,14 +118,15 @@ export class TURNPaths {
     if (!owner || [...this.#requests.values()].some((r) => r.owner === owner)) return
     this.#unsubscribe ??= this.#options.session.subscribeTURNControls((body) => this.#accept(body))
     const id = ++this.#next
-    this.#requests.set(id, { mode, owner, until: this.#options.now() + RESPONSE_MS })
+    const cancel = new AbortController()
+    this.#requests.set(id, { mode, owner, until: this.#options.now() + RESPONSE_MS, cancel })
     this.#options.trace?.(service ? 'turn_refresh_requested' : 'turn_demand_sent', {
       mode, ...(service && { serviceId: service.id }), ...(service?.current.grantId && { grantId: service.current.grantId }),
     }, service?.current.identity, service?.current.lane)
     if (!this.#requests.has(id)) return
     void this.#options.session.sendTURNControl(encodeTURNDemand({
       requestId: id, mode, serviceIds: service ? [service.id] : [],
-    })).catch(() => {
+    }), { signal: cancel.signal }).catch(() => {
       if (this.#requests.delete(id)) this.#retry(owner)
     })
   }
@@ -146,6 +148,7 @@ export class TURNPaths {
     if (this.#services !== activation) return
     if (grants.status === 'unconfigured') {
       this.#disabled = true
+      this.#abortRequests()
       return
     }
     if (grants.status === 'retry_later') {
@@ -332,11 +335,17 @@ export class TURNPaths {
     if (lane) await this.#releaseLane(service, leg, lane)
   }
 
+  #abortRequests(): void {
+    const pending = [...this.#requests.values()]
+    this.#requests.clear()
+    for (const request of pending) request.cancel.abort()
+  }
+
   reset(): Promise<void> {
     if (this.#resetting) return this.#resetting
     const services = [...this.#services.values()]
     this.#services = new Map()
-    this.#requests.clear()
+    this.#abortRequests()
     this.#unsubscribe?.()
     this.#unsubscribe = undefined
     this.#pressure.reset()
