@@ -42,6 +42,10 @@ type networkSubscriber interface {
 	Subscribe() (<-chan networkstate.Snapshot, func())
 	Current() networkstate.Snapshot
 }
+
+type networkSnapshotter interface {
+	Snapshot(context.Context) (networkstate.Snapshot, error)
+}
 type Config struct {
 	Admission           *Admission
 	Connect             func(pion.Configuration, pionpeer.AttemptConfig) (*pionpeer.Connection, error)
@@ -220,7 +224,18 @@ func (n *NativePeerConnectivity) NewPeerConnection(ctx context.Context, request 
 	return prepared.Start(ctx)
 }
 func (n *NativePeerConnectivity) snapshot(ctx context.Context) (networkstate.Snapshot, error) {
-	snapshot, _, err := n.config.Monitor.Poll(ctx, n.config.Now())
+	var (
+		snapshot networkstate.Snapshot
+		err      error
+	)
+	// Prefer Snapshot on clock-owning monitors (such as networkstate.Watcher) so
+	// freshness checks sample time inside the watcher lock instead of passing a
+	// pre-wait timestamp that can lag behind a concurrent cold-start sample.
+	if snap, ok := n.config.Monitor.(networkSnapshotter); ok {
+		snapshot, err = snap.Snapshot(ctx)
+	} else {
+		snapshot, _, err = n.config.Monitor.Poll(ctx, n.config.Now())
+	}
 	if err != nil {
 		return snapshot, err
 	}

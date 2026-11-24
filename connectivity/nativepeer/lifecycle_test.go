@@ -468,6 +468,82 @@ func TestPrepareAttemptSharesColdStartSamplingErrorWithoutSerializing(t *testing
 	})
 }
 
+func TestPrepareAttemptReusesNewerColdStartSample(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		base := time.Unix(760, 0)
+		var ticks atomic.Int64
+		clock := func() time.Time {
+			return base.Add(time.Duration(ticks.Add(1)) * time.Millisecond)
+		}
+		block := make(chan struct{})
+		source := &countingNetworkSource{
+			state:   networkstate.State{Addresses: []networkstate.Address{{IP: netip.MustParseAddr("192.0.2.1"), InterfaceIndex: 1}}},
+			entered: make(chan struct{}, 2),
+			block:   block,
+		}
+		watcher := networkstate.NewWatcher(networkstate.WatcherConfig{
+			Source:   source,
+			Debounce: time.Nanosecond,
+			Interval: time.Hour,
+			Now:      clock,
+		})
+		defer watcher.Close()
+
+		native := newTestConnectivity(t, Config{
+			Monitor:      watcher,
+			Now:          clock,
+			Reachability: reachability.New(reachability.Config{Now: clock}),
+		})
+		defer native.Close(context.Background())
+
+		leaderDone := make(chan error, 1)
+		go func() {
+			_, _, err := watcher.Poll(context.Background(), base.Add(50*time.Millisecond))
+			leaderDone <- err
+		}()
+		<-source.entered
+
+		waiterDone := make(chan error, 1)
+		go func() {
+			prepared, err := native.PrepareAttempt(t.Context(), request(1))
+			if prepared != nil {
+				prepared.Close()
+			}
+			waiterDone <- err
+		}()
+		synctest.Wait()
+
+		source.mu.Lock()
+		source.block = nil
+		source.mu.Unlock()
+		close(block)
+
+		if err := <-leaderDone; err != nil {
+			t.Fatalf("leader Poll err = %v", err)
+		}
+		if err := <-waiterDone; err != nil {
+			t.Fatalf("PrepareAttempt err = %v", err)
+		}
+		if calls := source.calls.Load(); calls != 1 {
+			t.Fatalf("cold-start PrepareAttempt calls = %d, want 1", calls)
+		}
+		if gen := native.NetworkGeneration(); gen != 1 {
+			t.Fatalf("native generation = %d, want 1", gen)
+		}
+
+		// Subsequent preparation after the clock catches up reuses the cached baseline.
+		ticks.Store(100)
+		prepared, err := native.PrepareAttempt(t.Context(), request(2))
+		if err != nil {
+			t.Fatalf("second PrepareAttempt err = %v", err)
+		}
+		prepared.Close()
+		if calls := source.calls.Load(); calls != 1 {
+			t.Fatalf("cached PrepareAttempt calls = %d, want 1", calls)
+		}
+	})
+}
+
 type blockingGateway struct {
 	entered  chan struct{}
 	canceled chan error

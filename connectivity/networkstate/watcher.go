@@ -21,12 +21,14 @@ type WatcherConfig struct {
 }
 
 // pollFlight tracks one in-flight OS sample shared across concurrent waiters.
-// The flight owner writes snapshot and err before closing done, establishing
-// a happens-before edge for waiters without holding w.mu on read.
+// The flight owner writes the settled outcome fields before closing done,
+// establishing a happens-before edge for waiters without holding w.mu on read.
 type pollFlight struct {
-	done     chan struct{}
-	snapshot Snapshot
-	err      error
+	done      chan struct{}
+	snapshot  Snapshot
+	polledAt  time.Time
+	succeeded bool
+	err       error
 }
 
 // Watcher owns one host-wide polling cadence and fans out immutable generation
@@ -79,21 +81,27 @@ func (w *Watcher) Current() Snapshot {
 }
 
 func (w *Watcher) Snapshot(ctx context.Context) (Snapshot, error) {
-	snapshot, _, err := w.Poll(ctx, w.now())
+	snapshot, _, err := w.poll(ctx, w.now)
 	return snapshot, err
 }
 
 // Poll satisfies pull-based consumers without triggering redundant OS queries
 // while the cached snapshot is fresh. Concurrent cache misses wait on either
 // the in-flight sample or their own context cancellation; non-cancellation
-// sampling errors are shared with that round's waiters, while caller
-// cancellation stays isolated and successes recheck snapshot freshness.
+// sampling errors and samples captured at or after the caller's timestamp are
+// shared with that round's waiters, while caller cancellation stays isolated
+// and older samples recheck snapshot freshness.
 func (w *Watcher) Poll(ctx context.Context, now time.Time) (Snapshot, bool, error) {
+	return w.poll(ctx, func() time.Time { return now })
+}
+
+func (w *Watcher) poll(ctx context.Context, nowFn func() time.Time) (Snapshot, bool, error) {
 	for {
 		if err := ctx.Err(); err != nil {
 			return w.Current(), false, err
 		}
 		w.mu.Lock()
+		now := nowFn()
 		if snapshot, err, ok := w.cachedLocked(now); ok {
 			w.mu.Unlock()
 			return snapshot, false, err
@@ -107,6 +115,9 @@ func (w *Watcher) Poll(ctx context.Context, now time.Time) (Snapshot, bool, erro
 				}
 				if wait.err != nil {
 					return wait.snapshot, false, wait.err
+				}
+				if wait.succeeded && !wait.polledAt.Before(now) {
+					return wait.snapshot, false, nil
 				}
 				continue
 			case <-ctx.Done():
@@ -308,6 +319,9 @@ func (w *Watcher) executePoll(ctx context.Context, now time.Time, flight *pollFl
 	w.attemptedAt = now
 	w.lastErr = nil
 	w.failedPolls = 0
+	flight.snapshot = snapshot
+	flight.polledAt = now
+	flight.succeeded = true
 	if changed && previous != 0 && snapshot.GenerationID() != previous {
 		for _, ch := range w.subscribers {
 			deliverSnapshot(ch, snapshot)

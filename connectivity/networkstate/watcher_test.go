@@ -797,3 +797,156 @@ func TestWatcherPollSharesNonCancellationErrorsAcrossFlightWaiters(t *testing.T)
 		}
 	})
 }
+
+func TestWatcherReusesNewerInFlightSample(t *testing.T) {
+	t.Run("poll_waiter_reuses_newer_leader_sample_without_breaking_backwards_clock_check", func(t *testing.T) {
+		base := time.Unix(12000, 0)
+		leaderTime := base.Add(5 * time.Millisecond)
+		block := make(chan struct{})
+		source := &countingSource{entered: make(chan struct{}, 2), block: block}
+		source.setIP("10.0.0.2")
+		watcher := NewWatcher(WatcherConfig{
+			Source:   source,
+			Debounce: time.Nanosecond,
+			Interval: time.Hour,
+			Now:      func() time.Time { return base },
+		})
+		defer watcher.Close()
+
+		leaderDone := make(chan error, 1)
+		go func() {
+			snap, _, err := watcher.Poll(context.Background(), leaderTime)
+			if err == nil && snap.GenerationID() != 1 {
+				t.Errorf("leader generation = %d, want 1", snap.GenerationID())
+			}
+			leaderDone <- err
+		}()
+		<-source.entered
+
+		waiterCtx := newWaitingContext(context.Background())
+		waiterDone := make(chan error, 1)
+		go func() {
+			snap, changed, err := watcher.Poll(waiterCtx, base)
+			if err == nil && (changed || snap.GenerationID() != 1) {
+				t.Errorf("waiter Poll = (%d, %t, %v), want gen 1 unchanged", snap.GenerationID(), changed, err)
+			}
+			waiterDone <- err
+		}()
+		<-waiterCtx.waiting
+
+		source.setBlock(nil)
+		close(block)
+
+		if err := <-leaderDone; err != nil {
+			t.Fatalf("leader err = %v", err)
+		}
+		if err := <-waiterDone; err != nil {
+			t.Fatalf("waiter err = %v", err)
+		}
+		if calls := source.calls.Load(); calls != 1 {
+			t.Fatalf("concurrent waiter with earlier timestamp calls = %d, want 1", calls)
+		}
+
+		// Outside a shared flight, a backwards timestamp still misses the cache
+		// instead of treating negative elapsed time as permanently fresh.
+		if snap, _, err := watcher.Poll(context.Background(), base); err != nil || snap.GenerationID() != 1 {
+			t.Fatalf("backwards-clock idle Poll = (%d, %v)", snap.GenerationID(), err)
+		}
+		if calls := source.calls.Load(); calls != 2 {
+			t.Fatalf("backwards-clock idle Poll calls = %d, want 2", calls)
+		}
+	})
+
+	t.Run("snapshot_reuses_newer_in_flight_sample_under_advancing_clock", func(t *testing.T) {
+		base := time.Unix(13000, 0)
+		var ticks atomic.Int64
+		clock := func() time.Time {
+			return base.Add(time.Duration(ticks.Add(1)) * time.Millisecond)
+		}
+		block := make(chan struct{})
+		source := &countingSource{entered: make(chan struct{}, 2), block: block}
+		source.setIP("10.0.0.2")
+		watcher := NewWatcher(WatcherConfig{
+			Source:   source,
+			Debounce: time.Nanosecond,
+			Interval: time.Hour,
+			Now:      clock,
+		})
+		defer watcher.Close()
+
+		leaderDone := make(chan error, 1)
+		go func() {
+			_, _, err := watcher.Poll(context.Background(), base.Add(50*time.Millisecond))
+			leaderDone <- err
+		}()
+		<-source.entered
+
+		waiterCtx := newWaitingContext(context.Background())
+		waiterDone := make(chan error, 1)
+		go func() {
+			snap, err := watcher.Snapshot(waiterCtx)
+			if err == nil && snap.GenerationID() != 1 {
+				t.Errorf("waiter Snapshot generation = %d, want 1", snap.GenerationID())
+			}
+			waiterDone <- err
+		}()
+		<-waiterCtx.waiting
+
+		source.setBlock(nil)
+		close(block)
+
+		if err := <-leaderDone; err != nil {
+			t.Fatalf("leader err = %v", err)
+		}
+		if err := <-waiterDone; err != nil {
+			t.Fatalf("waiter Snapshot err = %v", err)
+		}
+		if calls := source.calls.Load(); calls != 1 {
+			t.Fatalf("Snapshot waiting on newer sample calls = %d, want 1", calls)
+		}
+	})
+
+	t.Run("cold_start_subscribe_and_snapshot_under_advancing_clock", func(t *testing.T) {
+		base := time.Unix(14000, 0)
+		for range 16 {
+			var ticks atomic.Int64
+			clock := func() time.Time {
+				return base.Add(time.Duration(ticks.Add(1)) * time.Millisecond)
+			}
+			block := make(chan struct{})
+			source := &countingSource{entered: make(chan struct{}, 2), block: block}
+			source.setIP("10.0.0.2")
+			watcher := NewWatcher(WatcherConfig{
+				Source:   source,
+				Debounce: time.Nanosecond,
+				Interval: time.Hour,
+				Now:      clock,
+			})
+
+			_, unsub := watcher.Subscribe()
+			snapCtx := newWaitingContext(context.Background())
+			snapDone := make(chan error, 1)
+			go func() {
+				snap, err := watcher.Snapshot(snapCtx)
+				if err == nil && snap.GenerationID() != 1 {
+					t.Errorf("cold-start Snapshot generation = %d, want 1", snap.GenerationID())
+				}
+				snapDone <- err
+			}()
+			<-source.entered
+			<-snapCtx.waiting
+			source.setBlock(nil)
+			close(block)
+			if err := <-snapDone; err != nil {
+				unsub()
+				watcher.Close()
+				t.Fatal(err)
+			}
+			unsub()
+			watcher.Close()
+			if calls := source.calls.Load(); calls != 1 {
+				t.Fatalf("advancing-clock cold-start Subscribe + Snapshot calls = %d, want 1", calls)
+			}
+		}
+	})
+}
