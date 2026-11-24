@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { DirectoryFailureError, type CatalogClient } from '../../src/catalog/client'
-import { CatalogPageStoreError, type CommittedDirectory } from '../../src/catalog/page-store'
+import {
+  CatalogPageStoreError,
+  MemoryCatalogPageStore,
+  type CommittedDirectory,
+} from '../../src/catalog/page-store'
 import {
   DIRECTORY_FAILURE_CODE_RESOURCE_LIMIT,
   type CatalogEntry,
@@ -12,7 +16,11 @@ import { RemoteOperationError } from '../../src/content/session-operations'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import { createReceivedProtocolError } from '../../src/session/diagnostics'
 import { createDiagnosticIdentity } from '../../src/session/identities'
-import { discoverSelection, inspectSelectionShape } from '../../src/transfer/discovery'
+import {
+  CONSECUTIVE_CAPACITY_FAILURE_LIMIT,
+  discoverSelection,
+  inspectSelectionShape,
+} from '../../src/transfer/discovery'
 
 interface TreeDirSpec {
   readonly seed: number
@@ -604,13 +612,15 @@ describe('folder offer probing and directory failure tolerance', () => {
     expect(tree.loadedDirectories).toEqual([tree.rootIdText])
     expect(tree.loadedPages).toEqual([`${tree.rootIdText}#0`])
   })
+})
 
-  it('stops discovery immediately on permanent catalog capacity limits while continuing past retryable contention', async () => {
+describe('catalog capacity isolation and saturation halting', () => {
+  it('isolates a single oversized directory capacity failure and continues past healthy siblings', async () => {
     const buildTreeWithFailure = (failureForFirst: Error) => {
       const tree = makeCatalogTree([[
         { kind: 'directory', seed: 120, name: 'dir-1', entries: [] },
         { kind: 'directory', seed: 121, name: 'dir-2', entries: [{ kind: 'file', seed: 122, name: 'later.txt', size: 10n }] },
-        { kind: 'directory', seed: 123, name: 'dir-3', entries: [] },
+        { kind: 'directory', seed: 123, name: 'dir-3', entries: [{ kind: 'file', seed: 124, name: 'also-ok.txt', size: 20n }] },
       ]])
       const firstIdText = tree.entry(120).idText
       const loaded: string[] = []
@@ -626,7 +636,7 @@ describe('folder offer probing and directory failure tolerance', () => {
       return { tree, catalog, loaded, firstIdText }
     }
 
-    const permanentCases: readonly Error[] = [
+    const singleDirectoryCapacityCases: readonly Error[] = [
       new CatalogPageStoreError('resource-limit', 'Catalog cache exceeded its share entry or metadata budget'),
       new DirectoryFailureError(Object.freeze({
         shareInstance: makeId(1),
@@ -652,10 +662,10 @@ describe('folder offer probing and directory failure tolerance', () => {
       })),
     ]
 
-    for (const permanentError of permanentCases) {
-      const { tree, catalog, loaded, firstIdText } = buildTreeWithFailure(permanentError)
+    for (const capacityError of singleDirectoryCapacityCases) {
+      const { tree, catalog, loaded, firstIdText } = buildTreeWithFailure(capacityError)
       const failed: unknown[] = []
-      const yielded: string[] = []
+      const discoveredFiles: string[] = []
       for await (const item of discoverSelection(
         tree.descriptor,
         catalog,
@@ -664,42 +674,269 @@ describe('folder offer probing and directory failure tolerance', () => {
         new AbortController().signal,
         { onDirectoryFailed: (_id, error) => failed.push(error) },
       )) {
-        yielded.push(`${item.kind}:${item.relativePath.join('/')}`)
+        if (item.kind === 'file') discoveredFiles.push(item.relativePath.join('/'))
       }
-      expect(yielded).toEqual(['directory:dir-1', 'directory:dir-2', 'directory:dir-3'])
-      expect(loaded).toEqual([tree.rootIdText, firstIdText])
-      expect(failed).toEqual([permanentError])
+      expect(loaded).toEqual([
+        tree.rootIdText,
+        firstIdText,
+        tree.entry(121).idText,
+        tree.entry(123).idText,
+      ])
+      expect(discoveredFiles).toEqual(['dir-2/later.txt', 'dir-3/also-ok.txt'])
+      expect(failed).toEqual([capacityError])
+    }
+  })
+
+  it('halts immediately on a saturated browser cache while isolating oversized directories against MemoryCatalogPageStore', async () => {
+    const wrapWithMemoryStore = (
+      tree: ReturnType<typeof makeCatalogTree>,
+      store: MemoryCatalogPageStore,
+      encodedBytesByDir: ReadonlyMap<string, number>,
+    ) => {
+      const loaded: string[] = []
+      const catalog: CatalogClient = Object.freeze({
+        loadDirectory: async (directoryId: Uint8Array) => {
+          const idText = encodeBase64Url(directoryId)
+          loaded.push(idText)
+          const existing = await store.loadDirectory(idText)
+          if (existing !== undefined) return existing
+          const committed = await tree.catalog.loadDirectory(directoryId)
+          await store.begin(idText)
+          try {
+            const encodedBytes = encodedBytesByDir.get(idText) ?? 64
+            for (let pageIndex = 0; pageIndex < committed.pageCount; pageIndex += 1) {
+              const rawPage = await tree.catalog.page(committed, pageIndex)
+              await store.stage({ ...rawPage, encodedBytes })
+            }
+            await store.commit(committed)
+            return committed
+          } catch (error) {
+            await store.abort(idText)
+            throw error
+          }
+        },
+        page: async (committed: CommittedDirectory, pageIndex: number) => {
+          const stored = await store.loadPage(committed, pageIndex)
+          if (stored === undefined) throw new Error(`Missing stored page ${pageIndex}`)
+          return stored
+        },
+      }) as unknown as CatalogClient
+      return { catalog, loaded }
     }
 
-    // Transient retryable budget contention remains directory-local and continues to siblings.
-    const retryableBudgetError = new DirectoryFailureError(Object.freeze({
+    // 1. Oversized multi-page directory aborts and releases staging memory so its healthy sibling commits.
+    const oversizedTree = makeCatalogTree([[
+      {
+        kind: 'directory',
+        seed: 130,
+        name: 'huge-dir',
+        pages: [
+          [{ kind: 'file', seed: 131, name: 'h0.bin', size: 10n }],
+          [{ kind: 'file', seed: 132, name: 'h1.bin', size: 10n }],
+        ],
+      },
+      {
+        kind: 'directory',
+        seed: 133,
+        name: 'healthy-dir',
+        entries: [{ kind: 'file', seed: 134, name: 'keep.txt', size: 12n }],
+      },
+    ]])
+    const oversizedStore = new MemoryCatalogPageStore({
+      maxEntries: 32,
+      // Root (~3.3 KiB) + 1 page of huge-dir (~4.6 KiB) fits; page 2 (~4.6 KiB) overflows
+      // 11 KiB and rolls back, leaving ~7.7 KiB so healthy-dir (~2.8 KiB) still commits.
+      maxMetadataBytes: 11_000,
+    })
+    const oversizedClient = wrapWithMemoryStore(
+      oversizedTree,
+      oversizedStore,
+      new Map([[oversizedTree.entry(130).idText, 512]]),
+    )
+    const oversizedFailures: unknown[] = []
+    const oversizedFiles: string[] = []
+    for await (const item of discoverSelection(
+      oversizedTree.descriptor,
+      oversizedClient.catalog,
+      new SelectionPolicy(true).snapshot(),
+      [],
+      new AbortController().signal,
+      { onDirectoryFailed: (_id, error) => oversizedFailures.push(error) },
+    )) {
+      if (item.kind === 'file') oversizedFiles.push(item.relativePath.join('/'))
+    }
+    expect(oversizedFiles).toEqual(['healthy-dir/keep.txt'])
+    expect(oversizedFailures).toHaveLength(1)
+    expect(oversizedFailures[0]).toMatchObject({
+      name: 'CatalogPageStoreError',
+      kind: 'resource-limit',
+      storeExhausted: false,
+    })
+
+    // 2. Truly saturated committed store halts immediately without querying remaining siblings.
+    const saturatedTree = makeCatalogTree([[
+      { kind: 'directory', seed: 140, name: 'fills-cache', entries: [{ kind: 'file', seed: 141, name: 'a.txt', size: 5n }] },
+      { kind: 'directory', seed: 142, name: 'hits-ceiling', entries: [{ kind: 'file', seed: 143, name: 'b.txt', size: 5n }] },
+      { kind: 'directory', seed: 144, name: 'never-queried', entries: [{ kind: 'file', seed: 145, name: 'c.txt', size: 5n }] },
+    ]])
+    // Root: 2048 + 3*512 + 256 = 3840 B; fills-cache: 2048 + 512 + 256 = 2816 B -> 6656 B committed.
+    // Leaving 1344 B (< 2052 B minimum page footprint) marks hits-ceiling as storeExhausted.
+    const saturatedStore = new MemoryCatalogPageStore({
+      maxEntries: 32,
+      maxMetadataBytes: 8_000,
+    })
+    const saturatedClient = wrapWithMemoryStore(saturatedTree, saturatedStore, new Map())
+    const saturatedFailures: unknown[] = []
+    const saturatedFiles: string[] = []
+    for await (const item of discoverSelection(
+      saturatedTree.descriptor,
+      saturatedClient.catalog,
+      new SelectionPolicy(true).snapshot(),
+      [],
+      new AbortController().signal,
+      { onDirectoryFailed: (_id, error) => saturatedFailures.push(error) },
+    )) {
+      if (item.kind === 'file') saturatedFiles.push(item.relativePath.join('/'))
+    }
+    expect(saturatedFiles).toEqual(['fills-cache/a.txt'])
+    expect(saturatedClient.loaded).toEqual([
+      saturatedTree.rootIdText,
+      saturatedTree.entry(140).idText,
+      saturatedTree.entry(142).idText,
+    ])
+    expect(saturatedFailures).toHaveLength(1)
+    expect(saturatedFailures[0]).toMatchObject({
+      name: 'CatalogPageStoreError',
+      kind: 'resource-limit',
+      storeExhausted: true,
+    })
+  })
+
+  it('halts after consecutive permanent capacity failures, resets after a healthy directory, and ignores retryable contention', async () => {
+    const permanentFailureFor = (seed: number) => new DirectoryFailureError(Object.freeze({
       shareInstance: makeId(1),
-      directoryId: makeId(120),
-      directoryIdText: encodeBase64Url(makeId(120)),
-      attemptId: makeId(201),
-      attemptIdText: encodeBase64Url(makeId(201)),
+      directoryId: makeId(seed),
+      directoryIdText: encodeBase64Url(makeId(seed)),
+      attemptId: makeId(seed + 50),
+      attemptIdText: encodeBase64Url(makeId(seed + 50)),
+      code: DIRECTORY_FAILURE_CODE_RESOURCE_LIMIT,
+      kind: 'resource-limit',
+      retryable: false,
+    }))
+    const retryableFailureFor = (seed: number) => new DirectoryFailureError(Object.freeze({
+      shareInstance: makeId(1),
+      directoryId: makeId(seed),
+      directoryIdText: encodeBase64Url(makeId(seed)),
+      attemptId: makeId(seed + 80),
+      attemptIdText: encodeBase64Url(makeId(seed + 80)),
       code: DIRECTORY_FAILURE_CODE_RESOURCE_LIMIT,
       kind: 'resource-limit',
       retryable: true,
       retryAfterMilliseconds: 250,
     }))
-    const retryableCase = buildTreeWithFailure(retryableBudgetError)
-    const discovered: string[] = []
+
+    // 1. Consecutive permanent capacity failures (even across an unrelated local error) stop traversal.
+    const saturatedTree = makeCatalogTree([[
+      { kind: 'directory', seed: 150, name: 'cap-1', entries: [] },
+      { kind: 'directory', seed: 151, name: 'local-perm', entries: [] },
+      { kind: 'directory', seed: 152, name: 'cap-2', entries: [] },
+      { kind: 'directory', seed: 153, name: 'cap-3', entries: [] },
+      { kind: 'directory', seed: 154, name: 'cap-4', entries: [] },
+      { kind: 'directory', seed: 155, name: 'unreached', entries: [{ kind: 'file', seed: 156, name: 'skip.txt', size: 1n }] },
+    ]])
+    const saturatedLoaded: string[] = []
+    const saturatedCatalog: CatalogClient = Object.freeze({
+      loadDirectory: async (directoryId: Uint8Array) => {
+        const idText = encodeBase64Url(directoryId)
+        saturatedLoaded.push(idText)
+        if (idText === saturatedTree.entry(151).idText) throw new Error('permission denied')
+        if ([150, 152, 153, 154].some(seed => saturatedTree.entry(seed).idText === idText)) {
+          throw permanentFailureFor(150)
+        }
+        return saturatedTree.catalog.loadDirectory(directoryId)
+      },
+      page: (committed: CommittedDirectory, pageIndex: number) => saturatedTree.catalog.page(committed, pageIndex),
+    }) as unknown as CatalogClient
+    const saturatedFiles: string[] = []
     for await (const item of discoverSelection(
-      retryableCase.tree.descriptor,
-      retryableCase.catalog,
+      saturatedTree.descriptor,
+      saturatedCatalog,
       new SelectionPolicy(true).snapshot(),
       [],
       new AbortController().signal,
     )) {
-      if (item.kind === 'file') discovered.push(item.relativePath.join('/'))
+      if (item.kind === 'file') saturatedFiles.push(item.relativePath.join('/'))
     }
-    expect(retryableCase.loaded).toEqual([
-      retryableCase.tree.rootIdText,
-      retryableCase.firstIdText,
-      retryableCase.tree.entry(121).idText,
-      retryableCase.tree.entry(123).idText,
+    expect(saturatedFiles).toEqual([])
+    expect(CONSECUTIVE_CAPACITY_FAILURE_LIMIT).toBe(4)
+    expect(saturatedLoaded).toEqual([
+      saturatedTree.rootIdText,
+      saturatedTree.entry(150).idText,
+      saturatedTree.entry(151).idText,
+      saturatedTree.entry(152).idText,
+      saturatedTree.entry(153).idText,
+      saturatedTree.entry(154).idText,
     ])
-    expect(discovered).toEqual(['dir-2/later.txt'])
+
+    // 2. A healthy sibling resets the consecutive counter so later healthy siblings still download.
+    const intermittentTree = makeCatalogTree([[
+      { kind: 'directory', seed: 160, name: 'big-1', entries: [] },
+      { kind: 'directory', seed: 161, name: 'big-2', entries: [] },
+      { kind: 'directory', seed: 162, name: 'big-3', entries: [] },
+      { kind: 'directory', seed: 163, name: 'ok-mid', entries: [{ kind: 'file', seed: 164, name: 'mid.txt', size: 4n }] },
+      { kind: 'directory', seed: 165, name: 'big-4', entries: [] },
+      { kind: 'directory', seed: 166, name: 'big-5', entries: [] },
+      { kind: 'directory', seed: 167, name: 'ok-end', entries: [{ kind: 'file', seed: 168, name: 'end.txt', size: 4n }] },
+    ]])
+    const bigIds = new Set([160, 161, 162, 165, 166].map(seed => intermittentTree.entry(seed).idText))
+    const intermittentCatalog: CatalogClient = Object.freeze({
+      loadDirectory: async (directoryId: Uint8Array) => {
+        const idText = encodeBase64Url(directoryId)
+        if (bigIds.has(idText)) throw permanentFailureFor(160)
+        return intermittentTree.catalog.loadDirectory(directoryId)
+      },
+      page: (committed: CommittedDirectory, pageIndex: number) => intermittentTree.catalog.page(committed, pageIndex),
+    }) as unknown as CatalogClient
+    const intermittentFiles: string[] = []
+    for await (const item of discoverSelection(
+      intermittentTree.descriptor,
+      intermittentCatalog,
+      new SelectionPolicy(true).snapshot(),
+      [],
+      new AbortController().signal,
+    )) {
+      if (item.kind === 'file') intermittentFiles.push(item.relativePath.join('/'))
+    }
+    expect(intermittentFiles).toEqual(['ok-mid/mid.txt', 'ok-end/end.txt'])
+
+    // 3. Retryable budget contention never counts toward the permanent capacity stop threshold.
+    const retryableTree = makeCatalogTree([[
+      { kind: 'directory', seed: 170, name: 'busy-1', entries: [] },
+      { kind: 'directory', seed: 171, name: 'busy-2', entries: [] },
+      { kind: 'directory', seed: 172, name: 'busy-3', entries: [] },
+      { kind: 'directory', seed: 173, name: 'busy-4', entries: [] },
+      { kind: 'directory', seed: 174, name: 'busy-5', entries: [] },
+      { kind: 'directory', seed: 175, name: 'healthy', entries: [{ kind: 'file', seed: 176, name: 'later.txt', size: 10n }] },
+    ]])
+    const busyIds = new Set([170, 171, 172, 173, 174].map(seed => retryableTree.entry(seed).idText))
+    const retryableCatalog: CatalogClient = Object.freeze({
+      loadDirectory: async (directoryId: Uint8Array) => {
+        const idText = encodeBase64Url(directoryId)
+        if (busyIds.has(idText)) throw retryableFailureFor(170)
+        return retryableTree.catalog.loadDirectory(directoryId)
+      },
+      page: (committed: CommittedDirectory, pageIndex: number) => retryableTree.catalog.page(committed, pageIndex),
+    }) as unknown as CatalogClient
+    const retryableFiles: string[] = []
+    for await (const item of discoverSelection(
+      retryableTree.descriptor,
+      retryableCatalog,
+      new SelectionPolicy(true).snapshot(),
+      [],
+      new AbortController().signal,
+    )) {
+      if (item.kind === 'file') retryableFiles.push(item.relativePath.join('/'))
+    }
+    expect(retryableFiles).toEqual(['healthy/later.txt'])
   })
 })

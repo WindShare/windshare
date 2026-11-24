@@ -3,7 +3,7 @@ import { CATALOG_PATH_DEPTH, snapshotCatalogPath } from '../catalog/path-policy'
 import type { CatalogEntry, ShareDescriptor } from '../catalog/records'
 import type { FrozenSelectionPolicy } from '../catalog/selection'
 import { encodeBase64Url } from '../crypto/bytes'
-import { catalogCapacityReason } from './fault'
+import { catalogCapacityReason, isBrowserCatalogStoreExhausted } from './fault'
 
 export interface DiscoveredDirectory {
   readonly kind: 'directory'
@@ -56,6 +56,11 @@ const SHAPE_FALLBACK_DIRECTORY_LIMIT = 4
 // Bound guided ancestor verification to the maximum legal catalog depth plus root
 // so deep explicitly selected targets still resolve without allowing unbounded walks.
 const SHAPE_GUIDED_DIRECTORY_LIMIT = CATALOG_PATH_DEPTH + 1
+// Halt discovery only after consecutive permanent capacity failures with no
+// healthy directory succeeding in between. A single oversized directory frees
+// its transient sorting/staging memory on failure so healthy siblings still fit,
+// while a genuinely saturated share stops without burning unbounded round-trips.
+export const CONSECUTIVE_CAPACITY_FAILURE_LIMIT = 4
 const EMPTY_PATH: readonly string[] = Object.freeze([])
 
 type CommittedDir = Awaited<ReturnType<CatalogClient['loadDirectory']>>
@@ -558,14 +563,25 @@ export async function* discoverSelection(
   }
   queues.enqueue(rootFrame, tracker.isHintedDirectory(rootFrame.ancestry))
 
+  let consecutiveCapacityFailures = 0
   while (true) {
     signal.throwIfAborted()
     const next = queues.next(tracker)
     if (next === undefined) break
     const current = next.frame
-    const outcome = await loadDiscoveryDirectory(catalog, current, signal, callbacks)
+    const outcome = await loadDiscoveryDirectory(
+      catalog,
+      current,
+      signal,
+      callbacks,
+      consecutiveCapacityFailures,
+    )
     if (outcome.kind === 'stop') break
-    if (outcome.kind === 'skip') continue
+    if (outcome.kind === 'skip') {
+      consecutiveCapacityFailures = outcome.consecutiveCapacityFailures
+      continue
+    }
+    consecutiveCapacityFailures = 0
     const committed = outcome.committed
     if (current.selected && committed.omittedCount > 0n) {
       callbacks.onOmittedEntries?.(committed.omittedCount)
@@ -587,7 +603,7 @@ export async function* discoverSelection(
 
 type DiscoveryLoadOutcome =
   | Readonly<{ kind: 'loaded'; committed: CommittedDir }>
-  | Readonly<{ kind: 'skip' }>
+  | Readonly<{ kind: 'skip'; consecutiveCapacityFailures: number }>
   | Readonly<{ kind: 'stop' }>
 
 async function loadDiscoveryDirectory(
@@ -595,15 +611,21 @@ async function loadDiscoveryDirectory(
   current: DiscoveryFrame,
   signal: AbortSignal,
   callbacks: DiscoveryCallbacks,
+  consecutiveCapacityFailures: number,
 ): Promise<DiscoveryLoadOutcome> {
   try {
     return { kind: 'loaded', committed: await catalog.loadDirectory(current.id, { signal }) }
   } catch (error) {
     if (signal.aborted) throw error
     callbacks.onDirectoryFailed?.(current.idText, error)
-    // Permanent browser-cache or sender-share capacity limits apply to the whole
-    // share; continuing to fetch remaining queued directories only burns round-trips.
-    return catalogCapacityReason(error) === undefined ? { kind: 'skip' } : { kind: 'stop' }
+    if (isBrowserCatalogStoreExhausted(error)) return { kind: 'stop' }
+    if (catalogCapacityReason(error) === undefined) {
+      return { kind: 'skip', consecutiveCapacityFailures }
+    }
+    const nextCapacityFailures = consecutiveCapacityFailures + 1
+    return nextCapacityFailures >= CONSECUTIVE_CAPACITY_FAILURE_LIMIT
+      ? { kind: 'stop' }
+      : { kind: 'skip', consecutiveCapacityFailures: nextCapacityFailures }
   }
 }
 

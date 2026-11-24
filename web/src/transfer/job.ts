@@ -284,8 +284,8 @@ export class TransferJob {
     if (this.#discoveryInterrupted(error)) return
     this.#discoveryFailed = true
     this.#failedDirectories += 1n
-    // A share-wide capacity ceiling halts remaining discovery, so preserve it
-    // as the primary failure even if an earlier sibling directory failed locally.
+    // Preserve permanent catalog capacity failures over generic local directory
+    // errors so settlement explains why oversized or saturated subtrees were skipped.
     if (catalogCapacityReason(error) !== undefined) this.#firstError = error
     else this.#firstError ??= error
     this.#tracker.observeDirectoryFailed()

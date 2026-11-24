@@ -973,101 +973,176 @@ describe('TransferJob resumable interruption handling', () => {
     expect(discoveryResult.pauseReason).toBe('interrupted')
   })
 
-  it('preserves permanent catalog capacity limits over earlier local failures while finishing already-discovered files', async () => {
+  it('skips a single oversized directory while downloading healthy siblings and halts immediately when browser cache is saturated', async () => {
     const shareInstance = id(1)
     const rootId = id(2)
     const firstDirId = id(10)
     const limitDirId = id(11)
-    const unreachedDirId = id(12)
-    const fileId = id(20)
+    const siblingDirId = id(12)
+    const rootFileId = id(20)
+    const siblingFileId = id(21)
     const rootIdText = encodeBase64Url(rootId)
     const firstDirIdText = encodeBase64Url(firstDirId)
     const limitDirIdText = encodeBase64Url(limitDirId)
-    const unreachedDirIdText = encodeBase64Url(unreachedDirId)
+    const siblingDirIdText = encodeBase64Url(siblingDirId)
     const payload = new Uint8Array([1, 2, 3, 4])
 
     const rootEntries: readonly CatalogEntry[] = Object.freeze([
-      Object.freeze({ kind: 'file', id: fileId, idText: encodeBase64Url(fileId), name: 'ready.bin', expectedSize: 4n }),
+      Object.freeze({ kind: 'file', id: rootFileId, idText: encodeBase64Url(rootFileId), name: 'ready.bin', expectedSize: 4n }),
       Object.freeze({ kind: 'directory', id: firstDirId, idText: firstDirIdText, name: 'local-error' }),
       Object.freeze({ kind: 'directory', id: limitDirId, idText: limitDirIdText, name: 'hits-limit' }),
-      Object.freeze({ kind: 'directory', id: unreachedDirId, idText: unreachedDirIdText, name: 'never-queried' }),
+      Object.freeze({ kind: 'directory', id: siblingDirId, idText: siblingDirIdText, name: 'healthy-sibling' }),
     ])
-    const rootCommitted: CommittedDirectory = Object.freeze({
-      directoryId: rootId,
-      directoryIdText: rootIdText,
-      generation: id(50),
-      generationText: encodeBase64Url(id(50)),
+    const siblingEntries: readonly CatalogEntry[] = Object.freeze([
+      Object.freeze({ kind: 'file', id: siblingFileId, idText: encodeBase64Url(siblingFileId), name: 'sibling.bin', expectedSize: 4n }),
+    ])
+    const makeCommitted = (directoryId: Uint8Array<ArrayBuffer>, directoryIdText: string, genSeed: number, entries: readonly CatalogEntry[]): CommittedDirectory => Object.freeze({
+      directoryId,
+      directoryIdText,
+      generation: id(genSeed),
+      generationText: encodeBase64Url(id(genSeed)),
       pageCount: 1,
-      entryCount: rootEntries.length,
+      entryCount: entries.length,
       omittedCount: 0n,
       terminalCommitment: new Uint8Array(32),
     })
-    const rootPage: CatalogPage = Object.freeze({
+    const makePage = (committed: CommittedDirectory, entries: readonly CatalogEntry[]): CatalogPage => Object.freeze({
       shareInstance,
-      directoryId: rootId,
-      directoryIdText: rootIdText,
-      generation: id(50),
-      generationText: encodeBase64Url(id(50)),
+      directoryId: committed.directoryId,
+      directoryIdText: committed.directoryIdText,
+      generation: committed.generation,
+      generationText: committed.generationText,
       pageIndex: 0,
       terminal: true,
       previousCommitment: new Uint8Array(32),
-      entries: rootEntries,
+      entries,
       omittedCount: 0n,
       objectCommitment: new Uint8Array(32),
       encodedBytes: 128,
     })
 
+    const rootCommitted = makeCommitted(rootId, rootIdText, 50, rootEntries)
+    const siblingCommitted = makeCommitted(siblingDirId, siblingDirIdText, 51, siblingEntries)
+    const rootPage = makePage(rootCommitted, rootEntries)
+    const siblingPage = makePage(siblingCommitted, siblingEntries)
     const descriptor = Object.freeze({
       shareInstance,
       shareInstanceId: encodeBase64Url(shareInstance),
       syntheticRoot: rootId,
       syntheticRootId: rootIdText,
     }) as unknown as ShareDescriptor
-    const capacityError = new CatalogPageStoreError('resource-limit', 'Catalog cache exceeded its share entry or metadata budget')
-    const queriedDirs: string[] = []
-    const catalog = {
+
+    // 1. A single oversized directory is skipped while healthy siblings continue downloading.
+    const oversizedError = new CatalogPageStoreError('resource-limit', 'Catalog cache exceeded its share entry or metadata budget')
+    const oversizedQueries: string[] = []
+    const oversizedCommittedPaths: string[] = []
+    const oversizedCatalog = {
       loadDirectory: async (directoryId: Uint8Array) => {
         const dirText = encodeBase64Url(directoryId)
-        queriedDirs.push(dirText)
+        oversizedQueries.push(dirText)
         if (dirText === rootIdText) return rootCommitted
         if (dirText === firstDirIdText) throw new Error('local directory unreadable')
-        if (dirText === limitDirIdText) throw capacityError
+        if (dirText === limitDirIdText) throw oversizedError
+        if (dirText === siblingDirIdText) return siblingCommitted
         throw new Error(`unexpected directory query ${dirText}`)
       },
-      page: async () => rootPage,
+      page: async (committed: CommittedDirectory) => (
+        committed.directoryIdText === rootIdText ? rootPage : siblingPage
+      ),
     } as unknown as CatalogClient
 
-    const rev = makeDescriptor({ shareInstance, fileId, revision: id(60), exactSize: 4n })
-    let committedFiles = 0
-    const result = await new TransferJob({
+    const oversizedResult = await new TransferJob({
       descriptor,
-      catalog,
+      catalog: oversizedCatalog,
       selection: new SelectionPolicy(true).snapshot(),
-      revisions: { open: async () => Object.freeze({ descriptor: rev, leaseId: id(1), release: async () => undefined }) },
+      revisions: {
+        open: async (fileId: Uint8Array) => Object.freeze({
+          descriptor: makeDescriptor({ shareInstance, fileId: fileId.slice(), revision: id(60), exactSize: 4n }),
+          leaseId: id(1),
+          release: async () => undefined,
+        }),
+      },
       broker: {
         readRange: async function* () {
           yield Object.freeze({ offset: 0n, data: payload })
         },
       },
       output: {
-        sessionId: 'sess-catalog-limit',
+        sessionId: 'sess-oversized-dir',
         capabilities: { maxConcurrentFiles: 1, resumable: true },
-        openFile: async (): Promise<TransferOutputFile> => ({
+        openFile: async (file): Promise<TransferOutputFile> => ({
           completedRanges: [],
           writeAt: async () => undefined,
           checkpoint: async () => 'saved',
-          commit: async () => { committedFiles += 1 },
+          commit: async () => { oversizedCommittedPaths.push(file.path.join('/')) },
           pause: async () => undefined,
           abort: async () => undefined,
         }),
       },
     }).run()
 
-    expect(result.status).toBe('partial')
-    expect(result.completedFiles).toBe(1n)
-    expect(committedFiles).toBe(1)
-    expect(result.failedDirectories).toBe(2n)
-    expect(result.error).toBe(capacityError)
-    expect(queriedDirs).toEqual([rootIdText, firstDirIdText, limitDirIdText])
+    expect(oversizedResult.status).toBe('partial')
+    expect(oversizedResult.completedFiles).toBe(2n)
+    expect(oversizedCommittedPaths).toEqual(['ready.bin', 'healthy-sibling/sibling.bin'])
+    expect(oversizedResult.failedDirectories).toBe(2n)
+    expect(oversizedResult.error).toBe(oversizedError)
+    expect(oversizedQueries).toEqual([rootIdText, firstDirIdText, limitDirIdText, siblingDirIdText])
+
+    // 2. A provably saturated browser cache halts remaining discovery while finishing discovered files.
+    const saturatedError = new CatalogPageStoreError(
+      'resource-limit',
+      'Catalog cache exceeded its share entry or metadata budget',
+      { storeExhausted: true },
+    )
+    const saturatedQueries: string[] = []
+    const saturatedCatalog = {
+      loadDirectory: async (directoryId: Uint8Array) => {
+        const dirText = encodeBase64Url(directoryId)
+        saturatedQueries.push(dirText)
+        if (dirText === rootIdText) return rootCommitted
+        if (dirText === firstDirIdText) throw new Error('local directory unreadable')
+        if (dirText === limitDirIdText) throw saturatedError
+        throw new Error(`unexpected directory query ${dirText}`)
+      },
+      page: async () => rootPage,
+    } as unknown as CatalogClient
+
+    let saturatedCommittedFiles = 0
+    const saturatedResult = await new TransferJob({
+      descriptor,
+      catalog: saturatedCatalog,
+      selection: new SelectionPolicy(true).snapshot(),
+      revisions: {
+        open: async () => Object.freeze({
+          descriptor: makeDescriptor({ shareInstance, fileId: rootFileId, revision: id(61), exactSize: 4n }),
+          leaseId: id(2),
+          release: async () => undefined,
+        }),
+      },
+      broker: {
+        readRange: async function* () {
+          yield Object.freeze({ offset: 0n, data: payload })
+        },
+      },
+      output: {
+        sessionId: 'sess-saturated-cache',
+        capabilities: { maxConcurrentFiles: 1, resumable: true },
+        openFile: async (): Promise<TransferOutputFile> => ({
+          completedRanges: [],
+          writeAt: async () => undefined,
+          checkpoint: async () => 'saved',
+          commit: async () => { saturatedCommittedFiles += 1 },
+          pause: async () => undefined,
+          abort: async () => undefined,
+        }),
+      },
+    }).run()
+
+    expect(saturatedResult.status).toBe('partial')
+    expect(saturatedResult.completedFiles).toBe(1n)
+    expect(saturatedCommittedFiles).toBe(1)
+    expect(saturatedResult.failedDirectories).toBe(2n)
+    expect(saturatedResult.error).toBe(saturatedError)
+    expect(saturatedQueries).toEqual([rootIdText, firstDirIdText, limitDirIdText])
   })
 })

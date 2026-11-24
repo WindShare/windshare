@@ -708,8 +708,8 @@ func TestListChildrenContendedShareOverflowBecomesPermanentAfterExclusiveRetry(t
 	defer store.Close()
 
 	session := generousBudget(t, "contended-share-session")
-	dirs := prepareSelectedDirectories(t, store, session, 95, 96, 97)
-	smallDir, hugeDir := dirs[0], dirs[1]
+	dirs := prepareSelectedDirectories(t, store, session, 95, 96, 97, 98)
+	smallDir, hugeDir, laterSmallDir := dirs[0], dirs[1], dirs[2]
 
 	smallEntered := make(chan struct{})
 	releaseSmall := make(chan struct{})
@@ -720,6 +720,9 @@ func TestListChildrenContendedShareOverflowBecomesPermanentAfterExclusiveRetry(t
 			close(smallEntered)
 			<-releaseSmall
 			return ScanResult{}, request.Children.Add(ctx, scannedFile(t, 210, "tiny", 1))
+		}
+		if dirID == laterSmallDir {
+			return ScanResult{}, request.Children.Add(ctx, scannedFile(t, 218, "later-tiny", 1))
 		}
 		if hugeScans.Add(1) == 1 {
 			<-smallEntered
@@ -749,6 +752,12 @@ func TestListChildrenContendedShareOverflowBecomesPermanentAfterExclusiveRetry(t
 	}
 	if hugeScans.Load() != 2 {
 		t.Fatalf("contended oversized share scanned %d times, want 2 (initial + 1 exclusive retry)", hugeScans.Load())
+	}
+	// Failing hugeDir released its transient sort buffer, so healthy sibling
+	// directories listed afterward still commit within the remaining share budget.
+	laterCommitted, laterErr := store.ListChildren(context.Background(), laterSmallDir, session, ScanOptions{}, scanner)
+	if laterErr != nil || laterCommitted.EntryCount() != 1 {
+		t.Fatalf("sibling after oversized failure = %+v err=%v, want 1 committed entry", laterCommitted, laterErr)
 	}
 }
 

@@ -24,7 +24,9 @@ var (
 
 	// ErrShareCapacityExceeded reports that an uncontended operation exceeded the
 	// share's retained entry or memory ceiling. Committed directories remain
-	// resident until Close, so retrying within the same share cannot succeed.
+	// resident until Close, so retrying that directory within the same share
+	// cannot succeed, although smaller sibling directories can still commit once
+	// the failed scan releases its transient sorting memory.
 	ErrShareCapacityExceeded = errors.New("catalog share capacity exhausted")
 )
 

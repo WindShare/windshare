@@ -12,6 +12,10 @@ import {
 const CATALOG_PAGE_RECORD_BASE_BYTES = 2 * 1024
 const CATALOG_ENTRY_RECORD_BYTES = 512
 const CATALOG_AUTHENTICATED_BYTES_MULTIPLIER = 4
+// Minimum metadata footprint of any legal catalog page (base overhead plus a
+// 1-byte authenticated payload; zero-byte pages are rejected as invalid).
+const MIN_CATALOG_PAGE_METADATA_BYTES =
+  CATALOG_PAGE_RECORD_BASE_BYTES + CATALOG_AUTHENTICATED_BYTES_MULTIPLIER
 const MAX_SHARE_CATALOG_ENTRIES = 4_194_304
 const MAX_SHARE_CATALOG_METADATA_BYTES = 2 * 1024 * 1024 * 1024
 
@@ -50,17 +54,23 @@ export type CatalogPageStoreErrorKind =
   | 'resource-limit'
   | 'local-storage'
 
+export interface CatalogPageStoreErrorOptions extends ErrorOptions {
+  readonly storeExhausted?: boolean
+}
+
 export class CatalogPageStoreError extends Error {
   readonly kind: CatalogPageStoreErrorKind
+  readonly storeExhausted: boolean
 
   constructor(
     kind: CatalogPageStoreErrorKind,
     message: string,
-    options?: ErrorOptions,
+    options?: CatalogPageStoreErrorOptions,
   ) {
     super(message, options)
     this.name = 'CatalogPageStoreError'
     this.kind = kind
+    this.storeExhausted = options?.storeExhausted ?? false
   }
 }
 
@@ -108,6 +118,8 @@ export class MemoryCatalogPageStore implements CatalogPageStore {
   readonly #directoryCharges = new Map<string, DirectoryBudgetCharge>()
   #entries = 0
   #metadataBytes = 0
+  #committedEntries = 0
+  #committedMetadataBytes = 0
 
   constructor(limits: MemoryCatalogCacheBudgetLimits = DEFAULT_MEMORY_CATALOG_CACHE_BUDGET_LIMITS) {
     this.#limits = validateMemoryBudgetLimits(limits)
@@ -164,9 +176,16 @@ export class MemoryCatalogPageStore implements CatalogPageStore {
       this.#entries + entryCharge > this.#limits.maxEntries ||
       this.#metadataBytes + metadataChargeBytes > this.#limits.maxMetadataBytes
     ) {
+      // Distinguish a truly saturated store from a single oversized directory
+      // whose staged pages will be reclaimed by abort(). Checking committed totals
+      // avoids false saturation from concurrent uncommitted staging.
+      const storeExhausted =
+        this.#committedEntries >= this.#limits.maxEntries ||
+        this.#limits.maxMetadataBytes - this.#committedMetadataBytes < MIN_CATALOG_PAGE_METADATA_BYTES
       throw new CatalogPageStoreError(
         'resource-limit',
         'Catalog cache exceeded its share entry or metadata budget',
+        { storeExhausted },
       )
     }
     for (const node of pendingNodes) this.#nodeOwners.set(node, page.directoryIdText)
@@ -191,7 +210,15 @@ export class MemoryCatalogPageStore implements CatalogPageStore {
     // Sibling name collision checks only span pages staged for one generation;
     // releasing the transient index avoids retaining duplicate name maps after commit.
     this.#nameOwners.delete(directory.directoryIdText)
+    const wasCommitted = this.#directories.has(directory.directoryIdText)
     this.#directories.set(directory.directoryIdText, snapshotDirectory(directory))
+    if (!wasCommitted) {
+      const charge = this.#directoryCharges.get(directory.directoryIdText)
+      if (charge !== undefined) {
+        this.#committedEntries += charge.entries
+        this.#committedMetadataBytes += charge.metadataBytes
+      }
+    }
   }
 
   async storeFailure(cached: CachedDirectoryFailure): Promise<void> {
@@ -201,7 +228,7 @@ export class MemoryCatalogPageStore implements CatalogPageStore {
   }
 
   async abort(directoryIdText: string): Promise<void> {
-    this.#directories.delete(directoryIdText)
+    const wasCommitted = this.#directories.delete(directoryIdText)
     this.#failures.delete(directoryIdText)
     this.#releaseDirectoryPages(directoryIdText)
     this.#nameOwners.delete(directoryIdText)
@@ -209,6 +236,10 @@ export class MemoryCatalogPageStore implements CatalogPageStore {
     if (charge !== undefined) {
       this.#entries = Math.max(0, this.#entries - charge.entries)
       this.#metadataBytes = Math.max(0, this.#metadataBytes - charge.metadataBytes)
+      if (wasCommitted) {
+        this.#committedEntries = Math.max(0, this.#committedEntries - charge.entries)
+        this.#committedMetadataBytes = Math.max(0, this.#committedMetadataBytes - charge.metadataBytes)
+      }
       this.#directoryCharges.delete(directoryIdText)
     }
   }

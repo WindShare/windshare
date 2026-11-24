@@ -209,9 +209,9 @@ export function isSourceInvalidatedError(error: unknown): boolean {
 
 /**
  * Classifies permanent catalog capacity ceilings by owner so browsing and
- * downloads can give accurate guidance: browser-local cache exhaustion can still
+ * downloads can give accurate guidance: browser-local cache limits can still
  * succeed via `wind get` or a narrower folder, whereas sender share capacity
- * exhaustion is permanent for every receiver on this live share.
+ * failures are permanent for the affected directory on this live share.
  */
 export function catalogCapacityReason(error: unknown): CatalogCapacityReason | undefined {
   if (error instanceof CatalogPageStoreError && error.kind === 'resource-limit') {
@@ -233,6 +233,16 @@ export function catalogCapacityReason(error: unknown): CatalogCapacityReason | u
     return 'share-catalog-limit'
   }
   return undefined
+}
+
+/**
+ * Reports whether the browser catalog cache has provably exhausted its
+ * committed capacity so no further directory can fit after rollback.
+ */
+export function isBrowserCatalogStoreExhausted(error: unknown): boolean {
+  return error instanceof CatalogPageStoreError &&
+    error.kind === 'resource-limit' &&
+    error.storeExhausted
 }
 
 const MAX_INTERRUPTION_INSPECTION_DEPTH = 8

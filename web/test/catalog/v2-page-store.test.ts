@@ -298,6 +298,100 @@ describe('v2 catalog page store', () => {
       terminalCommitment: new Uint8Array(32),
     }, 0)).toBeDefined()
   })
+
+  it('distinguishes oversized single-directory staging from a saturated committed store', async () => {
+    const oversizedStore = new MemoryCatalogPageStore({
+      maxEntries: 10,
+      maxMetadataBytes: 10_000,
+    })
+    await oversizedStore.begin('oversized')
+    await oversizedStore.stage(page(0, 'oversized', [entry(1, 'a')]))
+    await expect(oversizedStore.stage(page(1, 'oversized', [entry(2, 'b')])))
+      .rejects.toMatchObject({
+        name: 'CatalogPageStoreError',
+        kind: 'resource-limit',
+        storeExhausted: false,
+      })
+
+    // Uncommitted staging by another directory must not mark the store saturated.
+    await oversizedStore.begin('sibling')
+    await expect(oversizedStore.stage(page(0, 'sibling', [entry(3, 'c')])))
+      .rejects.toMatchObject({
+        name: 'CatalogPageStoreError',
+        kind: 'resource-limit',
+        storeExhausted: false,
+      })
+
+    await oversizedStore.abort('oversized')
+    await oversizedStore.stage(page(0, 'sibling', [entry(3, 'c')]))
+    await oversizedStore.commit({
+      directoryIdText: 'sibling',
+      generationText: 'generation',
+      directoryId: new Uint8Array(16).fill(3),
+      generation: new Uint8Array(16).fill(4),
+      pageCount: 1,
+      entryCount: 1,
+      omittedCount: 0n,
+      terminalCommitment: new Uint8Array(32),
+    })
+
+    // Once committed bytes leave less than one minimal page, further staging reports storeExhausted.
+    const byteSaturatedStore = new MemoryCatalogPageStore({
+      maxEntries: 10,
+      maxMetadataBytes: 8_000,
+    })
+    await byteSaturatedStore.begin('filled')
+    await byteSaturatedStore.stage(page(0, 'filled', [entry(10, 'only')]))
+    await byteSaturatedStore.commit({
+      directoryIdText: 'filled',
+      generationText: 'generation',
+      directoryId: new Uint8Array(16).fill(5),
+      generation: new Uint8Array(16).fill(6),
+      pageCount: 1,
+      entryCount: 1,
+      omittedCount: 0n,
+      terminalCommitment: new Uint8Array(32),
+    })
+    await byteSaturatedStore.begin('blocked')
+    await expect(byteSaturatedStore.stage({ ...page(0, 'blocked', []), encodedBytes: 1 }))
+      .rejects.toMatchObject({
+        name: 'CatalogPageStoreError',
+        kind: 'resource-limit',
+        storeExhausted: true,
+      })
+
+    // Reaching committed maxEntries also marks the store saturated until reset via abort().
+    const entrySaturatedStore = new MemoryCatalogPageStore({
+      maxEntries: 2,
+      maxMetadataBytes: 64_000,
+    })
+    await entrySaturatedStore.begin('full-entries')
+    await entrySaturatedStore.stage(page(0, 'full-entries', [entry(20, 'one'), entry(21, 'two')]))
+    await entrySaturatedStore.commit({
+      directoryIdText: 'full-entries',
+      generationText: 'generation',
+      directoryId: new Uint8Array(16).fill(7),
+      generation: new Uint8Array(16).fill(8),
+      pageCount: 1,
+      entryCount: 2,
+      omittedCount: 0n,
+      terminalCommitment: new Uint8Array(32),
+    })
+    await entrySaturatedStore.begin('next-dir')
+    await expect(entrySaturatedStore.stage(page(0, 'next-dir', [entry(22, 'three')])))
+      .rejects.toMatchObject({
+        name: 'CatalogPageStoreError',
+        kind: 'resource-limit',
+        storeExhausted: true,
+      })
+    await entrySaturatedStore.abort('full-entries')
+    await expect(entrySaturatedStore.stage(page(0, 'next-dir', [entry(22, 'three'), entry(23, 'four'), entry(24, 'five')])))
+      .rejects.toMatchObject({
+        name: 'CatalogPageStoreError',
+        kind: 'resource-limit',
+        storeExhausted: false,
+      })
+  })
 })
 
 async function countMapIterations(operation: () => Promise<void>): Promise<number> {
