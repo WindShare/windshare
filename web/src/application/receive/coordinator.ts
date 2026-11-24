@@ -37,7 +37,6 @@ import type {
 } from './contracts'
 import { ExecutionState, WorkspaceTask, type LocalRetainedActionKind } from './execution-state'
 import { ReceiveStorage, type ReceiveStoreAccess } from './receive-storage'
-import { matchingRetainedTask } from './retained'
 import { RetainedTaskActions, type RetainedActionCallbacks } from './retained-actions'
 import { RetainedTaskInventory } from './retained-inventory'
 import { openNewOutputSession } from './session-opener'
@@ -94,7 +93,6 @@ export class ReceiveCoordinator {
   #lastShape: SelectionShape | null = null
   #selectionSpec: SelectionSpec | null = null
   #selectionPolicy: FrozenSelectionPolicy | null = null
-  #dismissedShareInstance: string | null = null
   #connectionUnavailable = false
   #shareEnded = false
   #snapshot: ReceiveRuntimeSnapshot
@@ -120,7 +118,6 @@ export class ReceiveCoordinator {
       signal: this.#lifetimeAbort.signal,
       isDisposed: () => this.#disposed,
       isLocalTask: taskId => this.#execution.ownsTask(taskId),
-      onFullLoaded: () => this.#adoptMatchingRetained(),
       onChange: () => this.#publish(),
     })
     this.#sessions = new ReceiveSessionRunner({
@@ -262,7 +259,6 @@ export class ReceiveCoordinator {
     this.#selectionPolicy = frozen
     this.#lastShape = null
     this.#offers = Object.freeze({ kind: 'confirming', epoch, selectionKey: key })
-    this.#adoptMatchingRetained()
     this.#publish()
 
     void this.#computeOffers(joined, frozen, key, epoch, abort.signal)
@@ -328,7 +324,6 @@ export class ReceiveCoordinator {
       this.#reportError(error)
       return false
     }
-    this.#dismissedShareInstance = null
     this.#workspace.completeSettled(record)
     this.#inventory.upsertRecord(record)
     this.#publish()
@@ -378,7 +373,6 @@ export class ReceiveCoordinator {
 
   startNewDownload(): void {
     if (this.#execution.isTransferActive) return
-    this.#dismissedShareInstance = this.#options.currentJoinedShare()?.descriptor.shareInstanceId ?? null
     this.#workspace.clear()
     this.#publish()
   }
@@ -409,7 +403,6 @@ export class ReceiveCoordinator {
     this.#selectionPolicy = null
     this.#execution.clearPreRunningTransfer()
     this.#inventory.resetShare()
-    this.#dismissedShareInstance = null
     if (!this.#execution.isRunning) this.#workspace.clear()
     this.#publish()
   }
@@ -671,17 +664,6 @@ export class ReceiveCoordinator {
       interruption: this.#workspace.interruption,
       retained: this.#inventory.snapshot(this.#execution.pendingRetained),
     })
-  }
-
-  #adoptMatchingRetained(): void {
-    if (this.#workspace.lifecycle !== null || this.#execution.isTransferActive) return
-    const joined = this.#options.currentJoinedShare()
-    const offers = this.#offers
-    if (joined === undefined || offers === null) return
-    const shareInstance = joined.descriptor.shareInstanceId
-    if (this.#dismissedShareInstance === shareInstance) return
-    const match = matchingRetainedTask(this.#inventory.tasks, shareInstance, offers.selectionKey)
-    if (match !== undefined) this.#workspace.adoptRetained(match)
   }
 
   #publish(): void {

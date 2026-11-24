@@ -859,4 +859,47 @@ describe('receive capability cache, pre-activation errors, and stale record clea
     fullLoadGate.resolve([...store.tasks.values()])
     await coordinator.dispose()
   })
+
+  it('keeps workspace lifecycle clean on reopen so retained matching stays selection-scoped and connection-aware', async () => {
+    const fileA = makeFileEntry(31, 'alpha.bin', 8n)
+    const fileB = makeFileEntry(32, 'beta.bin', 8n)
+    const dir = makeDir('root-1', 33, 'Album')
+    const store = new MemoryReceiveStore()
+    const olderComplete = makeOpfsRecord('complete-a', 'share-1', fileA, dir, 'ready-to-save', 1_000)
+    const newerPaused = makeOpfsRecord('paused-a', 'share-1', fileA, dir, 'paused', 2_000)
+    await store.putTask(olderComplete)
+    await store.putTask(newerPaused)
+
+    vi.spyOn(ReceiveStore, 'open').mockResolvedValue(Object.assign(store, { close: vi.fn() }) as unknown as ReceiveStore)
+    vi.spyOn(outputContract, 'probeBrowserOutputCapabilities').mockResolvedValue(Object.freeze({
+      indexedDb: true, fsa: false, opfs: true, portable: true, availableStorageBytes: 64n * 1024n * 1024n,
+    }))
+    const { windowPort: baseWin } = createMockDownloadWindow()
+    const windowPort: BrowserOutputWindow = {
+      ...baseWin,
+      indexedDB: { open: vi.fn() } as unknown as IDBFactory,
+    }
+    const selectionA = new SelectionPolicy(false)
+    selectionA.set(fileA, dir.ancestry, true)
+    const joined = makeJoinedShare('share-1', fileA, { selection: selectionA })
+    const coordinator = new ReceiveCoordinator({ windowPort, currentJoinedShare: () => joined })
+
+    coordinator.refreshOffers(joined)
+    await coordinator.loadRetained()
+    await waitForSnapshot(coordinator, s => s.offers?.kind === 'ready' && s.retained.tasks.length === 2)
+
+    // Loading retained inventory must not hijack #workspace with a sticky adopted task.
+    expect(coordinator.getSnapshot().lifecycle).toBeNull()
+    expect(coordinator.activeTaskId).toBeNull()
+
+    // Switching selection updates offers.selectionKey cleanly without leaving a stale task behind.
+    const selectionB = new SelectionPolicy(false)
+    selectionB.set(fileB, dir.ancestry, true)
+    ;(joined as { selection: SelectionPolicy }).selection = selectionB
+    coordinator.refreshOffers(joined)
+    await waitForSnapshot(coordinator, s => s.offers?.selectionKey === singleFileSpec('share-1', 'root-1', fileB, dir).key)
+    expect(coordinator.getSnapshot().lifecycle).toBeNull()
+
+    await coordinator.dispose()
+  })
 })

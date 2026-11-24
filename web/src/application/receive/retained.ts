@@ -16,7 +16,13 @@ import { classifyNativeError, storagePauseReason } from '../../transfer/fault'
 import type { JoinedBrowserShare } from '../browser-share/gateway'
 import { closeOutputSession } from './session-opener'
 import { transitionReceiveState } from '../../transfer/state'
-import { actionsForState, canForgetState, canSavePartialState } from './admission'
+import {
+  actionsForState,
+  admitRetainedAction,
+  canForgetState,
+  canSavePartialState,
+  type RetainedAdmissionContext,
+} from './admission'
 import type { ReceiveAction, RetainedTaskSnapshot } from './contracts'
 
 export interface RetainedTaskEnvironment {
@@ -43,16 +49,116 @@ export function retainedTaskEnvironment(
   }
 }
 
-/** Only tasks with local results or recoverable progress can replace a fresh selection. */
-export function matchingRetainedTask(
-  tasks: readonly RetainedTaskSnapshot[], shareInstance: string, selectionKey: string,
-): RetainedTaskSnapshot | undefined {
-  return tasks.filter(task => task.shareInstance === shareInstance && task.selectionKey === selectionKey &&
-    (task.lifecycle.kind === 'paused' || task.lifecycle.kind === 'ready-to-save' ||
-      (task.lifecycle.kind === 'download-started' && task.lifecycle.retained) ||
-      (task.backend === 'opfs' && task.lifecycle.kind === 'partial')))
-    .sort((left, right) =>
-      (right.display?.createdAtMilliseconds ?? 0) - (left.display?.createdAtMilliseconds ?? 0))[0]
+export type WorkspaceRetainedMatch =
+  | Readonly<{ kind: 'local-complete'; task: RetainedTaskSnapshot }>
+  | Readonly<{
+      kind: 'banner'
+      bannerKind: 'continue' | 'ready-to-save'
+      task: RetainedTaskSnapshot
+      action: 'continue' | 'save'
+    }>
+  | Readonly<{ kind: 'pending-continuation' }>
+  | Readonly<{ kind: 'none' }>
+
+export interface WorkspaceRetainedMatchInput {
+  readonly tasks: readonly RetainedTaskSnapshot[]
+  readonly shareInstance: string | null
+  readonly selectionKey: string | null
+  readonly admission: RetainedAdmissionContext
+  readonly isIgnored?: (task: RetainedTaskSnapshot) => boolean
+}
+
+function byNewestCreatedDesc(left: RetainedTaskSnapshot, right: RetainedTaskSnapshot): number {
+  return (right.display?.createdAtMilliseconds ?? 0) - (left.display?.createdAtMilliseconds ?? 0)
+}
+
+function isCompleteLocalRetained(
+  task: RetainedTaskSnapshot,
+  admission: RetainedAdmissionContext,
+): boolean {
+  const { lifecycle } = task
+  if (lifecycle.contentWarning !== undefined) return false
+  const hasLocalArtifact = lifecycle.kind === 'ready-to-save' ||
+    (lifecycle.kind === 'download-started' && lifecycle.retained)
+  if (!hasLocalArtifact) return false
+  const save = admitRetainedAction(task, 'save', admission)
+  // Transient local-slot contention disables the button in place without invalidating the local copy.
+  return save.allowed || save.reason === 'busy'
+}
+
+function retainedBannerMatch(
+  task: RetainedTaskSnapshot,
+  admission: RetainedAdmissionContext,
+): Extract<WorkspaceRetainedMatch, { kind: 'banner' }> | null {
+  if (task.lifecycle.kind === 'ready-to-save' && admitRetainedAction(task, 'save', admission).allowed) {
+    return Object.freeze({ kind: 'banner', bannerKind: 'ready-to-save', task, action: 'save' })
+  }
+  if (task.lifecycle.kind === 'paused' && admitRetainedAction(task, 'continue', admission).allowed) {
+    return Object.freeze({ kind: 'banner', bannerKind: 'continue', task, action: 'continue' })
+  }
+  return null
+}
+
+function isTransientlyBlockedContinuation(
+  task: RetainedTaskSnapshot,
+  admission: RetainedAdmissionContext,
+): boolean {
+  if (task.lifecycle.kind !== 'paused') return false
+  const result = admitRetainedAction(task, 'continue', admission)
+  return !result.allowed && (result.reason === 'busy' || result.reason === 'downloading')
+}
+
+function resolveSelectionRetainedMatch(
+  shareTasks: readonly RetainedTaskSnapshot[],
+  selectionKey: string,
+  admission: RetainedAdmissionContext,
+): WorkspaceRetainedMatch {
+  let selectionBanner: Extract<WorkspaceRetainedMatch, { kind: 'banner' }> | null = null
+  for (const task of shareTasks) {
+    if (task.selectionKey !== selectionKey) continue
+    if (isCompleteLocalRetained(task, admission)) {
+      return Object.freeze({ kind: 'local-complete', task })
+    }
+    if (task.lifecycle.kind === 'paused') {
+      const banner = retainedBannerMatch(task, admission)
+      if (banner !== null) return selectionBanner ?? banner
+      if (isTransientlyBlockedContinuation(task, admission)) {
+        return selectionBanner ?? Object.freeze({ kind: 'pending-continuation' })
+      }
+      continue
+    }
+    selectionBanner ??= retainedBannerMatch(task, admission)
+  }
+  return selectionBanner ?? Object.freeze({ kind: 'none' })
+}
+
+/**
+ * Single source of truth for matching persisted tasks to an idle share workspace.
+ * Exact selection matches take precedence over share-wide banners:
+ * - A complete local OPFS copy promotes directly so remote saving folds behind it.
+ * - A newer continuable attempt for the same selection supersedes older local copies.
+ * - Transient busy/downloading contention suppresses fallback so the workspace stays stable.
+ * - Share-wide banners only appear when the current selection has no retained match.
+ */
+export function resolveWorkspaceRetainedMatch(input: WorkspaceRetainedMatchInput): WorkspaceRetainedMatch {
+  const { tasks, shareInstance, selectionKey, admission, isIgnored } = input
+  if (shareInstance === null) return Object.freeze({ kind: 'none' })
+
+  const shareTasks = tasks
+    .filter(task => task.shareInstance === shareInstance && isIgnored?.(task) !== true)
+    .sort(byNewestCreatedDesc)
+  if (shareTasks.length === 0) return Object.freeze({ kind: 'none' })
+
+  if (selectionKey !== null) {
+    const selectionMatch = resolveSelectionRetainedMatch(shareTasks, selectionKey, admission)
+    if (selectionMatch.kind !== 'none') return selectionMatch
+  }
+
+  for (const task of shareTasks) {
+    const banner = retainedBannerMatch(task, admission)
+    if (banner !== null) return banner
+  }
+  return Object.freeze({ kind: 'none' })
 }
 
 /**

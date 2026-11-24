@@ -16,7 +16,6 @@ import type {
   PendingRetainedAction,
   ReceiveAction,
   ReceiveBlockReason,
-  RetainedTaskSnapshot,
 } from './contracts'
 
 export type LocalRetainedActionKind = 'save' | 'save-partial' | 'discard' | 'forget'
@@ -427,20 +426,6 @@ export class WorkspaceTask {
       reason: isAbortError(error) ? 'cancelled' : 'error',
       ...(error instanceof Error ? { detail: error.message } : {}),
     })
-  }
-
-  adoptRetained(match: RetainedTaskSnapshot): void {
-    this.#taskId = match.taskId
-    this.#shareInstance = match.shareInstance
-    this.#selectionKey = match.selectionKey
-    this.#backend = match.backend
-    this.#isZipArchive = match.canSavePartial
-    this.#lifecycle = match.lifecycle
-    this.#display = match.display ?? null
-    this.#safeRenamed = match.safeRenamed ?? null
-    this.#sourceRevisionFailures = match.sourceRevisionFailures ?? null
-    this.#progress = EMPTY_TRANSFER_PROGRESS
-    this.#interruption = null
   }
 
   completeSettled(record: ReceiveTaskRecord): void {

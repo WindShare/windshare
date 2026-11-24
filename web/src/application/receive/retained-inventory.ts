@@ -42,7 +42,6 @@ export interface RetainedTaskInventoryOptions {
   readonly signal: AbortSignal
   readonly isDisposed: () => boolean
   readonly isLocalTask: (taskId: string) => boolean
-  readonly onFullLoaded: () => void
   readonly onChange: () => void
 }
 
@@ -62,7 +61,6 @@ export class RetainedTaskInventory {
   readonly #signal: AbortSignal
   readonly #isDisposed: () => boolean
   readonly #isLocalTask: (taskId: string) => boolean
-  readonly #onFullLoaded: () => void
   readonly #onChange: () => void
 
   #fullKind: RetainedInventorySnapshot['kind'] = 'unloaded'
@@ -85,7 +83,6 @@ export class RetainedTaskInventory {
     this.#signal = options.signal
     this.#isDisposed = options.isDisposed
     this.#isLocalTask = options.isLocalTask
-    this.#onFullLoaded = options.onFullLoaded
     this.#onChange = options.onChange
   }
 
@@ -313,7 +310,6 @@ export class RetainedTaskInventory {
         }))
       }
       this.#commitFullEntries(entries, startSeq)
-      this.#onFullLoaded()
       this.#onChange()
     } catch {
       if (this.#isDisposed() || epoch !== this.#fullLoadEpoch) return

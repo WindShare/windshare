@@ -100,30 +100,36 @@ export function retainedTaskReadiness(
   return task.shareInstance === currentShareInstance ? 'matching-share' : 'different-share'
 }
 
+export interface RetainedAdmissionContext {
+  readonly currentShareInstance: string | null
+  readonly hasActiveDownload: boolean
+  readonly hasPendingAction: boolean
+  readonly connectionUnavailable: boolean
+  readonly shareEnded: boolean
+}
+
 export function admitRetainedAction(
   task: RetainedTaskSnapshot,
   action: ReceiveAction,
-  context: Readonly<{
-    currentShareInstance: string | null
-    hasActiveDownload: boolean
-    hasPendingAction: boolean
-    connectionUnavailable: boolean
-    shareEnded: boolean
-  }>,
+  context: RetainedAdmissionContext,
 ): ReceiveAdmission {
   const supported = task.actions.includes(action) ||
     (action === 'forget' && canForgetState(task.lifecycle, task.backend))
   if (!supported) return blockedAdmission('actionUnavailable')
   if (task.activeElsewhere) return blockedAdmission('activeInAnotherTab')
-  if (context.hasPendingAction) return blockedAdmission('busy')
-  if (isLocalOnlyAction(action)) return ALLOWED_ADMISSION
-  if (context.hasActiveDownload) return blockedAdmission('downloading')
+  if (isLocalOnlyAction(action)) {
+    return context.hasPendingAction ? blockedAdmission('busy') : ALLOWED_ADMISSION
+  }
+  // Structural share/connection blockers take precedence over transient local-slot
+  // contention so offline tasks do not masquerade as transiently busy during local exports.
   const readiness = retainedTaskReadiness(task, context.currentShareInstance)
   if (readiness === 'original-link-required' || readiness === 'different-share') {
     return blockedAdmission('matchingShare')
   }
   if (context.shareEnded) return blockedAdmission('shareEnded')
   if (context.connectionUnavailable) return blockedAdmission('connectionUnavailable')
+  if (context.hasPendingAction) return blockedAdmission('busy')
+  if (context.hasActiveDownload) return blockedAdmission('downloading')
   return ALLOWED_ADMISSION
 }
 

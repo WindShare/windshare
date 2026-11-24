@@ -1,5 +1,6 @@
-import type { ReceiveAction, RetainedTaskSnapshot } from '../../application/receive/contracts'
-import { retainedTaskReadiness } from '../../application/receive/admission'
+import type { ReceiveAction } from '../../application/receive/contracts'
+import type { RetainedAdmissionContext } from '../../application/receive/admission'
+import { resolveWorkspaceRetainedMatch } from '../../application/receive/retained'
 import type { TaskSnapshot } from '../controller/projections'
 import type { TaskAction, TaskPresentation } from '../tasks'
 import type { TaskComposition } from './task-composition'
@@ -19,24 +20,6 @@ export interface WorkspaceTaskLayout {
   readonly banner: WorkspaceRetainedBanner | null
 }
 
-type SelectionRetainedMatch =
-  | { readonly kind: 'local-complete'; readonly task: TaskPresentation }
-  | { readonly kind: 'banner'; readonly banner: WorkspaceRetainedBanner }
-  | { readonly kind: 'pending-continuation' }
-  | { readonly kind: 'none' }
-
-function isCompleteLocalRetained(
-  retained: RetainedTaskSnapshot,
-  task: TaskPresentation,
-): boolean {
-  const hasLocalArtifact = retained.lifecycle.kind === 'ready-to-save' ||
-    (retained.lifecycle.kind === 'download-started' && retained.lifecycle.retained)
-  return hasLocalArtifact &&
-    task.completeness === 'complete' &&
-    task.primaryAction !== null &&
-    task.primaryAction.target.kind === 'retained'
-}
-
 function retainedAction(
   task: TaskPresentation,
   action: ReceiveAction,
@@ -47,62 +30,6 @@ function retainedAction(
   return task.secondaryActions.find(
     candidate => candidate.target.kind === 'retained' && candidate.target.action === action,
   ) ?? null
-}
-
-function isTransientlyBusyContinuation(
-  retained: RetainedTaskSnapshot,
-  task: TaskPresentation,
-  snapshot: WorkspaceTaskSnapshot,
-): boolean {
-  const { pending } = snapshot.retained
-  if (pending === null) return false
-  if (pending.taskId === task.operationId && pending.action === 'continue') return true
-  if (retained.activeElsewhere) return false
-  const needsRemote = retainedTaskReadiness(retained, snapshot.share?.shareInstance ?? null) !== 'local'
-  return !needsRemote || (snapshot.connection.kind !== 'ended' && snapshot.connection.kind !== 'unavailable')
-}
-
-function isContinuableRetained(
-  retained: RetainedTaskSnapshot,
-  task: TaskPresentation,
-  snapshot: WorkspaceTaskSnapshot,
-): boolean {
-  if (task.stage === 'handed-to-browser') return false
-  const continuation = retainedAction(task, 'continue')
-  if (continuation === null) return false
-  return continuation.disabledReason === null || isTransientlyBusyContinuation(retained, task, snapshot)
-}
-
-function retainedBannerFor(task: TaskPresentation): WorkspaceRetainedBanner | null {
-  if (task.stage === 'handed-to-browser') return null
-  const primary = task.primaryAction
-  if (
-    task.stage === 'ready-to-save' &&
-    primary !== null &&
-    primary.disabledReason === null &&
-    primary.target.kind === 'retained' &&
-    primary.target.action === 'save'
-  ) {
-    return Object.freeze({ kind: 'ready-to-save', task, action: primary })
-  }
-  const continuation = retainedAction(task, 'continue')
-  if (continuation !== null && continuation.disabledReason === null) {
-    return Object.freeze({ kind: 'continue', task, action: continuation })
-  }
-  return null
-}
-
-function selectionTask(
-  task: TaskPresentation,
-  snapshot: WorkspaceTaskSnapshot,
-  key: string,
-): RetainedTaskSnapshot | null {
-  const shareInstance = snapshot.share?.shareInstance
-  if (shareInstance === undefined) return null
-  return snapshot.retained.tasks.find(candidate =>
-    candidate.taskId === task.operationId &&
-    candidate.shareInstance === shareInstance &&
-    candidate.selectionKey === key) ?? null
 }
 
 export function dismissedTaskKey(operationId: string, generation: bigint): string {
@@ -122,28 +49,17 @@ function isDismissedWorkspaceTask(
     dismissedTaskKeys.has(dismissedTaskKey(task.operationId, task.generation))
 }
 
-function resolveSelectionRetained(
-  snapshot: WorkspaceTaskSnapshot,
-  visibleCurrent: TaskPresentation | null,
-  dismissedTaskKeys?: ReadonlySet<string>,
-): SelectionRetainedMatch {
-  const key = snapshot.output.offers?.selectionKey
-  if (visibleCurrent !== null || snapshot.share === null || key === undefined) {
-    return { kind: 'none' }
+function admissionContextFor(snapshot: WorkspaceTaskSnapshot): RetainedAdmissionContext {
+  const { share, output, retained, connection, activeReceiveOperationId } = snapshot
+  return {
+    currentShareInstance: share?.shareInstance ?? null,
+    hasActiveDownload: activeReceiveOperationId !== null ||
+      output.activation !== null ||
+      retained.pending?.action === 'continue',
+    hasPendingAction: retained.pending !== null,
+    connectionUnavailable: connection.kind === 'unavailable' || connection.kind === 'ended',
+    shareEnded: connection.kind === 'ended',
   }
-  let fallbackBanner: WorkspaceRetainedBanner | null = null
-  for (const task of snapshot.tasks) {
-    if (isDismissedWorkspaceTask(task, dismissedTaskKeys)) continue
-    const retained = selectionTask(task, snapshot, key)
-    if (retained === null) continue
-    if (isCompleteLocalRetained(retained, task)) return { kind: 'local-complete', task }
-    if (isContinuableRetained(retained, task, snapshot)) {
-      const banner = fallbackBanner ?? retainedBannerFor(task)
-      return banner === null ? { kind: 'pending-continuation' } : { kind: 'banner', banner }
-    }
-    fallbackBanner ??= retainedBannerFor(task)
-  }
-  return fallbackBanner === null ? { kind: 'none' } : { kind: 'banner', banner: fallbackBanner }
 }
 
 function currentMatchesSelection(snapshot: WorkspaceTaskSnapshot): boolean {
@@ -158,43 +74,45 @@ function currentMatchesSelection(snapshot: WorkspaceTaskSnapshot): boolean {
   return share.kind !== 'browser'
 }
 
-function isSettlingWorkspaceHandoff(snapshot: WorkspaceTaskSnapshot): boolean {
-  const { current, output, retained, activeReceiveOperationId } = snapshot
-  const lifecycle = output.lifecycle
-  return current !== null &&
-    lifecycle?.kind === 'download-started' &&
-    lifecycle.retained &&
-    current.operationId === lifecycle.taskId &&
-    (activeReceiveOperationId === current.operationId || retained.kind === 'loading' || retained.kind === 'unloaded')
+function hasActionableLocalCopy(task: TaskPresentation): boolean {
+  return task.completeness === 'complete' &&
+    (task.stage === 'handed-to-browser' || task.stage === 'ready-to-save') &&
+    task.primaryAction !== null &&
+    task.primaryAction.target.action === 'save'
 }
 
-function findShareRetainedBanner(snapshot: WorkspaceTaskSnapshot): WorkspaceRetainedBanner | null {
-  const { share, tasks, retained } = snapshot
-  if (share === null) return null
-  for (const task of tasks) {
-    const banner = retainedBannerFor(task)
-    if (banner === null) continue
-    const matchesShare = retained.tasks.some(candidate =>
-      candidate.taskId === task.operationId && candidate.shareInstance === share.shareInstance)
-    if (matchesShare) return banner
-  }
-  return null
-}
-
-function resolveRetainedBanner(
+function resolveRetainedPresentation(
   snapshot: WorkspaceTaskSnapshot,
-  selectionMatch: SelectionRetainedMatch,
-  primaryTask: TaskPresentation | null,
-): WorkspaceRetainedBanner | null {
-  if (primaryTask !== null) return null
-  if (selectionMatch.kind === 'banner') return selectionMatch.banner
-  if (selectionMatch.kind === 'pending-continuation') return null
-  return findShareRetainedBanner(snapshot)
+  shareInstance: string,
+  dismissedTaskKeys: ReadonlySet<string> | undefined,
+): Readonly<{ primaryTask: TaskPresentation | null; banner: WorkspaceRetainedBanner | null }> {
+  const presentedById = new Map(snapshot.tasks.map(task => [task.operationId, task]))
+  const match = resolveWorkspaceRetainedMatch({
+    tasks: snapshot.retained.tasks,
+    shareInstance,
+    selectionKey: snapshot.output.offers?.selectionKey ?? null,
+    admission: admissionContextFor(snapshot),
+    isIgnored: retained => {
+      const presented = presentedById.get(retained.taskId)
+      return presented === undefined || isDismissedWorkspaceTask(presented, dismissedTaskKeys)
+    },
+  })
+  if (match.kind === 'local-complete') {
+    return { primaryTask: presentedById.get(match.task.taskId) ?? null, banner: null }
+  }
+  if (match.kind === 'banner') {
+    const presented = presentedById.get(match.task.taskId)
+    const action = presented === undefined ? null : retainedAction(presented, match.action)
+    if (presented !== undefined && action !== null && action.disabledReason === null) {
+      return { primaryTask: null, banner: Object.freeze({ kind: match.bannerKind, task: presented, action }) }
+    }
+  }
+  return { primaryTask: null, banner: null }
 }
 
 /**
- * Keeps local browser-retained re-export orthogonal to starting a fresh transfer from the sender.
- * When the current selection already has a complete local artifact—whether on the same page
+ * Projects active workspace state and domain retained-task matching into workspace layout.
+ * When the current selection already has a complete local OPFS copy—whether from this session
  * or after reload/reopen—the workspace surfaces that task directly and folds remote redownload
  * behind a secondary disclosure instead of creating duplicate browser copies.
  */
@@ -204,23 +122,19 @@ export function resolveWorkspaceTaskLayout(
 ): WorkspaceTaskLayout {
   const { share, current, output } = snapshot
   const visibleCurrent = current !== null && !isDismissedWorkspaceTask(current, dismissedTaskKeys) ? current : null
-  const selectionMatch = resolveSelectionRetained(snapshot, visibleCurrent, dismissedTaskKeys)
-  const completedLocalMatch = selectionMatch.kind === 'local-complete' ? selectionMatch.task : null
-  const primaryTask = visibleCurrent ?? completedLocalMatch
-  const matchesSelection = completedLocalMatch !== null || (visibleCurrent !== null && currentMatchesSelection(snapshot))
-  const hasActionableLocalResult = primaryTask !== null && matchesSelection &&
-    primaryTask.completeness === 'complete' && (
-      (primaryTask.stage === 'handed-to-browser' &&
-        (primaryTask.primaryAction !== null || isSettlingWorkspaceHandoff(snapshot))) ||
-      (primaryTask.stage === 'ready-to-save' &&
-        primaryTask.primaryAction !== null &&
-        primaryTask.primaryAction.target.kind === 'retained')
-    )
+  const retainedMatch = visibleCurrent === null && share !== null
+    ? resolveRetainedPresentation(snapshot, share.shareInstance, dismissedTaskKeys)
+    : null
+  const primaryTask = visibleCurrent ?? retainedMatch?.primaryTask ?? null
+  const banner = retainedMatch?.banner ?? null
+  const matchedLocalRetained = retainedMatch !== null && retainedMatch.primaryTask !== null
+  const matchesSelection = matchedLocalRetained || (visibleCurrent !== null && currentMatchesSelection(snapshot))
   const noPendingActivation = output.activationPresentation === null
-  const collapseRemoteSaving = share !== null && noPendingActivation && hasActionableLocalResult
+  const collapseRemoteSaving = share !== null && noPendingActivation &&
+    primaryTask !== null && matchesSelection && hasActionableLocalCopy(primaryTask)
   const singleFileDelivered = share !== null && share.kind !== 'browser' && noPendingActivation &&
     (primaryTask?.stage === 'saved' || primaryTask?.stage === 'handed-to-browser')
-  const banner = resolveRetainedBanner(snapshot, selectionMatch, primaryTask)
+
   return Object.freeze({
     primaryTask,
     collapseRemoteSaving,
