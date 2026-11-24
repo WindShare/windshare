@@ -37,12 +37,15 @@ function fixture(
     return Promise.resolve()
   }
   const slots = new PeerSlotPool()
+  const delivered = new Set<string>()
+  const laneKey = (lane: PeerAdmittedLane) => `${lane.laneId}:${lane.laneEpoch}`
   const requests: TURNDemand[] = []
   const attempts: Array<{ ordinal: PeerAttemptOrdinal; path: PeerPathIdentity; finish: (result: PeerAttemptResult) => void }> = []
   const released: number[] = []
   const traces: Array<{ stage: TURNTraceStage; grantId?: string; reason?: string; path?: PeerPathIdentity; lane?: PeerAdmittedLane }> = []
   const manager = new TURNPaths({
     now: () => now, slots, identity: () => new Uint8Array(16).fill(++value),
+    hasDelivered: (lane) => delivered.has(laneKey(lane)),
     session: {
       subscribeTURNControls: (cb) => { listener = cb; return () => { listener = undefined } },
       sendTURNControl: async (b) => { requests.push(decodeTURNDemand(b)) },
@@ -79,6 +82,7 @@ function fixture(
     manager, slots, attempts, requests, released, traces, epochs, retireLaneIfCovered,
     step: (elapsed: number, d = network) => { now += elapsed; manager.step(d) },
     available: (...ids: number[]) => { activeLanes = new Set(ids) },
+    deliver: (lane: PeerAdmittedLane) => { delivered.add(laneKey(lane)) },
     reply: (status: TURNStatus = 'ok', services = status === 'ok' ? ['home'] : [], ttl = 60_000n, request = requests.at(-1)!) =>
       listener!(encodeTURNGrants({ requestId: request.requestId, status, hasFallback: true,
         grants: services.map(serviceId => ({
@@ -386,5 +390,117 @@ it('correlates targeted refresh and detachment with the TURN lane and caps nonst
   expect(f.traces.at(-1)).toEqual({ stage: 'turn_grants_received', path: first.path, lane })
   f.manager.detached(first.path, lane)
   expect(f.traces.at(-1)).toEqual({ stage: 'turn_path_closed', reason: 'lane_lost', grantId, path: first.path, lane })
+  await f.manager.reset()
+})
+
+it('keeps backing off and exhausts a flapping TURN path that never delivers authenticated content', async () => {
+  const f = fixture()
+  let usefulBytes = 0
+  const advance = (elapsed: number) => {
+    usefulBytes += elapsed * 4096
+    f.step(elapsed, { ...network, usefulBytes })
+  }
+  advance(0)
+  f.reply('ok', ['home'], 60_000n)
+
+  let epoch = 1
+  for (const delay of [2000, 10_000, 30_000]) {
+    const lane = { laneId: 2, laneEpoch: epoch++ }
+    const attempt = f.attempts.at(-1)!
+    attempt.finish({ type: 'admitted', lane })
+    await settle()
+    advance(1000)
+    f.manager.detached(attempt.path, lane)
+
+    const before = f.requests.length
+    advance(delay - 1)
+    expect(f.requests).toHaveLength(before)
+    advance(1)
+    expect(f.requests).toHaveLength(before + 1)
+    expect(f.requests.at(-1)?.serviceIds).toEqual(['home'])
+    f.reply('ok', ['home'], 60_000n)
+    await settle()
+  }
+
+  const finalLane = { laneId: 2, laneEpoch: epoch }
+  const finalAttempt = f.attempts.at(-1)!
+  finalAttempt.finish({ type: 'admitted', lane: finalLane })
+  await settle()
+  f.manager.detached(finalAttempt.path, finalLane)
+
+  const exhaustedRequests = f.requests.length
+  advance(60_000)
+  expect(f.requests).toHaveLength(exhaustedRequests)
+  // Exhausting the undelivered service releases its slot for subsequent paths.
+  const leases = Array.from({ length: 8 }, () => f.slots.acquire())
+  leases.forEach(lease => lease.close())
+  await f.manager.reset()
+})
+
+it('resets retry backoff once a recovered TURN lane proves block delivery', async () => {
+  const f = fixture()
+  f.step(0)
+  f.reply('ok', ['home'], 60_000n)
+  const first = f.attempts[0]!
+  const lane1 = { laneId: 2, laneEpoch: 1 }
+  first.finish({ type: 'admitted', lane: lane1 })
+  await settle()
+  f.manager.detached(first.path, lane1)
+
+  f.step(2000)
+  f.reply('ok', ['home'], 60_000n)
+  const second = f.attempts[1]!
+  const lane2 = { laneId: 2, laneEpoch: 2 }
+  second.finish({ type: 'admitted', lane: lane2 })
+  await settle()
+
+  // Delivery confirmation clears retry debt even if the content queue is momentarily quiet.
+  f.deliver(lane2)
+  f.step(1000, { ...network, queuedBytes: 0, queuedBlocks: 0, networkWaitingBytes: 0, unfinishedBytes: 0 })
+  f.manager.detached(second.path, lane2)
+
+  const before = f.requests.length
+  f.step(1999)
+  expect(f.requests).toHaveLength(before)
+  f.step(1)
+  expect(f.requests).toHaveLength(before + 1)
+  expect(f.requests.at(-1)?.serviceIds).toEqual(['home'])
+  await f.manager.reset()
+})
+
+it('does not let delivery on an outgoing live lane clear refresh backoff', async () => {
+  const f = fixture()
+  let usefulBytes = 0
+  const advance = (elapsed: number) => {
+    usefulBytes += elapsed * 4096
+    f.step(elapsed, { ...network, usefulBytes })
+  }
+  advance(0)
+  f.reply('ok', ['home'], 60_000n)
+  const first = f.attempts[0]!
+  const lane1 = { laneId: 2, laneEpoch: 1 }
+  first.finish({ type: 'admitted', lane: lane1 })
+  await settle()
+  f.manager.detached(first.path, lane1)
+
+  advance(2000)
+  f.reply('ok', ['home'], 60_000n)
+  const second = f.attempts[1]!
+  const lane2 = { laneId: 2, laneEpoch: 2 }
+  second.finish({ type: 'admitted', lane: lane2 })
+  await settle()
+
+  // lane2 is still awaiting delivery when TTL refresh hits and fails with retry_later (10s backoff).
+  advance(46_000)
+  expect(f.requests.at(-1)?.serviceIds).toEqual(['home'])
+  f.reply('retry_later')
+  const count = f.requests.length
+
+  // Delivering on the outgoing lane must not wipe out the refresh backoff.
+  f.deliver(lane2)
+  advance(9999)
+  expect(f.requests).toHaveLength(count)
+  advance(1)
+  expect(f.requests).toHaveLength(count + 1)
   await f.manager.reset()
 })

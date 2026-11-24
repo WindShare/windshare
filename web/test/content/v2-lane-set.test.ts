@@ -480,6 +480,27 @@ describe('v2 receiver LaneSet', () => {
   })
 })
 
+describe('v2 receiver LaneSet delivery confirmation', () => {
+  it('tracks authenticated block delivery per exact live lane generation', async () => {
+    const lanes = new LaneSet()
+    lanes.add(new ImmediateLane(7), 'turn', 2)
+    expect(lanes.hasDelivered(7, 2)).toBe(false)
+
+    await expect(lanes.fetch(demand(0n), ALL_ROUTES, new AbortController().signal)).resolves.toMatchObject({
+      data: Uint8Array.of(7),
+    })
+    expect(lanes.hasDelivered(7, 2)).toBe(true)
+    expect(lanes.hasDelivered(7, 1)).toBe(false)
+    expect(lanes.hasDelivered(8, 2)).toBe(false)
+
+    lanes.withdraw(7, 2)
+    expect(lanes.hasDelivered(7, 2)).toBe(false)
+    lanes.remove(7)
+    expect(lanes.hasDelivered(7, 2)).toBe(false)
+    lanes.close()
+  })
+})
+
 describe('v2 receiver LaneSet bandwidth wait observation', () => {
   it('reports bandwidth waiting only when all eligible lanes are backed off while content is queued', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })

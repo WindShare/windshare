@@ -256,6 +256,12 @@ export class LaneSet {
     return this.#lanes.get(laneId)?.laneEpoch
   }
 
+  /** True once this exact live lane generation has completed at least one authenticated block read. */
+  hasDelivered(laneId: number, laneEpoch: number): boolean {
+    const state = this.#lanes.get(laneId)
+    return state?.laneEpoch === laneEpoch && state.performance.hasSuccessfulSample
+  }
+
   sampleLane(laneId: number, laneEpoch: number): void {
     const state = this.#lanes.get(laneId)
     if (state === undefined || state.laneEpoch !== laneEpoch) return

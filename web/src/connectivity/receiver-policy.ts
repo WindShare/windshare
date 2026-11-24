@@ -207,6 +207,7 @@ export class ReceiverConnectivity {
     this.#turn = new TURNPaths({
       session: this.#session, slots: this.#slots, now: () => clock.now(),
       identity: () => createPeerPathIdentity(this.#randomBytes),
+      hasDelivered: lane => this.#lanes.hasDelivered(lane.laneId, lane.laneEpoch),
       start: (grant, identity, ordinal) => new BrowserPeerAttemptExecutor({
         session: this.#session, offers: this.#offers, peerPathIdentity: identity.copyBytes(), clock,
         tabAdmission: turnAdmission, admissionReceiver: this, turnGrant: grant,

@@ -16,6 +16,7 @@ function fixture(onParallelReply: (manager: TURNPaths) => void) {
   const lanes = new Map([[1, 0]])
   const manager = new TURNPaths({
     slots: new PeerSlotPool(), now: () => now, identity: () => new Uint8Array(16).fill(1),
+    hasDelivered: () => false,
     session: {
       subscribeTURNControls: (callback) => { receive = callback; return () => {} },
       sendTURNControl: async (body) => { requests.push(decodeTURNDemand(body)) },

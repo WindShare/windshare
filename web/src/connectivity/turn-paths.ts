@@ -24,6 +24,7 @@ interface Leg {
   lane?: PeerAdmittedLane
   grantId?: string
   detachedDuringAdmission?: PeerAdmittedLane
+  awaitingDelivery?: boolean
   refresh: number
 }
 interface Service extends Retry { id: string; current: Leg; replacement?: Leg; work?: Promise<void> }
@@ -32,6 +33,7 @@ interface Options {
   slots: PeerSlotPool
   now(): number
   identity(): Uint8Array
+  hasDelivered(lane: PeerAdmittedLane): boolean
   start(grant: TURNGrant, identity: PeerPathIdentity, ordinal: PeerAttemptOrdinal): PeerAttemptHandle
   release(lane: PeerAdmittedLane, retirement?: Promise<void>): Promise<void>
   trace?(
@@ -80,6 +82,7 @@ export class TURNPaths {
       this.#requests.delete(id)
       this.#retry(request.owner)
     }
+    this.#observeDeliveries()
     const mode = this.#pressure.observe(now, demand)
     if ((!mode && !this.#services.size) || !this.#options.session.availableLaneIds().length) return
     if (mode && this.#hasRoom()) this.#considerFull(mode, now)
@@ -87,6 +90,16 @@ export class TURNPaths {
     for (const service of this.#services.values()) {
       if (!service.work && now >= service.due && (!service.current.lane || now >= service.current.refresh)) {
         this.#request('all', service)
+      }
+    }
+  }
+
+  #observeDeliveries(): void {
+    for (const service of this.#services.values()) {
+      const leg = service.current
+      if (leg.awaitingDelivery && leg.lane && this.#options.hasDelivered(leg.lane)) {
+        delete leg.awaitingDelivery
+        service.failures = service.due = 0
       }
     }
   }
@@ -249,11 +262,14 @@ export class TURNPaths {
       if (!this.#canPublish(service, leg, lane)) return await this.#rejectAdmission(lane)
       leg.lane = lane
       leg.grantId = grantId
+      // Require authenticated block delivery before clearing retry debt, so a
+      // blackhole or flapping TURN path cannot reset backoff on empty handshakes.
+      if (service.failures > 0) leg.awaitingDelivery = true
+      else delete leg.awaitingDelivery
       if (replacing) {
         service.current = leg
         delete service.replacement
       }
-      service.failures = service.due = 0
       this.settlingUntil = this.#options.now() + SETTLING_MS
       this.#options.trace?.('turn_path_admitted', { serviceId: service.id, grantId }, leg.identity, lane)
     } finally {
@@ -281,14 +297,20 @@ export class TURNPaths {
     const service = 'id' in retry ? retry : undefined
     if (service ? this.#services.get(service.id) !== retry : this.#full !== retry) return
     retry.due = this.#options.now() + (BACKOFF_MS[retry.failures++] ?? Infinity)
-    if (service && this.#exhausted(service)) {
-      // Keep the exhausted service in the activation, so another full grant cannot restart its retry budget.
-      closeSlot(service.current)
+    if (service) {
+      // A failure while the current lane stays live belongs to its refresh or replacement;
+      // delivery on the outgoing lane must not forgive that backoff.
+      if (service.current.lane) delete service.current.awaitingDelivery
+      if (this.#exhausted(service)) {
+        // Keep the exhausted service in the activation, so another full grant cannot restart its retry budget.
+        closeSlot(service.current)
+      }
     }
   }
 
   #closeLane(service: Service, leg: Leg, lane: PeerAdmittedLane, reason: 'owner_closed' | 'lane_lost'): void {
     delete leg.lane
+    delete leg.awaitingDelivery
     if (this.#services.get(service.id) === service) this.settlingUntil = this.#options.now() + SETTLING_MS
     this.#options.trace?.('turn_path_closed', {
       serviceId: service.id, ...(leg.grantId && { grantId: leg.grantId }), reason,
