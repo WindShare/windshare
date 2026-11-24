@@ -188,7 +188,7 @@ func TestTransferResultFormatsNameAdjustmentsOnlyWhenPresent(t *testing.T) {
 	for _, want := range []string{
 		"25 items saved under compatible names:",
 		"a:1.txt -> a-1.windshare-01.txt",
-		"23 more; use --trace to record all mappings.",
+		"23 more; --trace logs mappings applied during a run.",
 	} {
 		if !strings.Contains(capped, want) {
 			t.Fatalf("capped adjustment output %q missing %q", capped, want)

@@ -84,8 +84,12 @@ func newSession(a *Authority, op *Operation) (*Session, error) {
 		op.journal.nameMappings(),
 		op.journal.recordName,
 		func(ev nameTraceEvent) {
+			component := "file"
+			if ev.directory {
+				component = "directory"
+			}
 			emitTrace(a.diagnostics, traceEvent{
-				component:    "file",
+				component:    component,
 				operation:    "map_name",
 				decision:     "admitted",
 				operationID:  op.intent.OperationID(),
@@ -265,15 +269,23 @@ func (s *Session) openAdmittedDirLocked(
 		}
 		return nil, false, transfer.ErrInvalidOutputBinding
 	}
-	leaf, err := s.names.bindLeaf(logicalPath, parentState.dir, true)
-	if err != nil {
-		return nil, false, wrapOutputFault(ctx, transferfault.OutputNamespaceUnsafe, "map directory name", err)
-	}
-	childDir, err := ensureSubdirNoAlias(parentState.dir, leaf)
+	childDir, err := s.names.bindDirectory(logicalPath, parentState.dir, createFreshSubdir, ensureSubdirNoAlias)
 	if err != nil {
 		return nil, false, wrapOutputFault(ctx, transferfault.OutputNamespaceUnsafe, "materialize directory", err)
 	}
 	return childDir, false, nil
+}
+
+func createFreshSubdir(parent *Dir, name string) (*Dir, error) {
+	if err := mkdirChild(parent, name, publicDirMode); err != nil {
+		return nil, err
+	}
+	childDir, err := openChildDir(parent, name)
+	if err != nil {
+		_ = removeChild(parent, name, true)
+		return nil, err
+	}
+	return childDir, nil
 }
 
 func ensureSubdirNoAlias(parent *Dir, name string) (*Dir, error) {

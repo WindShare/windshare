@@ -207,8 +207,10 @@ func formatNameAdjustments(summary engine.NameAdjustmentSummary) []terminalcanva
 	}
 	if summary.Count > uint64(len(summary.Samples)) {
 		omitted := summary.Count - uint64(len(summary.Samples))
+		// NameAdjustments spans the whole operation across retries, while --trace
+		// is a per-run diagnostic stream that skips previously delivered receipts.
 		lines = append(lines, terminalcanvas.Plain(
-			"    "+formatCount(omitted)+" more; use --trace to record all mappings.",
+			"    "+formatCount(omitted)+" more; --trace logs mappings applied during a run.",
 		))
 	}
 	return lines

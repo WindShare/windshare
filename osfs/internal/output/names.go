@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"slices"
 	"strings"
 	"sync"
@@ -170,10 +171,11 @@ func joinLogicalPath(parent, leaf string) string {
 }
 
 type nameTraceEvent struct {
-	logical  string
-	physical string
-	attempt  uint32
-	reused   bool
+	logical   string
+	physical  string
+	attempt   uint32
+	reused    bool
+	directory bool
 }
 
 // nameMapper maps logical materialization paths to physical paths relative to
@@ -278,10 +280,13 @@ func (m *nameMapper) resolveLocked(logical string) (string, error) {
 	}
 }
 
-// bindLeaf resolves the physical leaf name for logicalPath inside parentDir,
+// bindFileLeaf resolves the physical leaf name for a file inside parentDir,
 // repairing only when the destination rejects the component, it collides with
 // .windshare-tmp* at the container root, or it aliases another mapped name.
-func (m *nameMapper) bindLeaf(logicalPath string, parentDir *Dir, isDir bool) (string, error) {
+// Repaired file names are persisted ahead of staging/publication so crash
+// recovery can reconcile interrupted publishes against the same physical leaf;
+// NameAdjustments gates file reporting on durable delivery receipts.
+func (m *nameMapper) bindFileLeaf(logicalPath string, parentDir *Dir) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -311,7 +316,58 @@ func (m *nameMapper) bindLeaf(logicalPath string, parentDir *Dir, isDir bool) (s
 			return leaf, nil
 		}
 	}
-	return m.repairLeafLocked(logicalPath, parentRel, parentDir, isDir)
+	return m.repairFileLeafLocked(logicalPath, parentRel, parentDir)
+}
+
+// bindDirectory resolves and materializes the physical subdirectory for
+// logicalPath inside parentDir. Unlike files, directories have no separate
+// delivery receipt, so repaired directory names are persisted only after the
+// new directory is created on disk (rolling back the empty directory if
+// persistence fails).
+func (m *nameMapper) bindDirectory(
+	logicalPath string,
+	parentDir *Dir,
+	createFresh func(parent *Dir, name string) (*Dir, error),
+	openExisting func(parent *Dir, name string) (*Dir, error),
+) (*Dir, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	phys, err := m.resolveLocked(logicalPath)
+	if err != nil {
+		return nil, err
+	}
+	if m.entryKind == receivecontract.ContainerEntrySingleFile || phys == "" {
+		return nil, ErrInvalidNameMapping
+	}
+	parentRel, leaf := splitLogicalPath(phys)
+	if rec, mapped := m.mappings[logicalPath]; mapped {
+		childDir, err := openExisting(parentDir, leaf)
+		if err != nil {
+			return nil, err
+		}
+		if m.trace != nil {
+			m.trace(nameTraceEvent{logical: logicalPath, physical: phys, attempt: rec.Attempt, reused: true, directory: true})
+		}
+		return childDir, nil
+	}
+	owner, claimed := m.claims[phys]
+	reserved := m.entryKind == 0 && parentRel == "" && isReservedContainerRootName(leaf)
+	if !reserved && (!claimed || owner == logicalPath) {
+		usable, checkErr := leafUsableDirectly(parentDir, leaf)
+		if checkErr != nil {
+			return nil, checkErr
+		}
+		if usable {
+			childDir, err := openExisting(parentDir, leaf)
+			if err != nil {
+				return nil, err
+			}
+			m.claims[phys] = logicalPath
+			return childDir, nil
+		}
+	}
+	return m.repairDirectoryLocked(logicalPath, parentRel, parentDir, createFresh)
 }
 
 func leafUsableDirectly(parentDir *Dir, leaf string) (bool, error) {
@@ -326,7 +382,7 @@ func leafUsableDirectly(parentDir *Dir, leaf string) (bool, error) {
 	return false, nil
 }
 
-func (m *nameMapper) repairLeafLocked(logicalPath, parentRel string, parentDir *Dir, isDir bool) (string, error) {
+func (m *nameMapper) repairFileLeafLocked(logicalPath, parentRel string, parentDir *Dir) (string, error) {
 	if len(m.mappings) >= MaxNameMappings {
 		return "", ErrInvalidNameMapping
 	}
@@ -350,7 +406,6 @@ func (m *nameMapper) repairLeafLocked(logicalPath, parentRel string, parentDir *
 			LogicalPath:       logicalPath,
 			PhysicalComponent: comp,
 			Attempt:           attempt,
-			Directory:         isDir,
 		}
 		if m.persist != nil {
 			if err := m.persist(rec); err != nil {
@@ -365,6 +420,62 @@ func (m *nameMapper) repairLeafLocked(logicalPath, parentRel string, parentDir *
 		return comp, nil
 	}
 	return "", errors.New("compatible output name attempts are exhausted")
+}
+
+func (m *nameMapper) repairDirectoryLocked(
+	logicalPath, parentRel string,
+	parentDir *Dir,
+	createFresh func(parent *Dir, name string) (*Dir, error),
+) (*Dir, error) {
+	if len(m.mappings) >= MaxNameMappings {
+		return nil, ErrInvalidNameMapping
+	}
+	for attempt := range uint32(MaxNameRepairAttempts) {
+		comp, err := SanitizeCandidate(m.opID, logicalPath, attempt)
+		if err != nil {
+			return nil, err
+		}
+		candRel := joinLogicalPath(parentRel, comp)
+		if owner, exists := m.claims[candRel]; exists && owner != logicalPath {
+			continue
+		}
+		kind, _, statErr := lstatChild(parentDir, comp)
+		if statErr != nil {
+			return nil, statErr
+		}
+		if kind != EntryAbsent {
+			continue
+		}
+		childDir, createErr := createFresh(parentDir, comp)
+		if errors.Is(createErr, ErrNamespaceCollision) || errors.Is(createErr, fs.ErrExist) {
+			continue
+		}
+		if createErr != nil {
+			return nil, createErr
+		}
+		rec := NameMapping{
+			LogicalPath:       logicalPath,
+			PhysicalComponent: comp,
+			Attempt:           attempt,
+			Directory:         true,
+		}
+		if m.persist != nil {
+			if err := m.persist(rec); err != nil {
+				if childDir != nil {
+					_ = childDir.Close()
+				}
+				_ = removeChild(parentDir, comp, true)
+				return nil, err
+			}
+		}
+		m.mappings[logicalPath] = rec
+		m.claims[candRel] = logicalPath
+		if m.trace != nil {
+			m.trace(nameTraceEvent{logical: logicalPath, physical: candRel, attempt: attempt, directory: true})
+		}
+		return childDir, nil
+	}
+	return nil, errors.New("compatible output name attempts are exhausted")
 }
 
 // sanitizeTopLevelComponent prepares a physical name for a top-level container
@@ -500,6 +611,9 @@ func collectNestedNameAdjustments(
 	}
 	nested := make([]NameAdjustment, 0, len(mappings))
 	for _, mapping := range mappings {
+		// Directory mappings are persisted only after mkdir succeeds in
+		// bindDirectory; file mappings are persisted before commit and require
+		// a durable delivery receipt before being reported as saved.
 		if !mapping.Directory {
 			if _, ok := delivered[mapping.LogicalPath]; !ok {
 				continue
