@@ -173,6 +173,8 @@ test('Go and Chromium download over two TURN servers and the application relay',
   }
 })
 
+// Driven only by standalone Cloudflare Worker checks (managed-turn-browser.mjs and
+// scripts/deploy/cloudflare/smoke.mjs); skipped in make browser-weekly / ci-full.
 const configuration = process.env.WINDSHARE_TURN_SMOKE_CONFIG
 if (configuration) {
   test('Chromium downloads in parallel through an isolated Cloudflare Worker and TURN', async ({ page }) => {

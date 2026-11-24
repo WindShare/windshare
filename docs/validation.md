@@ -23,7 +23,7 @@ Make targets operate on the repository root and use the installed Go, Rust, Node
 | `make check` | `rust` and `desktop-check`, then Go short tests, Web/Consoles typecheck, Consoles ESLint and embedded bundle verification, and Web unit tests. |
 | `make ci` | The ordinary gate set, serially. |
 | `make ci-parallel` | The same gates in three concurrent lanes: `short-go vectors rust desktop-check e2e hygiene workflow-lint sloc`, `web browser`, and `gopls lint vet`. |
-| `make ci-full` | `ci`, `long-go`, and the weekly browser supplement. |
+| `make ci-full` | `ci`, `long-go`, and the weekly browser supplement (excludes standalone Cloudflare Worker Miniflare and live checks). |
 | `make short-go` | Pinned ICE/SCTP state tests, then non-core and core short tests with race detection and coverage verdicts. |
 | `make race` | Short tests with race detection. |
 | `make coverage` | Short tests with coverage verdicts. |
@@ -101,15 +101,20 @@ The [Cloudflare deployment workflow](deploy/cloudflare-relay.md) verifies deploy
 and local Miniflare access/managed-TURN tests (`npm run test:access` in
 `relay-rust/crates/relay-cloudflare`, requiring no Cloudflare account) on pull requests and
 pushes; deployment itself remains opt-in on `main` or manual dispatch. `make hygiene` also
-covers its offline first-deploy/update/failure-recovery contracts. To run its opt-in live
-check, install `worker-build`, Go, pnpm, Web dependencies and the pinned Wrangler, set
+covers its offline first-deploy/update/failure-recovery contracts. Standalone Cloudflare Worker
+checks stay outside `make ci-full` and `make browser-weekly` so core local gates do not require
+`worker-build` or Wrangler/Miniflare dependencies. To run the opt-in live check, install Rust
+stable with `wasm32-unknown-unknown`, `worker-build`, Go, pnpm, Web dependencies, Playwright
+Chromium (`pnpm -C web exec playwright install chromium`), and the pinned Wrangler/Miniflare
+dependencies (`npm ci` in `relay-rust/crates/relay-cloudflare`), set
 `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID`, then run
 `node scripts/deploy/cloudflare/smoke.mjs`. It creates an isolated relay and companion console,
-imports a per-device credential, verifies separate origins, registration and permanent
-STOP across `full` → `relay-only` → `full` updates, then deletes its Workers and temporary files.
-A standalone local-Worker browser check (`npm run test:managed-turn:browser` in
-`relay-rust/crates/relay-cloudflare`) exercises discovery, credential issuance, and Chromium
-transfer without a Cloudflare account.
+imports a per-device credential, verifies separate origins, managed-TURN issuance and Chromium
+transfer when available, and registration/permanent STOP across `full` → `relay-only` → `full`
+updates, then deletes its Workers and temporary files. With the same local prerequisites (minus
+Cloudflare credentials), `npm run test:managed-turn:browser` in
+`relay-rust/crates/relay-cloudflare` runs the isolated local-Worker discovery, credential
+issuance, and Chromium transfer check without a Cloudflare account.
 
 CI calls the reusable [native output workflow](../.github/workflows/native-output.yml) on every pull request and `main` push. It also supports manual reruns. Each macOS architecture caches the Go toolchain from `go.mod` and its Cargo dependencies.
 

@@ -51,8 +51,10 @@ ci-parallel-static: $(CI_PARALLEL_STATIC_GATES)
 
 # `browser` runs `test:browser:smoke` followed by `test:browser:contract:short`.
 # The ordinary CI therefore owns both Chromium short lanes; reusing only the
-# weekly supplement keeps the full current-host sweep complete without rerunning
-# either ordinary Chromium project.
+# weekly supplement covers the remaining current-host gates without rerunning
+# either ordinary Chromium project. Standalone Cloudflare Worker checks
+# (Miniflare and live smoke) stay outside `ci-full` so core local gates do not
+# require `worker-build` or Wrangler/Miniflare dependencies.
 ci-full: ci long-go browser-weekly-supplement
 	@echo "ci-full: all current-host source gates passed"
 
