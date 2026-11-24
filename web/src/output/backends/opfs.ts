@@ -200,7 +200,7 @@ export async function exportPartialOPFSZip(
     const handle = await dir.getFileHandle(task.target.objectName)
     const file = await handle.getFile()
     const files = await store.listTaskFiles(task.taskId)
-    const blob = buildPartialZipBlob(file, files)
+    const blob = await buildPartialZipBlob(file, files, signal === undefined ? undefined : { signal })
     const partialName = task.target.fileName.replace(/\.zip$/iu, '') + '-partial.zip'
     signal?.throwIfAborted()
     triggerBrowserDownload(windowPort, blob, partialName, 'application/zip')

@@ -1,3 +1,4 @@
+import { BlobReader, Uint8ArrayWriter, ZipReader, type FileEntry } from '@zip.js/zip.js'
 import { describe, expect, it, vi } from 'vitest'
 import { byteRange } from '../../src/content/geometry'
 import type { StartBackendTaskInput } from '../../src/output/backends/contract'
@@ -6,6 +7,7 @@ import {
 } from '../../src/output/backends/opfs'
 import type { NativeObjectIO } from '../../src/output/native-object/contracts'
 import type { ReceiveStore } from '../../src/output/store/database'
+import { buildPartialZipBlob } from '../../src/output/zip/progressive-zip'
 import type { SettledTransferJobResult } from '../../src/transfer/job'
 import { initialReceiveState } from '../../src/transfer/state'
 import { createMemoryOPFSEnv, createMockDownloadWindow, MemoryReceiveStore } from './opfs-fixture'
@@ -179,5 +181,71 @@ describe('OPFS object ownership and recovery', () => {
     expect(await f.store.getTask(taskId)).toEqual(paused)
     await deleteOPFSTask(paused, f.store, f.env)
     expect(await f.store.getTask(taskId)).toBeUndefined()
+  })
+
+  it('detaches small partial ZIP payloads before releasing the lock while keeping large exports zero-copy', async () => {
+    const f = fixture(zip)
+    const session = await f.open()
+    const file = await session.transferOutput.openFile(fileRequest, new AbortController().signal)
+    await file.writeAt(0n, bytes)
+    await file.commit([byteRange(0n, 4n)])
+    const paused = await session.settle({ ...completion, status: 'paused', pauseReason: 'user' })
+    await session.close()
+
+    const part = f.part()!
+    const snapshot = await part.getFile()
+    let sliceArrayBufferCalls = 0
+    const spyFile = (source: File) => {
+      const slice = source.slice.bind(source)
+      vi.spyOn(source, 'slice').mockImplementation((...args) => {
+        const sliced = slice(...args)
+        const originalArrayBuffer = sliced.arrayBuffer.bind(sliced)
+        vi.spyOn(sliced, 'arrayBuffer').mockImplementation(() => {
+          sliceArrayBufferCalls += 1
+          f.events.push('slice.arrayBuffer')
+          return originalArrayBuffer()
+        })
+        return sliced
+      })
+      return source
+    }
+    vi.spyOn(part, 'getFile').mockResolvedValueOnce(spyFile(snapshot))
+    f.events.length = 0
+
+    const exported = await exportPartialOPFSZip(paused, f.store, f.env, f.windowPort)
+    expect(sliceArrayBufferCalls).toBe(1)
+    expect(f.events).toEqual(['slice.arrayBuffer', 'lock.release'])
+
+    // Immediate deletion after partial export leaves the materialized ZIP Blob intact.
+    await deleteOPFSTask(paused, f.store, f.env)
+    const reader = new ZipReader(new BlobReader(exported), { checkSignature: true, useWebWorkers: false })
+    try {
+      const [entry] = await reader.getEntries()
+      expect(entry?.filename).toBe('f')
+      expect(await (entry as FileEntry).getData(new Uint8ArrayWriter())).toEqual(bytes)
+    } finally {
+      await reader.close()
+    }
+
+    // Payloads above the detach cap stay zero-copy without eagerly materializing slices.
+    sliceArrayBufferCalls = 0
+    const files = await f.store.listTaskFiles(taskId)
+    expect(files).toHaveLength(0)
+    const session2 = await f.open()
+    const file2 = await session2.transferOutput.openFile(fileRequest, new AbortController().signal)
+    await file2.writeAt(0n, bytes)
+    await file2.commit([byteRange(0n, 4n)])
+    await session2.settle({ ...completion, status: 'paused', pauseReason: 'user' })
+    await session2.close()
+    const largeSource = spyFile(await f.part()!.getFile())
+    const largeFiles = await f.store.listTaskFiles(taskId)
+    const zeroCopy = await buildPartialZipBlob(largeSource, largeFiles, { detachMaxBytes: 2n })
+    expect(sliceArrayBufferCalls).toBe(0)
+    expect(zeroCopy.size).toBe(exported.size)
+
+    const aborted = new AbortController()
+    aborted.abort()
+    await expect(buildPartialZipBlob(largeSource, largeFiles, { signal: aborted.signal }))
+      .rejects.toMatchObject({ name: 'AbortError' })
   })
 })

@@ -226,7 +226,7 @@ describe('ZIP writers (portable streaming & OPFS progressive)', () => {
     await writer1.checkpointFile(fileB, [byteRange(0n, 8n)])
 
     // Partial ZIP export must include completed file A and exclude incomplete file B.
-    const partialBlob = buildPartialZipBlob(new File([io.bytes], 'pzip-1.part'), await store.listTaskFiles('pzip-1'))
+    const partialBlob = await buildPartialZipBlob(new File([io.bytes], 'pzip-1.part'), await store.listTaskFiles('pzip-1'))
     const partialFiles = await readZipEntries(partialBlob)
     expect([...partialFiles.keys()]).toEqual(['docs/a.txt'])
     expect(partialFiles.get('docs/a.txt')).toEqual(payloadA)
@@ -276,7 +276,7 @@ describe('ZIP writers (portable streaming & OPFS progressive)', () => {
 
     // IndexedDB's file-id order need not match physical ZIP layout.
     vi.spyOn(store, 'listTaskFiles').mockImplementation(async () => [...store.files.values()].reverse())
-    const partialArchive = async () => readZipArchive(buildPartialZipBlob(
+    const partialArchive = async () => readZipArchive(await buildPartialZipBlob(
       new File([io.bytes], 'cut.part'), await store.listTaskFiles(taskId)))
     expect((await partialArchive()).files).toEqual(new Map([['z-whole', data], ['empty', new Uint8Array()]]))
 
@@ -331,7 +331,7 @@ describe('ZIP writers (portable streaming & OPFS progressive)', () => {
     await writer.writeFileSlice(file, 0n, data)
     await writer.commitFile(file, [byteRange(0n, 3n)])
     const committed = await store.listTaskFiles(taskId)
-    expect(() => buildPartialZipBlob(new File([], 'evicted'), committed)).toThrow(/No completed files/u)
+    await expect(buildPartialZipBlob(new File([], 'evicted'), committed)).rejects.toThrow(/No completed files/u)
     const { descriptorOffset, endOffset } = file.record.zipEntry
     const descriptor = io.bytes.slice(Number(descriptorOffset), Number(endOffset))
     await io.truncate(descriptorOffset + 1n)

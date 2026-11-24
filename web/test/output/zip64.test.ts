@@ -282,7 +282,7 @@ describe('ZIP64 encoding boundaries and scale invariants', () => {
         return new Blob([io.readRange(BigInt(start), BigInt(end))])
       },
     } as unknown as File
-    const partialBlob = buildPartialZipBlob(sparseFile, await store.listTaskFiles(taskId))
+    const partialBlob = await buildPartialZipBlob(sparseFile, await store.listTaskFiles(taskId))
     const partialReader = new ZipReader(new BlobReader(partialBlob), { checkSignature: true, useWebWorkers: false })
     try {
       const partialEntries = await partialReader.getEntries()

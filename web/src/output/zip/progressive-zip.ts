@@ -32,6 +32,13 @@ import {
 const DIR_ENTRY_PREFIX = '__dir__:'
 // Match the worker client's chunk ceiling so each finalization batch maps to one worker write.
 const FINALIZE_WRITE_BATCH_BYTES = NATIVE_WRITE_CHUNK_BYTES
+/** Small partial ZIP exports copy payload bytes into RAM so resume/delete cannot cancel the handoff. */
+export const PARTIAL_ZIP_DETACH_MAX_BYTES = 16n * 1024n * 1024n
+
+export interface PartialZipBlobOptions {
+  readonly detachMaxBytes?: bigint
+  readonly signal?: AbortSignal
+}
 
 export interface ProgressiveZipEntryInput {
   readonly fileId: string
@@ -440,16 +447,30 @@ function buildUpdatedZipFileRecord(
 /**
  * Builds a valid partial ZIP Blob from completed entries inside a paused OPFS progressive ZIP
  * without modifying the underlying resumable OPFS file.
+ *
+ * Exports up to `detachMaxBytes` materialize payload slices off the mutable OPFS File so immediate
+ * resume writes or cleanup cannot invalidate an in-flight browser download; larger exports retain
+ * zero-copy `File.slice()` references to stay within tab memory budgets.
  */
-export function buildPartialZipBlob(
+export async function buildPartialZipBlob(
   sourceFile: File,
   files: readonly ReceiveFileRecord[],
-): Blob {
+  options?: PartialZipBlobOptions,
+): Promise<Blob> {
+  const detachMaxBytes = options?.detachMaxBytes ?? PARTIAL_ZIP_DETACH_MAX_BYTES
+  if (detachMaxBytes < 0n) {
+    throw new RangeError('Partial ZIP detach byte limit must be non-negative')
+  }
+  const signal = options?.signal
+  signal?.throwIfAborted()
+
   const physicalSize = BigInt(sourceFile.size)
   const completed = completedZipMembers(files).filter(row => hasZipPayload(row, physicalSize))
   if (!completed.some(row => row.zipEntry.kind === 'file')) {
     throw new DOMException('No completed files remain in browser storage', 'NotFoundError')
   }
+
+  const detachPayloads = completedPayloadBytes(completed) <= detachMaxBytes
 
   const parts: BlobPart[] = []
   const centralRecords: Uint8Array<ArrayBuffer>[] = []
@@ -457,22 +478,20 @@ export function buildPartialZipBlob(
   let centralBytes = 0n
 
   for (const entry of completed) {
-    const zip = entry.zipEntry
+    signal?.throwIfAborted()
     const plan = planStoredZipMember(entry, offset)
-    const header = encodeZipLocalHeader(plan)
-    parts.push(header)
-    if (zip.kind === 'file' && entry.size > 0n) {
-      const start = bigintToSafeNumber(zip.payloadOffset, 'partial ZIP slice start')
-      const end = bigintToSafeNumber(zip.payloadOffset + entry.size, 'partial ZIP slice end')
-      parts.push(sourceFile.slice(start, end))
+    parts.push(encodeZipLocalHeader(plan))
+    if (entry.zipEntry.kind === 'file' && entry.size > 0n) {
+      parts.push(await readPartialPayloadPart(sourceFile, entry, detachPayloads))
     }
-    const done = completeZipMember(plan, entry.size, zip.crc32!)
+    const done = completeZipMember(plan, entry.size, entry.zipEntry.crc32!)
     parts.push(done.descriptor)
     centralRecords.push(done.centralRecord)
     offset = checkedZipAdd(offset, plan.entryStreamBytes)
     centralBytes = checkedZipAdd(centralBytes, BigInt(done.centralRecord.byteLength))
   }
 
+  signal?.throwIfAborted()
   for (const record of centralRecords) parts.push(record)
   const endBase = {
     entryCount: BigInt(completed.length),
@@ -480,8 +499,29 @@ export function buildPartialZipBlob(
     centralDirectoryBytes: centralBytes,
   }
   const ends = encodeZipEndRecords({ ...endBase, zip64EndRequired: requiresZip64End(endBase) })
-  if (ends.zip64End !== undefined) parts.push(ends.zip64End)
-  if (ends.zip64Locator !== undefined) parts.push(ends.zip64Locator)
-  parts.push(ends.classicEnd)
+  for (const tail of [ends.zip64End, ends.zip64Locator, ends.classicEnd]) {
+    if (tail !== undefined) parts.push(tail)
+  }
   return new Blob(parts, { type: 'application/zip' })
+}
+
+function completedPayloadBytes(entries: readonly StoredZipMember[]): bigint {
+  let total = 0n
+  for (const entry of entries) {
+    if (entry.zipEntry.kind === 'file' && entry.size > 0n) {
+      total = checkedZipAdd(total, entry.size)
+    }
+  }
+  return total
+}
+
+function readPartialPayloadPart(
+  sourceFile: File,
+  entry: StoredZipMember,
+  detach: boolean,
+): BlobPart | Promise<ArrayBuffer> {
+  const start = bigintToSafeNumber(entry.zipEntry.payloadOffset, 'partial ZIP slice start')
+  const end = bigintToSafeNumber(entry.zipEntry.payloadOffset + entry.size, 'partial ZIP slice end')
+  const slice = sourceFile.slice(start, end)
+  return detach ? slice.arrayBuffer() : slice
 }
