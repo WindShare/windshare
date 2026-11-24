@@ -95,15 +95,19 @@
 }
 .receiver-shell .saving-note {
   margin: 0;
-  max-width: 44ch;
+  max-width: 54ch;
   color: var(--receiver-subtle);
   font-size: .8125rem;
   line-height: 1.45;
   text-align: right;
+  text-wrap: pretty;
   overflow-wrap: anywhere;
 }
 .receiver-shell .saving-note.action-reason {
   color: var(--receiver-muted);
+}
+.receiver-shell .saving-note.saving-caution {
+  color: var(--receiver-warning);
 }
 .receiver-shell .preparing-task {
   display: flex;

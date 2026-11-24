@@ -106,7 +106,10 @@ export function SavingControls({ model, activation, currentTaskContext, actionLa
       </div>
       {disabledReason !== null && <p className="saving-note action-reason" role="status">{disabledReason}</p>}
       {deferSummary && currentTaskContext.reason !== disabledReason && <p className="saving-note saving-summary">{currentTaskContext.reason}</p>}
-      {!deferSummary && disabledReason === null && model.primary !== null && <p className="saving-note saving-summary">{model.primary.summary}</p>}
+      {!deferSummary && disabledReason === null && model.primary !== null && <>
+        <p className="saving-note saving-summary">{model.primary.summary}</p>
+        {model.recoveryNotice !== null && <p className="saving-note saving-caution">{model.recoveryNotice}</p>}
+      </>}
       {model.desktopGuidance !== null && <p className="saving-note saving-summary">{model.desktopGuidance}</p>}
     </div>}
     {alternatives && <DetailSheet returnFocus={alternativesButton} title={t.otherWays}

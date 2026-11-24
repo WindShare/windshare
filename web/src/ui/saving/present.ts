@@ -11,6 +11,12 @@ import type {
   SavingPresentationTransition,
 } from './model'
 
+const GIBIBYTE = 1024n * 1024n * 1024n
+
+// Surface crash-recovery caveats on the primary control once a direct-folder transfer
+// is large enough that losing an in-flight file to a browser crash becomes costly.
+export const LARGE_DIRECT_DOWNLOAD_GUIDANCE_BYTES = 2n * GIBIBYTE
+
 interface SavingRequest {
   readonly offers: ArtifactOffers | null
   readonly actionLabel?: string
@@ -43,16 +49,40 @@ export function presentSavingActions(input: SavingRequest, language: Language = 
   if (primary.outcome === 'original-file') reason = 'original-file-default'
   if (primary.outcome === 'folder') reason = 'hierarchy-preserving-default'
 
+  const hasAlternatives = totalChoiceCount > 1
+
   return Object.freeze({
     primary,
     alternatives,
-    hasAlternatives: totalChoiceCount > 1,
+    hasAlternatives,
     disabledReason,
     retry: false,
+    recoveryNotice: directRecoveryNotice(offers.primary, choices, hasAlternatives, language),
     desktopGuidance: null,
     recommendation: null,
     transition: transition(offers, primary, reason, primaryBlockedBy),
   })
+}
+
+function directRecoveryNotice(
+  primary: ArtifactChoice,
+  choices: readonly ArtifactChoice[],
+  hasAlternatives: boolean,
+  language: Language,
+): string | null {
+  if (primary.backend !== 'fsa') return null
+  const t = receiverCopy[language].saving
+  const singleFile = primary.artifact.singleFileId !== undefined
+  if (!hasAlternatives) {
+    // When FSA is the sole browser option (for example, exceeding OPFS quota), the
+    // alternatives sheet and its notes are unreachable, so surface the caveat directly.
+    return singleFile ? t.directFileCrashNotice : t.directFolderCrashNotice
+  }
+  const estimatedBytes = primary.estimatedBytes ?? 0n
+  if (estimatedBytes < LARGE_DIRECT_DOWNLOAD_GUIDANCE_BYTES) return null
+  const hasCrashRecoveryAlternative = choices.some(choice => choice.resumeSupport === 'continuous')
+  if (!singleFile && hasCrashRecoveryAlternative) return t.directLargeFolderNotice
+  return singleFile ? t.directFileCrashNotice : t.directFolderCrashNotice
 }
 
 function groupOutcomes(
@@ -218,6 +248,7 @@ function unavailable(input: SavingRequest, language: Language): SavingActionPres
     hasAlternatives: false,
     disabledReason: presentReceiveReason(input.blockedBy ?? null, language) ?? copy,
     retry: reason === 'retry-required' && !terminalConnection,
+    recoveryNotice: null,
     desktopGuidance: unavailableOffer?.desktopGuidance ?? null,
     recommendation: null,
     transition: transition(offers, null, reason, input.blockedBy),

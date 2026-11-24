@@ -35,6 +35,7 @@ export interface SavingActionPresentation {
   readonly hasAlternatives: boolean
   readonly disabledReason: string | null
   readonly retry: boolean
+  readonly recoveryNotice: string | null
   readonly desktopGuidance: string | null
   readonly recommendation: string | null
   readonly transition: SavingPresentationTransition
