@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer"
@@ -20,10 +21,25 @@ func openLargeFileTransactionForTest(
 	exactSize uint64,
 ) (*Authority, *Operation, transfer.DirectTreeSession, transfer.SelectionSpec, transfer.FileTransaction) {
 	t.Helper()
+	return openLargeFileTransactionWithClockForTest(t, root, seed, fileName, exactSize, nil)
+}
+
+func openLargeFileTransactionWithClockForTest(
+	t *testing.T,
+	root string,
+	seed byte,
+	fileName string,
+	exactSize uint64,
+	now func() time.Time,
+) (*Authority, *Operation, transfer.DirectTreeSession, transfer.SelectionSpec, transfer.FileTransaction) {
+	t.Helper()
 	ctx := context.Background()
 	auth, err := New(Config{RootPath: root, CreateRoot: true})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if now != nil {
+		auth.now = now
 	}
 	if err := auth.BindDestination(ctx); err != nil {
 		_ = auth.Close()
@@ -295,4 +311,89 @@ func TestLargeFileCheckpointFailureAllowsPauseRetryAndMatchesReopen(t *testing.T
 			t.Fatalf("reopened reusable ranges = %v (%d bytes), want %d bytes", reopened, rangeTotalBytes(reopened), 2*LargeCheckpointBytes)
 		}
 	})
+}
+
+func TestLargeFileIntervalCheckpointTriggersPassivelyOnAccept(t *testing.T) {
+	ctx := context.Background()
+	const (
+		seed      byte   = 0xc4
+		fileName         = "trickle.bin"
+		totalSize uint64 = 2 * LargeCheckpointBytes
+		sliceSize uint64 = 4096
+	)
+	clock := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	root := t.TempDir()
+	auth, op, session, sel, tx := openLargeFileTransactionWithClockForTest(
+		t, root, seed, fileName, totalSize, func() time.Time { return clock },
+	)
+	canonicalPath := tx.Binding().Locator().CanonicalPath()
+	slice := make([]byte, sliceSize)
+	slice[0] = 0x3c
+	slice[len(slice)-1] = 0xc3
+
+	// A sub-threshold write before LargeCheckpointInterval stays accepted in
+	// memory without flushing a durable partial checkpoint.
+	if err := tx.WriteRange(ctx, 0, slice); err != nil {
+		t.Fatal(err)
+	}
+	progress, err := tx.Accept(ctx)
+	if err != nil {
+		t.Fatalf("first Accept failed: %v", err)
+	}
+	if persisted, ok := progress.Persisted(); !ok || persisted.CheckpointGeneration() != 0 || !persisted.Ranges().IsEmpty() {
+		t.Fatalf("first Accept persisted = (%v, gen=%d, ranges=%v), want empty gen=0", ok, persisted.CheckpointGeneration(), persisted.Ranges().Ranges())
+	}
+
+	// Advancing the clock while stalled does not flush asynchronously.
+	clock = clock.Add(LargeCheckpointInterval)
+	if partial, exists := op.journal.lookupPartial(canonicalPath); exists {
+		t.Fatalf("unexpected background partial checkpoint while idle: %+v", partial)
+	}
+
+	// Once LargeCheckpointInterval has elapsed, the next Accept persists all
+	// accumulated ranges and resets the interval baseline.
+	if err := tx.WriteRange(ctx, sliceSize, slice); err != nil {
+		t.Fatal(err)
+	}
+	progress, err = tx.Accept(ctx)
+	if err != nil {
+		t.Fatalf("second Accept failed: %v", err)
+	}
+	if persisted, ok := progress.Persisted(); !ok || persisted.CheckpointGeneration() != 1 || rangeTotalBytes(persisted.Ranges().Ranges()) != 2*sliceSize {
+		t.Fatalf("second Accept persisted = (%v, gen=%d, bytes=%d), want gen=1 and %d bytes", ok, persisted.CheckpointGeneration(), rangeTotalBytes(persisted.Ranges().Ranges()), 2*sliceSize)
+	}
+
+	// A subsequent sub-threshold write within LargeCheckpointInterval does not
+	// checkpoint again until the interval elapses or Pause flushes it.
+	clock = clock.Add(LargeCheckpointInterval / 2)
+	if err := tx.WriteRange(ctx, 2*sliceSize, slice); err != nil {
+		t.Fatal(err)
+	}
+	progress, err = tx.Accept(ctx)
+	if err != nil {
+		t.Fatalf("third Accept failed: %v", err)
+	}
+	if persisted, ok := progress.Persisted(); !ok || persisted.CheckpointGeneration() != 1 || rangeTotalBytes(persisted.Ranges().Ranges()) != 2*sliceSize {
+		t.Fatalf("third Accept persisted = (%v, gen=%d, bytes=%d), want unchanged gen=1 and %d bytes", ok, persisted.CheckpointGeneration(), rangeTotalBytes(persisted.Ranges().Ranges()), 2*sliceSize)
+	}
+
+	// Pause flushes the remaining unpersisted bytes for restart recovery.
+	paused, err := tx.Pause(ctx)
+	if err != nil || paused.Kind() != transfer.FilePaused {
+		t.Fatalf("Pause = (%v, %v), want FilePaused without error", paused.Kind(), err)
+	}
+	if verified, ok := paused.VerifiedProgress(); !ok || verified.CheckpointGeneration() != 2 || rangeTotalBytes(verified.Ranges().Ranges()) != 3*sliceSize {
+		t.Fatalf("paused verified = (%v, gen=%d, bytes=%d), want gen=2 and %d bytes", ok, verified.CheckpointGeneration(), rangeTotalBytes(verified.Ranges().Ranges()), 3*sliceSize)
+	}
+	if _, err := session.PauseTree(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := auth.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened := reopenReusableRangesForTest(t, root, sel, seed, fileName, totalSize)
+	if rangeTotalBytes(reopened) != 3*sliceSize {
+		t.Fatalf("reopened reusable ranges = %v (%d bytes), want %d bytes", reopened, rangeTotalBytes(reopened), 3*sliceSize)
+	}
 }

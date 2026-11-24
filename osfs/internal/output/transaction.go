@@ -20,8 +20,11 @@ const (
 	// SmallFileThreshold separates single-shot small files (0 per-file fsync on
 	// the hot path; batched journal sync) from large files that stream range
 	// checkpoints to disk during transfer.
-	SmallFileThreshold           uint64 = 8 << 20 // 8 MiB
-	LargeCheckpointBytes         uint64 = 8 << 20 // 8 MiB
+	SmallFileThreshold   uint64 = 8 << 20 // 8 MiB
+	LargeCheckpointBytes uint64 = 8 << 20 // 8 MiB
+	// LargeCheckpointInterval caps checkpoint lag during slow trickle writes
+	// without spawning background idle timers; it is checked passively in Accept
+	// while Pause and Commit flush any remaining bytes on stall, stop, or finish.
 	LargeCheckpointInterval             = 2 * time.Second
 	publicationFingerprintDomain        = "windshare/publication-samples/v1\x00"
 	stageRangeFingerprintDomain         = "windshare/stage-range-samples/v1\x00"

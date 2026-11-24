@@ -9,7 +9,7 @@ Each operation keeps an append-only, CRC32-checksummed `state.log` (automaticall
 Durability is tiered by file size to avoid small-file I/O amplification while protecting large transfers across restarts:
 
 - **Small files (`< 8 MiB`)**: staged in `.windshare-tmp/<op>/`, closed, published via one atomic no-replace rename with zero per-file `fsync`, and logged to `state.log` (flushed in batches every 64 files / 2 seconds and on pause/exit).
-- **Large files (`>= 8 MiB`)**: range checkpoints flush `.part` data before updating `state.log` every 8 MiB or 2 seconds idle, and on explicit checkpoint/pause/commit.
+- **Large files (`>= 8 MiB`)**: range checkpoints flush `.part` data before updating `state.log` on `Accept` once 8 MiB accumulates or 2 seconds elapse since the previous checkpoint, and on explicit checkpoint/pause/commit (no background idle timer).
 
 `get` automatically continues a matching task. `get --redownload` reserves a separate collision-safe destination and leaves the original continuation target intact; `resume retry --operation <id>` selects either task. Completion or `resume discard` removes `.windshare-tmp/<op>/` (and `.windshare-tmp/` when empty) while preserving all published and unrelated files in the destination.
 
