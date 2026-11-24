@@ -17,17 +17,29 @@ log() { printf 'event=wsrelay_install revision=%s result=%s\n' "$revision" "$1" 
 
 install -d -m 0755 "$root/releases"
 releases=$(realpath -e "$root/releases")
-readonly release="$releases/$revision" current="$root/current"
+readonly release="$releases/$revision" current="$root/current" last_healthy="$root/last-healthy"
 exec 9>"$root/.install.lock"
 flock -w 2 9 || exit "$busy"
 
-previous=
-if [[ -L $current ]]; then
-    previous=$(realpath -e "$current") || die "broken current release"
-    [[ $(dirname "$previous") == "$releases" && ${previous##*/} =~ ^[0-9a-f]{40}$ && -x $previous/wsrelay ]] || die "unexpected current release"
-elif [[ -e $current ]]; then
-    die "current must be a release symlink"
-fi
+resolve_release_link() {
+    local link=$1 label=$2 target
+    if [[ -L $link ]]; then
+        target=$(realpath -e "$link") || die "broken $label release"
+        [[ $(dirname "$target") == "$releases" && ${target##*/} =~ ^[0-9a-f]{40}$ && -x $target/wsrelay ]] || die "unexpected $label release"
+        printf '%s\n' "$target"
+    elif [[ -e $link ]]; then
+        die "$label must be a release symlink"
+    fi
+}
+
+health_ok() {
+    [[ $(curl --silent --max-time 1 --noproxy '*' --output /dev/null --write-out '%{http_code}' "$health_url" || true) == 200 ]]
+}
+
+# Separate systemd's active symlink (current) from the rollback anchor (last-healthy)
+# so interrupting a switch before health passes cannot overwrite the rollback target.
+current_release=$(resolve_release_link "$current" "current")
+previous=$(resolve_release_link "$last_healthy" "last-healthy")
 
 stage=$(mktemp -d "$releases/.incoming.XXXXXXXX")
 switch=
@@ -35,7 +47,7 @@ cleanup() {
     rm -f -- "$stage/wsrelay"
     [[ ! -d $stage ]] || rmdir -- "$stage"
     if [[ -n $switch ]]; then
-        rm -f -- "$switch/current"
+        rm -f -- "$switch/link"
         rmdir -- "$switch"
     fi
 }
@@ -55,9 +67,17 @@ else
     new_release=true
 fi
 
+set_release_link() {
+    ln -sfn -- "$1" "$switch/link"
+    mv -Tf -- "$switch/link" "$2"
+}
+
 select_release() {
-    ln -s -- "$1" "$switch/current"
-    mv -Tf -- "$switch/current" "$current"
+    set_release_link "$1" "$current"
+}
+
+record_healthy() {
+    set_release_link "$1" "$last_healthy"
 }
 
 restart_healthy() {
@@ -65,13 +85,28 @@ restart_healthy() {
     systemctl reset-failed "$unit" 9>&- || true
     systemctl restart "$unit" 9>&- || return 1
     for ((attempt=0; attempt<health_attempts; attempt++)); do
-        if [[ $(curl --silent --max-time 1 --noproxy '*' --output /dev/null --write-out '%{http_code}' "$health_url") == 200 ]]; then
+        if health_ok; then
             return 0
         fi
         sleep 1
     done
     return 1
 }
+
+if [[ -z $previous && -n $current_release ]]; then
+    if health_ok; then
+        # Persist the verified pre-existing release before mutating current so an
+        # interruption during the first upgrade on a legacy host keeps a rollback target.
+        previous=$current_release
+        record_healthy "$previous"
+    else
+        printf 'event=wsrelay_install revision=%s note=unverified_current current=%s last_healthy=none\n' \
+            "$revision" "${current_release##*/}" >&2
+    fi
+elif [[ -n $previous && -n $current_release && $current_release != "$previous" ]]; then
+    printf 'event=wsrelay_install revision=%s note=unverified_current current=%s last_healthy=%s\n' \
+        "$revision" "${current_release##*/}" "${previous##*/}" >&2
+fi
 
 select_release "$release"
 if ! restart_healthy; then
@@ -98,6 +133,7 @@ if ! restart_healthy; then
     exit 1
 fi
 
+record_healthy "$release"
 # Keep the actual rollback target even when older releases were reinstalled.
 touch "$release"
 kept=1
