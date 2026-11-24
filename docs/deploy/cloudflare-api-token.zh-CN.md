@@ -1,8 +1,6 @@
 # 创建 CLOUDFLARE_API_TOKEN：浏览器操作指南
 
-**完整部署和仅中转部署默认启用托管 TURN。** 账户需开通 Realtime TURN，部署令牌需有 **帐户 / Cloudflare Calls / 编辑** 权限。TURN 与 Realtime SFU 合计每帐户每月有 1,000 GB 免费出站流量，超出部分为 0.05 美元/GB。在管理台暂停后，已有凭据最长 30 分钟到期。设置 `CLOUDFLARE_TURN_ENABLED=false` 并重新部署会移除绑定和该部署的 Key。[Cloudflare 费率](https://developers.cloudflare.com/realtime/sfu/platform/pricing/)
-
-实测仅有 Workers 部署权限的令牌调用 Calls 返回 HTTP 403（10000），中转与前端仍可正常部署。
+**完整部署（`full`）和仅中转部署（`relay-only`）默认启用托管 TURN。** 账户需开通 Realtime TURN，部署令牌需有 **帐户 / Cloudflare Calls / 编辑** 权限；缺少该权限时，中转与前端仍可部署，但会跳过托管 TURN。TURN 与 Realtime SFU 合计每帐户每月有 1,000 GB 免费出站流量，超出部分为 0.05 美元/GB（[Cloudflare 费率](https://developers.cloudflare.com/realtime/sfu/platform/pricing/)）。在管理台暂停后，已有凭据最长 30 分钟到期。将 GitHub Actions 变量 `CLOUDFLARE_TURN_ENABLED` 设为 `false` 并重新部署，会移除绑定和该部署的 Key。
 
 这个 Token（令牌）是一串授权码，让 GitHub Actions 能把 WindShare 中转部署到你的 Cloudflare 账户。全程只需浏览器，不用安装软件或运行命令。
 
@@ -24,12 +22,12 @@
 | 什么时候需要 | 资源 | 权限 | 权限级别 |
 |---|---|---|---|
 | 所有人都需要 | 帐户（Account） | Workers | 管理员（Admin） |
-| 启用托管 TURN | 帐户（Account） | Cloudflare Calls | 编辑（Edit / Write） |
+| 默认需要（托管 TURN） | 帐户（Account） | Cloudflare Calls | 编辑（Edit / Write） |
 | 使用自己的域名时加上 | 区域（Zone） | Workers 路由（Workers Routes） | 编辑（Edit / Write） |
 | 使用自己的域名时加上 | 区域（Zone） | 区域（Zone） | 读取（Read） |
 
-- 使用 Cloudflare 提供的 `xxx.workers.dev` 地址：填写帐户权限。
-- 使用自己的地址，例如 `relay.example.com`：点击 **添加更多（Add more）**，补齐两项区域权限。
+- 使用 Cloudflare 提供的 `xxx.workers.dev` 地址：填写前两项帐户权限（若已将 Actions 变量 `CLOUDFLARE_TURN_ENABLED` 设为 `false`，只需第一项）。
+- 使用自己的地址，例如 `relay.example.com`：点击 **添加更多（Add more）**，再补齐后两项区域权限。
 
 首次部署需要创建 Worker，因此第一行选 **Workers → 管理员**；`Workers 脚本（Workers Scripts）→ 编辑` 不等同于这里的创建权限。这个管理员权限覆盖所选账户中的所有 Workers。自定义域名还需要对应区域的路由写入权限，见 [Cloudflare 权限说明](https://developers.cloudflare.com/workers/authorization/workers/)。区域读取权限用于本项目部署前检查域名归属。
 
@@ -55,10 +53,10 @@
 ## 4. 创建并复制 Token
 
 1. 点击 **继续以显示摘要（Continue to summary）**。
-2. 核对账户和权限。使用自定义域名时，摘要应类似下面的示意：
+2. 核对账户和权限。默认启用托管 TURN 且使用自定义域名时，摘要应类似下面的示意：
 
    ```text
-   你的 Cloudflare 账户 — Workers：管理员
+   你的 Cloudflare 账户 — Workers：管理员，Cloudflare Calls：编辑
      └─ example.com — Workers 路由：编辑，区域：读取
    ```
 
@@ -86,7 +84,7 @@
 
 ## 6. 继续部署
 
-Token 配置完成。回到[部署指南](cloudflare-relay.md#first-deployment)，填写其余 Secrets 和 Variables，然后运行 **Deploy WindShare to Cloudflare**。默认同时部署前端和中转；只需中转时，设置 `CLOUDFLARE_DEPLOYMENT_MODE=relay-only`。
+Token 配置完成。回到[部署指南](cloudflare-relay.md#first-deployment)，填写其余 Secrets 和 Variables，然后运行 **Deploy private relay**。默认同时部署前端和中转；只需中转时，设置 `CLOUDFLARE_DEPLOYMENT_MODE=relay-only`。
 
 保存 Token 本身不会启动部署。其余设置齐全后，在仓库的 **Actions → Deploy private relay → Run workflow** 中选择 `main`，再点击 **Run workflow**。
 

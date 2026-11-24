@@ -1,23 +1,23 @@
 # Cloudflare deployment
 
-**Managed TURN is enabled by default for full and relay-only deployments.** Enable Realtime TURN on the account and grant the deployment token **Account / Cloudflare Calls / Edit**. Missing Calls access leaves the relay and frontend operational. Cloudflare includes 1,000 GB of monthly egress per account shared with Realtime SFU, then charges US$0.05/GB. Pausing managed TURN in the console stops new credentials. Existing credentials expire within 30 minutes. Set `CLOUDFLARE_TURN_ENABLED=false` and redeploy to remove the binding and deployment-owned key. [Cloudflare pricing](https://developers.cloudflare.com/realtime/sfu/platform/pricing/)
-
-A Workers token without Calls Edit returned HTTP 403 (10000) in a live deployment. The relay and frontend still deployed.
+**Managed TURN is enabled by default for `full` and `relay-only` deployments.** Enable Realtime TURN on the account and include **Account / Cloudflare Calls / Edit** in the deployment token. Without Calls access, the relay and frontend still deploy while managed TURN is skipped. Cloudflare includes 1,000 GB of monthly egress per account shared with Realtime SFU, then charges US$0.05/GB ([Cloudflare pricing](https://developers.cloudflare.com/realtime/sfu/platform/pricing/)). Pausing managed TURN in the console stops new credentials (existing ones expire within 30 minutes). Set the `CLOUDFLARE_TURN_ENABLED` Actions variable to `false` and redeploy to remove the binding and deployment-owned key.
 
 Fork the repository and run **Deploy private relay** in GitHub Actions.
 The default `full` mode hosts the receiver frontend and private relay together.
 A separate console origin handles owner sign-in, device approval and credentials.
 `relay-only` omits the receiver frontend but keeps the console.
 
-`frontend` mode serves static assets and installer redirects without relay storage
-or an owner console. It needs no owner password. The official split deployment uses
-[network operations](../../deploy/network/operations.md) to publish one build to
-Cloudflare and mainland hosts. The steps below cover private relays.
+`frontend` mode serves static assets and installer redirects without relay storage,
+an owner console, or TURN. It needs no owner password or Calls permission. The official
+split deployment uses [network operations](../../deploy/network/operations.md) to publish
+one build to Cloudflare and mainland hosts. The steps below cover private relays.
 
 ## First deployment
 
 1. Create a Cloudflare **workers.dev** subdomain, or choose two unused hostnames in
-   an active Cloudflare zone. Create an account token with **Account / Workers / Admin**.
+   an active Cloudflare zone. Create an account token with **Account / Workers / Admin**
+   and **Account / Cloudflare Calls / Edit** (omit Calls Edit only when disabling managed
+   TURN with `CLOUDFLARE_TURN_ENABLED=false` or deploying `frontend` mode).
    Custom domains also need **Zone / Workers Routes / Edit** and **Zone / Zone / Read**.
    See the [token setup guide (中文)](cloudflare-api-token.zh-CN.md).
 2. In the fork's **Settings → Secrets and variables → Actions**, set:
@@ -30,6 +30,7 @@ Cloudflare and mainland hosts. The steps below cover private relays.
    | Secret | `CLOUDFLARE_WORKER_NAME` | Stable lowercase name, at most 55 characters |
    | Variable | `CLOUDFLARE_RELAY_ENABLED` | `true` |
    | Variable, optional | `CLOUDFLARE_DEPLOYMENT_MODE` | `full` (default), `relay-only`, or `frontend` |
+   | Variable, optional | `CLOUDFLARE_TURN_ENABLED` | `true` (default) or `false`; manages Cloudflare TURN for `full` and `relay-only` |
    | Secret, optional pair | `CLOUDFLARE_RELAY_DOMAIN` | Relay hostname, e.g. `share.example.com` |
    | Secret, optional pair | `CLOUDFLARE_ZONE_ID` | That hostname's zone ID |
    | Secret, optional | `CLOUDFLARE_CONSOLE_DOMAIN` | Console hostname in the same zone; defaults to `console.<relay-hostname>` |
