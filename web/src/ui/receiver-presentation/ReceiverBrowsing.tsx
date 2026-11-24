@@ -68,7 +68,6 @@ export function ReceiverBrowsing({ controller }: { readonly controller: Receiver
     startAdmission: snapshot.startAdmission,
     capabilitiesState: snapshot.capabilitiesState,
     activeSingleFileId: snapshot.activeSingleFileId,
-    singleFilePickerPendingFromBytes: snapshot.singleFilePickerPendingFromBytes,
     language: snapshot.language,
   }
 
@@ -95,10 +94,9 @@ export function ReceiverBrowsing({ controller }: { readonly controller: Receiver
   let previewDownload: PreviewDownloadControl | undefined
   if (preview.state !== 'idle') {
     const fileId = preview.fileId
-    const row = snapshot.rows.find(candidate => candidate.id === fileId)
     const state = preview.state === 'image'
       ? { downloading: false, disabledReason: null }
-      : singleFileDownloadState(fileId, row?.expectedSize, downloadReadiness)
+      : singleFileDownloadState(fileId, downloadReadiness)
     previewDownload = {
       downloading: state.downloading,
       started: startedFeedback?.fileId === fileId,
@@ -106,7 +104,6 @@ export function ReceiverBrowsing({ controller }: { readonly controller: Receiver
       onDownload: () => {
         setModalError(null)
         const result = controller.downloadPreviewedFile({
-          onExported: () => showStartedFeedback(fileId),
           onAsyncFailure: failure => setModalError({ kind: 'file', fileId, failure }),
         })
         if (result.kind === 'saved-image') {

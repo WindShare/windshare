@@ -41,18 +41,17 @@ import { RetainedTaskActions, type RetainedActionCallbacks } from './retained-ac
 import { RetainedTaskInventory } from './retained-inventory'
 import { openNewOutputSession } from './session-opener'
 import { ReceiveSessionRunner, type SessionRunCallbacks } from './session-runner'
-import { singleFilePickerFloorBytes } from './single-file'
 import {
   startSingleFileDownloadFlow,
   type SingleFileDownloadOptions,
   type SingleFileLaunchContext,
   type SingleFileLaunchRequest,
-} from './single-file-launch'
+} from './single-file'
 import type { BeforeUnloadEventTarget } from './unload-guard'
 import type { ScreenWakeLockWindowTarget } from './wake-lock-guard'
 
 export type { RetainedActionCallbacks } from './retained-actions'
-export type { SingleFileDownloadOptions } from './single-file-launch'
+export type { SingleFileDownloadOptions } from './single-file'
 
 export type ReceiveWindowPort =
   BrowserOutputWindow & Partial<BeforeUnloadEventTarget> & ScreenWakeLockWindowTarget
@@ -189,7 +188,7 @@ export class ReceiveCoordinator {
     this.#publish()
   }
 
-  preloadShareTasks(shareInstance: string): void {
+  warmCapabilities(): void {
     if (this.#disposed) return
     if (this.#capabilities.state === 'failed') {
       this.#capabilities.retry()
@@ -198,10 +197,6 @@ export class ReceiveCoordinator {
     } else if (this.#capabilities.state === 'ready') {
       void this.#capabilities.refreshStorageEstimate()
     }
-    this.#inventory.preloadShare(
-      shareInstance,
-      typeof safeIndexedDB(this.#options.windowPort)?.open === 'function',
-    )
   }
 
   startBlockedReason(): ReceiveBlockReason | null {
@@ -238,12 +233,19 @@ export class ReceiveCoordinator {
 
   retainedActionAdmission(task: RetainedTaskSnapshot, action: ReceiveAction): ReceiveAdmission {
     if (this.#execution.activeTransferTaskId === task.taskId) return blockedAdmission('busy')
-    return this.#admitRetained(task, action, this.#execution.isTransferActive)
+    const shareInstance = this.#options.currentJoinedShare()?.descriptor.shareInstanceId ?? null
+    return admitRetainedAction(task, action, {
+      currentShareInstance: shareInstance,
+      hasActiveDownload: this.#execution.isTransferActive,
+      hasPendingAction: this.#execution.pendingRetained !== null,
+      connectionUnavailable: this.#connectionUnavailable,
+      shareEnded: this.#shareEnded,
+    })
   }
 
   refreshOffers(joined: JoinedBrowserShare): void {
     if (this.#disposed) return
-    this.preloadShareTasks(joined.descriptor.shareInstanceId)
+    this.warmCapabilities()
     this.#offerAbort?.abort()
     const abort = new AbortController()
     this.#offerAbort = abort
@@ -402,7 +404,6 @@ export class ReceiveCoordinator {
     this.#selectionSpec = null
     this.#selectionPolicy = null
     this.#execution.clearPreRunningTransfer()
-    this.#inventory.resetShare()
     if (!this.#execution.isRunning) this.#workspace.clear()
     this.#publish()
   }
@@ -417,28 +418,17 @@ export class ReceiveCoordinator {
     this.#sessions.dispose()
     this.#execution.dispose()
     this.#workspace.clearActiveIfRunning()
-    this.#inventory.resetShare()
     this.#snapshot = this.#buildSnapshot()
     return this.#storage.close()
   }
 
   #createSingleFileContext(): SingleFileLaunchContext {
     return {
-      execution: this.#execution,
-      inventory: this.#inventory,
       capabilities: this.#capabilities,
-      retainedActions: this.#retainedActions,
-      ...(this.#options.outputTrace === undefined ? {} : { outputTrace: this.#options.outputTrace }),
       isDisposed: () => this.#disposed,
       currentJoinedShare: () => this.#options.currentJoinedShare(),
       startBlockedReason: () => this.startBlockedReason(),
-      preloadShareTasks: shareInstance => this.preloadShareTasks(shareInstance),
-      admitCandidate: (task, action, ignoreTransferSlot) =>
-        this.#admitRetained(task, action, ignoreTransferSlot ? this.#execution.isRunning : this.#execution.isTransferActive),
-      publish: () => this.#publish(),
       launchChoice: (request, options) => this.#launchChoice(request, launchCallbacks(options), false),
-      openWithTransferToken: (token, request, options) =>
-        this.#storage.run(access => this.#openDownload(access, request, token, undefined, launchCallbacks(options))),
       dispatchAsyncError: (error, custom) => this.#dispatchAsyncError(error, custom),
     }
   }
@@ -449,23 +439,12 @@ export class ReceiveCoordinator {
     callbacks: RetainedActionCallbacks | undefined,
   ): void {
     if (action === 'continue') {
-      void this.#retainedActions.runContinue(taskId, undefined, callbacks)
+      void this.#retainedActions.runContinue(taskId, callbacks)
       return
     }
     if (isLocalRetainedAction(action)) {
-      void this.#retainedActions.runLocalAction(taskId, action, undefined, callbacks)
+      void this.#retainedActions.runLocalAction(taskId, action, callbacks)
     }
-  }
-
-  #admitRetained(task: RetainedTaskSnapshot, action: ReceiveAction, hasActiveDownload: boolean): ReceiveAdmission {
-    const shareInstance = this.#options.currentJoinedShare()?.descriptor.shareInstanceId ?? null
-    return admitRetainedAction(task, action, {
-      currentShareInstance: shareInstance,
-      hasActiveDownload,
-      hasPendingAction: this.#execution.pendingRetained !== null,
-      connectionUnavailable: this.#connectionUnavailable,
-      shareEnded: this.#shareEnded,
-    })
   }
 
   #launchChoice(
@@ -638,17 +617,9 @@ export class ReceiveCoordinator {
   }
 
   #buildSnapshot(): ReceiveRuntimeSnapshot {
-    const shareInstance = this.#options.currentJoinedShare()?.descriptor.shareInstanceId ?? null
-    const pickerPending =
-      this.#capabilities.state === 'ready' &&
-      shareInstance !== null &&
-      this.#inventory.isShareLoading(shareInstance)
-        ? singleFilePickerFloorBytes(this.#capabilities.value)
-        : null
     return Object.freeze({
       offers: this.#offers,
       capabilitiesState: this.#capabilities.state,
-      singleFilePickerPendingFromBytes: pickerPending,
       activation: this.#execution.activation,
       activeTaskId: this.#execution.isRunning ? this.#workspace.activeTaskId() : null,
       activeSingleFileId: this.#execution.activeSingleFileId,

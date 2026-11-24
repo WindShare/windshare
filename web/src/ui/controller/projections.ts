@@ -33,10 +33,10 @@ function sameFields<T>(left: T, right: T): boolean {
 
 function browse(snapshot: ReceiverSnapshot) {
   const { share, rows, breadcrumbs, pageIndex, pageCount, omittedCount, browse, draft, preview, startAdmission } = snapshot
-  const { capabilitiesState, activeSingleFileId, singleFilePickerPendingFromBytes, language } = snapshot.output
+  const { capabilitiesState, activeSingleFileId, language } = snapshot.output
   return Object.freeze({
     share, rows, breadcrumbs, pageIndex, pageCount, omittedCount, browse, draft, preview,
-    startAdmission, capabilitiesState, activeSingleFileId, singleFilePickerPendingFromBytes, language,
+    startAdmission, capabilitiesState, activeSingleFileId, language,
   })
 }
 function connection(snapshot: ReceiverSnapshot) {

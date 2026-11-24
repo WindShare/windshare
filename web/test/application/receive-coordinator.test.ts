@@ -10,12 +10,11 @@ import { presentTask, retainedTaskFacts } from '../../src/ui/tasks'
 import { mapReceiverFailure } from '../../src/ui/controller/failures'
 import type { RetainedTaskSnapshot } from '../../src/application/receive/contracts'
 import { ReceiveCoordinator } from '../../src/application/receive/coordinator'
-import { executeRetainedTaskAction, retainedSnapshot } from '../../src/application/receive/retained'
+import { executeRetainedTaskAction } from '../../src/application/receive/retained'
 import * as sessionOpener from '../../src/application/receive/session-opener'
 import {
   ReceiveBlockedError,
   SaveUnavailableError,
-  decideSingleFileReuse,
   planSingleFileDownload,
 } from '../../src/application/receive/single-file'
 import type { BrowseDirectory, JoinedBrowserShare } from '../../src/application/browser-share/gateway'
@@ -562,7 +561,7 @@ describe('single-file quick download planning and activation ownership', () => {
 
     const coordinator = new ReceiveCoordinator({ windowPort, currentJoinedShare: () => joined, onActionError })
     coordinator.refreshOffers(joined)
-    await waitForSnapshot(coordinator, s => s.offers?.kind === 'ready' && s.singleFilePickerPendingFromBytes === null)
+    await waitForSnapshot(coordinator, s => s.offers?.kind === 'ready')
 
     // Top-level single-file selection exposes activeSingleFileId during waiting-picker.
     expect(coordinator.startDownload('fsa:file')).toBe(true)
@@ -580,7 +579,7 @@ describe('single-file quick download planning and activation ownership', () => {
     expect(coordinator.getSnapshot().activeSingleFileId).toBe(fileB.idText)
     expect(onActionError).not.toHaveBeenCalled()
 
-    // Complete B with a pause, then resume B and verify activeSingleFileId tracks resume too.
+    // Complete B with a pause: quick download starts a fresh download, while explicit continue resumes B and tracks activeSingleFileId.
     const events: string[] = []
     pickers[1]!.resolve(new FakeDirectoryHandle('Downloads', events) as unknown as FileSystemDirectoryHandle)
     await waitForSnapshot(coordinator, s => s.lifecycle?.kind === 'downloading')
@@ -590,8 +589,12 @@ describe('single-file quick download planning and activation ownership', () => {
     await waitForSnapshot(coordinator, s => s.lifecycle?.kind === 'paused')
     expect(coordinator.getSnapshot().activeSingleFileId).toBeNull()
 
-    // Resume via quick download (also exercises reusing just-paused task immediately).
-    expect(coordinator.startSingleFileDownload(fileB, dir)).toEqual({ kind: 'resumed' })
+    pickers.push(deferred<FileSystemDirectoryHandle>())
+    expect(coordinator.startSingleFileDownload(fileB, dir)).toEqual({ kind: 'waiting-picker' })
+    coordinator.cancelActivation()
+    pickers[2]!.resolve({} as FileSystemDirectoryHandle)
+
+    coordinator.performActiveAction('continue')
     await waitForSnapshot(coordinator, s => s.lifecycle?.kind === 'downloading')
     expect(coordinator.getSnapshot().activeSingleFileId).toBe(fileB.idText)
 
@@ -647,7 +650,7 @@ describe('single-file quick download planning and activation ownership', () => {
       createTransferJob: () => ({ pause: vi.fn(), stop: vi.fn(), run: () => secondJobGate.promise }),
     } as unknown as JoinedBrowserShare
     const coordinator = new ReceiveCoordinator({ windowPort, currentJoinedShare: () => joined })
-    coordinator.preloadShareTasks('share-1')
+    coordinator.warmCapabilities()
     await waitForSnapshot(coordinator, s => s.capabilitiesState === 'ready')
 
     expect(coordinator.startSingleFileDownload(fileA, dir)).toEqual({ kind: 'started' })
@@ -675,49 +678,45 @@ describe('single-file quick download planning and activation ownership', () => {
   })
 })
 
-describe('single-file reuse, errors, and local blob handoff', () => {
+describe('single-file fresh download, errors, and local blob handoff', () => {
   afterEach(() => vi.restoreAllMocks())
 
-  it('reuses completed OPFS over paused during concurrent index preload, fires onExported after export completes, and reports blocked resume reasons', async () => {
-    const file = makeFileEntry(30, 'report.pdf', 12n)
+  it('starts a fresh transfer even when retained OPFS or paused tasks exist, while explicit retained actions save and resume', async () => {
+    const file = makeFileEntry(30, 'report.pdf', 4n)
     const dir = makeSubDirectory('root-1', 4, 'Reports')
     const { spec, key } = singleFileSelectionKey('share-1', 'root-1', file, dir)
 
     const store = new MemoryReceiveStore()
-    const listGate = deferred<readonly ReceiveTaskRecord[]>()
-    vi.spyOn(store, 'listTasksByShare').mockImplementation(() => listGate.promise)
     vi.spyOn(ReceiveStore, 'open').mockResolvedValue(Object.assign(store, { close: vi.fn() }) as unknown as ReceiveStore)
 
     const { env, root } = createMemoryOPFSEnv()
     const tasksDir = await root.getDirectoryHandle('windshare-tasks', { create: true })
-    const opfsFile = await tasksDir.getFileHandle('opfs-new.part', { create: true })
+    const opfsFile = await tasksDir.getFileHandle('opfs-ready.part', { create: true })
     opfsFile.bytes = new Uint8Array([1, 2, 3, 4])
-    const opfsOldFile = await tasksDir.getFileHandle('opfs-old.part', { create: true })
-    opfsOldFile.bytes = new Uint8Array([9, 9, 9, 9])
 
-    const makeOpfsReady = (taskId: string, objectName: string, createdAtMilliseconds: number): ReceiveTaskRecord => ({
-      taskId,
+    const readyRecord: ReceiveTaskRecord = {
+      taskId: 'opfs-ready',
       shareInstance: 'share-1',
       selectionKey: key,
       selection: spec,
       artifact: { kind: 'original-file', name: file.name, singleFileId: file.idText, singleFileSize: 4n },
       backend: 'opfs',
-      lifecycle: transitionReceiveState(initialReceiveState(taskId), {
+      lifecycle: transitionReceiveState(initialReceiveState('opfs-ready'), {
         kind: 'ready-to-save', size: 4n, fileName: file.name,
       }),
-      target: { kind: 'opfs', objectName, fileName: file.name, isZip: false, allocatedLength: 4n, sealedSize: 4n },
-      display: { objectLabel: file.name, createdAtMilliseconds },
+      target: { kind: 'opfs', objectName: 'opfs-ready.part', fileName: file.name, isZip: false, allocatedLength: 4n, sealedSize: 4n },
+      display: { objectLabel: file.name, createdAtMilliseconds: 5_000 },
       discoveryComplete: true,
-      updatedAt: createdAtMilliseconds,
-    })
+      updatedAt: 5_000,
+    }
     const pausedRecord: ReceiveTaskRecord = {
-      taskId: 'paused-newer',
+      taskId: 'paused-task',
       shareInstance: 'share-1',
       selectionKey: key,
       selection: spec,
       artifact: { kind: 'original-file', name: file.name, singleFileId: file.idText, singleFileSize: 4n },
       backend: 'opfs',
-      lifecycle: transitionReceiveState(initialReceiveState('paused-newer'), {
+      lifecycle: transitionReceiveState(initialReceiveState('paused-task'), {
         kind: 'paused', reason: 'user',
         completedFiles: 0n, completedBytes: 0n, retainedBytes: 2n,
         discoveredFiles: 1n, discoveredBytes: 4n, discoveryComplete: true,
@@ -727,38 +726,8 @@ describe('single-file reuse, errors, and local blob handoff', () => {
       discoveryComplete: true,
       updatedAt: 9_000,
     }
-    const olderReady = makeOpfsReady('opfs-old', 'opfs-old.part', 1_000)
-    const newerReady = makeOpfsReady('opfs-new', 'opfs-new.part', 5_000)
-    await store.putTask(olderReady)
-    await store.putTask(newerReady)
+    await store.putTask(readyRecord)
     await store.putTask(pausedRecord)
-
-    // Verify pure candidate ranking prefers exportable OPFS (newest) over even newer paused task.
-    const pureDecision = decideSingleFileReuse(
-      [
-        retainedSnapshot(pausedRecord, false),
-        retainedSnapshot(olderReady, false),
-        retainedSnapshot(newerReady, false),
-      ],
-      'share-1',
-      key,
-      () => ({ allowed: true, reason: null }),
-    )
-    expect(pureDecision).toMatchObject({ kind: 'export', task: { taskId: 'opfs-new' } })
-
-    const lockedElsewhereDecision = decideSingleFileReuse(
-      [retainedSnapshot(pausedRecord, true)],
-      'share-1',
-      key,
-      (task, action) => admitRetainedAction(task, action, {
-        currentShareInstance: 'share-1',
-        hasActiveDownload: false,
-        hasPendingAction: false,
-        connectionUnavailable: false,
-        shareEnded: false,
-      }),
-    )
-    expect(lockedElsewhereDecision).toMatchObject({ kind: 'blocked', reason: 'activeInAnotherTab' })
 
     vi.spyOn(outputContract, 'probeBrowserOutputCapabilities').mockResolvedValue(Object.freeze({
       indexedDb: true, fsa: false, opfs: true, portable: true, availableStorageBytes: 64n * 1024n * 1024n,
@@ -768,12 +737,29 @@ describe('single-file reuse, errors, and local blob handoff', () => {
       ...baseWin,
       indexedDB: { open: vi.fn() } as unknown as IDBFactory,
     }
+    const createTransferJob = vi.fn((output: Parameters<JoinedBrowserShare['createTransferJob']>[0]) => ({
+      pause: vi.fn(),
+      stop: vi.fn(),
+      detach: vi.fn(),
+      run: async () => {
+        const writer = await output.openFile({
+          fileId: file.idText,
+          path: [file.name],
+          sourcePath: ['Reports', file.name],
+          revision: 'rev-fresh',
+          exactSize: 4n,
+        }, new AbortController().signal)
+        await writer.writeAt(0n, new Uint8Array([8, 8, 8, 8]))
+        await writer.commit([{ start: 0n, end: 4n }])
+        return makeJobResult('completed', 4n)
+      },
+    }))
     const joined = {
       descriptor: { shareInstanceId: 'share-1', syntheticRootId: 'root-1' },
       selection: new SelectionPolicy(true),
       inspectSelection: async () => ({ kind: 'single-file' as const, file, sourcePath: ['Reports', file.name], exactBytes: 4n }),
-      beginDownloadConnectivity: vi.fn(),
-      createTransferJob: vi.fn(),
+      beginDownloadConnectivity: () => ({ routes: [], close: vi.fn() }),
+      createTransferJob,
     } as unknown as JoinedBrowserShare
 
     const coordinator = new ReceiveCoordinator({
@@ -781,36 +767,31 @@ describe('single-file reuse, errors, and local blob handoff', () => {
       opfsEnv: env,
       currentJoinedShare: () => joined,
     })
-    coordinator.preloadShareTasks('share-1')
-    await waitForSnapshot(coordinator, s => s.capabilitiesState === 'ready')
-
-    // First click arrives while listTasksByShare() is still unresolved.
-    const exported = deferred<void>()
-    let exportedCount = 0
-    const outcome = coordinator.startSingleFileDownload(file, dir, {
-      onExported: () => {
-        exportedCount += 1
-        exported.resolve()
-      },
-    })
-    expect(outcome).toEqual({ kind: 'started' })
-    expect(exportedCount).toBe(0)
-    expect(downloads).toHaveLength(0)
-
-    listGate.resolve([pausedRecord, olderReady, newerReady])
-    await exported.promise
-    expect(exportedCount).toBe(1)
-    expect(downloads).toHaveLength(1)
-    expect(new Uint8Array(await downloads[0]!.blob.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3, 4]))
-    expect(joined.createTransferJob).not.toHaveBeenCalled()
-
-    // Remove OPFS copies so only paused task remains, then verify shareEnded blocks resume explicitly.
-    await store.deleteTask('opfs-new')
-    await store.deleteTask('opfs-old')
+    coordinator.warmCapabilities()
     await coordinator.loadRetained()
+    await waitForSnapshot(coordinator, s => s.capabilitiesState === 'ready' && s.retained.tasks.length === 2)
+
+    // Quick download always fetches freshly from the sender instead of silently exporting or resuming retained tasks.
+    expect(coordinator.startSingleFileDownload(file, dir)).toEqual({ kind: 'started' })
+    await waitForSnapshot(coordinator, s => s.activeTaskId === null && s.lifecycle?.kind === 'download-started')
+    expect(createTransferJob).toHaveBeenCalledTimes(1)
+    expect(downloads).toHaveLength(1)
+    expect(new Uint8Array(await downloads[0]!.blob.arrayBuffer())).toEqual(new Uint8Array([8, 8, 8, 8]))
+
+    // Explicit retained save exports the stored OPFS copy locally without starting a transfer.
+    const savedReady = coordinator.getSnapshot().retained.tasks.find(t => t.taskId === 'opfs-ready')!
+    const exported = deferred<void>()
+    coordinator.performRetainedAction(savedReady, 'save', { onCompleted: () => exported.resolve() })
+    await exported.promise
+    expect(createTransferJob).toHaveBeenCalledTimes(1)
+    expect(downloads).toHaveLength(2)
+    expect(new Uint8Array(await downloads[1]!.blob.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3, 4]))
+
+    // Explicit retained continue still honors shareEnded admission checks.
+    const pausedTask = coordinator.getSnapshot().retained.tasks.find(t => t.taskId === 'paused-task')!
     coordinator.observeConnection('ended')
-    expect(coordinator.startSingleFileDownload(file, dir)).toEqual({
-      kind: 'blocked',
+    expect(coordinator.retainedActionAdmission(pausedTask, 'continue')).toEqual({
+      allowed: false,
       reason: 'shareEnded',
     })
     await coordinator.dispose()
@@ -852,7 +833,7 @@ describe('single-file reuse, errors, and local blob handoff', () => {
       currentJoinedShare: () => joined,
       onActionError,
     })
-    coordinator.preloadShareTasks('share-1')
+    coordinator.warmCapabilities()
     await waitForSnapshot(coordinator, s => s.capabilitiesState === 'failed')
 
     // Clicking while failed switches back to probing and recovers.

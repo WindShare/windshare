@@ -706,10 +706,9 @@ describe('single-photo blob reuse, preview picker isolation, and workspace task 
     controller.initialize({ capabilityInput: 'key', pageUrl: 'https://receiver.invalid/s/share' })
     await waitForController(controller, s =>
       s.output.capabilitiesState === 'ready' &&
-      s.rows.length === 2 &&
-      s.output.singleFilePickerPendingFromBytes === null,
+      s.rows.length === 2,
     )
-    expect(openSpy).toHaveBeenCalled()
+    await waitFor(() => openSpy.mock.calls.length > 0)
 
     // Cancelling the FSA picker keeps the error preview open with zero errors.
     controller.previewFile(fsaEntry.idText)
@@ -804,10 +803,10 @@ describe('single-photo blob reuse, preview picker isolation, and workspace task 
   })
 })
 
-describe('preview export guards, modal task failure routing, and shareScope visits', () => {
+describe('preview fresh download, modal task failure routing, and shareScope visits', () => {
   afterEach(() => vi.restoreAllMocks())
 
-  it('guards late onExported callbacks, routes task action failures locally with unmount fallback, and advances shareScope visitId across switches', async () => {
+  it('starts a fresh preview download even with a retained OPFS copy, routes task action failures locally with unmount fallback, and advances shareScope visitId across switches', async () => {
     const store = new MemoryReceiveStore()
     vi.spyOn(ReceiveStore, 'open').mockResolvedValue(Object.assign(store, { close: vi.fn() }) as unknown as ReceiveStore)
     const { env } = createMemoryOPFSEnv()
@@ -823,6 +822,7 @@ describe('preview export guards, modal task failure routing, and shareScope visi
     const shareBId = identityText(9)
     const fileA = { ...entry, id: identity(2), idText: identityText(2), name: 'clip-a.mp4', expectedSize: 20n * 1024n * 1024n }
     const fileB = { ...entry, id: identity(3), idText: identityText(3), name: 'photo-b.png', expectedSize: 100n }
+    let transferCalls = 0
     const makeJoined = (shareId: string, shareBytes: Uint8Array) => ({
       descriptor: {
         shareInstance: shareBytes, shareInstanceId: shareId,
@@ -845,6 +845,32 @@ describe('preview export guards, modal task failure routing, and shareScope visi
       subscribeConnection: (listener: (value: { kind: 'connected' }) => void) => { listener({ kind: 'connected' }); return () => undefined },
       subscribeProtocolGeneration: () => () => undefined,
       beginPreviewConnectivity: () => ({ routes: [], close: vi.fn() }),
+      beginDownloadConnectivity: () => ({ routes: [], close: vi.fn() }),
+      createTransferJob: (output: Parameters<JoinedBrowserShare['createTransferJob']>[0]) => {
+        transferCalls += 1
+        return {
+          pause: vi.fn(),
+          stop: vi.fn(),
+          detach: vi.fn(),
+          run: async () => {
+            const writer = await output.openFile({
+              fileId: fileA.idText,
+              path: [fileA.name],
+              sourcePath: [fileA.name],
+              revision: 'rev-fresh',
+              exactSize: 8n,
+            }, new AbortController().signal)
+            await writer.writeAt(0n, new Uint8Array(8))
+            await writer.commit([{ start: 0n, end: 8n }])
+            return {
+              status: 'completed' as const,
+              completedFiles: 1n, completedBytes: 8n,
+              discoveredFiles: 1n, discoveredBytes: 8n, discoveryComplete: true,
+              failedFiles: 0n, failedDirectories: 0n,
+            }
+          },
+        }
+      },
       preview: async (target: typeof fileA) => {
         if (target.idText === fileA.idText) {
           return {
@@ -876,7 +902,7 @@ describe('preview export guards, modal task failure routing, and shareScope visi
       { windowPort: windowPort as unknown as ReceiveWindowPort, opfsEnv: env },
     )
 
-    // Pre-populate a sealed OPFS record for fileA on shareA so preview download triggers async OPFS export.
+    // Pre-populate a sealed OPFS record for fileA on shareA; preview download must still start a fresh download.
     const opfsDir = await (await env.getRootDirectory()).getDirectoryHandle('windshare-tasks', { create: true })
     const fileHandle = await opfsDir.getFileHandle('task-a.part', { create: true })
     const nativeIo = await env.openNativeObject!(fileHandle)
@@ -907,21 +933,16 @@ describe('preview export guards, modal task failure routing, and shareScope visi
       controller.getSnapshot().retained.tasks.length === 1,
     )
 
-    // Switching preview from fileA to fileB before OPFS export completes must suppress fileA's late onExported.
     controller.previewFile(fileA.idText)
     await waitFor(() => controller.getSnapshot().preview.state === 'video')
-    let exportedCalls = 0
-    expect(controller.downloadPreviewedFile({ onExported: () => { exportedCalls += 1 } })).toEqual({ kind: 'exported' })
-    controller.previewFile(fileB.idText)
-    await waitFor(() => downloads.length === 1 && controller.getSnapshot().retained.pending === null)
-    expect(exportedCalls).toBe(0)
+    expect(controller.downloadPreviewedFile()).toEqual({ kind: 'started' })
+    await waitFor(() => transferCalls === 1 && downloads.length === 1 && controller.getSnapshot().output.activeTaskId === null)
 
-    // Staying on fileA receives onExported normally.
-    controller.previewFile(fileA.idText)
-    await waitFor(() => controller.getSnapshot().preview.state === 'video')
-    expect(controller.downloadPreviewedFile({ onExported: () => { exportedCalls += 1 } })).toEqual({ kind: 'exported' })
-    await waitFor(() => exportedCalls === 1 && controller.getSnapshot().retained.pending === null)
-    expect(downloads).toHaveLength(2)
+    // Explicit retained save still exports the pre-existing OPFS copy locally without a transfer.
+    const existingTask = controller.getSnapshot().retained.tasks.find(t => t.taskId === 'task-a')!
+    controller.performRetainedAction(existingTask, 'save')
+    await waitFor(() => downloads.length === 2 && controller.getSnapshot().retained.pending === null)
+    expect(transferCalls).toBe(1)
 
     // Retained action failure routes locally when onAsyncFailure handles it (returns true/void),
     // and falls back to global snapshot.error when onAsyncFailure returns false (unmounted modal).

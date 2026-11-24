@@ -21,7 +21,6 @@ function makeReadiness(
     startAdmission: { allowed: true, reason: null, canReleaseCurrent: false },
     capabilitiesState: 'ready',
     activeSingleFileId: null,
-    singleFilePickerPendingFromBytes: null,
     language: 'en',
     ...overrides,
   }
@@ -72,18 +71,17 @@ function makeBrowseShare(
 
 describe('singleFileDownloadState', () => {
   it('marks the active file as downloading with highest precedence over admission and probing gates', () => {
-    const state = singleFileDownloadState('file-a', 100n * MIB, makeReadiness({
+    const state = singleFileDownloadState('file-a', makeReadiness({
       activeSingleFileId: 'file-a',
       startAdmission: { allowed: false, reason: 'downloading', canReleaseCurrent: false },
       capabilitiesState: 'probing',
-      singleFilePickerPendingFromBytes: 64n * MIB + 1n,
     }))
     expect(state.downloading).toBe(true)
     expect(state.disabledReason).not.toBeNull()
   })
 
   it('disables non-active files when startAdmission blocks new downloads', () => {
-    const state = singleFileDownloadState('file-b', 100n, makeReadiness({
+    const state = singleFileDownloadState('file-b', makeReadiness({
       activeSingleFileId: 'file-a',
       startAdmission: { allowed: false, reason: 'downloading', canReleaseCurrent: false },
       capabilitiesState: 'failed',
@@ -93,40 +91,20 @@ describe('singleFileDownloadState', () => {
   })
 
   it('disables files while capabilities are probing, but keeps failed capabilities clickable for retry', () => {
-    const probing = singleFileDownloadState('file-a', 100n, makeReadiness({
+    const probing = singleFileDownloadState('file-a', makeReadiness({
       capabilitiesState: 'probing',
     }))
     expect(probing.downloading).toBe(false)
     expect(probing.disabledReason).not.toBeNull()
 
-    // Failed probing stays clickable even if a picker floor is present so clicks retry probing.
-    const failed = singleFileDownloadState('file-a', 100n * MIB, makeReadiness({
+    const failed = singleFileDownloadState('file-a', makeReadiness({
       capabilitiesState: 'failed',
-      singleFilePickerPendingFromBytes: 64n * MIB + 1n,
     }))
     expect(failed).toEqual({ downloading: false, disabledReason: null })
   })
 
-  it('gates only files at or above singleFilePickerPendingFromBytes while share lookup is pending', () => {
-    const floor = 64n * MIB + 1n
-    const readiness = makeReadiness({ singleFilePickerPendingFromBytes: floor })
-
-    expect(singleFileDownloadState('small', 64n * MIB, readiness)).toEqual({
-      downloading: false,
-      disabledReason: null,
-    })
-    expect(singleFileDownloadState('unknown', undefined, readiness)).toEqual({
-      downloading: false,
-      disabledReason: null,
-    })
-
-    const atFloor = singleFileDownloadState('large', floor, readiness)
-    expect(atFloor.downloading).toBe(false)
-    expect(atFloor.disabledReason).not.toBeNull()
-  })
-
   it('allows immediate single-file downloads when ready and admitted', () => {
-    expect(singleFileDownloadState('file-a', 100n, makeReadiness())).toEqual({
+    expect(singleFileDownloadState('file-a', makeReadiness())).toEqual({
       downloading: false,
       disabledReason: null,
     })

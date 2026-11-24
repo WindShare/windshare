@@ -39,7 +39,7 @@ export interface RetainedTaskActionsOptions {
 
 /**
  * Executes retained-task commands under `ExecutionState` ownership:
- * - `continue` claims or transitions the exclusive transfer slot into `running`.
+ * - `continue` claims the exclusive transfer slot and transitions it into `running`.
  * - `save` / `save-partial` / `discard` / `forget` claim the orthogonal local-action slot
  *   so users can manage other retained records while a transfer is active.
  */
@@ -52,12 +52,10 @@ export class RetainedTaskActions {
 
   runContinue(
     taskId: string,
-    singleFileId?: string,
     callbacks?: RetainedActionCallbacks,
-    existingTransferToken?: symbol,
   ): Promise<void> {
     if (this.#options.isDisposed()) return Promise.resolve()
-    const token = this.#claimContinueToken(taskId, singleFileId, existingTransferToken)
+    const token = this.#options.execution.claimResuming(taskId)
     if (token === null) return Promise.resolve()
     this.#options.publish()
     return this.#options.storage.run(access => this.#executeContinue(access, token, taskId, callbacks))
@@ -66,40 +64,13 @@ export class RetainedTaskActions {
   runLocalAction(
     taskId: string,
     action: LocalRetainedActionKind,
-    singleFileId?: string,
     callbacks?: RetainedActionCallbacks,
-    existingTransferToken?: symbol,
   ): Promise<void> {
     if (this.#options.isDisposed()) return Promise.resolve()
-    const token = this.#claimLocalToken(taskId, action, singleFileId, existingTransferToken)
+    const token = this.#options.execution.claimLocalAction(taskId, action)
     if (token === null) return Promise.resolve()
     this.#options.publish()
     return this.#options.storage.run(access => this.#executeLocal(access, token, taskId, action, callbacks))
-  }
-
-  #claimContinueToken(
-    taskId: string,
-    singleFileId: string | undefined,
-    existingTransferToken: symbol | undefined,
-  ): symbol | null {
-    if (existingTransferToken === undefined) {
-      return this.#options.execution.claimResuming(taskId, singleFileId)
-    }
-    return this.#options.execution.transitionToResuming(existingTransferToken, taskId, singleFileId)
-      ? existingTransferToken
-      : null
-  }
-
-  #claimLocalToken(
-    taskId: string,
-    action: LocalRetainedActionKind,
-    singleFileId: string | undefined,
-    existingTransferToken: symbol | undefined,
-  ): symbol | null {
-    if (existingTransferToken === undefined) {
-      return this.#options.execution.claimLocalAction(taskId, action, singleFileId)
-    }
-    return this.#options.execution.handoffTransferToLocal(existingTransferToken, taskId, action, singleFileId)
   }
 
   async #executeContinue(

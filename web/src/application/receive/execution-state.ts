@@ -23,17 +23,15 @@ export type LocalRetainedActionKind = 'save' | 'save-partial' | 'discard' | 'for
 
 export type TransferSlot =
   | Readonly<{ kind: 'idle' }>
-  | Readonly<{ kind: 'resolving-reuse'; token: symbol; choiceId: string; suggestedName: string; singleFileId: string }>
   | Readonly<{ kind: 'waiting-picker'; token: symbol; choiceId: string; suggestedName: string; singleFileId?: string }>
   | Readonly<{ kind: 'opening'; token: symbol; choiceId: string; suggestedName: string; singleFileId?: string }>
-  | Readonly<{ kind: 'resuming'; token: symbol; taskId: string; singleFileId?: string }>
+  | Readonly<{ kind: 'resuming'; token: symbol; taskId: string }>
   | Readonly<{ kind: 'running'; token: symbol; taskId: string; singleFileId: string | null; job?: TransferJob }>
 
 export type LocalActionSlot = Readonly<{
   token: symbol
   taskId: string
   action: LocalRetainedActionKind
-  singleFileId?: string
 }>
 
 const IDLE_TRANSFER_SLOT: TransferSlot = Object.freeze({ kind: 'idle' })
@@ -81,10 +79,6 @@ export class ExecutionState {
     return this.#transfer.kind === 'running' ? this.#transfer.job : undefined
   }
 
-  get hasLocalAction(): boolean {
-    return this.#localAction !== null
-  }
-
   get activation(): ActiveActivationSnapshot | null {
     switch (this.#transfer.kind) {
       case 'waiting-picker':
@@ -94,7 +88,6 @@ export class ExecutionState {
           suggestedName: this.#transfer.suggestedName,
           ...(this.#transfer.singleFileId === undefined ? {} : { singleFileId: this.#transfer.singleFileId }),
         })
-      case 'resolving-reuse':
       case 'opening':
         return Object.freeze({
           kind: 'committing',
@@ -118,8 +111,14 @@ export class ExecutionState {
   }
 
   get activeSingleFileId(): string | null {
-    if (this.#transfer.kind !== 'idle') return this.#transfer.singleFileId ?? null
-    return this.#localAction?.singleFileId ?? null
+    if (
+      this.#transfer.kind === 'waiting-picker' ||
+      this.#transfer.kind === 'opening' ||
+      this.#transfer.kind === 'running'
+    ) {
+      return this.#transfer.singleFileId ?? null
+    }
+    return null
   }
 
   startBlockedReason(hasJoinedShare: boolean, canStartNewTask: boolean): ReceiveBlockReason | null {
@@ -134,8 +133,7 @@ export class ExecutionState {
     if (
       this.#transfer.kind === 'running' ||
       this.#transfer.kind === 'waiting-picker' ||
-      this.#transfer.kind === 'opening' ||
-      this.#transfer.kind === 'resolving-reuse'
+      this.#transfer.kind === 'opening'
     ) {
       return 'downloading'
     }
@@ -149,13 +147,6 @@ export class ExecutionState {
 
   ownsLocalAction(token: symbol): boolean {
     return this.#localAction?.token === token
-  }
-
-  claimResolvingReuse(choiceId: string, suggestedName: string, singleFileId: string): symbol | null {
-    if (this.#transfer.kind !== 'idle' || this.#localAction !== null) return null
-    const token = Symbol('receive-transfer')
-    this.#transfer = Object.freeze({ kind: 'resolving-reuse', token, choiceId, suggestedName, singleFileId })
-    return token
   }
 
   claimLaunch(
@@ -176,23 +167,15 @@ export class ExecutionState {
     return token
   }
 
-  claimResuming(taskId: string, singleFileId?: string): symbol | null {
+  claimResuming(taskId: string): symbol | null {
     if (this.#transfer.kind !== 'idle' || this.#localAction !== null) return null
     const token = Symbol('receive-transfer')
-    this.#transfer = Object.freeze({
-      kind: 'resuming',
-      token,
-      taskId,
-      ...(singleFileId === undefined ? {} : { singleFileId }),
-    })
+    this.#transfer = Object.freeze({ kind: 'resuming', token, taskId })
     return token
   }
 
   transitionToOpening(token: symbol): boolean {
-    if (
-      (this.#transfer.kind !== 'waiting-picker' && this.#transfer.kind !== 'resolving-reuse') ||
-      this.#transfer.token !== token
-    ) {
+    if (this.#transfer.kind !== 'waiting-picker' || this.#transfer.token !== token) {
       return false
     }
     this.#transfer = Object.freeze({
@@ -201,20 +184,6 @@ export class ExecutionState {
       choiceId: this.#transfer.choiceId,
       suggestedName: this.#transfer.suggestedName,
       ...(this.#transfer.singleFileId === undefined ? {} : { singleFileId: this.#transfer.singleFileId }),
-    })
-    return true
-  }
-
-  transitionToResuming(token: symbol, taskId: string, singleFileId?: string): boolean {
-    if (this.#transfer.kind !== 'resolving-reuse' || this.#transfer.token !== token || this.#localAction !== null) {
-      return false
-    }
-    const resolvedFileId = singleFileId ?? this.#transfer.singleFileId
-    this.#transfer = Object.freeze({
-      kind: 'resuming',
-      token,
-      taskId,
-      ...(resolvedFileId === undefined ? {} : { singleFileId: resolvedFileId }),
     })
     return true
   }
@@ -262,38 +231,11 @@ export class ExecutionState {
   claimLocalAction(
     taskId: string,
     action: LocalRetainedActionKind,
-    singleFileId?: string,
   ): symbol | null {
     if (this.#localAction !== null || this.activeTransferTaskId === taskId) return null
     const token = Symbol('receive-local-action')
-    this.#localAction = Object.freeze({
-      token,
-      taskId,
-      action,
-      ...(singleFileId === undefined ? {} : { singleFileId }),
-    })
+    this.#localAction = Object.freeze({ token, taskId, action })
     return token
-  }
-
-  /** Atomically converts an in-flight single-file lookup into a local export action without flickering UI state. */
-  handoffTransferToLocal(
-    transferToken: symbol,
-    taskId: string,
-    action: LocalRetainedActionKind,
-    singleFileId?: string,
-  ): symbol | null {
-    if (this.#transfer.kind !== 'resolving-reuse' || this.#transfer.token !== transferToken) return null
-    if (this.#localAction !== null) return null
-    const resolvedFileId = singleFileId ?? this.#transfer.singleFileId
-    const localToken = Symbol('receive-local-action')
-    this.#transfer = IDLE_TRANSFER_SLOT
-    this.#localAction = Object.freeze({
-      token: localToken,
-      taskId,
-      action,
-      ...(resolvedFileId === undefined ? {} : { singleFileId: resolvedFileId }),
-    })
-    return localToken
   }
 
   releaseLocalIfOwned(token: symbol): boolean {

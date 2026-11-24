@@ -1,27 +1,23 @@
 import type { CatalogEntry } from '../../catalog/records'
 import { snapshotCatalogPath } from '../../catalog/path-policy'
 import { SelectionPolicy, type FrozenSelectionPolicy } from '../../catalog/selection'
-import type { ArtifactOffers, SaveBackendKind } from '../../output/model'
+import type { ArtifactChoice, ArtifactOffers, ReceiveOperationDisplay } from '../../output/model'
 import {
   planArtifactOffers,
-  PORTABLE_MAX_BYTES,
   type BrowserOutputCapabilities,
 } from '../../output/backends/contract'
-import type { ReceiveTaskRecord } from '../../output/store/types'
 import type { SelectionShape } from '../../transfer/discovery'
 import {
   selectionKey,
   selectionSpecFromPolicy,
   type SelectionSpec,
 } from '../../transfer/selection'
-import type { ReceiveLifecycleState } from '../../transfer/state'
 import type { BrowseDirectory, JoinedBrowserShare } from '../browser-share/gateway'
+import type { BrowserCapabilityCache } from './capability-cache'
 import type {
-  ReceiveAction,
-  ReceiveAdmission,
   ReceiveBlockReason,
-  RetainedTaskSnapshot,
   SaveUnavailableReason,
+  SingleFileDownloadOutcome,
 } from './contracts'
 
 export class SaveUnavailableError extends Error {
@@ -51,11 +47,33 @@ export interface SingleFileDownloadPlan {
   readonly offers: ArtifactOffers
 }
 
-export type SingleFileReuseDecision =
-  | Readonly<{ kind: 'export'; task: RetainedTaskSnapshot }>
-  | Readonly<{ kind: 'resume'; task: RetainedTaskSnapshot }>
-  | Readonly<{ kind: 'blocked'; reason: ReceiveBlockReason; task: RetainedTaskSnapshot }>
-  | Readonly<{ kind: 'none' }>
+export interface SingleFileDownloadOptions {
+  readonly display?: ReceiveOperationDisplay
+  readonly onActivated?: () => void
+  readonly onAsyncError?: (error: unknown) => void
+}
+
+export interface SingleFileLaunchRequest {
+  readonly joined: JoinedBrowserShare
+  readonly choice: ArtifactChoice
+  readonly spec: SelectionSpec
+  readonly selection: FrozenSelectionPolicy
+  readonly key: string
+  readonly display: ReceiveOperationDisplay | undefined
+}
+
+/** Narrow internal collaboration surface owned by `ReceiveCoordinator`. */
+export interface SingleFileLaunchContext {
+  readonly capabilities: BrowserCapabilityCache
+  isDisposed(): boolean
+  currentJoinedShare(): JoinedBrowserShare | undefined
+  startBlockedReason(): ReceiveBlockReason | null
+  launchChoice(
+    request: SingleFileLaunchRequest,
+    options: SingleFileDownloadOptions | undefined,
+  ): Extract<SingleFileDownloadOutcome, { kind: 'started' | 'waiting-picker' | 'failed' }>
+  dispatchAsyncError(error: unknown, custom?: (error: unknown) => void): void
+}
 
 /**
  * Synchronously validates the target file path and plans single-file offers
@@ -88,113 +106,70 @@ export function planSingleFileDownload(
 }
 
 /**
- * Returns the minimum single-file byte size at which `planArtifactOffers` falls back to
- * FSA (requiring a synchronous directory picker inside the user click), or `null` when
- * FSA is never selected as the primary backend.
+ * Synchronously launches a fresh single-file download from the sender.
+ * Never repurposes the download action to export or resume historical tasks,
+ * keeping behavior predictable and preserving synchronous user activation for FSA pickers.
  */
-export function singleFilePickerFloorBytes(
-  capabilities: BrowserOutputCapabilities | undefined,
-): bigint | null {
-  if (capabilities === undefined || !capabilities.fsa) return null
-  if (capabilities.opfs && capabilities.availableStorageBytes === null) return null
-  let nonPickerMax = -1n
-  if (capabilities.portable) nonPickerMax = PORTABLE_MAX_BYTES
-  if (
-    capabilities.opfs &&
-    capabilities.availableStorageBytes !== null &&
-    capabilities.availableStorageBytes > nonPickerMax
-  ) {
-    nonPickerMax = capabilities.availableStorageBytes
-  }
-  return nonPickerMax + 1n
-}
+export function startSingleFileDownloadFlow(
+  ctx: SingleFileLaunchContext,
+  entry: Extract<CatalogEntry, { kind: 'file' }>,
+  directory: BrowseDirectory,
+  options?: SingleFileDownloadOptions,
+): SingleFileDownloadOutcome {
+  const ready = checkSingleFileReady(ctx, options)
+  if (ready.kind !== 'ready') return ready.outcome
 
-export function singleFileNeedsPicker(
-  expectedSize: bigint | undefined,
-  pickerFloorBytes: bigint | null,
-): boolean {
-  return pickerFloorBytes !== null && expectedSize !== undefined && expectedSize >= pickerFloorBytes
-}
-
-export function isSingleFileReuseCandidate(
-  backend: SaveBackendKind,
-  lifecycle: ReceiveLifecycleState,
-): boolean {
-  switch (lifecycle.kind) {
-    case 'ready-to-save':
-      return backend === 'opfs'
-    case 'download-started':
-      return backend === 'opfs' && lifecycle.retained
-    case 'paused':
-    case 'downloading':
-    case 'preparing':
-      return true
-    default:
-      return false
-  }
-}
-
-export function isSingleFileReuseCandidateRecord(record: ReceiveTaskRecord): boolean {
-  return isSingleFileReuseCandidate(record.backend, record.lifecycle)
-}
-
-function isExportableOpfsTask(task: RetainedTaskSnapshot): boolean {
-  if (task.backend !== 'opfs') return false
-  return task.lifecycle.kind === 'ready-to-save' ||
-    (task.lifecycle.kind === 'download-started' && task.lifecycle.retained)
-}
-
-function byNewestCreatedDesc(left: RetainedTaskSnapshot, right: RetainedTaskSnapshot): number {
-  return (right.display?.createdAtMilliseconds ?? 0) - (left.display?.createdAtMilliseconds ?? 0)
-}
-
-/**
- * Pure reuse decision for single-file quick download.
- * Ignores dead terminal records (`saved`, `failed`, `partial`, non-retained handoffs)
- * and prefers completed exportable OPFS copies over `paused` tasks, newest first.
- */
-export function decideSingleFileReuse(
-  tasks: readonly RetainedTaskSnapshot[],
-  shareInstance: string,
-  key: string,
-  admit: (task: RetainedTaskSnapshot, action: ReceiveAction) => ReceiveAdmission,
-): SingleFileReuseDecision {
-  const matching = tasks.filter(
-    task => task.shareInstance === shareInstance && task.selectionKey === key,
-  )
-  if (matching.length === 0) return Object.freeze({ kind: 'none' })
-
-  const exportable = matching.filter(isExportableOpfsTask).sort(byNewestCreatedDesc)
-  if (exportable.length > 0) {
-    let firstBlocked: Readonly<{ reason: ReceiveBlockReason; task: RetainedTaskSnapshot }> | undefined
-    for (const candidate of exportable) {
-      const admission = admit(candidate, 'save')
-      if (admission.allowed) return Object.freeze({ kind: 'export', task: candidate })
-      firstBlocked ??= { reason: admission.reason ?? 'actionUnavailable', task: candidate }
-    }
-    if (firstBlocked !== undefined) {
-      return Object.freeze({ kind: 'blocked', reason: firstBlocked.reason, task: firstBlocked.task })
-    }
+  let planned: SingleFileDownloadPlan
+  try {
+    planned = planSingleFileDownload(ready.joined, entry, directory, ready.capabilities)
+  } catch (error) {
+    return Object.freeze({ kind: 'failed', error })
   }
 
-  const paused = matching.filter(task => task.lifecycle.kind === 'paused').sort(byNewestCreatedDesc)
-  const newestPaused = paused[0]
-  if (newestPaused !== undefined) {
-    const admission = admit(newestPaused, 'continue')
-    if (admission.allowed) return Object.freeze({ kind: 'resume', task: newestPaused })
-    return Object.freeze({
-      kind: 'blocked',
-      reason: admission.reason ?? 'actionUnavailable',
-      task: newestPaused,
-    })
-  }
+  return launchFreshSingleFile(ctx, ready.joined, planned, options)
+}
 
-  const activeElsewhere = matching
-    .filter(task => (task.lifecycle.kind === 'downloading' || task.lifecycle.kind === 'preparing') && task.activeElsewhere)
-    .sort(byNewestCreatedDesc)[0]
-  if (activeElsewhere !== undefined) {
-    return Object.freeze({ kind: 'blocked', reason: 'activeInAnotherTab', task: activeElsewhere })
+function checkSingleFileReady(
+  ctx: SingleFileLaunchContext,
+  options: SingleFileDownloadOptions | undefined,
+):
+  | Readonly<{ kind: 'ready'; joined: JoinedBrowserShare; capabilities: BrowserOutputCapabilities }>
+  | Readonly<{ kind: 'stop'; outcome: SingleFileDownloadOutcome }> {
+  if (ctx.isDisposed()) return { kind: 'stop', outcome: Object.freeze({ kind: 'blocked', reason: 'actionUnavailable' }) }
+  const blocked = ctx.startBlockedReason()
+  if (blocked !== null) return { kind: 'stop', outcome: Object.freeze({ kind: 'blocked', reason: blocked }) }
+  const joined = ctx.currentJoinedShare()
+  if (joined === undefined) return { kind: 'stop', outcome: Object.freeze({ kind: 'blocked', reason: 'connectFirst' }) }
+  if (ctx.capabilities.state === 'failed') {
+    ctx.capabilities.retry(error => ctx.dispatchAsyncError(error, options?.onAsyncError))
+    return { kind: 'stop', outcome: Object.freeze({ kind: 'probing' }) }
   }
+  const capabilities = ctx.capabilities.value
+  if (ctx.capabilities.state === 'probing' || capabilities === undefined) {
+    void ctx.capabilities.ensure().catch(() => undefined)
+    return { kind: 'stop', outcome: Object.freeze({ kind: 'probing' }) }
+  }
+  return { kind: 'ready', joined, capabilities }
+}
 
-  return Object.freeze({ kind: 'none' })
+function launchFreshSingleFile(
+  ctx: SingleFileLaunchContext,
+  joined: JoinedBrowserShare,
+  planned: SingleFileDownloadPlan,
+  options: SingleFileDownloadOptions | undefined,
+): SingleFileDownloadOutcome {
+  if (planned.offers.kind === 'unavailable') {
+    return Object.freeze({ kind: 'unavailable', error: new SaveUnavailableError(planned.offers.reason) })
+  }
+  if (planned.offers.kind !== 'ready') {
+    return Object.freeze({ kind: 'failed', error: new Error('Single-file download options are unavailable') })
+  }
+  return ctx.launchChoice({
+    joined,
+    choice: planned.offers.primary,
+    spec: planned.spec,
+    selection: planned.selection,
+    key: planned.selectionKey,
+    display: options?.display,
+  }, options)
 }

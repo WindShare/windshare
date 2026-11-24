@@ -153,7 +153,7 @@ function BrowseExplorerRow({ row, previewable, downloadReadiness, actions, t }: 
 }) {
   const isDirectory = row.kind === 'directory'
   const interactive = isDirectory || previewable
-  const fileState = isDirectory ? null : singleFileDownloadState(row.id, row.expectedSize, downloadReadiness)
+  const fileState = isDirectory ? null : singleFileDownloadState(row.id, downloadReadiness)
   const buttonMeta = fileState === null ? null : fileDownloadButtonMeta(row.name, fileState, t)
 
   return <li className={`explorer-row${interactive ? ' explorer-row-interactive' : ''}`}

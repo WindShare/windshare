@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { BrowseDirectory, JoinedBrowserShare } from '../../src/application/browser-share/gateway'
 import { ReceiveCoordinator } from '../../src/application/receive/coordinator'
 import { retainedSnapshot } from '../../src/application/receive/retained'
-import { ReceiveBlockedError } from '../../src/application/receive/single-file'
 import type { CatalogEntry } from '../../src/catalog/records'
 import { SelectionPolicy } from '../../src/catalog/selection'
 import * as outputContract from '../../src/output/backends/contract'
@@ -140,53 +139,15 @@ function makeJoinedShare(
 describe('receive inventory lookup and concurrency invariants', () => {
   afterEach(() => vi.restoreAllMocks())
 
-  it('degrades cleanly on share index preload failure without FSA probing loop (#1)', async () => {
+  it('opens FSA directory picker synchronously even while retained inventory loads, fails, or holds stale records', async () => {
     const file = makeFileEntry(1, 'movie.mkv', 100n * 1024n * 1024n)
     const dir = makeDir('root-1', 2, 'Media')
     const store = new MemoryReceiveStore()
-    const listSpy = vi.spyOn(store, 'listTasksByShare').mockRejectedValue(new Error('IDB transaction failed'))
-    vi.spyOn(ReceiveStore, 'open').mockResolvedValue(Object.assign(store, { close: vi.fn() }) as unknown as ReceiveStore)
-    vi.spyOn(outputContract, 'probeBrowserOutputCapabilities').mockResolvedValue(Object.freeze({
-      indexedDb: true, fsa: true, opfs: false, portable: false, availableStorageBytes: null,
-    }))
+    await store.putTask(makeOpfsRecord('stale-dl', 'share-1', file, dir, 'downloading', 1_000))
+    await store.putTask(makeOpfsRecord('old-ready', 'share-1', file, dir, 'ready-to-save', 2_000))
 
-    let pickerOpenedSync = false
-    const picker = deferred<FileSystemDirectoryHandle>()
-    const { windowPort: baseWin } = createMockDownloadWindow()
-    const windowPort: BrowserOutputWindow = {
-      ...baseWin,
-      indexedDB: { open: vi.fn() } as unknown as IDBFactory,
-      showDirectoryPicker: vi.fn(() => {
-        pickerOpenedSync = true
-        return picker.promise
-      }),
-    }
-    const joined = makeJoinedShare('share-1', file)
-    const coordinator = new ReceiveCoordinator({ windowPort, currentJoinedShare: () => joined })
-    coordinator.preloadShareTasks('share-1')
-    await waitForSnapshot(coordinator, s => s.capabilitiesState === 'ready' && s.singleFilePickerPendingFromBytes === null)
-    expect(listSpy).toHaveBeenCalledTimes(1)
-
-    // Clicking FSA single-file must NOT reset failed index back to loading; picker opens synchronously.
-    const outcome = coordinator.startSingleFileDownload(file, dir)
-    expect(outcome).toEqual({ kind: 'waiting-picker' })
-    expect(pickerOpenedSync).toBe(true)
-    expect(listSpy).toHaveBeenCalledTimes(1)
-
-    coordinator.cancelActivation()
-    picker.resolve({} as FileSystemDirectoryHandle)
-    await coordinator.dispose()
-  })
-
-  it('prunes vanished or terminal stale downloading records on lookup so FSA next click opens picker (#2)', async () => {
-    const fileDeleted = makeFileEntry(3, 'iso.img', 100n * 1024n * 1024n)
-    const fileSettled = makeFileEntry(24, 'settled.img', 100n * 1024n * 1024n)
-    const dir = makeDir('root-1', 4, 'ISOs')
-    const store = new MemoryReceiveStore()
-    const staleDeleted = makeOpfsRecord('stale-dl', 'share-1', fileDeleted, dir, 'downloading', 1_000)
-    const staleSettled = makeOpfsRecord('stale-terminal', 'share-1', fileSettled, dir, 'downloading', 2_000)
-    await store.putTask(staleDeleted)
-    await store.putTask(staleSettled)
+    const loadGate = deferred<readonly ReceiveTaskRecord[]>()
+    vi.spyOn(store, 'listTasks').mockReturnValueOnce(loadGate.promise)
     vi.spyOn(ReceiveStore, 'open').mockResolvedValue(Object.assign(store, { close: vi.fn() }) as unknown as ReceiveStore)
     vi.spyOn(outputContract, 'probeBrowserOutputCapabilities').mockResolvedValue(Object.freeze({
       indexedDb: true, fsa: true, opfs: false, portable: false, availableStorageBytes: null,
@@ -194,52 +155,36 @@ describe('receive inventory lookup and concurrency invariants', () => {
 
     const pickers = [deferred<FileSystemDirectoryHandle>(), deferred<FileSystemDirectoryHandle>()]
     let pickerIndex = 0
+    let pickerOpenedSync = false
     const { windowPort: baseWin } = createMockDownloadWindow()
     const windowPort: BrowserOutputWindow = {
       ...baseWin,
       indexedDB: { open: vi.fn() } as unknown as IDBFactory,
-      showDirectoryPicker: vi.fn(() => pickers[pickerIndex++]!.promise),
+      showDirectoryPicker: vi.fn(() => {
+        pickerOpenedSync = true
+        return pickers[pickerIndex++]!.promise
+      }),
     }
-    const joined = makeJoinedShare('share-1', fileDeleted)
+    const joined = makeJoinedShare('share-1', file)
     const coordinator = new ReceiveCoordinator({ windowPort, currentJoinedShare: () => joined })
-    coordinator.preloadShareTasks('share-1')
-    await waitForSnapshot(coordinator, s => s.capabilitiesState === 'ready' && s.singleFilePickerPendingFromBytes === null)
+    coordinator.warmCapabilities()
+    await waitForSnapshot(coordinator, s => s.capabilitiesState === 'ready')
 
-    // Case A: another tab deleted the stale downloading task before click.
-    await store.deleteTask('stale-dl')
-    const deletedErrors: unknown[] = []
-    const deletedErrorDone = deferred<void>()
-    expect(coordinator.startSingleFileDownload(fileDeleted, dir, {
-      onAsyncError: err => { deletedErrors.push(err); deletedErrorDone.resolve() },
-    })).toEqual({ kind: 'started' })
-    await deletedErrorDone.promise
-    expect(deletedErrors[0]).toBeInstanceOf(ReceiveBlockedError)
-    expect((deletedErrors[0] as ReceiveBlockedError).reason).toBe('actionUnavailable')
-
-    expect(coordinator.startSingleFileDownload(fileDeleted, dir)).toEqual({ kind: 'waiting-picker' })
+    // Start a slow retained inventory load: FSA single-file click must not wait on history loading.
+    const pendingLoad = coordinator.loadRetained()
+    const outcomeWhileLoading = coordinator.startSingleFileDownload(file, dir)
+    expect(outcomeWhileLoading).toEqual({ kind: 'waiting-picker' })
+    expect(pickerOpenedSync).toBe(true)
     coordinator.cancelActivation()
 
-    // Case B: another tab settled the stale downloading task into terminal `saved` state before click.
-    await store.putTask({
-      ...staleSettled,
-      lifecycle: transitionReceiveState(staleSettled.lifecycle, {
-        kind: 'saved',
-        savedFiles: 1n,
-        savedBytes: fileSettled.expectedSize,
-      }, 3_000),
-      updatedAt: 3_000,
-    })
-    const terminalErrors: unknown[] = []
-    const terminalErrorDone = deferred<void>()
-    expect(coordinator.startSingleFileDownload(fileSettled, dir, {
-      onAsyncError: err => { terminalErrors.push(err); terminalErrorDone.resolve() },
-    })).toEqual({ kind: 'started' })
-    await terminalErrorDone.promise
-    expect(terminalErrors[0]).toBeInstanceOf(ReceiveBlockedError)
-    expect((terminalErrors[0] as ReceiveBlockedError).reason).toBe('actionUnavailable')
+    // Even when retained inventory loading fails, FSA single-file click still opens picker synchronously.
+    pickerOpenedSync = false
+    loadGate.reject(new Error('IDB transaction failed'))
+    await pendingLoad
+    expect(coordinator.getSnapshot().retained.kind).toBe('failed')
+    expect(coordinator.startSingleFileDownload(file, dir)).toEqual({ kind: 'waiting-picker' })
+    expect(pickerOpenedSync).toBe(true)
 
-    // Resolved terminal state is written back so the second click synchronously launches the FSA picker.
-    expect(coordinator.startSingleFileDownload(fileSettled, dir)).toEqual({ kind: 'waiting-picker' })
     coordinator.cancelActivation()
     for (const picker of pickers) picker.resolve({} as FileSystemDirectoryHandle)
     await coordinator.dispose()
@@ -320,7 +265,7 @@ describe('receive inventory lookup and concurrency invariants', () => {
       opfsEnv: env,
       currentJoinedShare: () => joined,
     })
-    coordinator.preloadShareTasks('share-1')
+    coordinator.warmCapabilities()
     await waitForSnapshot(coordinator, s => s.capabilitiesState === 'ready')
     await coordinator.loadRetained()
     expect(coordinator.getSnapshot().retained.tasks.map(t => t.taskId)).toEqual(['other-retained'])
@@ -375,7 +320,7 @@ describe('receive inventory lookup and concurrency invariants', () => {
     }
     const joined = makeJoinedShare('share-1', fileA)
     const coordinator = new ReceiveCoordinator({ windowPort, opfsEnv: env, currentJoinedShare: () => joined })
-    coordinator.preloadShareTasks('share-1')
+    coordinator.warmCapabilities()
     await waitForSnapshot(coordinator, s => s.capabilitiesState === 'ready')
     await coordinator.loadRetained()
 
@@ -433,75 +378,37 @@ describe('receive inventory lookup and concurrency invariants', () => {
 describe('receive slot lifecycle, cross-tab locks, and disposal invariants', () => {
   afterEach(() => vi.restoreAllMocks())
 
-  it('handles resolveSingleFileAsync errors, share change, and dispose cleanly without leaking slot (#5, #14)', async () => {
+  it('clears activeSingleFileId and activeTaskId on dispose across waiting-picker and active running transfers (#14)', async () => {
     const file = makeFileEntry(10, 'clip.mp4', 16n)
     const dir = makeDir('root-1', 11, 'Clips')
-    const store = new MemoryReceiveStore()
-    const preloadGate = deferred<readonly ReceiveTaskRecord[]>()
-    vi.spyOn(store, 'listTasksByShare').mockReturnValue(preloadGate.promise)
-    vi.spyOn(ReceiveStore, 'open').mockResolvedValue(Object.assign(store, { close: vi.fn() }) as unknown as ReceiveStore)
-    vi.spyOn(outputContract, 'probeBrowserOutputCapabilities').mockResolvedValue(Object.freeze({
-      indexedDb: true, fsa: false, opfs: false, portable: true, availableStorageBytes: null,
+    const picker = deferred<FileSystemDirectoryHandle>()
+    vi.spyOn(outputContract, 'probeBrowserOutputCapabilities').mockResolvedValueOnce(Object.freeze({
+      indexedDb: true, fsa: true, opfs: false, portable: false, availableStorageBytes: null,
     }))
-
     const { windowPort: baseWin } = createMockDownloadWindow()
-    const windowPort: BrowserOutputWindow = {
+    const pickerWin: BrowserOutputWindow = {
       ...baseWin,
-      indexedDB: { open: vi.fn() } as unknown as IDBFactory,
+      showDirectoryPicker: vi.fn(() => picker.promise),
     }
-    const shareA = makeJoinedShare('share-a', file)
-    const shareB = makeJoinedShare('share-b', file)
-    let activeShare: JoinedBrowserShare | undefined = shareA
-    const coordinator = new ReceiveCoordinator({ windowPort, currentJoinedShare: () => activeShare })
-    coordinator.preloadShareTasks('share-a')
-    await waitForSnapshot(coordinator, s => s.capabilitiesState === 'ready')
+    const pickerCoordinator = new ReceiveCoordinator({
+      windowPort: pickerWin,
+      currentJoinedShare: () => makeJoinedShare('share-a', file),
+    })
+    pickerCoordinator.warmCapabilities()
+    await waitForSnapshot(pickerCoordinator, s => s.capabilitiesState === 'ready')
 
-    // Start async lookup, then switch currentJoinedShare without calling suspendForNewShare.
-    expect(coordinator.startSingleFileDownload(file, dir)).toEqual({ kind: 'started' })
-    expect(coordinator.getSnapshot().activeSingleFileId).toBe(file.idText)
-    activeShare = shareB
-    preloadGate.resolve([])
-    await waitForSnapshot(coordinator, s => s.activation === null && s.activeSingleFileId === null)
-    expect(coordinator.startBlockedReason()).toBeNull()
-
-    // Non-abort error inside resolveSingleFileAsync releases the slot before reporting to onAsyncError.
-    const staleRec = makeOpfsRecord('stale-2', 'share-b', file, dir, 'downloading', 1_000)
-    await store.putTask(staleRec)
-    vi.spyOn(store, 'listTasksByShare').mockResolvedValue([staleRec])
-    const getSpy = vi.spyOn(store, 'getTask').mockRejectedValueOnce(new Error('IDB read failed'))
-    coordinator.suspendForNewShare()
-    coordinator.preloadShareTasks('share-b')
-    await waitForSnapshot(coordinator, s => s.singleFilePickerPendingFromBytes === null)
-    await Promise.resolve()
-
-    const lookupErr = deferred<unknown>()
-    let blockedDuringError: string | null = 'unset'
-    let activationDuringError: unknown = 'unset'
-    expect(coordinator.startSingleFileDownload(file, dir, {
-      onAsyncError: err => {
-        blockedDuringError = coordinator.startBlockedReason()
-        activationDuringError = coordinator.getSnapshot().activation
-        lookupErr.resolve(err)
-      },
-    })).toEqual({ kind: 'started' })
-    expect((await lookupErr.promise as Error).message).toBe('IDB read failed')
-    expect(blockedDuringError).toBeNull()
-    expect(activationDuringError).toBeNull()
-    expect(coordinator.getSnapshot().activeSingleFileId).toBeNull()
-
-    // Dispose while a second lookup is in flight: activeSingleFileId clears and no unhandled rejection occurs.
-    const getGate = deferred<ReceiveTaskRecord | undefined>()
-    getSpy.mockReturnValueOnce(getGate.promise)
-    expect(coordinator.startSingleFileDownload(file, dir)).toEqual({ kind: 'started' })
-    expect(coordinator.getSnapshot().activeSingleFileId).toBe(file.idText)
-
-    const disposing = coordinator.dispose()
-    expect(coordinator.getSnapshot().activeTaskId).toBeNull()
-    expect(coordinator.getSnapshot().activeSingleFileId).toBeNull()
-    getGate.resolve(staleRec)
-    await disposing
+    expect(pickerCoordinator.startSingleFileDownload(file, dir)).toEqual({ kind: 'waiting-picker' })
+    expect(pickerCoordinator.getSnapshot().activeSingleFileId).toBe(file.idText)
+    const disposingPicker = pickerCoordinator.dispose()
+    expect(pickerCoordinator.getSnapshot().activation).toBeNull()
+    expect(pickerCoordinator.getSnapshot().activeSingleFileId).toBeNull()
+    picker.resolve({} as FileSystemDirectoryHandle)
+    await disposingPicker
 
     // Dispose while a transfer is actively running: BOTH activeTaskId and activeSingleFileId transition from non-null to null.
+    vi.spyOn(outputContract, 'probeBrowserOutputCapabilities').mockResolvedValueOnce(Object.freeze({
+      indexedDb: true, fsa: false, opfs: false, portable: true, availableStorageBytes: null,
+    }))
     const runningGate = deferred<Awaited<ReturnType<ReturnType<JoinedBrowserShare['createTransferJob']>['run']>>>()
     const detachJob = vi.fn(() => {
       runningGate.resolve({
@@ -527,7 +434,7 @@ describe('receive slot lifecycle, cross-tab locks, and disposal invariants', () 
       windowPort: baseWin,
       currentJoinedShare: () => runningShare,
     })
-    runningCoordinator.preloadShareTasks('share-c')
+    runningCoordinator.warmCapabilities()
     await waitForSnapshot(runningCoordinator, s => s.capabilitiesState === 'ready')
     expect(runningCoordinator.startSingleFileDownload(file, dir)).toEqual({ kind: 'started' })
     await waitForSnapshot(runningCoordinator, s => s.lifecycle?.kind === 'downloading')
@@ -541,7 +448,7 @@ describe('receive slot lifecycle, cross-tab locks, and disposal invariants', () 
     expect(runningCoordinator.getSnapshot().lifecycle).toBeNull()
   })
 
-  it('checks cross-tab Web Locks on raw candidates, falls back to unlocked OPFS copy, and rechecks after lock release (#6, #14)', async () => {
+  it('tracks cross-tab Web Locks on retained tasks without blocking fresh single-file downloads (#6, #12a)', async () => {
     const file = makeFileEntry(12, 'deck.pdf', 4n)
     const dir = makeDir('root-1', 13, 'Decks')
     const store = new MemoryReceiveStore()
@@ -572,54 +479,51 @@ describe('receive slot lifecycle, cross-tab locks, and disposal invariants', () 
     }
     const joined = makeJoinedShare('share-1', file)
     const coordinator = new ReceiveCoordinator({ windowPort, opfsEnv: env, currentJoinedShare: () => joined })
-    coordinator.preloadShareTasks('share-1')
+    coordinator.warmCapabilities()
     await waitForSnapshot(coordinator, s => s.capabilitiesState === 'ready')
-    await Promise.resolve()
 
-    // Hold lock on newer copy: quick download checks locks and seamlessly exports older unlocked copy without flickering activeSingleFileId!
+    // Hold lock on newer copy: retained admission blocks saving the locked task while older unlocked task saves cleanly.
     fakeLocks.holdExternal('opfs-newer')
-    const observedFileIds: Array<string | null> = []
-    const unsub = coordinator.subscribe(() => { observedFileIds.push(coordinator.getSnapshot().activeSingleFileId) })
+    await coordinator.loadRetained()
+    const newerTask = coordinator.getSnapshot().retained.tasks.find(t => t.taskId === 'opfs-newer')!
+    const olderTask = coordinator.getSnapshot().retained.tasks.find(t => t.taskId === 'opfs-older')!
+    expect(coordinator.retainedActionAdmission(newerTask, 'save')).toEqual({ allowed: false, reason: 'activeInAnotherTab' })
+    expect(coordinator.retainedActionAdmission(olderTask, 'save')).toEqual({ allowed: true, reason: null })
+
     const exportedDone = deferred<void>()
     let pendingDuringExportCallback: unknown = 'unset'
-    expect(coordinator.startSingleFileDownload(file, dir, {
-      onExported: () => {
+    coordinator.performRetainedAction(olderTask, 'save', {
+      onCompleted: () => {
         pendingDuringExportCallback = coordinator.getSnapshot().retained.pending
         exportedDone.resolve()
       },
-    })).toEqual({ kind: 'started' })
+    })
     await exportedDone.promise
-    unsub()
-
-    // #12a: pending is already null when onExported runs.
+    // #12a: pending is already null when onCompleted runs.
     expect(pendingDuringExportCallback).toBeNull()
-    // #14: activeSingleFileId never flickered fileId -> null -> fileId mid-handoff.
-    const firstNullIdx = observedFileIds.indexOf(null)
-    if (firstNullIdx !== -1) {
-      expect(observedFileIds.slice(firstNullIdx).every(id => id === null)).toBe(true)
-    }
     expect(downloads).toHaveLength(1)
     expect(new Uint8Array(await downloads[0]!.blob.arrayBuffer())).toEqual(new Uint8Array([7, 7, 7, 7]))
 
-    // Lock BOTH copies: returns activeInAnotherTab; then release lock on newer -> re-click succeeds!
+    // Lock BOTH copies: explicit retained save is blocked, yet fresh single-file download still starts cleanly.
     fakeLocks.holdExternal('opfs-older')
     await coordinator.loadRetained()
-    const blockedErr = deferred<unknown>()
-    expect(coordinator.startSingleFileDownload(file, dir, {
-      onAsyncError: err => blockedErr.resolve(err),
-    })).toEqual({ kind: 'started' })
-    const err = await blockedErr.promise
-    expect(err).toBeInstanceOf(ReceiveBlockedError)
-    expect((err as ReceiveBlockedError).reason).toBe('activeInAnotherTab')
+    expect(coordinator.retainedActionAdmission(
+      coordinator.getSnapshot().retained.tasks.find(t => t.taskId === 'opfs-older')!,
+      'save',
+    )).toEqual({ allowed: false, reason: 'activeInAnotherTab' })
+    expect(coordinator.startSingleFileDownload(file, dir)).toEqual({ kind: 'started' })
+    await waitForSnapshot(coordinator, s => s.activeTaskId === null && s.lifecycle?.kind === 'download-started')
 
+    // Release external lock on newer -> reload and explicit retained save succeeds.
     fakeLocks.releaseExternal('opfs-newer')
+    await coordinator.loadRetained()
+    const unlockedNewer = coordinator.getSnapshot().retained.tasks.find(t => t.taskId === 'opfs-newer')!
     const exported2 = deferred<void>()
-    expect(coordinator.startSingleFileDownload(file, dir, {
-      onExported: () => exported2.resolve(),
-    })).toEqual({ kind: 'started' })
+    coordinator.performRetainedAction(unlockedNewer, 'save', {
+      onCompleted: () => exported2.resolve(),
+    })
     await exported2.promise
-    expect(downloads).toHaveLength(2)
-    expect(new Uint8Array(await downloads[1]!.blob.arrayBuffer())).toEqual(new Uint8Array([9, 9, 9, 9]))
+    expect(new Uint8Array(await downloads.at(-1)!.blob.arrayBuffer())).toEqual(new Uint8Array([9, 9, 9, 9]))
     await coordinator.dispose()
   })
 })
@@ -649,7 +553,7 @@ describe('receive capability cache, pre-activation errors, and stale record clea
       currentJoinedShare: () => joined,
       onActionError: err => onError.resolve(err),
     })
-    coordinator.preloadShareTasks('share-1')
+    coordinator.warmCapabilities()
     await waitForSnapshot(coordinator, s => s.capabilitiesState === 'ready')
 
     // Complete fileA first so workspace holds a settled download-started card.
@@ -742,7 +646,7 @@ describe('receive capability cache, pre-activation errors, and stale record clea
 
     // Returning null from a failed background estimate must preserve the last known 200 MiB quota.
     vi.spyOn(outputContract, 'estimateAvailableStorageBytes').mockResolvedValueOnce(null)
-    coordinator.preloadShareTasks('share-1')
+    coordinator.warmCapabilities()
     await Promise.resolve()
     expect(coordinator.getSnapshot().offers?.kind).toBe('ready')
     await coordinator.dispose()
@@ -784,14 +688,15 @@ describe('receive capability cache, pre-activation errors, and stale record clea
     await coordinator.dispose()
   })
 
-  it('preserves local settlement upserts arriving during in-flight share index preload (#15)', async () => {
+  it('preserves local settlement upserts arriving during an in-flight retained inventory scan (#15)', async () => {
     const file = makeFileEntry(22, 'fresh.bin', 4n)
     const dir = makeDir('root-1', 23, 'Fresh')
     const store = new MemoryReceiveStore()
-    const preloadGate = deferred<readonly ReceiveTaskRecord[]>()
     const fullLoadGate = deferred<readonly ReceiveTaskRecord[]>()
-    vi.spyOn(store, 'listTasksByShare').mockReturnValue(preloadGate.promise)
-    vi.spyOn(store, 'listTasks').mockReturnValue(fullLoadGate.promise)
+    const realListTasks = store.listTasks.bind(store)
+    vi.spyOn(store, 'listTasks')
+      .mockReturnValueOnce(fullLoadGate.promise)
+      .mockImplementation(realListTasks)
     vi.spyOn(ReceiveStore, 'open').mockResolvedValue(Object.assign(store, { close: vi.fn() }) as unknown as ReceiveStore)
     vi.spyOn(outputContract, 'probeBrowserOutputCapabilities').mockResolvedValue(Object.freeze({
       indexedDb: true, fsa: false, opfs: true, portable: false, availableStorageBytes: 64n * 1024n * 1024n,
@@ -836,27 +741,27 @@ describe('receive capability cache, pre-activation errors, and stale record clea
     })
 
     const coordinator = new ReceiveCoordinator({ windowPort, opfsEnv: env, currentJoinedShare: () => joined })
-    // Start top-bar download while listTasksByShare is still in flight, let it settle into OPFS, then resolve stale empty preload.
+    // Start a slow retained scan, then run a top-bar OPFS download to settlement before the stale empty scan resolves.
+    const slowScan = coordinator.loadRetained()
     coordinator.refreshOffers(joined)
     await waitForSnapshot(coordinator, s => s.offers?.kind === 'ready')
     expect(coordinator.startDownload('opfs:file')).toBe(true)
     await waitForSnapshot(coordinator, s => s.lifecycle?.kind === 'download-started' && s.activeTaskId === null)
     expect(downloads).toHaveLength(1)
 
-    // Resolve stale empty scan AFTER settlement; mutation overlay must keep the newly settled OPFS record.
-    preloadGate.resolve([])
-    await waitForSnapshot(coordinator, s => s.singleFilePickerPendingFromBytes === null)
-    await Promise.resolve()
+    // Resolve the stale empty scan AFTER settlement; load epochs and mutation overlay must keep the settled OPFS record.
+    fullLoadGate.resolve([])
+    await slowScan
+    await waitForSnapshot(coordinator, s => s.retained.tasks.length === 1)
 
+    const settledTask = coordinator.getSnapshot().retained.tasks[0]!
     const exported = deferred<void>()
-    const outcome = coordinator.startSingleFileDownload(file, dir, {
-      onExported: () => exported.resolve(),
+    coordinator.performRetainedAction(settledTask, 'save', {
+      onCompleted: () => exported.resolve(),
     })
-    expect(outcome).toEqual({ kind: 'exported' })
     await exported.promise
     expect(downloads).toHaveLength(2)
 
-    fullLoadGate.resolve([...store.tasks.values()])
     await coordinator.dispose()
   })
 

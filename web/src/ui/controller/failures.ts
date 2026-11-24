@@ -8,11 +8,10 @@ import type { ReceiverFailure } from '../model'
 export type ChooseArtifactIntent = 'default' | 'redownload'
 
 export type PreviewDownloadResult =
-  | Readonly<{ kind: 'saved-image' | 'exported' | 'started' | 'resumed' | 'waiting-picker' | 'probing' }>
+  | Readonly<{ kind: 'saved-image' | 'started' | 'waiting-picker' | 'probing' }>
   | Readonly<{ kind: 'failed'; failure: ReceiverFailure }>
 
 export interface PreviewDownloadCallbacks {
-  readonly onExported?: () => void
   readonly onAsyncFailure?: (failure: ReceiverFailure) => void
 }
 

@@ -367,14 +367,6 @@ export class ReceiverController {
           this.#previews.cancel()
         }
       },
-      ...(callbacks?.onExported === undefined ? {} : {
-        onExported: () => {
-          const current = this.#snapshot.preview
-          if (!this.#disposed && current.state !== 'idle' && current.fileId === fileId) {
-            callbacks.onExported?.()
-          }
-        },
-      }),
       onAsyncError: error => {
         if (this.#disposed) return
         const current = this.#snapshot.preview
@@ -506,7 +498,7 @@ export class ReceiverController {
       if (!this.#joinReplacementIsCurrent(navigation)) return false
       this.#traceJoin('joined')
       this.#joinedObservation.observe(joined)
-      this.#receive.preloadShareTasks(joined.descriptor.shareInstanceId)
+      this.#receive.warmCapabilities()
       await this.#openInitialBrowsePage(joined)
       return this.#joinReplacementIsCurrent(navigation)
     } catch (error) {

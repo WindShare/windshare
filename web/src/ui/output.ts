@@ -15,7 +15,6 @@ export interface OutputPresentationSnapshot {
   readonly language: Language
   readonly offers: ArtifactOffers | null
   readonly capabilitiesState: BrowserCapabilitiesState
-  readonly singleFilePickerPendingFromBytes: bigint | null
   readonly activation: ActiveActivationSnapshot | null
   readonly activationPresentation: ArtifactActivationPresentation | null
   readonly activeTaskId: string | null
@@ -34,7 +33,6 @@ export interface OutputPresentationSnapshot {
 export const EMPTY_RECEIVE_RUNTIME: ReceiveRuntimeSnapshot = Object.freeze({
   offers: null,
   capabilitiesState: 'probing',
-  singleFilePickerPendingFromBytes: null,
   activation: null,
   activeTaskId: null,
   activeSingleFileId: null,
@@ -60,7 +58,6 @@ export function presentReceiveOutput(
     language,
     offers: runtime.offers,
     capabilitiesState: runtime.capabilitiesState,
-    singleFilePickerPendingFromBytes: runtime.singleFilePickerPendingFromBytes,
     activation: runtime.activation,
     activationPresentation: presentActivation(runtime.activation, language),
     activeTaskId: runtime.activeTaskId,

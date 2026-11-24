@@ -15,8 +15,6 @@ export type SaveUnavailableReason = 'storage-full' | 'portable-limit-exceeded' |
 export type SingleFileDownloadOutcome =
   | Readonly<{ kind: 'started' }>
   | Readonly<{ kind: 'waiting-picker' }>
-  | Readonly<{ kind: 'exported' }>
-  | Readonly<{ kind: 'resumed' }>
   | Readonly<{ kind: 'probing' }>
   | Readonly<{ kind: 'blocked'; reason: ReceiveBlockReason }>
   | Readonly<{ kind: 'unavailable'; error: SaveUnavailableError }>
@@ -95,7 +93,6 @@ export interface ActiveActivationSnapshot {
 export interface ReceiveRuntimeSnapshot {
   readonly offers: ArtifactOffers | null
   readonly capabilitiesState: BrowserCapabilitiesState
-  readonly singleFilePickerPendingFromBytes: bigint | null
   readonly activation: ActiveActivationSnapshot | null
   readonly activeTaskId: string | null
   readonly activeSingleFileId: string | null
