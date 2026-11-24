@@ -1,12 +1,34 @@
 import type { Language } from '../preferences/model'
-import type { ReceiveAction, ReceiveAdmission, RetainedTaskSnapshot } from '../../application/receive/contracts'
-import { retainedTaskReadiness } from '../../application/receive/admission'
+import type { ReceiveAction, ReceiveAdmission, ReceiveBlockReason, RetainedTaskSnapshot } from '../../application/receive/contracts'
+import { canForgetState, retainedTaskReadiness } from '../../application/receive/admission'
 import type { ReceiveOperationDisplay, SaveBackendKind } from '../../output/model'
 import type { ReceiveLifecycleState } from '../../transfer/state'
 import type { ReceiverProgress } from '../model'
 import type { OutputPresentationSnapshot } from '../output'
-import { activeTaskAction, retainedTaskAction } from './actions'
-import type { TaskBlocking, TaskCompleteness, TaskFacts, TaskPublication, TaskRecoveryReadiness } from './model'
+import {
+  activeFallbackForgetAction,
+  activeTaskAction,
+  retainedFallbackForgetAction,
+  retainedTaskAction,
+} from './actions'
+import type {
+  TaskAction,
+  TaskBlocking,
+  TaskCompleteness,
+  TaskFacts,
+  TaskPublication,
+  TaskRecoveryReadiness,
+} from './model'
+
+function applyActionAdmission(
+  action: TaskAction<ReceiveBlockReason>,
+  admission: ReceiveAdmission | undefined,
+  fallbackReason: ReceiveBlockReason,
+): TaskAction<ReceiveBlockReason> {
+  return admission !== undefined && !admission.allowed
+    ? Object.freeze({ ...action, disabledReason: admission.reason ?? fallbackReason })
+    : action
+}
 
 export function activeTaskFacts(input: Readonly<{
   output: OutputPresentationSnapshot
@@ -20,17 +42,16 @@ export function activeTaskFacts(input: Readonly<{
   if (state === null || output.backend === null) return null
 
   const backend = output.backend
+  const fallbackForget = !output.actions.includes('forget') && canForgetState(state, backend)
+    ? applyActionAdmission(activeFallbackForgetAction(language), input.actionAdmission?.('forget'), 'actionUnavailable')
+    : null
   return Object.freeze({
     lifecycle: state,
     backend,
     display: input.display ?? null,
-    actions: Object.freeze(output.actions.map(action => {
-      const presented = activeTaskAction(action, state.kind, backend, language)
-      const admission = input.actionAdmission?.(action)
-      return admission !== undefined && !admission.allowed
-        ? Object.freeze({ ...presented, disabledReason: admission.reason ?? 'actionUnavailable' as const })
-        : presented
-    })),
+    actions: Object.freeze(output.actions.map(action =>
+      applyActionAdmission(activeTaskAction(action, state.kind, backend, language), input.actionAdmission?.(action), 'actionUnavailable'))),
+    fallbackForget,
     blocking: activeBlocking(input.blocking, progress),
     readiness: 'matching-share',
     completeness: completenessFromFacts(state, progress),
@@ -52,17 +73,16 @@ export function retainedTaskFacts(
   }> = {},
   language: Language = 'en',
 ): TaskFacts {
+  const fallbackForget = !task.actions.includes('forget') && canForgetState(task.lifecycle, task.backend)
+    ? applyActionAdmission(retainedFallbackForgetAction(task, language), execution.admission?.('forget'), 'busy')
+    : null
   return Object.freeze({
     lifecycle: task.lifecycle,
     backend: task.backend,
     display: task.display ?? null,
-    actions: Object.freeze(task.actions.map(action => {
-      const presented = retainedTaskAction(task, action, readiness, language)
-      const admission = execution.admission?.(action)
-      return admission !== undefined && !admission.allowed
-        ? Object.freeze({ ...presented, disabledReason: admission.reason ?? 'busy' as const })
-        : presented
-    })),
+    actions: Object.freeze(task.actions.map(action =>
+      applyActionAdmission(retainedTaskAction(task, action, readiness, language), execution.admission?.(action), 'busy'))),
+    fallbackForget,
     blocking: execution.blocking ?? null,
     readiness,
     completeness: completenessFromFacts(task.lifecycle, null),

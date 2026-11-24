@@ -75,6 +75,22 @@ export function isLocalOnlyAction(action: ReceiveAction): boolean {
     action === 'forget'
 }
 
+/**
+ * Whether removing only the IndexedDB history record (`forget`) is safe for this state/backend.
+ *
+ * OPFS retains opaque browser-private files that users cannot delete in their OS file manager,
+ * so forgetting an OPFS task with retained data would leak browser quota. FSA writes into a
+ * user-owned folder whose permission can be revoked across sessions, so record-only removal
+ * remains a safe explicit fallback while `actionsForState` keeps `discard` as the primary path.
+ */
+export function canForgetState(
+  state: ReceiveLifecycleState,
+  backend: SaveBackendKind,
+): boolean {
+  return actionsForState(state, backend).includes('forget') ||
+    (backend === 'fsa' && (state.kind === 'paused' || state.kind === 'failed'))
+}
+
 export function retainedTaskReadiness(
   task: Pick<RetainedTaskSnapshot, 'shareInstance' | 'lifecycle'>,
   currentShareInstance: string | null,
@@ -95,7 +111,9 @@ export function admitRetainedAction(
     shareEnded: boolean
   }>,
 ): ReceiveAdmission {
-  if (!task.actions.includes(action)) return blockedAdmission('actionUnavailable')
+  const supported = task.actions.includes(action) ||
+    (action === 'forget' && canForgetState(task.lifecycle, task.backend))
+  if (!supported) return blockedAdmission('actionUnavailable')
   if (task.activeElsewhere) return blockedAdmission('activeInAnotherTab')
   if (context.hasPendingAction) return blockedAdmission('busy')
   if (isLocalOnlyAction(action)) return ALLOWED_ADMISSION

@@ -16,7 +16,7 @@ import { classifyNativeError, storagePauseReason } from '../../transfer/fault'
 import type { JoinedBrowserShare } from '../browser-share/gateway'
 import { closeOutputSession } from './session-opener'
 import { transitionReceiveState } from '../../transfer/state'
-import { actionsForState, canSavePartialState } from './admission'
+import { actionsForState, canForgetState, canSavePartialState } from './admission'
 import type { ReceiveAction, RetainedTaskSnapshot } from './contracts'
 
 export interface RetainedTaskEnvironment {
@@ -144,10 +144,17 @@ async function forgetRetainedTask(env: RetainedTaskEnvironment, taskId: string):
   const lock = await acquireTaskLock(taskId, env.locks)
   try {
     const record = await readRetainedTask(env, taskId)
-    if (!actionsForState(record.lifecycle, record.backend).includes('forget')) {
+    if (!canForgetState(record.lifecycle, record.backend)) {
       throw new DOMException('Remove retained download data explicitly instead of forgetting history', 'InvalidStateError')
     }
     await env.store.deleteTask(taskId)
+    if (!actionsForState(record.lifecycle, record.backend).includes('forget')) {
+      emitOutputTrace(env.outputTrace, 'cleanup', {
+        backend: diagnosticBackendName(record.backend),
+        task_id: taskId,
+        transition: 'forgotten_without_disk_cleanup',
+      })
+    }
     return { kind: 'completed' }
   } finally {
     await lock.release()

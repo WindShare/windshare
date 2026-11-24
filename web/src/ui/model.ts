@@ -98,7 +98,7 @@ export type ReceiverFailure =
   | Readonly<{ kind: 'blocked'; reason: ReceiveBlockReason }>
   | Readonly<{ kind: 'save-unavailable'; reason: SaveUnavailableReason }>
   | Readonly<{ kind: 'source-changed' }>
-  | Readonly<{ kind: 'invalidLink' | 'secureContext'; detail: string }>
+  | Readonly<{ kind: 'invalidLink' | 'secureContext' | 'permissionDenied'; detail: string }>
 
 export interface ReceiverSnapshot {
   readonly connection: import('../receiver/connection-state').ReceiverConnectionSnapshot |

@@ -25,7 +25,7 @@ import {
 } from '../../transfer/selection'
 import { initialReceiveState } from '../../transfer/state'
 import type { BrowseDirectory, JoinedBrowserShare } from '../browser-share/gateway'
-import { ALLOWED_ADMISSION, admitRetainedAction, blockedAdmission } from './admission'
+import { ALLOWED_ADMISSION, admitRetainedAction, blockedAdmission, canForgetState } from './admission'
 import { BrowserCapabilityCache } from './capability-cache'
 import type {
   ReceiveAction,
@@ -228,7 +228,10 @@ export class ReceiveCoordinator {
     ) {
       return blockedAdmission('busy')
     }
-    if (!this.#activeActions().includes(action)) return blockedAdmission('actionUnavailable')
+    const supported = this.#activeActions().includes(action) ||
+      (!this.#sessions.waitingForLiveJob && action === 'forget' &&
+        canForgetState(this.#workspace.lifecycle, this.#workspace.backend))
+    if (!supported) return blockedAdmission('actionUnavailable')
     if (action === 'continue') {
       if (this.#shareEnded) return blockedAdmission('shareEnded')
       if (this.#connectionUnavailable) return blockedAdmission('connectionUnavailable')

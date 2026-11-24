@@ -48,6 +48,7 @@ export interface TaskFacts {
   readonly backend: SaveBackendKind
   readonly display: ReceiveOperationDisplay | null
   readonly actions: readonly TaskAction<ReceiveBlockReason>[]
+  readonly fallbackForget?: TaskAction<ReceiveBlockReason> | null
   readonly blocking: TaskBlocking | null
   readonly readiness: TaskRecoveryReadiness
   readonly completeness: TaskCompleteness
@@ -83,6 +84,12 @@ export interface TaskPresentationTransition {
   readonly fingerprint: string
 }
 
+export interface TaskRemovalPresentation {
+  readonly summary: string
+  readonly hint: string
+  readonly fallbackForget: TaskAction | null
+}
+
 export interface TaskPresentation {
   readonly operationId: string
   readonly generation: bigint
@@ -99,6 +106,7 @@ export interface TaskPresentation {
   readonly primaryAction: TaskAction | null
   readonly secondaryActions: readonly TaskAction[]
   readonly destructiveActions: readonly TaskAction[]
+  readonly removal: TaskRemovalPresentation | null
   readonly details: readonly string[]
   readonly safeRenamed: SafeRenamedSummary | null
   readonly completeness: TaskCompleteness

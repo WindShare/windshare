@@ -4,6 +4,7 @@ export const failures: typeof English = {
   invalidLink: '分享链接或密钥无效。请重新打开原链接，或让发送方重新分享。',
   secureContext: '此浏览器无法解密分享，请使用支持安全连接的浏览器打开原链接。',
   open: '无法打开分享。请重新打开原链接，并确认发送方在线。',
+  permissionDenied: '未授予文件夹访问权限。请允许访问所选文件夹后重试。',
   action: '无法完成此下载操作。',
   directory: '无法加载此文件夹。',
   preview: '无法预览此文件。',

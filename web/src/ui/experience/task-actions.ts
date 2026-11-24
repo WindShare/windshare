@@ -6,10 +6,11 @@ export function taskActions(
   callbacks?: TaskActionCallbacks,
 ): TaskViewActions {
   return {
-    perform: action => {
+    perform: (action, overrideCallbacks) => {
       if (action.disabledReason !== null) return
-      if (action.target.kind === 'active') controller.performLifecycleAction(action.target.action, callbacks)
-      else controller.performRetainedAction(action.target.task, action.target.action, callbacks)
+      const effective = overrideCallbacks ?? callbacks
+      if (action.target.kind === 'active') controller.performLifecycleAction(action.target.action, effective)
+      else controller.performRetainedAction(action.target.task, action.target.action, effective)
     },
   }
 }

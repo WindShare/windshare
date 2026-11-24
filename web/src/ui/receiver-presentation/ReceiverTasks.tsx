@@ -106,7 +106,7 @@ export function ReceiverActivity({ controller, openDownloads, dismissedTaskKeys,
   const baseActions = taskActions(controller)
   const actions: TaskViewActions = {
     ...baseActions,
-    perform: action => {
+    perform: (action, callbacks) => {
       // A repeated handoff click strongly indicates the first browser save was blocked or missed.
       if (
         action.disabledReason === null &&
@@ -115,7 +115,7 @@ export function ReceiverActivity({ controller, openDownloads, dismissedTaskKeys,
       ) {
         setHandoffHelpOpenId(primaryTask.operationId)
       }
-      baseActions.perform(action)
+      baseActions.perform(action, callbacks)
     },
   }
   const closeDetails = () => { controller.recordExperienceIntent('close-details'); setDetailsOperationId(null) }

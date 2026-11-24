@@ -13,8 +13,10 @@ export const actions = {
   savePartialHint: 'Saves completed files as a separate ZIP. Unfinished items are excluded, and you can still continue the full download later.',
   discardOutput: 'Discard unfinished download',
   discardOutputHint: 'Deletes unfinished data for this download from your browser.',
+  discardFolderHint: 'Deletes unfinished files from your chosen folder and clears resume progress. Completed files already in your folder stay saved.',
   deleteSavedCopy: 'Delete browser copy',
   deleteSavedCopyHint: 'Deletes the copy stored in this browser. Files already saved to your device are unaffected.',
   forget: 'Remove from Downloads',
   forgetHint: 'Removes this history record from Downloads. Files already saved or handed to the browser remain untouched.',
+  forgetRecordOnly: 'Remove record only',
 }

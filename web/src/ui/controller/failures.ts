@@ -2,7 +2,7 @@ import type { SingleFileDownloadOutcome } from '../../application/receive/contra
 import { ReceiveBlockedError, SaveUnavailableError } from '../../application/receive/single-file'
 import { CryptoError } from '../../crypto/errors'
 import type { ArtifactChoice, ArtifactOffers } from '../../output/model'
-import { isSourceInvalidatedError } from '../../transfer/fault'
+import { isPermissionDeniedError, isSourceInvalidatedError } from '../../transfer/fault'
 import type { ReceiverFailure } from '../model'
 
 export type ChooseArtifactIntent = 'default' | 'redownload'
@@ -52,6 +52,9 @@ export function mapReceiverFailure(
   }
   if (isSourceInvalidatedError(error)) {
     return Object.freeze({ kind: 'source-changed' })
+  }
+  if (isPermissionDeniedError(error)) {
+    return Object.freeze({ kind: 'permissionDenied', detail: publicError(error) })
   }
   return publicError(error)
 }

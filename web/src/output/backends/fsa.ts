@@ -249,6 +249,11 @@ export async function discardFSATask(
         if (permission === 'granted') {
           await cleanupFSATaskEntries(task.taskId, current.target, files, { store, diagnostics, beginRemoval })
         } else if (unfinished) {
+          emitOutputTrace(diagnostics?.trace, 'cleanup', {
+            backend: 'file_system_access',
+            task_id: task.taskId,
+            transition: 'permission_denied',
+          })
           throw new TransferFaultError(outputFault(FaultScope.Job, OutputFaultCode.PermissionDenied),
             'Allow folder access to discard the unfinished files.')
         }

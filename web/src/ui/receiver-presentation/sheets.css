@@ -140,6 +140,27 @@
 }
 .detail-sheet .task-handoff-help p { margin-bottom: 0; }
 .detail-sheet .task-removal .task-actions { gap: 8px; }
+.detail-sheet .task-action-error {
+  padding: 12px 14px;
+  border-radius: var(--receiver-radius-control);
+  background: var(--receiver-error-wash);
+  color: var(--receiver-error);
+  font-size: .8125rem;
+  line-height: 1.55;
+}
+.detail-sheet .task-action-error p { margin: 0; }
+.detail-sheet .task-action-error details { margin-top: 6px; }
+.detail-sheet .task-removal .task-removal-fallback {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--receiver-warning-rule);
+  border-radius: var(--receiver-radius-control);
+  background: var(--receiver-warning-wash);
+}
+.detail-sheet .task-removal .task-removal-fallback p {
+  margin: 0 0 10px;
+  color: var(--receiver-ink);
+}
 
 /* Connection & encryption inspector */
 .detail-sheet .connection-details {

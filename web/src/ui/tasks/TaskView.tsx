@@ -1,8 +1,11 @@
 import { receiverCopy } from '../locales/receiver'
 import { useCopy, usePreferences } from '../preferences/use-preferences'
-import { useRef, useState, type ReactNode, type Ref } from 'react'
-import type { TaskAction, TaskPresentation } from './index'
+import { useEffect, useRef, useState, type ReactNode, type Ref } from 'react'
+import type { TaskActionCallbacks } from '../controller/failures'
+import type { ReceiverFailure } from '../model'
+import type { TaskAction, TaskPresentation, TaskRemovalPresentation } from './index'
 import { DetailSheet } from '../controls/DetailSheet'
+import { FailureNotice } from '../controls/FailureNotice'
 import { ReceiverIcon, type ReceiverIconName } from '../receiver-presentation/ReceiverIcon'
 import { useReceiveRate } from './use-receive-rate'
 import { formatElapsedTime } from './elapsed'
@@ -19,7 +22,7 @@ const SELF_EXPLANATORY_ACTIONS = new Set(['pause', 'continue'])
 const DETAILS_ONLY_CONSEQUENCE_ACTIONS = new Set(['save'])
 
 export interface TaskViewActions {
-  readonly perform: (action: TaskAction) => void
+  readonly perform: (action: TaskAction, callbacks?: TaskActionCallbacks) => void
 }
 
 export function TaskActionButton({ action, perform, primary = false, busy = false, detailed = false }: {
@@ -152,6 +155,50 @@ function TaskDetailFacts({ task }: { readonly task: TaskPresentation }) {
   </dl>
 }
 
+interface LocalTaskActionFailure {
+  readonly operationId: string
+  readonly actionId: string
+  readonly failure: ReceiverFailure
+}
+
+function isDiscardPermissionFallback(
+  failure: LocalTaskActionFailure | null,
+  removal: TaskRemovalPresentation | null,
+): boolean {
+  return failure !== null &&
+    failure.actionId === 'discard' &&
+    typeof failure.failure !== 'string' &&
+    failure.failure.kind === 'permissionDenied' &&
+    removal !== null &&
+    removal.fallbackForget !== null
+}
+
+function TaskRemovalSection({ removal, actions, permissionDenied, perform, busy }: {
+  readonly removal: TaskRemovalPresentation
+  readonly actions: readonly TaskAction[]
+  readonly permissionDenied: boolean
+  readonly perform: (action: TaskAction) => void
+  readonly busy: boolean
+}) {
+  const t = useCopy(receiverCopy).downloads
+  const disclosureRef = useRef<HTMLDetailsElement>(null)
+  useEffect(() => {
+    if (permissionDenied && disclosureRef.current !== null) disclosureRef.current.open = true
+  }, [permissionDenied])
+  return <details ref={disclosureRef} className="detail-disclosure task-removal">
+    <summary>{removal.summary}</summary>
+    <p>{removal.hint}</p>
+    <div className="task-actions">{actions.map(action =>
+      <TaskActionButton key={action.id} action={action} perform={perform} busy={busy} detailed />)}</div>
+    {permissionDenied && removal.fallbackForget !== null && <div className="task-removal-fallback" role="alert">
+      <p>{t.discardPermissionDenied}</p>
+      <div className="task-actions">
+        <TaskActionButton action={removal.fallbackForget} perform={perform} busy={busy} detailed />
+      </div>
+    </div>}
+  </details>
+}
+
 export function TaskDetails({ task, actions, busy = false, children }: {
   readonly task: TaskPresentation
   readonly actions: TaskViewActions
@@ -160,22 +207,46 @@ export function TaskDetails({ task, actions, busy = false, children }: {
 }) {
   const rate = useReceiveRate(task)
   const t = useCopy(receiverCopy).downloads
+  const [actionFailure, setActionFailure] = useState<LocalTaskActionFailure | null>(null)
+  const visibleOperationRef = useRef<string | null>(task.operationId)
+  useEffect(() => {
+    visibleOperationRef.current = task.operationId
+    return () => { visibleOperationRef.current = null }
+  }, [task.operationId])
+  const performLocal = (action: TaskAction) => {
+    setActionFailure(null)
+    const operationId = task.operationId
+    actions.perform(action, {
+      onAsyncFailure: failure => {
+        if (visibleOperationRef.current !== operationId) return false
+        setActionFailure({ operationId, actionId: action.id, failure })
+        return true
+      },
+    })
+  }
+  const activeFailure = actionFailure?.operationId === task.operationId ? actionFailure : null
+  const discardPermissionDenied = isDiscardPermissionFallback(activeFailure, task.removal)
   const hasActions = task.primaryAction !== null || task.secondaryActions.length > 0
   const technicalLines = task.progress?.details ?? []
   const safeRenamed = task.safeRenamed !== null && task.safeRenamed.sample.length > 0 ? task.safeRenamed : null
   const remainingAdjusted = safeRenamed === null ? 0 : Math.max(0, safeRenamed.count - safeRenamed.sample.length)
+  const hasDisclosures = task.stage === 'handed-to-browser' || safeRenamed !== null ||
+    technicalLines.length > 0 || task.removal !== null
   return <div className={`task-details task-tone-${task.tone}`} data-task-stage={task.stage}>
     <TaskDetailHero task={task} rate={rate} />
     {hasActions && <div className="task-actions task-detail-actions">
-      {task.primaryAction !== null && <TaskActionButton action={task.primaryAction} perform={actions.perform} primary busy={busy} detailed />}
-      {task.secondaryActions.map(action => <TaskActionButton key={action.id} action={action} perform={actions.perform} busy={busy} detailed />)}
+      {task.primaryAction !== null && <TaskActionButton action={task.primaryAction} perform={performLocal} primary busy={busy} detailed />}
+      {task.secondaryActions.map(action => <TaskActionButton key={action.id} action={action} perform={performLocal} busy={busy} detailed />)}
+    </div>}
+    {activeFailure !== null && !discardPermissionDenied && <div className="task-action-error" role="alert">
+      <FailureNotice failure={activeFailure.failure} context="action" />
     </div>}
     <TaskDetailFacts task={task} />
     {task.details.length > 0 && <ul className="task-detail-notices">
       {task.details.map((line, index) => <li key={`${index}-${line}`}>{line}</li>)}
     </ul>}
     {children}
-    {(task.stage === 'handed-to-browser' || safeRenamed !== null || technicalLines.length > 0 || task.destructiveActions.length > 0) && <div className="detail-disclosures">
+    {hasDisclosures && <div className="detail-disclosures">
       {task.stage === 'handed-to-browser' && <details className="detail-disclosure task-handoff-help">
         <summary>{t.handoffHelp}</summary>
         <p>{t.handoffHelpHint}</p>
@@ -193,12 +264,13 @@ export function TaskDetails({ task, actions, busy = false, children }: {
         <summary>{t.transferDetails}</summary>
         <ul className="task-detail-list">{technicalLines.map((line, index) => <li key={`${index}-${line}`}>{line}</li>)}</ul>
       </details>}
-      {task.destructiveActions.length > 0 && <details className="detail-disclosure task-removal">
-        <summary>{t.remove}</summary>
-        <p>{t.removeHint}</p>
-        <div className="task-actions">{task.destructiveActions.map(action =>
-          <TaskActionButton key={action.id} action={action} perform={actions.perform} busy={busy} detailed />)}</div>
-      </details>}
+      {task.removal !== null && <TaskRemovalSection
+        removal={task.removal}
+        actions={task.destructiveActions}
+        permissionDenied={discardPermissionDenied}
+        perform={performLocal}
+        busy={busy}
+      />}
     </div>}
   </div>
 }

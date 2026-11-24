@@ -2,13 +2,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   actionsForState,
   admitRetainedAction,
+  canForgetState,
   canSavePartialState,
   retainedTaskReadiness,
 } from '../../src/application/receive/admission'
 import { presentTask, retainedTaskFacts } from '../../src/ui/tasks'
+import { mapReceiverFailure } from '../../src/ui/controller/failures'
 import type { RetainedTaskSnapshot } from '../../src/application/receive/contracts'
 import { ReceiveCoordinator } from '../../src/application/receive/coordinator'
-import { retainedSnapshot } from '../../src/application/receive/retained'
+import { executeRetainedTaskAction, retainedSnapshot } from '../../src/application/receive/retained'
 import * as sessionOpener from '../../src/application/receive/session-opener'
 import {
   ReceiveBlockedError,
@@ -24,6 +26,8 @@ import * as outputContract from '../../src/output/backends/contract'
 import type { NativeSupportWorker } from '../../src/output/native-object/support'
 import { ReceiveStore } from '../../src/output/store/database'
 import type { ReceiveTaskRecord } from '../../src/output/store/types'
+import type { OutputTraceEvent } from '../../src/output/diagnostics'
+import { isPermissionDeniedError } from '../../src/transfer/fault'
 import { initialReceiveState, transitionReceiveState } from '../../src/transfer/state'
 import { FakeDirectoryHandle } from '../output/fsa-fixture'
 import { createMemoryOPFSEnv, createMockDownloadWindow, MemoryReceiveStore } from '../output/opfs-fixture'
@@ -1038,6 +1042,155 @@ describe('single-file reuse, errors, and local blob handoff', () => {
     expect(onActionError).not.toHaveBeenCalled()
     expect(store.tasks.has(failedPersistId)).toBe(false)
     expect(coordinator.getSnapshot().retained.tasks.map(task => task.taskId)).toEqual([firstTaskId])
+
+    await coordinator.dispose()
+  })
+})
+
+describe('FSA discard permission fallback', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('keeps a paused FSA task retryable after PermissionDenied discard and allows explicit record-only forget while blocking OPFS forget', async () => {
+    const store = new MemoryReceiveStore()
+    vi.spyOn(ReceiveStore, 'open').mockResolvedValue(Object.assign(store, { close: vi.fn() }) as unknown as ReceiveStore)
+    const parent = new FakeDirectoryHandle('Downloads', [])
+    const queryPermission = vi.spyOn(parent, 'queryPermission').mockResolvedValue('prompt')
+    const requestPermission = vi.spyOn(parent, 'requestPermission').mockResolvedValue('denied')
+    const pausedFsaLifecycle = transitionReceiveState(initialReceiveState('fsa-paused'), {
+      kind: 'paused',
+      reason: 'user',
+      completedFiles: 0n,
+      completedBytes: 0n,
+      retainedBytes: 4n,
+      discoveredFiles: 1n,
+      discoveredBytes: 8n,
+      discoveryComplete: true,
+    })
+    const failedFsaLifecycle = transitionReceiveState(initialReceiveState('fsa-failed'), {
+      kind: 'failed',
+      reason: 'error',
+      detail: 'io failed',
+    })
+    const pausedOpfsLifecycle = transitionReceiveState(initialReceiveState('opfs-paused'), {
+      kind: 'paused',
+      reason: 'user',
+      completedFiles: 0n,
+      completedBytes: 0n,
+      retainedBytes: 4n,
+      discoveredFiles: 1n,
+      discoveredBytes: 8n,
+      discoveryComplete: true,
+    })
+
+    // Default actions still prioritize discard; only FSA paused/failed permit record-only forget fallback.
+    expect(actionsForState(pausedFsaLifecycle, 'fsa')).toEqual(['continue', 'discard'])
+    expect(actionsForState(failedFsaLifecycle, 'fsa')).toEqual(['discard'])
+    expect(canForgetState(pausedFsaLifecycle, 'fsa')).toBe(true)
+    expect(canForgetState(failedFsaLifecycle, 'fsa')).toBe(true)
+    expect(canForgetState(pausedOpfsLifecycle, 'opfs')).toBe(false)
+
+    const baseSelection = { shareInstance: 'share-1', syntheticRoot: 'root-1', defaultSelected: true, rules: [] }
+    const fsaRecord: ReceiveTaskRecord = {
+      taskId: 'fsa-paused',
+      shareInstance: 'share-1',
+      selectionKey: 'sel-fsa',
+      selection: baseSelection,
+      artifact: { kind: 'directory-tree', name: 'Album', rootPath: ['Album'] },
+      backend: 'fsa',
+      lifecycle: pausedFsaLifecycle,
+      target: {
+        kind: 'fsa',
+        parentHandle: parent as unknown as FileSystemDirectoryHandle,
+        reservedName: 'Album',
+        collisionIndex: 0,
+        singleFile: false,
+        reservedAtMs: 1_000,
+      },
+      discoveryComplete: true,
+      updatedAt: 2_000,
+    }
+    const opfsRecord: ReceiveTaskRecord = {
+      taskId: 'opfs-paused',
+      shareInstance: 'share-1',
+      selectionKey: 'sel-opfs',
+      selection: baseSelection,
+      artifact: { kind: 'zip-archive', name: 'Album.zip', rootPath: ['Album'] },
+      backend: 'opfs',
+      lifecycle: pausedOpfsLifecycle,
+      target: { kind: 'opfs', objectName: 'opfs-paused.part', fileName: 'Album.zip', isZip: true, allocatedLength: 8n },
+      discoveryComplete: true,
+      updatedAt: 1_000,
+    }
+    await store.putTask(fsaRecord)
+    await store.putFile({
+      id: 'fsa-paused:f1',
+      taskId: 'fsa-paused',
+      fileId: 'f1',
+      revision: 'rev-1',
+      path: ['part.bin'],
+      size: 8n,
+      completedRanges: [[0n, 4n]],
+      status: 'receiving',
+    })
+    await store.putTask(opfsRecord)
+
+    const traces: OutputTraceEvent[] = []
+    const { windowPort: baseWin } = createMockDownloadWindow()
+    const windowPort: BrowserOutputWindow = {
+      ...baseWin,
+      indexedDB: { open: vi.fn() } as unknown as IDBFactory,
+    }
+    const coordinator = new ReceiveCoordinator({
+      windowPort,
+      currentJoinedShare: () => undefined,
+      outputTrace: { current: event => { traces.push(event) } },
+    })
+    await coordinator.loadRetained()
+
+    const fsaTask = coordinator.getSnapshot().retained.tasks.find(task => task.taskId === 'fsa-paused')!
+    const opfsTask = coordinator.getSnapshot().retained.tasks.find(task => task.taskId === 'opfs-paused')!
+    expect(presentTask(retainedTaskFacts(fsaTask)).removal?.fallbackForget?.target).toEqual({
+      kind: 'retained',
+      task: fsaTask,
+      action: 'forget',
+    })
+    expect(presentTask(retainedTaskFacts(opfsTask)).removal?.fallbackForget).toBeNull()
+    expect(coordinator.retainedActionAdmission(fsaTask, 'forget')).toEqual({ allowed: true, reason: null })
+    expect(coordinator.retainedActionAdmission(opfsTask, 'forget')).toEqual({ allowed: false, reason: 'actionUnavailable' })
+
+    const discardFailed = deferred<unknown>()
+    coordinator.performRetainedAction(fsaTask, 'discard', { onError: error => { discardFailed.resolve(error) } })
+    const discardError = await discardFailed.promise
+    expect(coordinator.getSnapshot().retained.pending).toBeNull()
+    expect(isPermissionDeniedError(discardError)).toBe(true)
+    expect(mapReceiverFailure(discardError, err => String(err))).toMatchObject({ kind: 'permissionDenied' })
+    expect(queryPermission).toHaveBeenCalledOnce()
+    expect(requestPermission).toHaveBeenCalledOnce()
+    expect(store.tasks.has('fsa-paused')).toBe(true)
+    expect(await store.listTaskFiles('fsa-paused')).toHaveLength(1)
+    expect(traces).toContainEqual({
+      eventName: 'cleanup',
+      payload: { backend: 'file_system_access', task_id: 'fsa-paused', transition: 'permission_denied' },
+    })
+
+    // Explicit fallback forget removes the FSA record without prompting for folder permission again.
+    coordinator.performRetainedAction(fsaTask, 'forget')
+    await waitForSnapshot(coordinator, s => s.retained.pending === null && !s.retained.tasks.some(t => t.taskId === 'fsa-paused'))
+    expect(requestPermission).toHaveBeenCalledOnce()
+    expect(store.tasks.has('fsa-paused')).toBe(false)
+    expect(await store.listTaskFiles('fsa-paused')).toHaveLength(0)
+    expect(traces).toContainEqual({
+      eventName: 'cleanup',
+      payload: { backend: 'file_system_access', task_id: 'fsa-paused', transition: 'forgotten_without_disk_cleanup' },
+    })
+
+    // OPFS retained tasks still reject forget at the storage-command boundary to prevent browser-quota leaks.
+    await expect(executeRetainedTaskAction(
+      { store: store as unknown as ReceiveStore, windowPort },
+      'opfs-paused',
+      'forget',
+    )).rejects.toMatchObject({ name: 'InvalidStateError' })
+    expect(store.tasks.has('opfs-paused')).toBe(true)
 
     await coordinator.dispose()
   })

@@ -43,6 +43,33 @@ export function retainedTaskAction(
   })
 }
 
+export function activeFallbackForgetAction(
+  language: Language = 'en',
+): TaskAction<ReceiveBlockReason> {
+  return Object.freeze({
+    id: 'forget',
+    label: receiverCopy[language].actions.forgetRecordOnly,
+    destructive: false,
+    disabledReason: null,
+    consequence: null,
+    target: Object.freeze({ kind: 'active', action: 'forget' }),
+  })
+}
+
+export function retainedFallbackForgetAction(
+  task: RetainedTaskSnapshot,
+  language: Language = 'en',
+): TaskAction<ReceiveBlockReason> {
+  return Object.freeze({
+    id: 'forget',
+    label: receiverCopy[language].actions.forgetRecordOnly,
+    destructive: false,
+    disabledReason: task.activeElsewhere ? 'activeInAnotherTab' : null,
+    consequence: null,
+    target: Object.freeze({ kind: 'retained', task, action: 'forget' }),
+  })
+}
+
 function isDestructiveAction(action: ReceiveAction): boolean {
   return action === 'discard'
 }
@@ -86,7 +113,9 @@ function actionConsequence(
     case 'save': return lifecycleKind === 'download-started' ? t.saveAgainHint : null
     // Only paused tasks remain resumable after a partial export.
     case 'save-partial': return lifecycleKind === 'paused' ? t.savePartialHint : null
-    case 'discard': return hasSavedBrowserCopy(lifecycleKind, backend) ? t.deleteSavedCopyHint : t.discardOutputHint
+    case 'discard':
+      if (hasSavedBrowserCopy(lifecycleKind, backend)) return t.deleteSavedCopyHint
+      return backend === 'fsa' ? t.discardFolderHint : t.discardOutputHint
     case 'forget': return t.forgetHint
     default: return null
   }

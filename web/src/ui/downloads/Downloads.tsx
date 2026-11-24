@@ -1,10 +1,12 @@
 import type { RetainedInventorySnapshot } from '../../application/receive/contracts'
 import { receiverCopy } from '../locales/receiver'
 import { useCopy } from '../preferences/use-preferences'
-import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import type { ReceiverFailure } from '../model'
 import type { TaskPresentation } from '../tasks'
 import { TaskCard, TaskDetails, type TaskViewActions } from '../tasks/TaskView'
 import { DetailSheet } from '../controls/DetailSheet'
+import { FailureNotice } from '../controls/FailureNotice'
 import { ReceiverIcon } from '../receiver-presentation/ReceiverIcon'
 
 export function Downloads({ tasks, actions, inventory, busy, details, entryLabel, entryDescription, onIntent, onRetry, open, onOpenChange }: {
@@ -22,6 +24,7 @@ export function Downloads({ tasks, actions, inventory, busy, details, entryLabel
 }) {
   const { downloads: t, failures } = useCopy(receiverCopy)
   const [expanded, setExpanded] = useState<string | null>(null)
+  const [listFailure, setListFailure] = useState<ReceiverFailure | null>(null)
   const descriptionId = useId()
   const entryButton = useRef<HTMLButtonElement>(null)
   const detailsButtons = useRef(new Map<string, HTMLButtonElement>())
@@ -31,6 +34,12 @@ export function Downloads({ tasks, actions, inventory, busy, details, entryLabel
   const attention = tasks.filter(task => task.attention).length
   const selected = tasks.find(task => task.operationId === expanded)
   const selectedId = selected?.operationId
+  const listVisible = open && selectedId === undefined
+  const listVisibleRef = useRef(listVisible)
+  useEffect(() => {
+    listVisibleRef.current = listVisible
+    return () => { listVisibleRef.current = false }
+  }, [listVisible])
   useLayoutEffect(() => {
     if (!open) { previousSelection.current = undefined; return }
     // Drill-in replaces DOM inside the same modal, so native dialog restoration cannot handle it.
@@ -40,7 +49,19 @@ export function Downloads({ tasks, actions, inventory, busy, details, entryLabel
     }
     previousSelection.current = selectedId
   }, [open, selectedId])
-  const close = () => { onIntent('close-downloads'); onOpenChange(false); setExpanded(null) }
+  const close = () => { onIntent('close-downloads'); onOpenChange(false); setExpanded(null); setListFailure(null) }
+  const listActions: TaskViewActions = {
+    perform: (action, callbacks) => {
+      setListFailure(null)
+      actions.perform(action, callbacks ?? {
+        onAsyncFailure: failure => {
+          if (!listVisibleRef.current) return false
+          setListFailure(failure)
+          return true
+        },
+      })
+    },
+  }
   return <>
     <button ref={entryButton} className="downloads-entry" type="button" aria-describedby={entryDescription === undefined ? undefined : descriptionId}
       onClick={() => { onIntent('open-downloads'); onOpenChange(true) }}>
@@ -57,16 +78,19 @@ export function Downloads({ tasks, actions, inventory, busy, details, entryLabel
           {(inventory === 'unloaded' || inventory === 'loading') && <p role="status">{t.loading}</p>}
           {inventory === 'failed' && <div className="downloads-error" role="alert"><p>{failures.history}</p>
             {onRetry !== undefined && <button type="button" onClick={onRetry}>{t.retry}</button>}</div>}
+          {listFailure !== null && <div className="downloads-error" role="alert">
+            <FailureNotice failure={listFailure} context="action" />
+          </div>}
           {(inventory === 'empty' || inventory === 'available') && tasks.length === 0 && <div className="downloads-empty">
             <p>{t.empty}</p><p>{t.emptyHint}</p>
           </div>}
           <div className="downloads-list">{tasks.map(task =>
-            <TaskCard key={task.operationId} task={task} actions={actions} busy={busy} showTimestamp
+            <TaskCard key={task.operationId} task={task} actions={listActions} busy={busy} showTimestamp
               detailsRef={element => {
                 if (element === null) detailsButtons.current.delete(task.operationId)
                 else detailsButtons.current.set(task.operationId, element)
               }}
-              onDetails={() => { onIntent('open-download-task-details'); setExpanded(task.operationId) }} />)}</div>
+              onDetails={() => { onIntent('open-download-task-details'); setListFailure(null); setExpanded(task.operationId) }} />)}</div>
           {tasks.length > 0 && <details className="storage-details"><summary>{t.storage}</summary>
             <p>{t.storageHint}</p>
           </details>}
