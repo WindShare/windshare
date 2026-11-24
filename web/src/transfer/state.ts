@@ -10,6 +10,7 @@ export type ReceiveFailureReason =
   | 'source-changed'
   | 'cancelled'
   | 'session-ended'
+  | 'portable-limit-exceeded'
   | 'error'
 
 export interface ReceiveTiming {

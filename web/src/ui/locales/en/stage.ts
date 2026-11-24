@@ -29,6 +29,8 @@ export const stage = {
   preparing: 'Preparing download',
   preparingHint: 'Preparing your files and save location.',
   newAttempt: 'Download needs a new attempt',
+  portableLimitExceeded: 'Too large for direct download',
+  portableLimitExceededHint: 'This selection exceeds the direct browser download limit. Select fewer items, use a browser with folder or workspace storage, or install WindShare and run wind get with this share link.',
   sourceChanged: 'Source file changed',
   cancelled: 'Cancelled',
   discardedHint: 'Unfinished download data was removed.',

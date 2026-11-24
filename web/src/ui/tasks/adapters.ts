@@ -109,7 +109,7 @@ function activeBlocking(blocking: TaskBlocking | null | undefined, progress: Rec
 }
 
 function completenessFromFacts(state: ReceiveLifecycleState, progress: ReceiverProgress | null): TaskCompleteness {
-  if (state.kind === 'paused') return 'incomplete'
+  if (state.kind === 'paused' || state.kind === 'failed') return 'incomplete'
   if (state.contentWarning !== undefined || state.kind === 'partial') return 'partial'
   if (progress !== null && (progress.fileErrors > 0 || progress.selectionErrors > 0 ||
       progress.failedDirectories > 0 || progress.discovery === 'failed')) {

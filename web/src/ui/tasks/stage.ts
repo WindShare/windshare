@@ -112,6 +112,9 @@ function failedStage(
   if (reason === 'source-changed') {
     return stage('failed', t.sourceChanged, receiverCopy[language].failures.sourceChangedHint, 'source_invalidated')
   }
+  if (reason === 'portable-limit-exceeded') {
+    return stage('failed', t.portableLimitExceeded, t.portableLimitExceededHint, reason)
+  }
   if (reason === 'cancelled') {
     return stage('cancelled', t.cancelled, t.discardedHint, reason)
   }

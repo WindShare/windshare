@@ -21,6 +21,7 @@ import type { ReceiveFileRecord, ReceiveTaskRecord } from '../../src/output/stor
 import { buildPartialZipBlob, ProgressiveZipWriter } from '../../src/output/zip/progressive-zip'
 import { StreamingZipWriter } from '../../src/output/zip/streaming-zip'
 import { inspectSelectionShape } from '../../src/transfer/discovery'
+import { FaultScope, TransferFaultError, isPortableLimitExceededError } from '../../src/transfer/fault'
 import { TransferJob } from '../../src/transfer/job'
 import { artifactRootPath, selectionKey, selectionSpecFromPolicy } from '../../src/transfer/selection'
 import { initialReceiveState } from '../../src/transfer/state'
@@ -823,5 +824,161 @@ describe('ZIP result-root layout integration', () => {
     expect([...opfsArchive.files.keys()].sort()).toEqual(['Photos/Trip/1.jpg', 'Photos/a.jpg'])
     expect(opfsArchive.files.get('Photos/a.jpg')).toEqual(payloadA)
     expect(opfsArchive.files.get('Photos/Trip/1.jpg')).toEqual(payloadB)
+  })
+
+  it('rejects overflowing StreamingZipWriter entries before payload writes using exact finalized bounds', async () => {
+    const first = new Uint8Array(64).fill(0x41)
+    const second = new Uint8Array(64).fill(0x42)
+
+    const baseline = new StreamingZipWriter({ taskId: 'stream-exact-base', maxBytes: 1024n * 1024n })
+    const baseA = baseline.beginFile(['one.bin'], BigInt(first.byteLength))
+    baseA.write(first)
+    await baseA.close()
+    const baseB = baseline.beginFile(['two.bin'], BigInt(second.byteLength))
+    baseB.write(second)
+    await baseB.close()
+    const exactSize = BigInt((await baseline.finalize()).size)
+
+    const exactFit = new StreamingZipWriter({ taskId: 'stream-exact-fit', maxBytes: exactSize })
+    const fitA = exactFit.beginFile(['one.bin'], BigInt(first.byteLength))
+    fitA.write(first)
+    await fitA.close()
+    const fitB = exactFit.beginFile(['two.bin'], BigInt(second.byteLength))
+    fitB.write(second)
+    await fitB.close()
+    expect(BigInt((await exactFit.finalize()).size)).toBe(exactSize)
+
+    const oneShort = new StreamingZipWriter({ taskId: 'stream-one-short', maxBytes: exactSize - 1n })
+    const shortA = oneShort.beginFile(['one.bin'], BigInt(first.byteLength))
+    shortA.write(first)
+    await shortA.close()
+    let thrown: unknown
+    try {
+      oneShort.beginFile(['two.bin'], BigInt(second.byteLength))
+    } catch (error) {
+      thrown = error
+    }
+    expect(isPortableLimitExceededError(thrown)).toBe(true)
+    assert(thrown instanceof TransferFaultError)
+    expect(thrown.fault.scope).toBe(FaultScope.Job)
+  })
+
+  it('aborts TransferJob immediately when portable ZIP exceeds its byte cap and settles with portable-limit-exceeded', async () => {
+    const shareInstance = fixedId(31)
+    const rootId = fixedId(32)
+    const file1Id = fixedId(33)
+    const file2Id = fixedId(34)
+    const file3Id = fixedId(35)
+    const payload1 = new Uint8Array(512).fill(0x11)
+    const payload2 = new Uint8Array(512).fill(0x22)
+    const payload3 = new Uint8Array(128).fill(0x33)
+    const payloads = new Map<string, Uint8Array<ArrayBuffer>>([
+      [encodeBase64Url(file1Id), payload1],
+      [encodeBase64Url(file2Id), payload2],
+      [encodeBase64Url(file3Id), payload3],
+    ])
+    const pages = new Map([
+      [encodeBase64Url(rootId), makeDirectoryPage(shareInstance, rootId, [
+        Object.freeze({ kind: 'file', id: file1Id, idText: encodeBase64Url(file1Id), name: 'one.bin', expectedSize: BigInt(payload1.byteLength) }),
+        Object.freeze({ kind: 'file', id: file2Id, idText: encodeBase64Url(file2Id), name: 'two.bin', expectedSize: BigInt(payload2.byteLength) }),
+        Object.freeze({ kind: 'file', id: file3Id, idText: encodeBase64Url(file3Id), name: 'three.bin', expectedSize: BigInt(payload3.byteLength) }),
+      ])],
+    ])
+    const descriptor = Object.freeze({
+      shareInstance,
+      shareInstanceId: encodeBase64Url(shareInstance),
+      syntheticRoot: rootId,
+      syntheticRootId: encodeBase64Url(rootId),
+    }) as unknown as ShareDescriptor
+    const catalog = Object.freeze({
+      loadDirectory: async (directoryId: Uint8Array) => pages.get(encodeBase64Url(directoryId))!.committed,
+      page: async (committed: CommittedDirectory) => pages.get(committed.directoryIdText)!.page,
+    }) as unknown as CatalogClient
+
+    const openedRevisions: string[] = []
+    const readPayloads: string[] = []
+    const revisions: RevisionReader = {
+      open: async fileId => {
+        const idText = encodeBase64Url(fileId)
+        openedRevisions.push(idText)
+        const bytes = payloads.get(idText)!
+        const rev = fixedId(80)
+        return Object.freeze({
+          descriptor: Object.freeze({
+            shareInstance,
+            shareInstanceId: descriptor.shareInstanceId,
+            fileId,
+            fileIdText: idText,
+            fileRevision: rev,
+            fileRevisionText: encodeBase64Url(rev),
+            exactSize: BigInt(bytes.byteLength),
+            geometry: new FileGeometry(BigInt(bytes.byteLength), 1024n),
+          }) as FileRevisionDescriptor,
+          leaseId: fixedId(81),
+          release: async () => undefined,
+        })
+      },
+    }
+    const broker: BlockRangeReader = {
+      readRange: async function* (desc) {
+        readPayloads.push(desc.fileIdText)
+        yield Object.freeze({ offset: 0n, data: payloads.get(desc.fileIdText)! })
+      },
+    }
+
+    const selection = new SelectionPolicy(true).snapshot()
+    const spec = selectionSpecFromPolicy(descriptor.shareInstanceId, descriptor.syntheticRootId, selection)
+    const { windowPort, blobs } = createMockDownloadWindow()
+    const traceEvents: { readonly eventName: string; readonly payload: Readonly<Record<string, unknown>> }[] = []
+    const session = openPortableSession({
+      task: {
+        taskId: 'portable-cap-abort',
+        selection: spec,
+        selectionKey: selectionKey(spec),
+        artifact: Object.freeze({ kind: 'zip-archive', name: 'bundle.zip' }),
+        lifecycle: initialReceiveState('portable-cap-abort'),
+      },
+      windowPort,
+      // Fits file 1 (~512 B + ZIP framing) but not file 1 + file 2 (~1024 B + ZIP framing).
+      maxBytes: 900n,
+      diagnostics: {
+        backend: 'portable',
+        trace: { current: event => { traceEvents.push(event) } },
+      },
+    })
+
+    const result = await new TransferJob({
+      descriptor,
+      catalog,
+      selection,
+      revisions,
+      broker,
+      output: session.transferOutput,
+    }).run()
+
+    assert(result.status === 'failed')
+    expect(isPortableLimitExceededError(result.error)).toBe(true)
+    expect(readPayloads).toEqual([encodeBase64Url(file1Id)])
+    expect(openedRevisions).toEqual([encodeBase64Url(file1Id), encodeBase64Url(file2Id)])
+
+    const settled = await session.settle(result)
+    await session.close()
+    expect(blobs).toHaveLength(0)
+    expect(settled.lifecycle).toMatchObject({
+      kind: 'failed',
+      reason: 'portable-limit-exceeded',
+    })
+    if (settled.lifecycle.kind === 'failed') {
+      expect(settled.lifecycle.detail).toBeUndefined()
+    }
+    expect(traceEvents).toContainEqual({
+      eventName: 'settlement',
+      payload: {
+        backend: 'portable',
+        task_id: 'portable-cap-abort',
+        transition: 'failed',
+        reason: 'portable-limit-exceeded',
+      },
+    })
   })
 })

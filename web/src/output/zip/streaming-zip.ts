@@ -1,7 +1,10 @@
+import { portableLimitExceededError } from '../../transfer/fault'
 import type { ReceiveStore } from '../store/database'
 import { spoolChunkId } from '../store/types'
 import { completeZipMember } from './member'
 import {
+  ZIP64_END_BYTES,
+  ZIP_CLASSIC_END_BYTES,
   ZipCrc32,
   checkedZipAdd,
   encodeZipEndRecords,
@@ -97,7 +100,8 @@ type StreamingZipState = 'idle' | 'file-open' | 'finalized' | 'aborted'
 
 interface PendingZipDirectory {
   readonly entry: NormalizedZipEntry
-  readonly minimumBytes: bigint
+  readonly streamBytes: bigint
+  readonly centralBytes: bigint
 }
 
 /**
@@ -112,9 +116,11 @@ export class StreamingZipWriter {
   #offset = 0n
   #entryCount = 0n
   #centralBytes = 0n
-  #pendingDirectoryBytes = 0n
+  #pendingDirectoryStreamBytes = 0n
+  #pendingDirectoryCentralBytes = 0n
   #state: StreamingZipState = 'idle'
   #activeFile: StreamingZipFileWriter | undefined
+  #activePlan: ZipEntryPlanV1 | undefined
 
   constructor(options: StreamingZipWriterOptions) {
     this.#maxBytes = options.maxBytes
@@ -155,8 +161,11 @@ export class StreamingZipWriter {
       ...(modifiedTimeMilliseconds === undefined ? {} : { modifiedTimeMilliseconds }),
     })
     const plan = planZipEntry(normalized, this.#offset)
+    // Reject before reading any payload when the full entry and ZIP end records cannot fit.
+    this.#checkBudget(this.#projectedArchiveBytes(plan.entryStreamBytes, plan.centralRecordBytes, 1n))
     this.#push(encodeZipLocalHeader(plan))
     this.#state = 'file-open'
+    this.#activePlan = plan
     const writer: StreamingZipFileWriter = new StreamingZipFileWriter(
       plan,
       chunk => this.#writeActiveChunk(writer, chunk),
@@ -208,16 +217,23 @@ export class StreamingZipWriter {
   }
 
   #queueDirectory(entry: NormalizedZipEntry): void {
-    const estimate = planZipEntry(entry, 0n)
-    const minimumBytes = checkedZipAdd(estimate.entryStreamBytes, estimate.centralRecordBytes)
-    const nextPending = checkedZipAdd(this.#pendingDirectoryBytes, minimumBytes)
-    this.#checkBudget(checkedZipAdd(this.#offset, this.#centralBytes, nextPending))
-    this.#pendingDirectoryBytes = nextPending
-    this.#pendingDirectories.push({ entry, minimumBytes })
+    const activeEnd = this.#activePlan === undefined
+      ? this.#offset
+      : checkedZipAdd(this.#activePlan.localHeaderOffset, this.#activePlan.entryStreamBytes)
+    const estimate = planZipEntry(entry, checkedZipAdd(activeEnd, this.#pendingDirectoryStreamBytes))
+    this.#checkBudget(this.#projectedArchiveBytes(estimate.entryStreamBytes, estimate.centralRecordBytes, 1n))
+    this.#pendingDirectoryStreamBytes = checkedZipAdd(this.#pendingDirectoryStreamBytes, estimate.entryStreamBytes)
+    this.#pendingDirectoryCentralBytes = checkedZipAdd(this.#pendingDirectoryCentralBytes, estimate.centralRecordBytes)
+    this.#pendingDirectories.push({
+      entry,
+      streamBytes: estimate.entryStreamBytes,
+      centralBytes: estimate.centralRecordBytes,
+    })
   }
 
   async #writeDirectory(entry: NormalizedZipEntry): Promise<void> {
     const plan = planZipEntry(entry, this.#offset)
+    this.#checkBudget(this.#projectedArchiveBytes(plan.entryStreamBytes, plan.centralRecordBytes, 1n))
     this.#push(encodeZipLocalHeader(plan))
     const done = completeZipMember(plan, 0n, 0)
     this.#push(done.descriptor)
@@ -242,6 +258,9 @@ export class StreamingZipWriter {
     try {
       const done = completeZipMember(plan, plan.exactSize, crc32)
       this.#push(done.descriptor)
+      // Stream bytes are now committed to `#offset`; `#recordCentral` commits central bytes
+      // before its first await, so clearing `#activePlan` here avoids double-counting across yields.
+      this.#activePlan = undefined
       await this.#recordCentral(done.centralRecord)
       await this.#flushPendingDirectories()
     } catch (error) {
@@ -259,7 +278,8 @@ export class StreamingZipWriter {
     while (this.#pendingDirectories.length > 0) {
       if (this.#state !== 'file-open') return
       const pending = this.#pendingDirectories.shift()!
-      this.#pendingDirectoryBytes -= pending.minimumBytes
+      this.#pendingDirectoryStreamBytes -= pending.streamBytes
+      this.#pendingDirectoryCentralBytes -= pending.centralBytes
       await this.#writeDirectory(pending.entry)
     }
   }
@@ -273,14 +293,17 @@ export class StreamingZipWriter {
   #markAborted(): void {
     this.#state = 'aborted'
     this.#activeFile = undefined
+    this.#activePlan = undefined
     this.#parts.length = 0
     this.#pendingDirectories.length = 0
-    this.#pendingDirectoryBytes = 0n
+    this.#pendingDirectoryStreamBytes = 0n
+    this.#pendingDirectoryCentralBytes = 0n
   }
 
   async #recordCentral(record: Uint8Array): Promise<void> {
     const nextCentral = checkedZipAdd(this.#centralBytes, BigInt(record.byteLength))
-    this.#checkBudget(checkedZipAdd(this.#offset, nextCentral, this.#pendingDirectoryBytes))
+    const pendingBytes = checkedZipAdd(this.#pendingDirectoryStreamBytes, this.#pendingDirectoryCentralBytes)
+    this.#checkBudget(checkedZipAdd(this.#offset, nextCentral, pendingBytes))
     this.#centralBytes = nextCentral
     this.#entryCount += 1n
     await this.#spool.append(record)
@@ -288,9 +311,10 @@ export class StreamingZipWriter {
 
   #push(chunk: Uint8Array): void {
     const next = checkedZipAdd(this.#offset, BigInt(chunk.byteLength))
+    const pendingBytes = checkedZipAdd(this.#pendingDirectoryStreamBytes, this.#pendingDirectoryCentralBytes)
     const projected = this.#state === 'finalized'
       ? next
-      : checkedZipAdd(next, this.#centralBytes, this.#pendingDirectoryBytes)
+      : checkedZipAdd(next, this.#centralBytes, pendingBytes)
     this.#checkBudget(projected)
     const copy = new Uint8Array(chunk.byteLength)
     copy.set(chunk)
@@ -298,12 +322,31 @@ export class StreamingZipWriter {
     this.#offset = next
   }
 
+  #projectedArchiveBytes(addedStreamBytes: bigint, addedCentralBytes: bigint, addedEntries: bigint): bigint {
+    const baseStreamEnd = this.#activePlan === undefined
+      ? this.#offset
+      : checkedZipAdd(this.#activePlan.localHeaderOffset, this.#activePlan.entryStreamBytes)
+    const baseCentral = this.#activePlan === undefined
+      ? this.#centralBytes
+      : checkedZipAdd(this.#centralBytes, this.#activePlan.centralRecordBytes)
+    const baseEntries = this.#activePlan === undefined ? this.#entryCount : this.#entryCount + 1n
+
+    const streamEnd = checkedZipAdd(baseStreamEnd, this.#pendingDirectoryStreamBytes, addedStreamBytes)
+    const centralEnd = checkedZipAdd(baseCentral, this.#pendingDirectoryCentralBytes, addedCentralBytes)
+    const totalEntries = checkedZipAdd(baseEntries, BigInt(this.#pendingDirectories.length), addedEntries)
+    const endBytes = requiresZip64End({
+      entryCount: totalEntries,
+      centralDirectoryOffset: streamEnd,
+      centralDirectoryBytes: centralEnd,
+    })
+      ? checkedZipAdd(ZIP_CLASSIC_END_BYTES, ZIP64_END_BYTES)
+      : ZIP_CLASSIC_END_BYTES
+    return checkedZipAdd(streamEnd, centralEnd, endBytes)
+  }
+
   #checkBudget(projectedBytes: bigint): void {
     if (projectedBytes > this.#maxBytes) {
-      throw new DOMException(
-        `Portable browser download is limited to ${Number(this.#maxBytes / (1024n * 1024n))} MiB`,
-        'NotSupportedError',
-      )
+      throw portableLimitExceededError(this.#maxBytes)
     }
   }
 }

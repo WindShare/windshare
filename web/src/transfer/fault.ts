@@ -40,6 +40,7 @@ export const OutputFaultCode = Object.freeze({
   WriteFailed: 'write-failed',
   CommitFailed: 'commit-failed',
   QuotaExceeded: 'quota-exceeded',
+  PortableLimitExceeded: 'portable-limit-exceeded',
   PermissionDenied: 'permission-denied',
   DirectoryMetadata: 'directory-metadata',
   StorageUnavailable: 'storage-unavailable',
@@ -156,6 +157,23 @@ export class TransferStopError extends Error {
 
 export function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === 'AbortError'
+}
+
+const PORTABLE_LIMIT_MEBIBYTE = 1024n * 1024n
+
+/** Portable downloads have no resume or partial export, so exceeding their cap aborts the whole job. */
+export function portableLimitExceededError(maxBytes: bigint): TransferFaultError {
+  const limitLabel = maxBytes >= PORTABLE_LIMIT_MEBIBYTE && maxBytes % PORTABLE_LIMIT_MEBIBYTE === 0n
+    ? `${Number(maxBytes / PORTABLE_LIMIT_MEBIBYTE)} MiB`
+    : `${maxBytes.toString()} bytes`
+  return new TransferFaultError(
+    outputFault(FaultScope.Job, OutputFaultCode.PortableLimitExceeded),
+    `Portable browser download is limited to ${limitLabel}`,
+  )
+}
+
+export function isPortableLimitExceededError(error: unknown): boolean {
+  return error instanceof TransferFaultError && error.fault.code === OutputFaultCode.PortableLimitExceeded
 }
 
 export function isQuotaExceededError(error: unknown): boolean {

@@ -31,6 +31,8 @@ export const stage: typeof English = {
   preparing: '正在准备下载',
   preparingHint: '正在准备文件和保存位置。',
   newAttempt: '需要重新下载',
+  portableLimitExceeded: '超出直接下载上限',
+  portableLimitExceededHint: '所选内容超出浏览器直接下载上限。请减少所选项目、改用支持文件夹或浏览器存储的浏览器，或安装 WindShare 并使用 wind get 和此分享链接下载。',
   sourceChanged: '源文件已更改',
   cancelled: '已取消',
   discardedHint: '未完成的下载数据已移除。',

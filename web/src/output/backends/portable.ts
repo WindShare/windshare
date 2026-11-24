@@ -1,5 +1,5 @@
 import { bigintToSafeNumber } from '../../content/geometry'
-import { classifyNativeError } from '../../transfer/fault'
+import { classifyNativeError, isPortableLimitExceededError, portableLimitExceededError } from '../../transfer/fault'
 import type { SettledTransferJobResult } from '../../transfer/job'
 import type {
   TransferDirectoryRequest,
@@ -7,7 +7,7 @@ import type {
   TransferOutputFile,
   TransferOutputSession,
 } from '../../transfer/output-port'
-import { transitionReceiveState } from '../../transfer/state'
+import { transitionReceiveState, type ReceiveFailureReason } from '../../transfer/state'
 import { emitOutputTrace, type OutputDiagnosticsPorts, type OutputTraceSource } from '../diagnostics'
 import type { ReceiveOperationDisplay } from '../model/operation-display'
 import type { ReceiveStore } from '../store/database'
@@ -191,11 +191,17 @@ class PortableSessionHandle implements OutputSessionHandle {
     if (result.status !== 'completed') {
       await this.#zip?.abort()
       this.#singleFileBuffer = undefined
-      const reason = failedReasonFor(result.status)
+      const reason = failedReasonFor(result)
       const failed = transitionReceiveState(this.#baseRecord.lifecycle, {
         kind: 'failed',
         reason,
-        ...(result.error instanceof Error ? { detail: result.error.message } : {}),
+        ...(reason === 'error' && result.error instanceof Error ? { detail: result.error.message } : {}),
+      })
+      emitOutputTrace(this.#diagnostics?.trace, 'settlement', {
+        backend: 'portable',
+        task_id: this.taskId,
+        transition: 'failed',
+        reason,
       })
       const record: ReceiveTaskRecord = Object.freeze({
         ...this.#baseRecord,
@@ -257,10 +263,7 @@ class PortableSessionHandle implements OutputSessionHandle {
   async #openFile(request: TransferFileRequest, signal: AbortSignal): Promise<TransferOutputFile> {
     signal.throwIfAborted()
     if (request.exactSize > this.#maxBytes) {
-      throw new DOMException(
-        `Portable browser download is limited to ${Number(this.#maxBytes / (1024n * 1024n))} MiB`,
-        'NotSupportedError',
-      )
+      throw portableLimitExceededError(this.#maxBytes)
     }
 
     if (this.#isZip && this.#zip !== undefined) {
@@ -341,8 +344,9 @@ function portableDisplay(
   })
 }
 
-function failedReasonFor(status: SettledTransferJobResult['status']): 'source-changed' | 'cancelled' | 'error' {
-  if (status === 'source-changed') return 'source-changed'
-  if (status === 'stopped') return 'cancelled'
+function failedReasonFor(result: SettledTransferJobResult): ReceiveFailureReason {
+  if (isPortableLimitExceededError(result.error)) return 'portable-limit-exceeded'
+  if (result.status === 'source-changed') return 'source-changed'
+  if (result.status === 'stopped') return 'cancelled'
   return 'error'
 }
