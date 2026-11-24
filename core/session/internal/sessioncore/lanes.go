@@ -362,12 +362,22 @@ func (lanes *runtimeLanes) respondBelowReplayWindow(lane *RuntimeLane, request p
 	target := lane.identity
 	// Use non-blocking control enqueue so replying to a delayed request can
 	// never stall this lane's inbound pump behind outbound backpressure.
+	// When the inbound lane's control queue is saturated or stopped, scan
+	// remaining usable lanes without re-selecting it; if every control queue
+	// is full, drop the best-effort hint and record SendStatusNotSent.
 	if lane.writer != nil && lane.writer.EnqueueControl(reply, nil) == nil {
 		status = sessionobs.SendStatusConfirmed
-	} else if fallback, selectErr := lanes.selectLane(nil); selectErr == nil &&
-		fallback.writer != nil && fallback.writer.EnqueueControl(reply, nil) == nil {
-		target = fallback.identity
-		status = sessionobs.SendStatusConfirmed
+	} else if lanes.runtime.ctx.Err() == nil {
+		for _, fallback := range lanes.snapshot() {
+			if fallback.identity == lane.identity || fallback.writer == nil {
+				continue
+			}
+			if fallback.writer.EnqueueControl(reply, nil) == nil {
+				target = fallback.identity
+				status = sessionobs.SendStatusConfirmed
+				break
+			}
+		}
 	}
 	if lanes.runtime.protocolOperationTracingEnabled() {
 		lanes.runtime.traceProtocolOperation(sessionobs.ProtocolOperationObservation{

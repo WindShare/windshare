@@ -111,16 +111,17 @@ func TestRPCClientBoundsLifecycleAndCancellation(t *testing.T) {
 	}
 }
 
-func TestDelayedFirstRequestBelowReplayWindowRepliesRetryWithoutEndingSession(t *testing.T) {
-	share := id16[catalog.ShareInstance](91)
-	authKey := bytes.Repeat([]byte{92}, protocolsession.SessionAuthKeyBytes)
-	receiverPrivate, err := ecdh.X25519().GenerateKey(&deterministicReader{next: 93})
+func newTestSenderSessionKeys(t *testing.T, seed byte) (catalog.ShareInstance, protocolsession.SessionKeys) {
+	t.Helper()
+	share := id16[catalog.ShareInstance](seed)
+	authKey := bytes.Repeat([]byte{seed + 1}, protocolsession.SessionAuthKeyBytes)
+	receiverPrivate, err := ecdh.X25519().GenerateKey(&deterministicReader{next: seed + 2})
 	if err != nil {
 		t.Fatal(err)
 	}
 	client, err := protocolsession.NewClientHello(
-		share, id16[protocolsession.ReceiverInstanceID](94),
-		bytes.Repeat([]byte{95}, protocolsession.HandshakeNonceBytes), receiverPrivate.PublicKey(), authKey,
+		share, id16[protocolsession.ReceiverInstanceID](seed+3),
+		bytes.Repeat([]byte{seed + 4}, protocolsession.HandshakeNonceBytes), receiverPrivate.PublicKey(), authKey,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -133,13 +134,13 @@ func TestDelayedFirstRequestBelowReplayWindowRepliesRetryWithoutEndingSession(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	senderPrivate, err := ecdh.X25519().GenerateKey(&deterministicReader{next: 96})
+	senderPrivate, err := ecdh.X25519().GenerateKey(&deterministicReader{next: seed + 5})
 	if err != nil {
 		t.Fatal(err)
 	}
-	signingKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{97}, ed25519.SeedSize))
+	signingKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{seed + 6}, ed25519.SeedSize))
 	server, err := protocolsession.NewServerHello(
-		client, bytes.Repeat([]byte{98}, protocolsession.HandshakeNonceBytes),
+		client, bytes.Repeat([]byte{seed + 7}, protocolsession.HandshakeNonceBytes),
 		senderPrivate.PublicKey(), 1, signingKey,
 	)
 	if err != nil {
@@ -149,6 +150,113 @@ func TestDelayedFirstRequestBelowReplayWindowRepliesRetryWithoutEndingSession(t 
 	if err != nil {
 		t.Fatal(err)
 	}
+	return share, keys
+}
+
+func makePeerLaneCrypto(
+	t *testing.T,
+	sender *Runtime,
+	identity session.LaneIdentity,
+) (*protocolsession.EnvelopeSealer, *protocolsession.EnvelopeOpener) {
+	t.Helper()
+	outBind := protocolsession.EnvelopeBinding{
+		ShareInstance: sender.share, ProtocolSessionID: sender.sessionID,
+		LaneID: identity.ID, LaneEpoch: identity.Epoch, Direction: protocolsession.DirectionReceiverToSender,
+	}
+	inBind := outBind
+	inBind.Direction = protocolsession.DirectionSenderToReceiver
+	sealer, err := protocolsession.NewEnvelopeSealer(sender.keys.ReceiverToSender(), outBind, &deterministicReader{next: byte(identity.ID + 10)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opener, err := protocolsession.NewEnvelopeOpener(sender.keys.SenderToReceiver(), inBind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sealer, opener
+}
+
+func sendSealedPeerMessage(
+	t *testing.T,
+	ch *memoryChannel,
+	sealer *protocolsession.EnvelopeSealer,
+	kind protocolsession.MessageKind,
+	id protocolsession.OperationID,
+	body []byte,
+) {
+	t.Helper()
+	msg, err := protocolsession.NewMessage(kind, &id, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pt, err := protocolsession.EncodeMessage(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := sealer.Seal(pt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ch.Send(context.Background(), sealed.Frame); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func recvSealedPeerMessage(
+	t *testing.T,
+	ch *memoryChannel,
+	opener *protocolsession.EnvelopeOpener,
+) protocolsession.Message {
+	t.Helper()
+	select {
+	case frame := <-ch.Recv():
+		opened, err := opener.Open(frame)
+		if err != nil {
+			t.Fatal(err)
+		}
+		msg, err := protocolsession.DecodeMessage(opened.Plaintext)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return msg
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for sender response")
+		return protocolsession.Message{}
+	}
+}
+
+func saturateLaneControlQueue(t *testing.T, lane *RuntimeLane, blocker *blockingRuntimeLaneChannel) {
+	t.Helper()
+	body, err := protocolsession.EncodeOperationRetry(protocolsession.OperationRetryReasonReplayWindow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fillID := protocolsession.OperationID(999_999)
+	filler, err := protocolsession.NewMessage(protocolsession.MessageOperationRetry, &fillID, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// First control frame enters Send and parks the writer on blocker.
+	if err := lane.writer.EnqueueControl(filler, nil); err != nil {
+		t.Fatalf("seed blocking control frame: %v", err)
+	}
+	select {
+	case <-blocker.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for lane writer to block on transport")
+	}
+	for i := range protocolsession.ControlQueueFrameLimit {
+		if err := lane.writer.EnqueueControl(filler, nil); err != nil {
+			t.Fatalf("fill control queue slot %d: %v", i, err)
+		}
+	}
+	if err := lane.writer.EnqueueControl(filler, nil); !errors.Is(err, protocolsession.ErrControlQueueFull) {
+		t.Fatalf("expected full control queue, got %v", err)
+	}
+}
+
+func TestDelayedFirstRequestBelowReplayWindowRepliesRetryWithoutEndingSession(t *testing.T) {
+	share, keys := newTestSenderSessionKeys(t, 91)
 	lane1SenderCh, lane1Peer := newMemoryChannelPair()
 	t.Cleanup(func() {
 		_ = lane1SenderCh.Close()
@@ -194,77 +302,23 @@ func TestDelayedFirstRequestBelowReplayWindowRepliesRetryWithoutEndingSession(t 
 	sender.Start()
 	defer sender.Close()
 
-	makePeerLane := func(identity session.LaneIdentity) (*protocolsession.EnvelopeSealer, *protocolsession.EnvelopeOpener) {
-		outBind := protocolsession.EnvelopeBinding{
-			ShareInstance: sender.share, ProtocolSessionID: sender.sessionID,
-			LaneID: identity.ID, LaneEpoch: identity.Epoch, Direction: protocolsession.DirectionReceiverToSender,
-		}
-		inBind := outBind
-		inBind.Direction = protocolsession.DirectionSenderToReceiver
-		sealer, err := protocolsession.NewEnvelopeSealer(sender.keys.ReceiverToSender(), outBind, &deterministicReader{next: byte(identity.ID + 10)})
-		if err != nil {
-			t.Fatal(err)
-		}
-		opener, err := protocolsession.NewEnvelopeOpener(sender.keys.SenderToReceiver(), inBind)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return sealer, opener
-	}
-	lane1Sealer, lane1Opener := makePeerLane(sender.initial)
-	lane2Sealer, lane2Opener := makePeerLane(lane2ID)
-
-	sendOn := func(ch *memoryChannel, sealer *protocolsession.EnvelopeSealer, kind protocolsession.MessageKind, id protocolsession.OperationID, body []byte) {
-		t.Helper()
-		msg, err := protocolsession.NewMessage(kind, &id, body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		pt, err := protocolsession.EncodeMessage(msg)
-		if err != nil {
-			t.Fatal(err)
-		}
-		sealed, err := sealer.Seal(pt)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := ch.Send(context.Background(), sealed.Frame); err != nil {
-			t.Fatal(err)
-		}
-	}
-	recvOn := func(ch *memoryChannel, opener *protocolsession.EnvelopeOpener) protocolsession.Message {
-		t.Helper()
-		select {
-		case frame := <-ch.Recv():
-			opened, err := opener.Open(frame)
-			if err != nil {
-				t.Fatal(err)
-			}
-			msg, err := protocolsession.DecodeMessage(opened.Plaintext)
-			if err != nil {
-				t.Fatal(err)
-			}
-			return msg
-		case <-time.After(2 * time.Second):
-			t.Fatal("timed out waiting for sender response")
-			return protocolsession.Message{}
-		}
-	}
+	lane1Sealer, lane1Opener := makePeerLaneCrypto(t, sender, sender.initial)
+	lane2Sealer, lane2Opener := makePeerLaneCrypto(t, sender, lane2ID)
 
 	// Advance sender's replay window past (1 + OperationReplayWindow) on lane 2 with at most 2 ops.
 	highID := protocolsession.OperationID(1 + protocolsession.OperationReplayWindow)
-	sendOn(lane2Peer, lane2Sealer, protocolsession.MessageRequestBlocks, 2, []byte{0xa0})
-	if got := recvOn(lane2Peer, lane2Opener); got.Kind() != protocolsession.MessageOperationComplete {
+	sendSealedPeerMessage(t, lane2Peer, lane2Sealer, protocolsession.MessageRequestBlocks, 2, []byte{0xa0})
+	if got := recvSealedPeerMessage(t, lane2Peer, lane2Opener); got.Kind() != protocolsession.MessageOperationComplete {
 		t.Fatalf("lane 2 op 2 response kind = %d", got.Kind())
 	}
-	sendOn(lane2Peer, lane2Sealer, protocolsession.MessageRequestBlocks, highID, []byte{0xa0})
-	if got := recvOn(lane2Peer, lane2Opener); got.Kind() != protocolsession.MessageOperationComplete {
+	sendSealedPeerMessage(t, lane2Peer, lane2Sealer, protocolsession.MessageRequestBlocks, highID, []byte{0xa0})
+	if got := recvSealedPeerMessage(t, lane2Peer, lane2Opener); got.Kind() != protocolsession.MessageOperationComplete {
 		t.Fatalf("lane 2 op %d response kind = %d", highID, got.Kind())
 	}
 
 	// Deliver the delayed first catalog request (id = 1) on lane 1.
-	sendOn(lane1Peer, lane1Sealer, protocolsession.MessageListChildren, 1, []byte{0xa0})
-	retryReply := recvOn(lane1Peer, lane1Opener)
+	sendSealedPeerMessage(t, lane1Peer, lane1Sealer, protocolsession.MessageListChildren, 1, []byte{0xa0})
+	retryReply := recvSealedPeerMessage(t, lane1Peer, lane1Opener)
 	replyID, _ := retryReply.OperationID()
 	if retryReply.Kind() != protocolsession.MessageOperationRetry || replyID != 1 {
 		t.Fatalf("delayed op 1 reply = (kind=%d, id=%d), want (MessageOperationRetry, 1)", retryReply.Kind(), replyID)
@@ -279,8 +333,8 @@ func TestDelayedFirstRequestBelowReplayWindowRepliesRetryWithoutEndingSession(t 
 
 	// Reissuing the catalog request with a fresh OperationID succeeds on the same healthy session.
 	freshID := highID + 1
-	sendOn(lane1Peer, lane1Sealer, protocolsession.MessageListChildren, freshID, []byte{0xa0})
-	freshReply := recvOn(lane1Peer, lane1Opener)
+	sendSealedPeerMessage(t, lane1Peer, lane1Sealer, protocolsession.MessageListChildren, freshID, []byte{0xa0})
+	freshReply := recvSealedPeerMessage(t, lane1Peer, lane1Opener)
 	if freshReply.Kind() != protocolsession.MessageCatalogResult {
 		t.Fatalf("fresh retry reply kind = %d, want MessageCatalogResult", freshReply.Kind())
 	}
@@ -300,7 +354,7 @@ func TestDelayedFirstRequestBelowReplayWindowRepliesRetryWithoutEndingSession(t 
 	}
 
 	// Proven in-window duplicate (conflicting body on freshID) must still terminate the session.
-	sendOn(lane2Peer, lane2Sealer, protocolsession.MessageListChildren, freshID, []byte{0xa1, 0x00, 0x01})
+	sendSealedPeerMessage(t, lane2Peer, lane2Sealer, protocolsession.MessageListChildren, freshID, []byte{0xa1, 0x00, 0x01})
 	select {
 	case <-sender.Done():
 	case <-time.After(2 * time.Second):
@@ -309,4 +363,204 @@ func TestDelayedFirstRequestBelowReplayWindowRepliesRetryWithoutEndingSession(t 
 	if !errors.Is(sender.Err(), protocolsession.ErrOperationIDReused) {
 		t.Fatalf("proven duplicate termination err = %v, want ErrOperationIDReused", sender.Err())
 	}
+}
+
+func TestBelowReplayWindowRetryFallbackSkipsFullLanesAndDropsWhenAllFull(t *testing.T) {
+	t.Run("skips_saturated_primary_and_second_lane_to_deliver_on_open_lane", func(t *testing.T) {
+		share, keys := newTestSenderSessionKeys(t, 111)
+		lane1Base, lane1Peer := newMemoryChannelPair()
+		lane2Base, lane2Peer := newMemoryChannelPair()
+		lane3SenderCh, lane3Peer := newMemoryChannelPair()
+		t.Cleanup(func() {
+			_ = lane1Base.Close()
+			_ = lane1Peer.Close()
+			_ = lane2Base.Close()
+			_ = lane2Peer.Close()
+			_ = lane3SenderCh.Close()
+			_ = lane3Peer.Close()
+		})
+		lane1Blocking := &blockingRuntimeLaneChannel{
+			memoryChannel: lane1Base, started: make(chan struct{}), release: make(chan struct{}),
+		}
+		lane2Blocking := &blockingRuntimeLaneChannel{
+			memoryChannel: lane2Base, started: make(chan struct{}), release: make(chan struct{}),
+		}
+
+		sender, err := New(Config{
+			Share: share, Role: protocolsession.RoleSender, Keys: keys, LaneID: 1, Channel: lane1Blocking,
+			Random: &deterministicReader{next: 119}, Validator: permissiveInboundAuthenticator(),
+		})
+		if err != nil {
+			keys.Destroy()
+			t.Fatal(err)
+		}
+		keys.Destroy()
+		recorder := newProtocolTraceRecorder(sender)
+
+		responses := NewResponses(sender, ResponseConfig{})
+		completeBody, _ := protocolsession.EncodeBody(map[uint64]any{0: uint64(1), 1: uint64(0)})
+		if err := sender.inbound.RegisterHandler(protocolsession.MessageRequestBlocks, protocolsession.MessageHandlerFunc(
+			func(ctx context.Context, op protocolsession.Operation, _ protocolsession.Message) error {
+				return responses.SendControl(ctx, op, protocolsession.MessageOperationComplete, completeBody)
+			},
+		)); err != nil {
+			t.Fatal(err)
+		}
+
+		lane2ID := session.LaneIdentity{ID: 2, Epoch: 1}
+		lane3ID := session.LaneIdentity{ID: 3, Epoch: 1}
+		lane2, err := sender.lanes.add(lane2ID, lane2Blocking, permissiveInboundAuthenticator(), false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := sender.lanes.add(lane3ID, lane3SenderCh, permissiveInboundAuthenticator(), false); err != nil {
+			t.Fatal(err)
+		}
+		lane1 := sender.lanes.active[sender.initial.ID]
+		sender.Start()
+		defer sender.Close()
+
+		lane1Sealer, _ := makePeerLaneCrypto(t, sender, sender.initial)
+		lane3Sealer, lane3Opener := makePeerLaneCrypto(t, sender, lane3ID)
+
+		// Advance the replay window on lane 3 so op 1 falls below the window.
+		highID := protocolsession.OperationID(1 + protocolsession.OperationReplayWindow)
+		sendSealedPeerMessage(t, lane3Peer, lane3Sealer, protocolsession.MessageRequestBlocks, highID, []byte{0xa0})
+		if got := recvSealedPeerMessage(t, lane3Peer, lane3Opener); got.Kind() != protocolsession.MessageOperationComplete {
+			t.Fatalf("lane 3 op %d response kind = %d", highID, got.Kind())
+		}
+
+		// Saturate both the inbound lane (lane 1) and the next lane (lane 2).
+		saturateLaneControlQueue(t, lane1, lane1Blocking)
+		saturateLaneControlQueue(t, lane2, lane2Blocking)
+
+		// Point round-robin cursor directly at lane 1 so single-pick fallback would re-select it.
+		sender.lanes.mu.Lock()
+		sender.lanes.nextSlot = 0
+		sender.lanes.mu.Unlock()
+
+		sendSealedPeerMessage(t, lane1Peer, lane1Sealer, protocolsession.MessageListChildren, 1, []byte{0xa0})
+		retryReply := recvSealedPeerMessage(t, lane3Peer, lane3Opener)
+		replyID, _ := retryReply.OperationID()
+		if retryReply.Kind() != protocolsession.MessageOperationRetry || replyID != 1 {
+			t.Fatalf("fallback reply on lane 3 = (kind=%d, id=%d), want (MessageOperationRetry, 1)", retryReply.Kind(), replyID)
+		}
+		reason, err := protocolsession.DecodeOperationRetry(retryReply.Body())
+		if err != nil || reason != protocolsession.OperationRetryReasonReplayWindow {
+			t.Fatalf("fallback retry reason = (%d, %v)", reason, err)
+		}
+
+		foundFallbackTrace := false
+		for _, obs := range recorder.snapshot() {
+			if obs.Stage == sessionobs.ProtocolOperationSenderRequestBelowWindow &&
+				obs.OperationID == 1 &&
+				obs.Lane == lane3ID &&
+				obs.SendStatus == sessionobs.SendStatusConfirmed {
+				foundFallbackTrace = true
+				break
+			}
+		}
+		if !foundFallbackTrace {
+			t.Fatalf("missing confirmed fallback trace on lane 3; events=%+v", recorder.snapshot())
+		}
+		if sender.Err() != nil {
+			t.Fatalf("session failed unexpectedly: %v", sender.Err())
+		}
+	})
+
+	t.Run("all_control_queues_full_drops_without_stalling_inbound_pump", func(t *testing.T) {
+		share, keys := newTestSenderSessionKeys(t, 131)
+		lane1Base, lane1Peer := newMemoryChannelPair()
+		lane2Base, lane2Peer := newMemoryChannelPair()
+		t.Cleanup(func() {
+			_ = lane1Base.Close()
+			_ = lane1Peer.Close()
+			_ = lane2Base.Close()
+			_ = lane2Peer.Close()
+		})
+		lane1Blocking := &blockingRuntimeLaneChannel{
+			memoryChannel: lane1Base, started: make(chan struct{}), release: make(chan struct{}),
+		}
+		lane2Blocking := &blockingRuntimeLaneChannel{
+			memoryChannel: lane2Base, started: make(chan struct{}), release: make(chan struct{}),
+		}
+
+		sender, err := New(Config{
+			Share: share, Role: protocolsession.RoleSender, Keys: keys, LaneID: 1, Channel: lane1Blocking,
+			Random: &deterministicReader{next: 139}, Validator: permissiveInboundAuthenticator(),
+		})
+		if err != nil {
+			keys.Destroy()
+			t.Fatal(err)
+		}
+		keys.Destroy()
+		recorder := newProtocolTraceRecorder(sender)
+
+		admitted := make(chan protocolsession.OperationID, 2)
+		if err := sender.inbound.RegisterHandler(protocolsession.MessageRequestBlocks, protocolsession.MessageHandlerFunc(
+			func(_ context.Context, op protocolsession.Operation, _ protocolsession.Message) error {
+				admitted <- op.ID()
+				return nil
+			},
+		)); err != nil {
+			t.Fatal(err)
+		}
+
+		lane2ID := session.LaneIdentity{ID: 2, Epoch: 1}
+		lane2, err := sender.lanes.add(lane2ID, lane2Blocking, permissiveInboundAuthenticator(), false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lane1 := sender.lanes.active[sender.initial.ID]
+		sender.Start()
+		defer sender.Close()
+
+		lane1Sealer, _ := makePeerLaneCrypto(t, sender, sender.initial)
+		lane2Sealer, _ := makePeerLaneCrypto(t, sender, lane2ID)
+
+		highID := protocolsession.OperationID(1 + protocolsession.OperationReplayWindow)
+		sendSealedPeerMessage(t, lane2Peer, lane2Sealer, protocolsession.MessageRequestBlocks, highID, []byte{0xa0})
+		select {
+		case gotID := <-admitted:
+			if gotID != highID {
+				t.Fatalf("admitted highID = %d, want %d", gotID, highID)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for highID admission")
+		}
+
+		saturateLaneControlQueue(t, lane1, lane1Blocking)
+		saturateLaneControlQueue(t, lane2, lane2Blocking)
+
+		// Deliver a below-window request followed immediately by a fresh request on lane 1.
+		// Dropping the retry hint must not block lane 1's inbound pump from delivering freshID.
+		sendSealedPeerMessage(t, lane1Peer, lane1Sealer, protocolsession.MessageListChildren, 1, []byte{0xa0})
+		freshID := highID + 1
+		sendSealedPeerMessage(t, lane1Peer, lane1Sealer, protocolsession.MessageRequestBlocks, freshID, []byte{0xa0})
+		select {
+		case gotID := <-admitted:
+			if gotID != freshID {
+				t.Fatalf("admitted freshID = %d, want %d", gotID, freshID)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("inbound pump stalled after full-queue below-window retry drop")
+		}
+
+		foundNotSent := false
+		for _, obs := range recorder.snapshot() {
+			if obs.Stage == sessionobs.ProtocolOperationSenderRequestBelowWindow &&
+				obs.OperationID == 1 &&
+				obs.Lane == sender.initial &&
+				obs.SendStatus == sessionobs.SendStatusNotSent {
+				foundNotSent = true
+				break
+			}
+		}
+		if !foundNotSent {
+			t.Fatalf("missing SendStatusNotSent below-window trace; events=%+v", recorder.snapshot())
+		}
+		if sender.Err() != nil {
+			t.Fatalf("session failed unexpectedly after best-effort drop: %v", sender.Err())
+		}
+	})
 }
