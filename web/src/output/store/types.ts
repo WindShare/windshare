@@ -73,6 +73,7 @@ export interface ReceiveTaskRecord {
   readonly target: TaskTargetRecord
   readonly display?: ReceiveOperationDisplay
   readonly safeRenamed?: SafeRenamedSummary
+  readonly sourceOmittedEntries?: bigint
   readonly sourceRevisionFailures?: SourceRevisionFailures
   readonly discoveryComplete: boolean
   readonly updatedAt: number

@@ -58,6 +58,9 @@ export function activeTaskFacts(input: Readonly<{
     publication: publicationFromLifecycle(state, backend),
     progress,
     safeRenamed: output.safeRenamed,
+    sourceOmittedEntries: output.sourceOmittedEntries > 0n
+      ? output.sourceOmittedEntries
+      : progress.sourceOmittedEntries,
     details: Object.freeze([]),
     outageCheckpointed: output.outageCheckpointed,
     interruption: output.interruption,
@@ -89,6 +92,7 @@ export function retainedTaskFacts(
     publication: publicationFromLifecycle(task.lifecycle, task.backend),
     progress: null,
     safeRenamed: task.safeRenamed ?? null,
+    sourceOmittedEntries: task.sourceOmittedEntries ?? 0n,
     details: Object.freeze([]),
     outageCheckpointed: false,
     interruption: null,

@@ -1,5 +1,6 @@
 export const stage = {
   partialHandoff: 'Partial download — check browser downloads',
+  handoffWithSkipped: 'Download started with skipped items',
   handoff: 'Download started — check browser downloads',
   handoffHint: 'The browser took over. WindShare cannot confirm where or whether the file was saved.',
   readyToSave: 'Ready to save',
@@ -10,6 +11,7 @@ export const stage = {
   settling: 'Finishing in-progress writes so your download can close safely.',
   savedHint: 'Saved to your chosen folder.',
   partiallySaved: 'Saved with missing items',
+  savedWithSkipped: 'Saved with skipped items',
   saved: 'Saved',
   permissionNeeded: 'Folder access needed',
   permissionNeededHint: 'Grant folder access again to continue this download.',

@@ -109,6 +109,8 @@ export function TaskCard({ task, actions, onDetails, onDismiss, detailsRef, busy
       </div>
     </div>}
     {task.completeness === 'partial' && <p className="task-notice">{t.partial}</p>}
+    {task.sourceOmittedEntries > 0n &&
+      <p className="task-notice">{t.sourceOmittedCount(task.sourceOmittedEntries)}</p>}
     {task.safeRenamed !== null && task.safeRenamed.count > 0 &&
       <p className="task-notice">{t.adjustedCount(task.safeRenamed.count)}</p>}
   </section>

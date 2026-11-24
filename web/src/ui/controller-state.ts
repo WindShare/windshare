@@ -191,6 +191,7 @@ export function receiverProgressSnapshot(progress: TransferProgress): ReceiverPr
     contentLanes: progress.contentLanes,
     discovery: progress.discovery,
     failedDirectories: progress.failedDirectories,
+    sourceOmittedEntries: progress.sourceOmittedEntries,
     capacityWaitingFiles: progress.capacityWaitingFiles,
     capacityAccumulatedWaitMilliseconds: progress.capacityAccumulatedWaitMilliseconds,
     capacityWaitAttempts: progress.capacityWaitAttempts,

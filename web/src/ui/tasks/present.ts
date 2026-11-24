@@ -49,6 +49,10 @@ function collectTaskDetails(
   } else if (facts.completeness === 'partial') {
     details.unshift(t.partial)
   }
+  if (facts.sourceOmittedEntries > 0n) {
+    details.push(receiverCopy[language].downloads.sourceOmittedCount(facts.sourceOmittedEntries))
+    details.push(t.sourceOmittedHint)
+  }
   if (facts.safeRenamed !== null && facts.safeRenamed.count > 0) {
     details.push(receiverCopy[language].downloads.adjustedCount(facts.safeRenamed.count))
     details.push(t.adjustedHint)
@@ -92,6 +96,7 @@ export function presentTask(facts: TaskFacts, language: Language = 'en'): TaskPr
     removal,
     details,
     safeRenamed: facts.safeRenamed,
+    sourceOmittedEntries: facts.sourceOmittedEntries,
     completeness: facts.completeness,
     publication: facts.publication,
     transition,
@@ -124,6 +129,9 @@ function contentWarningDetails(
 function taskTone(stage: TaskStage, attention: boolean, facts: TaskFacts): TaskPresentation['tone'] {
   if (stage === 'failed') return 'critical'
   if (attention || stage === 'paused' || stage === 'waiting') return 'warning'
+  // Omitted source items cannot be fixed by retrying locally, so surface a warning tone on
+  // delivered cards without keeping a permanent needs-attention badge on Downloads.
+  if (facts.sourceOmittedEntries > 0n && (stage === 'saved' || stage === 'handed-to-browser')) return 'warning'
   return facts.publication === 'saved' ? 'positive' : 'neutral'
 }
 
@@ -152,7 +160,7 @@ function transitionFor(facts: TaskFacts, copy: StageCopy, attention: boolean): T
     attention,
     fingerprint: [
       facts.lifecycle.taskId, copy.stage, copy.reason, facts.completeness,
-      facts.publication, attention, (facts.safeRenamed?.count ?? 0) > 0, actionFacts,
+      facts.publication, attention, (facts.safeRenamed?.count ?? 0) > 0, facts.sourceOmittedEntries, actionFacts,
       receiveElapsedMilliseconds(facts.lifecycle.timing),
     ].join(':'),
   })

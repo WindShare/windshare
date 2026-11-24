@@ -2,6 +2,7 @@ import { plural } from './plural'
 
 export const progress = {
   adjustedHint: 'Download as a ZIP archive to preserve the original filenames.',
+  sourceOmittedHint: 'A skipped folder counts as one item, excluding all of its contents. Ask the sender to check skipped items.',
   partial: 'Partial result: some selected items are missing or unfinished.',
   sourceChanged: 'The source file changed or was deleted.',
   sourceUnavailable: 'The source file is unavailable or was deleted.',

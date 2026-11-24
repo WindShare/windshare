@@ -2,6 +2,7 @@ import type { stage as English } from '../en/stage'
 
 export const stage: typeof English = {
   partialHandoff: '已开始下载部分内容，请查看浏览器下载记录',
+  handoffWithSkipped: '已开始下载，有跳过项目',
   handoff: '下载已开始，请查看浏览器下载记录',
   handoffHint: '浏览器已接管下载。WindShare 无法确认文件是否已保存及保存位置。',
   readyToSave: '可以保存',
@@ -12,6 +13,7 @@ export const stage: typeof English = {
   settling: '正在完成当前写入并保存进度，随后将安全结束。',
   savedHint: '已保存到所选文件夹。',
   partiallySaved: '已保存，部分项目缺失',
+  savedWithSkipped: '已保存，有跳过项目',
   saved: '已保存',
   permissionNeeded: '需要重新授权文件夹',
   permissionNeededHint: '请重新授予文件夹访问权限以继续下载。',

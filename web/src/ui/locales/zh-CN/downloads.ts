@@ -36,6 +36,7 @@ export const downloads: typeof English = {
   elapsedLabel: duration => `耗时：${duration}`,
   adjustedCount: count => `已调整 ${count} 个文件名，以便在此设备上保存。`,
   moreAdjusted: count => `另有 ${count} 个已调整的文件名未列出。`,
+  sourceOmittedCount: count => `已跳过 ${count} 个无法分享的源项目。`,
   days: n => `${n} 天`,
   hours: n => `${n} 小时`,
   minutes: n => `${n} 分钟`,

@@ -55,6 +55,7 @@ export interface TaskFacts {
   readonly publication: TaskPublication
   readonly progress: ReceiverProgress | null
   readonly safeRenamed: SafeRenamedSummary | null
+  readonly sourceOmittedEntries: bigint
   readonly details: readonly string[]
   readonly outageCheckpointed: boolean
   readonly interruption: 'pause' | 'stop' | null
@@ -109,6 +110,7 @@ export interface TaskPresentation {
   readonly removal: TaskRemovalPresentation | null
   readonly details: readonly string[]
   readonly safeRenamed: SafeRenamedSummary | null
+  readonly sourceOmittedEntries: bigint
   readonly completeness: TaskCompleteness
   readonly publication: TaskPublication
   readonly transition: TaskPresentationTransition

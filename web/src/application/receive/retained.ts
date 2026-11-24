@@ -202,6 +202,9 @@ export function retainedSnapshot(record: ReceiveTaskRecord, activeElsewhere: boo
     backend: record.backend, lifecycle: record.lifecycle, activeElsewhere, canSavePartial,
     ...(record.display === undefined ? {} : { display: record.display }),
     ...(record.safeRenamed === undefined ? {} : { safeRenamed: record.safeRenamed }),
+    ...(record.sourceOmittedEntries !== undefined && record.sourceOmittedEntries > 0n
+      ? { sourceOmittedEntries: record.sourceOmittedEntries }
+      : {}),
     ...(record.sourceRevisionFailures === undefined ? {} : { sourceRevisionFailures: record.sourceRevisionFailures }),
     actions: actionsForState(record.lifecycle, record.backend, canSavePartial),
   })

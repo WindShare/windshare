@@ -54,6 +54,7 @@ interface TransferJobFacts {
   readonly discoveryComplete: boolean
   readonly failedFiles: bigint
   readonly failedDirectories: bigint
+  readonly sourceOmittedEntries?: bigint
   readonly sourceRevisionFailures?: SourceRevisionFailures
   readonly contentWarning?: ReceiveContentWarning
   readonly safeRenamed?: SafeRenamedSummary
@@ -95,6 +96,7 @@ export class TransferJob {
   #discoveredBytes = 0n
   #failedFiles = 0n
   #failedDirectories = 0n
+  #sourceOmittedEntries = 0n
 
   constructor(options: TransferJobOptions) {
     this.transferJobId = options.transferJobId ?? createTaskId()
@@ -234,7 +236,11 @@ export class TransferJob {
       this.#options.rootPath ?? EMPTY_ROOT_PATH,
       this.#abort.signal,
       {
-        onOmittedEntries: count => this.#tracker.observeOmittedEntries(count),
+        onOmittedEntries: count => {
+          if (count <= 0n) return
+          this.#sourceOmittedEntries += count
+          this.#tracker.observeOmittedEntries(count)
+        },
         onDirectoryFailed: (_id, error) => this.#recordDirectoryFailure(error),
         onFileDiscovered: file => {
           this.#discoveredFiles += 1n
@@ -431,6 +437,7 @@ export class TransferJob {
       discoveryComplete: this.#discoveryComplete,
       failedFiles: this.#failedFiles,
       failedDirectories: this.#failedDirectories,
+      ...(this.#sourceOmittedEntries > 0n ? { sourceOmittedEntries: this.#sourceOmittedEntries } : {}),
       ...(sourceRevisionFailures === undefined ? {} : { sourceRevisionFailures }),
       ...(contentWarning === undefined ? {} : { contentWarning }),
       ...(safeRenamed === undefined ? {} : { safeRenamed }),

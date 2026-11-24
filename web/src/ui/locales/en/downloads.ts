@@ -36,6 +36,7 @@ export const downloads = {
   elapsedLabel: (duration: string) => `Elapsed: ${duration}`,
   adjustedCount: (count: number) => `${count} ${count === 1 ? 'filename was' : 'filenames were'} adjusted for this device.`,
   moreAdjusted: (count: number) => `${count} more adjusted ${plural(count, 'filename')}.`,
+  sourceOmittedCount: (count: bigint) => `${count} source ${plural(count, 'item')} couldn’t be shared and ${count === 1n ? 'was' : 'were'} skipped.`,
   days: (n: number) => `${n} ${n === 1 ? 'day' : 'days'}`,
   hours: (n: number) => `${n} hr`,
   minutes: (n: number) => `${n} min`,

@@ -61,6 +61,7 @@ export interface RetainedTaskSnapshot {
   readonly lifecycle: ReceiveLifecycleState
   readonly display?: ReceiveOperationDisplay
   readonly safeRenamed?: SafeRenamedSummary
+  readonly sourceOmittedEntries?: bigint
   readonly sourceRevisionFailures?: SourceRevisionFailures
   readonly actions: readonly ReceiveAction[]
   readonly activeElsewhere: boolean
@@ -103,6 +104,7 @@ export interface ReceiveRuntimeSnapshot {
   readonly lifecycle: ReceiveLifecycleState | null
   readonly display: ReceiveOperationDisplay | null
   readonly safeRenamed: SafeRenamedSummary | null
+  readonly sourceOmittedEntries: bigint
   readonly sourceRevisionFailures: SourceRevisionFailures | null
   readonly outageCheckpointed: boolean
   readonly progress: TransferProgress

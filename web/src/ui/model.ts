@@ -34,6 +34,7 @@ export interface ReceiverProgress {
   readonly contentLanes: number
   readonly discovery: 'open' | 'complete' | 'failed'
   readonly failedDirectories: number
+  readonly sourceOmittedEntries: bigint
   readonly capacityWaitingFiles: number
   readonly capacityAccumulatedWaitMilliseconds: number
   readonly capacityWaitAttempts: number
@@ -142,6 +143,7 @@ export const EMPTY_PROGRESS: ReceiverProgress = Object.freeze({
   contentLanes: 0,
   discovery: 'open',
   failedDirectories: 0,
+  sourceOmittedEntries: 0n,
   capacityWaitingFiles: 0,
   capacityAccumulatedWaitMilliseconds: 0,
   capacityWaitAttempts: 0,

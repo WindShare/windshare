@@ -657,6 +657,7 @@ export class ReceiveCoordinator {
       lifecycle: this.#workspace.lifecycle,
       display: this.#workspace.display,
       safeRenamed: this.#workspace.safeRenamed,
+      sourceOmittedEntries: this.#workspace.sourceOmittedEntries,
       sourceRevisionFailures: this.#workspace.sourceRevisionFailures,
       outageCheckpointed: this.#sessions.outageCheckpointed,
       progress: this.#workspace.progress,

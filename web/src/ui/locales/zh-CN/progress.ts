@@ -2,6 +2,7 @@ import type { progress as English } from '../en/progress'
 
 export const progress: typeof English = {
   adjustedHint: '如需保留原文件名，请改用 ZIP 方式下载。',
+  sourceOmittedHint: '整个跳过的文件夹计为一项，其内容均未包含。可请发送方检查跳过的项目。',
   partial: '仅部分完成：部分所选项目缺失或尚未完成。',
   sourceChanged: '源文件已更改或已删除。',
   sourceUnavailable: '源文件不可用或已删除。',

@@ -303,3 +303,20 @@ export function resolveZipEntryPath(
   }
   return Object.freeze([archiveRoot, ...relativePath])
 }
+
+/**
+ * Reconciles omitted source-entry counts across resumable runs.
+ * Complete discovery traverses the whole selected tree from scratch so its count is
+ * authoritative; incomplete runs retain the larger bound observed so far.
+ */
+export function mergeSourceOmittedEntries(
+  observed: bigint | undefined,
+  previous: bigint | undefined,
+  discoveryComplete: boolean,
+): bigint | undefined {
+  const current = observed !== undefined && observed > 0n ? observed : 0n
+  const prior = previous !== undefined && previous > 0n ? previous : 0n
+  const maxObserved = current > prior ? current : prior
+  const total = discoveryComplete ? current : maxObserved
+  return total > 0n ? total : undefined
+}

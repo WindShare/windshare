@@ -321,6 +321,7 @@ export class WorkspaceTask {
   #lifecycle: ReceiveLifecycleState | null = null
   #display: ReceiveOperationDisplay | null = null
   #safeRenamed: SafeRenamedSummary | null = null
+  #sourceOmittedEntries = 0n
   #sourceRevisionFailures: SourceRevisionFailures | null = null
   #progress: TransferProgress = EMPTY_TRANSFER_PROGRESS
   #interruption: 'pause' | 'stop' | null = null
@@ -332,6 +333,7 @@ export class WorkspaceTask {
   get lifecycle(): ReceiveLifecycleState | null { return this.#lifecycle }
   get display(): ReceiveOperationDisplay | null { return this.#display }
   get safeRenamed(): SafeRenamedSummary | null { return this.#safeRenamed }
+  get sourceOmittedEntries(): bigint { return this.#sourceOmittedEntries }
   get sourceRevisionFailures(): SourceRevisionFailures | null { return this.#sourceRevisionFailures }
   get progress(): TransferProgress { return this.#progress }
   get interruption(): 'pause' | 'stop' | null { return this.#interruption }
@@ -357,6 +359,7 @@ export class WorkspaceTask {
     this.#lifecycle = null
     this.#display = null
     this.#safeRenamed = null
+    this.#sourceOmittedEntries = 0n
     this.#sourceRevisionFailures = null
     this.#progress = EMPTY_TRANSFER_PROGRESS
     this.#interruption = null
@@ -387,6 +390,7 @@ export class WorkspaceTask {
     this.#lifecycle = downloading
     this.#display = input.display
     this.#safeRenamed = null
+    this.#sourceOmittedEntries = 0n
     this.#sourceRevisionFailures = null
     this.#interruption = null
     this.#progress = EMPTY_TRANSFER_PROGRESS
@@ -410,6 +414,7 @@ export class WorkspaceTask {
     this.#lifecycle = settled.lifecycle
     this.#display = settled.display ?? this.#display
     this.#safeRenamed = settled.safeRenamed ?? null
+    this.#sourceOmittedEntries = settled.sourceOmittedEntries ?? 0n
     this.#sourceRevisionFailures = settled.sourceRevisionFailures ?? null
     this.#interruption = null
   }
@@ -437,6 +442,7 @@ export class WorkspaceTask {
     this.#lifecycle = record.lifecycle
     this.#display = record.display ?? null
     this.#safeRenamed = record.safeRenamed ?? null
+    this.#sourceOmittedEntries = record.sourceOmittedEntries ?? 0n
     this.#sourceRevisionFailures = record.sourceRevisionFailures ?? null
     this.#progress = EMPTY_TRANSFER_PROGRESS
     this.#interruption = null

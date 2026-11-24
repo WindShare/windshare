@@ -24,7 +24,7 @@ import {
   type ReceiveFileRecord,
   type ReceiveTaskRecord,
 } from '../store/types'
-import type { BrowserOutputWindow, OutputSessionHandle, StartBackendTaskInput } from './contract'
+import { mergeSourceOmittedEntries, type BrowserOutputWindow, type OutputSessionHandle, type StartBackendTaskInput } from './contract'
 import {
   cleanupFSATaskEntries, isMissingFSAEntry, isUncommittedEmptyPlaceholder,
   matchesFSADiskFingerprint, readFSADiskFingerprint, sameFSAEntry,
@@ -367,11 +367,18 @@ class FSASessionHandle implements OutputSessionHandle {
 
     const nextLifecycle = nextFSALifecycle(this.#record.lifecycle, result, retainedBytes)
     const safeRenamed = this.#safeNames.summary() ?? this.#record.safeRenamed
+    const { sourceOmittedEntries: previousOmitted, ...baseRecord } = this.#record
+    const sourceOmittedEntries = mergeSourceOmittedEntries(
+      result.sourceOmittedEntries,
+      previousOmitted,
+      result.discoveryComplete,
+    )
     const nextRecord: FSATaskRecord = Object.freeze({
-      ...this.#record,
+      ...baseRecord,
       lifecycle: nextLifecycle,
       discoveryComplete: result.discoveryComplete || this.#record.discoveryComplete,
       ...(safeRenamed === undefined ? {} : { safeRenamed }),
+      ...(sourceOmittedEntries === undefined ? {} : { sourceOmittedEntries }),
       ...(result.sourceRevisionFailures === undefined
         ? {}
         : { sourceRevisionFailures: result.sourceRevisionFailures }),

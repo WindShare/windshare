@@ -32,7 +32,7 @@ import {
   triggerBrowserDownload,
   type BrowserDownloadWindow,
 } from './browser-handoff'
-import { resolveZipEntryPath, type OutputSessionHandle, type StartBackendTaskInput } from './contract'
+import { mergeSourceOmittedEntries, resolveZipEntryPath, type OutputSessionHandle, type StartBackendTaskInput } from './contract'
 
 const OPFS_ROOT_DIR = 'windshare-tasks'
 const OPFS_MAX_CONCURRENT_FILES = 4
@@ -369,6 +369,12 @@ class OPFSSessionHandle implements OutputSessionHandle {
       fileName: target.fileName,
       contentWarning: result.contentWarning ?? null,
     })
+    const { sourceOmittedEntries: previousOmitted, ...baseRecord } = this.#record
+    const sourceOmittedEntries = mergeSourceOmittedEntries(
+      result.sourceOmittedEntries,
+      previousOmitted,
+      result.discoveryComplete,
+    )
     // A late stop can leave a complete file for the user to save at their discretion.
     if (result.status === 'completed' && file !== undefined) {
       try {
@@ -379,14 +385,16 @@ class OPFSSessionHandle implements OutputSessionHandle {
         })
         emitOutputTrace(this.#diagnostics?.trace, 'publication', {
           backend: 'origin_private', task_id: this.taskId, transition: 'committed',
+          ...(sourceOmittedEntries === undefined ? {} : { source_omitted_entries: String(sourceOmittedEntries) }),
         })
       } catch { /* Downloads can retry a handoff that needs a fresh user gesture. */ }
     }
 
     const updated: ReceiveTaskRecord = Object.freeze({
-      ...this.#record,
+      ...baseRecord,
       target,
       lifecycle: nextLifecycle,
+      ...(sourceOmittedEntries === undefined ? {} : { sourceOmittedEntries }),
       discoveryComplete: true,
       updatedAt: Date.now(),
     })
@@ -436,11 +444,18 @@ class OPFSSessionHandle implements OutputSessionHandle {
       ...(this.#record.target as OPFSTargetRecord),
       allocatedLength: this.#zip?.allocatedLength ?? (this.#record.target as OPFSTargetRecord).allocatedLength,
     })
+    const { sourceOmittedEntries: previousOmitted, ...baseRecord } = this.#record
+    const sourceOmittedEntries = mergeSourceOmittedEntries(
+      result.sourceOmittedEntries,
+      previousOmitted,
+      result.discoveryComplete,
+    )
     const updated: ReceiveTaskRecord = Object.freeze({
-      ...this.#record,
+      ...baseRecord,
       target,
       lifecycle: nextLifecycle,
       discoveryComplete: result.discoveryComplete || this.#record.discoveryComplete,
+      ...(sourceOmittedEntries === undefined ? {} : { sourceOmittedEntries }),
       ...(result.sourceRevisionFailures === undefined
         ? {}
         : { sourceRevisionFailures: result.sourceRevisionFailures }),
@@ -466,6 +481,7 @@ class OPFSSessionHandle implements OutputSessionHandle {
       lifecycle: nextLifecycle.kind,
       completed_files: String(storedCompletedFiles),
       failed_files: String(result.failedFiles + result.failedDirectories),
+      ...(sourceOmittedEntries === undefined ? {} : { source_omitted_entries: String(sourceOmittedEntries) }),
     })
     return updated
   }

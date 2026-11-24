@@ -32,13 +32,12 @@ export function resolveTaskStage(facts: TaskFacts, language: Language = 'en'): S
         facts.completeness === 'partial' ? t.partialLocal : t.resultLocal,
         state.kind,
       )
-    case 'download-started':
-      return stage(
-        'handed-to-browser',
-        facts.completeness === 'partial' ? t.partialHandoff : t.handoff,
-        t.handoffHint,
-        state.kind,
-      )
+    case 'download-started': {
+      let headline = t.handoff
+      if (facts.completeness === 'partial') headline = t.partialHandoff
+      else if (facts.sourceOmittedEntries > 0n) headline = t.handoffWithSkipped
+      return stage('handed-to-browser', headline, t.handoffHint, state.kind)
+    }
     case 'saved':
     case 'partial':
       return savedOrPartialStage(facts, state, language)
@@ -59,7 +58,9 @@ function savedOrPartialStage(
   const description = facts.display?.destinationLabel === undefined
     ? t.savedHint
     : t.savedTo(destinationLabel(facts.display.destinationLabel, language))
-  const headline = state.kind === 'partial' || facts.completeness === 'partial' ? t.partiallySaved : t.saved
+  let headline = t.saved
+  if (state.kind === 'partial' || facts.completeness === 'partial') headline = t.partiallySaved
+  else if (facts.sourceOmittedEntries > 0n) headline = t.savedWithSkipped
   return stage('saved', headline, description, state.kind)
 }
 

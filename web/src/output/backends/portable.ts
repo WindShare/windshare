@@ -20,6 +20,7 @@ import {
 } from './browser-handoff'
 import {
   PORTABLE_MAX_BYTES,
+  mergeSourceOmittedEntries,
   resolveZipEntryPath,
   type OutputSessionHandle,
   type StartBackendTaskInput,
@@ -182,6 +183,11 @@ class PortableSessionHandle implements OutputSessionHandle {
 
   async settle(result: SettledTransferJobResult): Promise<ReceiveTaskRecord> {
     this.#settled = true
+    const sourceOmittedEntries = mergeSourceOmittedEntries(
+      result.sourceOmittedEntries,
+      undefined,
+      result.discoveryComplete,
+    )
     if (result.status !== 'completed') {
       await this.#zip?.abort()
       this.#singleFileBuffer = undefined
@@ -194,6 +200,7 @@ class PortableSessionHandle implements OutputSessionHandle {
       const record: ReceiveTaskRecord = Object.freeze({
         ...this.#baseRecord,
         lifecycle: failed,
+        ...(sourceOmittedEntries === undefined ? {} : { sourceOmittedEntries }),
         ...(result.sourceRevisionFailures === undefined
           ? {}
           : { sourceRevisionFailures: result.sourceRevisionFailures }),
@@ -214,6 +221,7 @@ class PortableSessionHandle implements OutputSessionHandle {
     emitOutputTrace(this.#diagnostics?.trace, 'publication', {
       backend: 'portable',
       transition: 'committed',
+      ...(sourceOmittedEntries === undefined ? {} : { source_omitted_entries: String(sourceOmittedEntries) }),
     })
 
     const started = transitionReceiveState(this.#baseRecord.lifecycle, {
@@ -225,6 +233,7 @@ class PortableSessionHandle implements OutputSessionHandle {
     const record: ReceiveTaskRecord = Object.freeze({
       ...this.#baseRecord,
       lifecycle: started,
+      ...(sourceOmittedEntries === undefined ? {} : { sourceOmittedEntries }),
       discoveryComplete: true,
       updatedAt: Date.now(),
     })
