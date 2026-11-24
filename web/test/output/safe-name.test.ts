@@ -4,6 +4,7 @@ import {
   SafeNameRegistry,
   decideCollisionName,
   deterministicSafeComponent,
+  isSafeComponentName,
 } from '../../src/output/backends/safe-name'
 import {
   completedTuplesBytes,
@@ -21,18 +22,30 @@ describe('safe names and store range helpers', () => {
     expect(decideCollisionName('Photos', 'directory', 2)).toBe('Photos (2)')
   })
 
-  it('generates deterministic OS-safe component names without collisions', async () => {
-    const first = await deterministicSafeComponent({ logicalPath: ['dir', 'CON.txt'], entryKind: 'file' })
-    const repeat = await deterministicSafeComponent({ logicalPath: ['dir', 'CON.txt'], entryKind: 'file' })
-    const other = await deterministicSafeComponent({ logicalPath: ['dir2', 'CON.txt'], entryKind: 'file' })
+  it('generates per-task deterministic OS-safe component names isolated across tasks', async () => {
+    const first = await deterministicSafeComponent({ taskId: 'task-a', logicalPath: ['dir', 'CON.txt'], entryKind: 'file' })
+    const repeat = await deterministicSafeComponent({ taskId: 'task-a', logicalPath: ['dir', 'CON.txt'], entryKind: 'file' })
+    const otherPath = await deterministicSafeComponent({ taskId: 'task-a', logicalPath: ['dir2', 'CON.txt'], entryKind: 'file' })
+    const otherTask = await deterministicSafeComponent({ taskId: 'task-b', logicalPath: ['dir', 'CON.txt'], entryKind: 'file' })
     expect(first).toBe(repeat)
-    expect(first).not.toBe(other)
-    expect(first).toMatch(/\.windshare-[0-9a-f]{8}$/u)
+    expect(first).not.toBe(otherPath)
+    expect(first).not.toBe(otherTask)
+    expect(first).toMatch(/\.windshare-[0-9a-f]{16}$/u)
+    expect(isSafeComponentName(first)).toBe(true)
+    await expect(deterministicSafeComponent({ taskId: '', logicalPath: ['CON.txt'], entryKind: 'file' })).rejects.toThrow(TypeError)
 
     const registry = new SafeNameRegistry()
     registry.record(['dir', 'CON.txt'], 'file', first)
     expect(registry.physicalComponent(['dir', 'CON.txt'], 'file')).toBe(first)
     expect(registry.summary()).toMatchObject({ count: 1 })
+
+    expect(registry.claimDirectory(['CON'], ['entry-CON.windshare-0123456789abcdef'])).toBe('claimed')
+    expect(registry.claimDirectory(['CON'], ['entry-CON.windshare-0123456789abcdef'])).toBe('owned')
+    expect(registry.claimDirectory(['entry-CON.windshare-0123456789abcdef'], ['entry-CON.windshare-0123456789abcdef'])).toBe('conflict')
+    registry.releaseDirectoryClaim(['entry-CON.windshare-0123456789abcdef'], ['entry-CON.windshare-0123456789abcdef'])
+    expect(registry.claimDirectory(['CON'], ['entry-CON.windshare-0123456789abcdef'])).toBe('owned')
+    registry.releaseDirectoryClaim(['CON'], ['entry-CON.windshare-0123456789abcdef'])
+    expect(registry.claimDirectory(['entry-CON.windshare-0123456789abcdef'], ['entry-CON.windshare-0123456789abcdef'])).toBe('claimed')
   })
 
   it('converts byte ranges and measures completed coverage accurately', () => {

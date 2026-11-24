@@ -38,11 +38,49 @@ export async function openDirectory(parent: FSADirectory, name: string): Promise
   return { handle, physicalPath: [...parent.physicalPath, handle.name], created: existing === undefined }
 }
 
+export type OpenFSADirectoryResult =
+  | Readonly<{ kind: 'opened'; directory: FSADirectory }>
+  | Readonly<{ kind: 'conflict'; physicalPath: readonly string[] }>
+
+export async function openFSADirectory(
+  parent: FSADirectory,
+  logicalPath: readonly string[],
+  name: string,
+  safeNames: SafeNameRegistry,
+  taskId: string,
+): Promise<OpenFSADirectoryResult> {
+  const openOwned = async (component: string): Promise<OpenFSADirectoryResult> => {
+    const candidatePath = [...parent.physicalPath, component]
+    const claim = safeNames.claimDirectory(logicalPath, candidatePath)
+    if (claim === 'conflict') {
+      return { kind: 'conflict', physicalPath: candidatePath }
+    }
+    try {
+      return { kind: 'opened', directory: await openDirectory(parent, component) }
+    } catch (error) {
+      if (claim === 'claimed') safeNames.releaseDirectoryClaim(logicalPath, candidatePath)
+      throw error
+    }
+  }
+  try {
+    return await openOwned(name)
+  } catch (error) {
+    if (!requiresSafeComponent(error)) throw error
+    const safe = await deterministicSafeComponent({ taskId, logicalPath, entryKind: 'directory' })
+    const opened = await openOwned(safe)
+    if (opened.kind === 'opened') {
+      safeNames.recordDirectory(logicalPath, opened.directory.physicalPath)
+    }
+    return opened
+  }
+}
+
 export async function openFSAFile(
   parent: FileSystemDirectoryHandle,
   logicalPath: readonly string[],
   leaf: string,
   safeNames: SafeNameRegistry,
+  taskId: string,
 ): Promise<{ handle: FileSystemFileHandle; created: boolean }> {
   const open = async (name: string) => {
     try {
@@ -56,7 +94,7 @@ export async function openFSAFile(
     return await open(leaf)
   } catch (error) {
     if (!requiresSafeComponent(error)) throw error
-    const name = await deterministicSafeComponent({ logicalPath, entryKind: 'file' })
+    const name = await deterministicSafeComponent({ taskId, logicalPath, entryKind: 'file' })
     const entry = await open(name)
     safeNames.record(logicalPath, 'file', name)
     return entry
@@ -68,13 +106,19 @@ export async function reserveFSATarget(
   requestedName: string,
   singleFile: boolean,
   safeNames: SafeNameRegistry,
+  taskId: string,
 ): Promise<ReservedFSATarget> {
   const kind = singleFile ? 'file' : 'directory'
   for (let collisionIndex = 0; collisionIndex < MAX_COLLISION_ATTEMPTS; collisionIndex++) {
     let reservedName = decideCollisionName(requestedName, kind, collisionIndex)
     let entry = await reserveRootEntry(parentHandle, reservedName, singleFile)
     if (entry === 'invalid-name') {
-      reservedName = await deterministicSafeComponent({ logicalPath: [requestedName], entryKind: kind, collisionIndex })
+      reservedName = await deterministicSafeComponent({
+        taskId,
+        logicalPath: [requestedName],
+        entryKind: kind,
+        collisionIndex,
+      })
       entry = await reserveRootEntry(parentHandle, reservedName, singleFile)
       if (typeof entry !== 'string') safeNames.recordRoot([requestedName], kind, reservedName)
     }

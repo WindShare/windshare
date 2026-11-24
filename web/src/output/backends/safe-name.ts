@@ -16,7 +16,7 @@ export { decideCollisionName } from '../names/policy'
 
 const SAFE_NAME_DOMAIN = 'windshare/fsa-safe-name/v1'
 const SAFE_NAME_MARKER = '.windshare-'
-const SAFE_NAME_HASH_BYTES = 4
+const SAFE_NAME_HASH_BYTES = 8
 const MAX_READABLE_PREFIX_BYTES = 64
 const FALLBACK_PREFIX = 'entry'
 const RESERVED_STEM_PREFIX = 'entry-'
@@ -24,28 +24,36 @@ const MAX_COLLISION_INDEX = 0xffff_ffff
 
 const TEXT_ENCODER = new TextEncoder()
 const SAFE_CODE_POINT = /[\p{L}\p{N}]/u
-const SAFE_NAME_SUFFIX_PATTERN = /\.windshare-[0-9a-f]{8}$/
+const SAFE_NAME_SUFFIX_PATTERN = /\.windshare-[0-9a-f]{16}$/
 
 export type SafeNameEntryKind = 'file' | 'directory'
 export type SafeNameEntryScope = 'root' | 'child'
+export type DirectoryClaimStatus = 'claimed' | 'owned' | 'conflict'
 
 export function isSafeComponentName(name: string): boolean {
   return SAFE_NAME_SUFFIX_PATTERN.test(name)
 }
 
 export interface DeterministicSafeComponentInput {
+  readonly taskId: string
   readonly logicalPath: readonly string[]
   readonly entryKind: SafeNameEntryKind
   readonly collisionIndex?: number
 }
 
 /**
- * Produces a deterministic, portable FSA component for a logical name rejected by the
- * browser or OS. Replacing any original extension avoids repeating blocked-suffix refusals.
+ * Produces a per-task deterministic, portable FSA component for a logical name
+ * rejected by the browser or OS. Salting with the task's random ID isolates
+ * each download from re-shared safe names and sender predictions while keeping
+ * pause/resume and crash recovery deterministic within the same task.
+ * Replacing any original extension avoids repeating blocked-suffix refusals.
  */
 export async function deterministicSafeComponent(
   input: DeterministicSafeComponentInput,
 ): Promise<string> {
+  if (input.taskId.length === 0) {
+    throw new TypeError('Deterministic safe component requires a non-empty taskId')
+  }
   if (input.logicalPath.length === 0) {
     throw new TypeError('Deterministic safe component requires a non-empty logical path')
   }
@@ -61,7 +69,7 @@ export async function deterministicSafeComponent(
 
   const encodedPath = input.logicalPath.map(segment => `${segment.length}:${segment}`).join('/')
   const material = TEXT_ENCODER.encode(
-    `${SAFE_NAME_DOMAIN}\0${input.entryKind}\0${collisionIndex}\0${encodedPath}`,
+    `${SAFE_NAME_DOMAIN}\0${input.taskId.length}:${input.taskId}\0${input.entryKind}\0${collisionIndex}\0${encodedPath}`,
   )
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', material))
   const suffix = hexPrefix(digest, SAFE_NAME_HASH_BYTES)
@@ -86,6 +94,7 @@ export class SafeNameRegistry {
   readonly #assigned = new Map<string, string>()
   readonly #recorded = new Map<string, SafeRenamedEntry>()
   readonly #directories = new Map<string, SafeRenamedDirectoryRecord>()
+  readonly #directoryOwners = new Map<string, string>()
   readonly #listeners = new Set<(summary: SafeRenamedSummary) => void>()
 
   constructor(onChange?: (summary: SafeRenamedSummary) => void) {
@@ -95,6 +104,34 @@ export class SafeNameRegistry {
   subscribe(listener: (summary: SafeRenamedSummary) => void): () => void {
     this.#listeners.add(listener)
     return () => { this.#listeners.delete(listener) }
+  }
+
+  /**
+   * Enforces 1:1 physical-to-logical ownership for directories within a task so
+   * two distinct logical folders can never silently merge into one physical path.
+   */
+  claimDirectory(
+    logicalPath: readonly string[],
+    physicalPath: readonly string[],
+  ): DirectoryClaimStatus {
+    const physKey = pathKey(physicalPath)
+    const logKey = pathKey(logicalPath)
+    const owner = this.#directoryOwners.get(physKey)
+    if (owner === undefined) {
+      this.#directoryOwners.set(physKey, logKey)
+      return 'claimed'
+    }
+    return owner === logKey ? 'owned' : 'conflict'
+  }
+
+  releaseDirectoryClaim(
+    logicalPath: readonly string[],
+    physicalPath: readonly string[],
+  ): void {
+    const physKey = pathKey(physicalPath)
+    if (this.#directoryOwners.get(physKey) === pathKey(logicalPath)) {
+      this.#directoryOwners.delete(physKey)
+    }
   }
 
   physicalComponent(
@@ -139,6 +176,10 @@ export class SafeNameRegistry {
   ): void {
     if (logicalPath.length === 0 || logicalPath.length !== physicalPath.length) return
     const key = pathKey(logicalPath)
+    const physKey = pathKey(physicalPath)
+    if (!this.#directoryOwners.has(physKey)) {
+      this.#directoryOwners.set(physKey, key)
+    }
     if (!this.#directories.has(key)) {
       this.#directories.set(key, freezeDirectoryRecord(logicalPath, physicalPath))
     }
@@ -196,10 +237,14 @@ export class SafeNameRegistry {
 
   #seedDirectorySegments(logical: readonly string[], physical: readonly string[]): void {
     for (let depth = 1; depth <= logical.length; depth += 1) {
-      if (physical[depth - 1] === logical[depth - 1]) continue
       const logicalPrefix = logical.slice(0, depth)
       const physicalPrefix = physical.slice(0, depth)
       const key = pathKey(logicalPrefix)
+      const physKey = pathKey(physicalPrefix)
+      if (!this.#directoryOwners.has(physKey)) {
+        this.#directoryOwners.set(physKey, key)
+      }
+      if (physical[depth - 1] === logical[depth - 1]) continue
       if (!this.#directories.has(key)) {
         this.#directories.set(key, freezeDirectoryRecord(logicalPrefix, physicalPrefix))
       }

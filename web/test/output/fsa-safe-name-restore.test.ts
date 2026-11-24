@@ -9,10 +9,12 @@ import type { JoinedBrowserShare } from '../../src/application/browser-share/gat
 import type { FrozenSelectionPolicy } from '../../src/catalog/selection'
 import { openNewFSASession, reopenFSASession } from '../../src/output/backends/fsa'
 import { loadFSARestorePlan, writeFSARestoreArtifact } from '../../src/output/backends/fsa-restore'
+import { deterministicSafeComponent } from '../../src/output/backends/safe-name'
 import type { OutputTraceEvent } from '../../src/output/diagnostics'
 import { FSARestoreTargetMissingError } from '../../src/output/model/safe-name-restore'
 import type { ReceiveStore } from '../../src/output/store/database'
 import { acquireTaskLock, TaskBusyError } from '../../src/output/store/tab-lock'
+import { FileDestinationConflictError } from '../../src/transfer/fault'
 import type { SettledTransferJobResult } from '../../src/transfer/job'
 import { initialReceiveState, transitionReceiveState, type SafeRenamedSummary } from '../../src/transfer/state'
 import { presentTask } from '../../src/ui/tasks/present'
@@ -253,6 +255,198 @@ describe('FSA safe-name live notification, single source of truth, resume, and c
     expect(snapshots[0]!.lifecycle.kind).toBe('paused')
     expect(snapshots[0]!.safeRenamed?.count).toBe(1)
     expect(snapshots[0]!.safeRenamed?.sample[0]!.logicalPath).toEqual(['pyvenv.cfg'])
+  })
+
+  it('isolates re-shared safe directory names across tasks in both discovery orders and restores only the renamed directory', async () => {
+    const priorSafeName = await deterministicSafeComponent({
+      taskId: 'prior-task',
+      logicalPath: ['empty.cfg'],
+      entryKind: 'directory',
+    })
+
+    for (const order of ['legal-first', 'rejected-first'] as const) {
+      const memory = new MemoryReceiveStore()
+      const store = memory as unknown as ReceiveStore
+      const parent = new FakeDirectoryHandle('Downloads', memory.events, ['empty.cfg'])
+      const taskId = `reshare-${order}`
+      const session = await openNewFSASession({
+        task: {
+          taskId,
+          selectionKey: `sel-${order}`,
+          selection: { shareInstance: 's1', syntheticRoot: 'r1', defaultSelected: true, rules: [] },
+          artifact: { kind: 'directory-tree', name: 'Bundle' },
+          lifecycle: initialReceiveState(taskId),
+        },
+        parentHandle: parent as unknown as FileSystemDirectoryHandle,
+        store,
+      })
+
+      const writeDirFile = async (dir: string, fileId: string, fileName: string, payload: number) => {
+        await session.transferOutput.ensureDirectory?.({ directoryId: `d-${dir}`, path: [dir] }, SIGNAL)
+        const writer = await session.transferOutput.openFile({
+          fileId, path: [dir, fileName], sourcePath: ['Bundle', dir, fileName], revision: `rev-${fileId}`, exactSize: 1n,
+        }, SIGNAL)
+        await writer.writeAt(0n, Uint8Array.of(payload))
+        await writer.commit([byteRange(0n, 1n)])
+      }
+
+      if (order === 'legal-first') {
+        await writeDirFile(priorSafeName, 'f-legal', 'legal.txt', 1)
+        await writeDirFile('empty.cfg', 'f-rej', 'rejected.txt', 2)
+      } else {
+        await writeDirFile('empty.cfg', 'f-rej', 'rejected.txt', 2)
+        await writeDirFile(priorSafeName, 'f-legal', 'legal.txt', 1)
+      }
+
+      const saved = await session.settle(settled('completed', { completedFiles: 2n, completedBytes: 2n }))
+      await session.close()
+
+      const newSafeName = await deterministicSafeComponent({ taskId, logicalPath: ['empty.cfg'], entryKind: 'directory' })
+      expect(newSafeName).not.toBe(priorSafeName)
+      const root = parent.children.get('Bundle') as FakeDirectoryHandle
+      expect([...root.children.keys()].sort()).toEqual([newSafeName, priorSafeName].sort())
+      expect([...(root.children.get(priorSafeName) as FakeDirectoryHandle).children.keys()]).toEqual(['legal.txt'])
+      expect([...(root.children.get(newSafeName) as FakeDirectoryHandle).children.keys()]).toEqual(['rejected.txt'])
+      expect(saved.safeRenamed?.count).toBe(1)
+
+      const plan = await loadFSARestorePlan(store, taskId, 'windows')
+      expect(plan.restorable.map(step => [step.fromName, step.toName])).toEqual([[newSafeName, 'empty.cfg']])
+    }
+  })
+
+  it('rejects same-task physical directory collisions explicitly across both orders, pause/resume, while preserving crash reuse', async () => {
+    // 1. Both discovery orders in a single session reject collision without merging files or polluting restore plan.
+    for (const order of ['legal-first', 'rejected-first'] as const) {
+      const memory = new MemoryReceiveStore()
+      const store = memory as unknown as ReceiveStore
+      const parent = new FakeDirectoryHandle('Downloads', memory.events, ['empty.cfg'])
+      const taskId = `collide-${order}`
+      const collidingName = await deterministicSafeComponent({
+        taskId,
+        logicalPath: ['empty.cfg'],
+        entryKind: 'directory',
+      })
+      const traces: OutputTraceEvent[] = []
+      const session = await openNewFSASession({
+        task: {
+          taskId,
+          selectionKey: `sel-${order}`,
+          selection: { shareInstance: 's1', syntheticRoot: 'r1', defaultSelected: true, rules: [] },
+          artifact: { kind: 'directory-tree', name: 'Pkg' },
+          lifecycle: initialReceiveState(taskId),
+        },
+        parentHandle: parent as unknown as FileSystemDirectoryHandle,
+        store,
+        diagnostics: { backend: 'file_system_access', trace: { current: event => traces.push(event) } },
+      })
+
+      if (order === 'legal-first') {
+        const legalFile = await session.transferOutput.openFile({
+          fileId: 'f-legal', path: [collidingName, 'keep.txt'], sourcePath: ['Pkg', collidingName, 'keep.txt'], revision: 'r1', exactSize: 1n,
+        }, SIGNAL)
+        await legalFile.writeAt(0n, Uint8Array.of(7))
+        await legalFile.commit([byteRange(0n, 1n)])
+
+        await expect(session.transferOutput.ensureDirectory?.({ directoryId: 'd-rej', path: ['empty.cfg'] }, SIGNAL))
+          .rejects.toBeInstanceOf(FileDestinationConflictError)
+        await expect(session.transferOutput.openFile({
+          fileId: 'f-rej', path: ['empty.cfg', 'bad.txt'], sourcePath: ['Pkg', 'empty.cfg', 'bad.txt'], revision: 'r2', exactSize: 1n,
+        }, SIGNAL)).rejects.toBeInstanceOf(FileDestinationConflictError)
+
+        const partial = await session.settle(settled('partial', { completedFiles: 1n, completedBytes: 1n, failedFiles: 1n, failedDirectories: 1n }))
+        await session.close()
+        const dir = (parent.children.get('Pkg') as FakeDirectoryHandle).children.get(collidingName) as FakeDirectoryHandle
+        expect([...dir.children.keys()]).toEqual(['keep.txt'])
+        expect(partial.safeRenamed).toBeUndefined()
+      } else {
+        const rejFile = await session.transferOutput.openFile({
+          fileId: 'f-rej', path: ['empty.cfg', 'from-rej.txt'], sourcePath: ['Pkg', 'empty.cfg', 'from-rej.txt'], revision: 'r1', exactSize: 1n,
+        }, SIGNAL)
+        await rejFile.writeAt(0n, Uint8Array.of(9))
+        await rejFile.commit([byteRange(0n, 1n)])
+
+        await expect(session.transferOutput.ensureDirectory?.({ directoryId: 'd-legal', path: [collidingName] }, SIGNAL))
+          .rejects.toBeInstanceOf(FileDestinationConflictError)
+        await expect(session.transferOutput.openFile({
+          fileId: 'f-legal', path: [collidingName, 'other.txt'], sourcePath: ['Pkg', collidingName, 'other.txt'], revision: 'r2', exactSize: 1n,
+        }, SIGNAL)).rejects.toBeInstanceOf(FileDestinationConflictError)
+
+        await session.settle(settled('partial', { completedFiles: 1n, completedBytes: 1n, failedFiles: 1n, failedDirectories: 1n }))
+        await session.close()
+        const dir = (parent.children.get('Pkg') as FakeDirectoryHandle).children.get(collidingName) as FakeDirectoryHandle
+        expect([...dir.children.keys()]).toEqual(['from-rej.txt'])
+        const plan = await loadFSARestorePlan(store, taskId, 'windows')
+        expect(plan.restorable.map(step => [step.fromName, step.toName])).toEqual([[collidingName, 'empty.cfg']])
+      }
+
+      const collisionTrace = traces.find(event => event.payload.transition === 'directory_collision')
+      expect(collisionTrace).toBeDefined()
+      expect(JSON.stringify(collisionTrace!.payload)).not.toContain('empty.cfg')
+      expect(JSON.stringify(collisionTrace!.payload)).not.toContain(collidingName)
+    }
+
+    // 2. Across pause/resume: seeded unrenamed legal directory still blocks colliding safe rename on reopen.
+    const pauseMem = new MemoryReceiveStore()
+    const pauseStore = pauseMem as unknown as ReceiveStore
+    const pauseParent = new FakeDirectoryHandle('Downloads', pauseMem.events, ['empty.cfg'])
+    const pauseSafe = await deterministicSafeComponent({ taskId: 'pause-collide', logicalPath: ['empty.cfg'], entryKind: 'directory' })
+    const run1 = await openNewFSASession({
+      task: {
+        taskId: 'pause-collide',
+        selectionKey: 'sel-pause',
+        selection: { shareInstance: 's1', syntheticRoot: 'r1', defaultSelected: true, rules: [] },
+        artifact: { kind: 'directory-tree', name: 'PausePkg' },
+        lifecycle: initialReceiveState('pause-collide'),
+      },
+      parentHandle: pauseParent as unknown as FileSystemDirectoryHandle,
+      store: pauseStore,
+    })
+    const f1 = await run1.transferOutput.openFile({
+      fileId: 'f1', path: [pauseSafe, 'a.txt'], sourcePath: ['PausePkg', pauseSafe, 'a.txt'], revision: 'r1', exactSize: 1n,
+    }, SIGNAL)
+    await f1.writeAt(0n, Uint8Array.of(1))
+    await f1.commit([byteRange(0n, 1n)])
+    const paused = await run1.settle(settled('paused', { pauseReason: 'user', completedFiles: 1n, completedBytes: 1n }))
+    await run1.close()
+
+    const run2 = await reopenFSASession({ task: paused, store: pauseStore, allowPermissionPrompt: false })
+    await expect(run2.transferOutput.ensureDirectory?.({ directoryId: 'd-rej', path: ['empty.cfg'] }, SIGNAL))
+      .rejects.toBeInstanceOf(FileDestinationConflictError)
+    await run2.close()
+
+    // 3. Crash before settle: reopening the same task seamlessly reuses its own pre-crash safe directory.
+    const crashMem = new MemoryReceiveStore()
+    const crashStore = crashMem as unknown as ReceiveStore
+    const crashParent = new FakeDirectoryHandle('Downloads', crashMem.events, ['empty.cfg'])
+    const crashRun1 = await openNewFSASession({
+      task: {
+        taskId: 'crash-reuse',
+        selectionKey: 'sel-crash-reuse',
+        selection: { shareInstance: 's1', syntheticRoot: 'r1', defaultSelected: true, rules: [] },
+        artifact: { kind: 'directory-tree', name: 'CrashPkg' },
+        lifecycle: initialReceiveState('crash-reuse'),
+      },
+      parentHandle: crashParent as unknown as FileSystemDirectoryHandle,
+      store: crashStore,
+    })
+    await crashRun1.transferOutput.ensureDirectory?.({ directoryId: 'd1', path: ['empty.cfg'] }, SIGNAL)
+    await crashRun1.close() // abrupt crash without settle()
+
+    const recovered = (await loadRetainedTasks(retainedTaskEnvironment(crashStore, { windowPort: {} as BrowserOutputWindow })))[0]!
+    const crashTask = (await crashStore.getTask(recovered.taskId))!
+    const crashRun2 = await reopenFSASession({ task: crashTask, store: crashStore, allowPermissionPrompt: false })
+    const afterCrash = await crashRun2.transferOutput.openFile({
+      fileId: 'f-after', path: ['empty.cfg', 'ok.txt'], sourcePath: ['CrashPkg', 'empty.cfg', 'ok.txt'], revision: 'r1', exactSize: 1n,
+    }, SIGNAL)
+    await afterCrash.writeAt(0n, Uint8Array.of(3))
+    await afterCrash.commit([byteRange(0n, 1n)])
+    await crashRun2.settle(settled('completed', { completedFiles: 1n, completedBytes: 1n }))
+    await crashRun2.close()
+
+    const crashSafe = await deterministicSafeComponent({ taskId: 'crash-reuse', logicalPath: ['empty.cfg'], entryKind: 'directory' })
+    const crashRoot = crashParent.children.get('CrashPkg') as FakeDirectoryHandle
+    expect([...crashRoot.children.keys()]).toEqual([crashSafe])
+    expect([...(crashRoot.children.get(crashSafe) as FakeDirectoryHandle).children.keys()]).toEqual(['ok.txt'])
   })
 })
 

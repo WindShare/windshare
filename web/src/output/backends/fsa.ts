@@ -32,12 +32,12 @@ import {
 } from './fsa-cleanup'
 import { destinationChanged, FSAOutputFile, verifyExistingFSAFile } from './fsa-file'
 import {
-  openDirectory, openFSAFile, requiresSafeComponent, reserveFSATarget, rollbackReservedTarget,
+  openFSADirectory, openFSAFile, reserveFSATarget, rollbackReservedTarget,
   type FSADirectory, type ReservedFSATarget,
 } from './fsa-reservation'
 import {
   SafeNameRegistry, applySafeRenamedFields, collectSafeRenamedFromRecords,
-  deterministicSafeComponent, mergeRenamedDirectories, sameSafeRenamedState,
+  mergeRenamedDirectories, sameSafeRenamedState,
 } from './safe-name'
 
 type FSATaskRecord = ReceiveTaskRecord & { readonly target: FSATargetRecord }
@@ -91,7 +91,7 @@ export async function openNewFSASession(input: Readonly<{
     const safeNames = new SafeNameRegistry()
     const reservedAtMs = Date.now()
     reserved = await withFSAReservationLock(
-      () => reserveFSATarget(input.parentHandle, input.task.artifact.name, singleFile, safeNames),
+      () => reserveFSATarget(input.parentHandle, input.task.artifact.name, singleFile, safeNames, input.task.taskId),
       input.locks,
     )
     const target: FSATargetRecord = reserved.entry.kind === 'file'
@@ -489,7 +489,7 @@ class FSASessionHandle implements OutputSessionHandle {
     const target = this.#record.target
     const entry = target.singleFile
       ? await this.#openSingleFileEntry(parent.handle, request.path, leaf)
-      : await openFSAFile(parent.handle, request.path, leaf, this.#safeNames)
+      : await openFSAFile(parent.handle, request.path, leaf, this.#safeNames, this.taskId)
     const candidatePath = this.#displayPath([...parent.physicalPath, entry.handle.name])
     if (entry.created) {
       if (!target.singleFile) return { handle: entry.handle, openedAtMs }
@@ -520,7 +520,10 @@ class FSASessionHandle implements OutputSessionHandle {
       if (!isMissingFSAEntry(error)) throw error
     }
     // Coordinate recreating a deleted/retired single-file placeholder with new root allocations.
-    return withFSAReservationLock(() => openFSAFile(parent, logicalPath, leaf, this.#safeNames), this.#locks)
+    return withFSAReservationLock(
+      () => openFSAFile(parent, logicalPath, leaf, this.#safeNames, this.taskId),
+      this.#locks,
+    )
   }
 
   #claimReservedFile(
@@ -661,17 +664,18 @@ class FSASessionHandle implements OutputSessionHandle {
   }
 
   async #openSubdirectory(parent: FSADirectory, prefix: readonly string[], name: string): Promise<FSADirectory> {
-    let next: FSADirectory
-    try {
-      next = await openDirectory(parent, name)
-    } catch (error) {
-      if (!requiresSafeComponent(error)) throw error
-      const safe = await deterministicSafeComponent({ logicalPath: prefix, entryKind: 'directory' })
-      next = await openDirectory(parent, safe)
-      this.#safeNames.recordDirectory(prefix, next.physicalPath)
+    const result = await openFSADirectory(parent, prefix, name, this.#safeNames, this.taskId)
+    if (result.kind === 'conflict') {
+      emitOutputTrace(this.#diagnostics?.trace, 'output_reservation', {
+        backend: 'file_system_access',
+        task_id: this.taskId,
+        transition: 'directory_collision',
+        depth: result.physicalPath.length,
+      })
+      throw destinationChanged(this.#displayPath(result.physicalPath))
     }
-    if (next.created) this.#createdDirectories.add(next.handle)
-    return next
+    if (result.directory.created) this.#createdDirectories.add(result.directory.handle)
+    return result.directory
   }
 }
 
