@@ -551,7 +551,8 @@ describe('OPFS resume completion skip', () => {
     expect(entries.get('b.txt')).toEqual(payloadB)
     expect(entries.get('c.txt')).toEqual(payloadC)
 
-    // Single-file OPFS also verifies physical size before skipping remote open on resume.
+    // Single-file OPFS seals ready-to-save atomically on commit, so a late pause stays locally
+    // exportable without needing to reconnect or reopen the remote source revision.
     const singleFileId = encodeBase64Url(fixedId(24))
     const singleBytes = new TextEncoder().encode('single-done-bytes')
     const singleFixture = makeShareFixture([{ seed: 24, name: 'clip.bin', bytes: singleBytes, missing: true }])
@@ -584,7 +585,7 @@ describe('OPFS resume completion skip', () => {
     }, new AbortController().signal)
     await singleWriter.writeAt(0n, singleBytes)
     await singleWriter.commit([byteRange(0n, BigInt(singleBytes.byteLength))])
-    const singlePaused = await singleNew.settle({
+    const singleSettled = await singleNew.settle({
       status: 'paused', pauseReason: 'user',
       completedFiles: 1n, completedBytes: BigInt(singleBytes.byteLength),
       discoveredFiles: 1n, discoveredBytes: BigInt(singleBytes.byteLength),
@@ -592,20 +593,20 @@ describe('OPFS resume completion skip', () => {
     })
     await singleNew.close()
 
-    const singleReopened = await reopenOPFSSession({
-      task: singlePaused, store: store as unknown as ReceiveStore, env, windowPort,
+    expect(singleSettled.lifecycle).toMatchObject({
+      kind: 'ready-to-save',
+      size: BigInt(singleBytes.byteLength),
+      fileName: 'clip.bin',
     })
-    const singleResult = await new TransferJob({
-      descriptor: singleFixture.descriptor,
-      catalog: singleFixture.catalog,
-      selection,
-      revisions: singleFixture.revisions,
-      broker: singleFixture.broker,
-      output: singleReopened.transferOutput,
-    }).run()
-    await singleReopened.close()
-
-    expect(singleResult.status).toBe('completed')
+    const downloadsBeforeSave = downloads.length
+    await executeRetainedTaskAction(
+      { store: store as unknown as ReceiveStore, windowPort: windowPort as unknown as BrowserOutputWindow, opfsEnv: env },
+      singleSettled.taskId,
+      'save',
+    )
+    expect(downloads).toHaveLength(downloadsBeforeSave + 1)
+    expect(downloads.at(-1)?.fileName).toBe('clip.bin')
+    expect(new Uint8Array(await downloads.at(-1)!.blob.arrayBuffer())).toEqual(singleBytes)
     expect(singleFixture.openedFileIds).toEqual([])
   })
 

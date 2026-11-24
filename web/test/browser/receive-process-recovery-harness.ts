@@ -1,4 +1,5 @@
-import { loadRetainedTasks } from '../../src/application/receive/retained'
+import { admitRetainedAction, retainedTaskReadiness } from '../../src/application/receive/admission'
+import { executeRetainedTaskAction, loadRetainedTasks } from '../../src/application/receive/retained'
 import { byteRange } from '../../src/content/geometry'
 import { openNewFSASession, reopenFSASession } from '../../src/output/backends/fsa'
 import { browserOPFSEnvironment, openNewOPFSSession, reopenOPFSSession } from '../../src/output/backends/opfs'
@@ -11,6 +12,7 @@ const OPFS_PART_PREFIX = ENCODER.encode('first-part')
 const OPFS_PART_SUFFIX = ENCODER.encode('|second-part')
 const OPFS_PART_UNCOMMITTED = ENCODER.encode('xxxx')
 const OPFS_FRESH_PAYLOAD = ENCODER.encode('fresh-after-process-exit')
+const OPFS_SINGLE_PAYLOAD = ENCODER.encode('single-file-committed-before-process-exit')
 
 const FSA_DONE_BYTES = new Uint8Array([10, 20, 30, 40])
 const FSA_PART_PREFIX = new Uint8Array([1, 2, 3, 4])
@@ -21,6 +23,7 @@ const FSA_DRAFT_BYTES = new Uint8Array([11, 12, 13, 14, 15, 16])
 export interface ProcessCrashIds {
   readonly databaseName: string
   readonly opfsTaskId: string
+  readonly opfsSingleTaskId: string
   readonly fsaTaskId: string
   readonly fsaSandbox: string
 }
@@ -102,12 +105,40 @@ export async function startActiveProcessCrashCut(ids: ProcessCrashIds) {
   }, new AbortController().signal)
   await fsaDraft.writeAt(0n, FSA_DRAFT_BYTES.subarray(0, 3))
 
+  // 3. Committed single-file OPFS interrupted before settle()/publication runs.
+  const opfsSingleSession = await openNewOPFSSession({
+    task: {
+      taskId: ids.opfsSingleTaskId,
+      selection: { shareInstance: 'share-proc-single', syntheticRoot: 'root', defaultSelected: true, rules: [] },
+      selectionKey: 'sel-proc-single',
+      artifact: {
+        kind: 'original-file',
+        name: 'committed-single.txt',
+        singleFileId: 'single-f1',
+        singleFilePath: ['committed-single.txt'],
+        singleFileSize: BigInt(OPFS_SINGLE_PAYLOAD.byteLength),
+      },
+      lifecycle: initialReceiveState(ids.opfsSingleTaskId),
+    },
+    store,
+    env: opfsEnv,
+    windowPort: window,
+  })
+  const opfsSingle = await opfsSingleSession.transferOutput.openFile({
+    fileId: 'single-f1', path: ['committed-single.txt'], sourcePath: ['committed-single.txt'], revision: 'r-single',
+    exactSize: BigInt(OPFS_SINGLE_PAYLOAD.byteLength),
+  }, new AbortController().signal)
+  await opfsSingle.writeAt(0n, OPFS_SINGLE_PAYLOAD)
+  await opfsSingle.commit([byteRange(0n, BigInt(OPFS_SINGLE_PAYLOAD.byteLength))])
+
   const opfsRow = await store.getTask(ids.opfsTaskId)
+  const opfsSingleRow = await store.getTask(ids.opfsSingleTaskId)
   const fsaRow = await store.getTask(ids.fsaTaskId)
-  // Intentionally leave both sessions, SyncAccessHandle worker, writable streams, and Web Locks open
+  // Intentionally leave all sessions, SyncAccessHandle workers, writable streams, and Web Locks open
   // so closing the persistent BrowserContext severs the entire Chromium process abruptly.
   return {
     opfsLifecycle: opfsRow?.lifecycle.kind ?? null,
+    opfsSingleLifecycle: opfsSingleRow?.lifecycle.kind ?? null,
     fsaLifecycle: fsaRow?.lifecycle.kind ?? null,
   }
 }
@@ -116,18 +147,37 @@ export async function recoverAfterBrowserProcessRestart(ids: ProcessCrashIds) {
   const store = await ReceiveStore.open(ids.databaseName)
   const opfsEnv = browserOPFSEnvironment()
   try {
-    const retained = await loadRetainedTasks({ store, windowPort: window, opfsEnv })
+    const retainedEnv = { store, windowPort: window, opfsEnv }
+    const retained = await loadRetainedTasks(retainedEnv)
     const opfsRetained = retained.find(task => task.taskId === ids.opfsTaskId)
+    const opfsSingleRetained = retained.find(task => task.taskId === ids.opfsSingleTaskId)
     const fsaRetained = retained.find(task => task.taskId === ids.fsaTaskId)
-    if (opfsRetained === undefined || fsaRetained === undefined) {
-      throw new Error('Expected both abandoned tasks to be recovered by loadRetainedTasks')
+    if (opfsRetained === undefined || opfsSingleRetained === undefined || fsaRetained === undefined) {
+      throw new Error('Expected all abandoned tasks to be recovered by loadRetainedTasks')
     }
 
+    const opfsSingleReadiness = retainedTaskReadiness(opfsSingleRetained, null)
+    const opfsSingleOfflineSave = admitRetainedAction(opfsSingleRetained, 'save', {
+      currentShareInstance: null,
+      hasActiveDownload: false,
+      hasPendingAction: false,
+      connectionUnavailable: true,
+      shareEnded: true,
+    })
+    const opfsSingleExported = await executeRetainedTaskAction(retainedEnv, ids.opfsSingleTaskId, 'save')
     const opfsSummary = await resumeAndCompleteOPFS(ids.opfsTaskId, store, opfsEnv)
     const fsaSummary = await resumeAndCompleteFSA(ids.fsaTaskId, ids.fsaSandbox, store)
 
     return {
       normalizedOpfs: summarizePausedSnapshot(opfsRetained),
+      normalizedOpfsSingle: {
+        activeElsewhere: opfsSingleRetained.activeElsewhere,
+        kind: opfsSingleRetained.lifecycle.kind,
+        actions: [...opfsSingleRetained.actions],
+        readiness: opfsSingleReadiness,
+        offlineSaveAllowed: opfsSingleOfflineSave.allowed,
+        exportedLifecycle: opfsSingleExported.updated?.lifecycle.kind ?? null,
+      },
       normalizedFsa: summarizePausedSnapshot(fsaRetained),
       opfs: opfsSummary,
       fsa: fsaSummary,

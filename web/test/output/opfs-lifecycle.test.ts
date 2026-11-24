@@ -1,10 +1,12 @@
 import { BlobReader, Uint8ArrayWriter, ZipReader, type FileEntry } from '@zip.js/zip.js'
 import { describe, expect, it, vi } from 'vitest'
+import { admitRetainedAction, retainedTaskReadiness } from '../../src/application/receive/admission'
+import { executeRetainedTaskAction, loadRetainedTasks } from '../../src/application/receive/retained'
 import { DirectoryFailureError } from '../../src/catalog/client'
 import { CatalogPageStoreError } from '../../src/catalog/page-store'
 import { DIRECTORY_FAILURE_CODE_RESOURCE_LIMIT } from '../../src/catalog/records'
 import { byteRange } from '../../src/content/geometry'
-import type { StartBackendTaskInput } from '../../src/output/backends/contract'
+import type { BrowserOutputWindow, StartBackendTaskInput } from '../../src/output/backends/contract'
 import {
   deleteOPFSTask, exportPartialOPFSZip, openNewOPFSSession, reopenOPFSSession, saveRetainedOPFSTask,
 } from '../../src/output/backends/opfs'
@@ -125,6 +127,7 @@ describe('OPFS object ownership and recovery', () => {
     await session.close()
     expect(f.downloads).toHaveLength(0)
     expect(paused.lifecycle).toMatchObject({ kind: 'paused', reason: 'interrupted', completedFiles: 0n, retainedBytes: 2n })
+    expect(paused.target.kind === 'opfs' ? paused.target.sealedSize : null).toBeUndefined()
     const resumed = await reopenOPFSSession({ ...f, task: paused })
     const fileAgain = await resumed.transferOutput.openFile(fileRequest, new AbortController().signal)
     expect(fileAgain.completedRanges).toEqual([byteRange(0n, 2n)])
@@ -300,5 +303,102 @@ describe('OPFS object ownership and recovery', () => {
       reason: 'share-catalog-limit',
     })
     if (failed.lifecycle.kind === 'failed') expect(failed.lifecycle.detail).toBeUndefined()
+  })
+
+  it('seals single-file OPFS atomically on commit so abandoning before settle still exports offline', async () => {
+    const f = fixture(single)
+    const session = await f.open()
+    const file = await session.transferOutput.openFile(fileRequest, new AbortController().signal)
+    await file.writeAt(0n, bytes)
+    await file.commit([byteRange(0n, 4n)])
+    // Simulate closing the tab after file commit and before settle()/publication runs.
+    await session.close()
+
+    const retainedEnv = {
+      store: f.store,
+      windowPort: f.windowPort as unknown as BrowserOutputWindow,
+      opfsEnv: f.env,
+      locks: f.env.locks,
+    }
+    const retained = await loadRetainedTasks(retainedEnv)
+    expect(retained).toHaveLength(1)
+    const snapshot = retained[0]!
+    expect(snapshot.lifecycle).toMatchObject({ kind: 'ready-to-save', size: 4n, fileName: 'f' })
+    expect(snapshot.actions).toEqual(['save', 'discard'])
+    expect(retainedTaskReadiness(snapshot, null)).toBe('local')
+    expect(admitRetainedAction(snapshot, 'save', {
+      currentShareInstance: null,
+      hasActiveDownload: false,
+      hasPendingAction: false,
+      connectionUnavailable: true,
+      shareEnded: true,
+    })).toEqual({ allowed: true, reason: null })
+
+    const outcome = await executeRetainedTaskAction(retainedEnv, taskId, 'save')
+    expect(outcome.updated?.lifecycle.kind).toBe('download-started')
+    expect(f.downloads).toHaveLength(1)
+    expect(f.downloads[0]?.fileName).toBe('f')
+    expect(new Uint8Array(await f.downloads[0]!.blob.arrayBuffer())).toEqual(bytes)
+  })
+
+  it('keeps committed single-file OPFS ready-to-save across late pause and concurrent discovery completion', async () => {
+    const f = fixture(single)
+    const session = await f.open()
+    const file = await session.transferOutput.openFile(fileRequest, new AbortController().signal)
+    await file.writeAt(0n, bytes)
+
+    const putTaskSpy = vi.spyOn(f.memory, 'putTask')
+    let atomicCommitStarted!: () => void
+    const commitStarted = new Promise<void>(resolve => { atomicCommitStarted = resolve })
+    let releaseAtomicCommit!: () => void
+    const atomicCommitGate = new Promise<void>(resolve => { releaseAtomicCommit = resolve })
+    const originalPutTaskAndFile = f.memory.putTaskAndFile.bind(f.memory)
+    vi.spyOn(f.memory, 'putTaskAndFile').mockImplementationOnce(async (task, row) => {
+      atomicCommitStarted()
+      await atomicCommitGate
+      await originalPutTaskAndFile(task, row)
+    })
+
+    const committing = file.commit([byteRange(0n, 4n)])
+    await commitStarted
+    const marking = session.transferOutput.markDiscoveryComplete?.()
+    releaseAtomicCommit()
+    await Promise.all([committing, marking])
+
+    // Concurrent markDiscoveryComplete must serialize after commit and skip redundant writes.
+    expect(putTaskSpy).not.toHaveBeenCalled()
+    expect((await f.store.getTask(taskId))?.lifecycle.kind).toBe('ready-to-save')
+
+    const settled = await session.settle({ ...completion, status: 'paused', pauseReason: 'user' })
+    await session.close()
+    expect(settled.lifecycle).toMatchObject({ kind: 'ready-to-save', size: 4n, fileName: 'f' })
+    expect(f.downloads).toHaveLength(0)
+
+    await saveRetainedOPFSTask(settled, f.store, f.env, f.windowPort)
+    expect(f.downloads).toHaveLength(1)
+    expect(new Uint8Array(await f.downloads[0]!.blob.arrayBuffer())).toEqual(bytes)
+
+    // Reverse race: markDiscoveryComplete starts first and stays in-flight while commit runs.
+    const f2 = fixture(single)
+    const session2 = await f2.open()
+    const file2 = await session2.transferOutput.openFile(fileRequest, new AbortController().signal)
+    await file2.writeAt(0n, bytes)
+    let discoveryStarted!: () => void
+    const discoveryRunning = new Promise<void>(resolve => { discoveryStarted = resolve })
+    let releaseDiscovery!: () => void
+    const discoveryGate = new Promise<void>(resolve => { releaseDiscovery = resolve })
+    const originalPutTask = f2.memory.putTask.bind(f2.memory)
+    vi.spyOn(f2.memory, 'putTask').mockImplementationOnce(async record => {
+      discoveryStarted()
+      await discoveryGate
+      await originalPutTask(record)
+    })
+    const marking2 = session2.transferOutput.markDiscoveryComplete?.()
+    await discoveryRunning
+    const committing2 = file2.commit([byteRange(0n, 4n)])
+    releaseDiscovery()
+    await Promise.all([marking2, committing2])
+    await session2.close()
+    expect((await f2.store.getTask(taskId))?.lifecycle.kind).toBe('ready-to-save')
   })
 })

@@ -32,6 +32,12 @@ export class MemoryReceiveStore {
     this.events.push(`putFile:${record.fileId}:${record.status}`)
   }
 
+  async putTaskAndFile(task: ReceiveTaskRecord, file: ReceiveFileRecord): Promise<void> {
+    this.tasks.set(task.taskId, task)
+    this.files.set(file.id, file)
+    this.events.push(`putTaskAndFile:${task.lifecycle.kind}:${file.fileId}:${file.status}`)
+  }
+
   async getFile(taskId: string, fileId: string): Promise<ReceiveFileRecord | undefined> {
     return this.files.get(`${taskId}:${fileId}`)
   }

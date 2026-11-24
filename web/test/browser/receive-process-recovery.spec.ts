@@ -48,6 +48,7 @@ test('OPFS progressive ZIP and FSA directory tasks recover across a real Chromiu
   const ids = {
     databaseName: `windshare-proc-${crypto.randomUUID()}`,
     opfsTaskId: `opfs-proc-${crypto.randomUUID()}`,
+    opfsSingleTaskId: `opfs-single-proc-${crypto.randomUUID()}`,
     fsaTaskId: `fsa-proc-${crypto.randomUUID()}`,
     fsaSandbox: `fsa-proc-sandbox-${crypto.randomUUID()}`,
   }
@@ -63,7 +64,11 @@ test('OPFS progressive ZIP and FSA directory tasks recover across a real Chromiu
       const harness = await import(path) as typeof import('./receive-process-recovery-harness')
       return harness.startActiveProcessCrashCut(crashIds)
     }, { path: HARNESS_PATH, crashIds: ids })
-    expect(crashCut).toEqual({ opfsLifecycle: 'downloading', fsaLifecycle: 'downloading' })
+    expect(crashCut).toEqual({
+      opfsLifecycle: 'downloading',
+      opfsSingleLifecycle: 'ready-to-save',
+      fsaLifecycle: 'downloading',
+    })
 
     // Closing a persistent BrowserContext terminates its dedicated Chromium process without
     // running JS session settlement, releasing OS handles and Web Locks only via process exit.
@@ -76,12 +81,13 @@ test('OPFS progressive ZIP and FSA directory tasks recover across a real Chromiu
     await secondPage.goto(contractHostURL)
     await requireOriginPrivateStorage(secondPage, browserName)
 
-    const downloadPromise = secondPage.waitForEvent('download')
+    const downloads: Download[] = []
+    secondPage.on('download', download => { downloads.push(download) })
     const recovered = await secondPage.evaluate(async ({ path, crashIds }) => {
       const harness = await import(path) as typeof import('./receive-process-recovery-harness')
       return harness.recoverAfterBrowserProcessRestart(crashIds)
     }, { path: HARNESS_PATH, crashIds: ids })
-    const download = await downloadPromise
+    await expect.poll(() => downloads.length).toBe(2)
 
     expect(recovered).toEqual({
       normalizedOpfs: {
@@ -90,6 +96,14 @@ test('OPFS progressive ZIP and FSA directory tasks recover across a real Chromiu
         reason: 'interrupted',
         completedFiles: 1,
         retainedBytes: 34,
+      },
+      normalizedOpfsSingle: {
+        activeElsewhere: false,
+        kind: 'ready-to-save',
+        actions: ['save', 'discard'],
+        readiness: 'local',
+        offlineSaveAllowed: true,
+        exportedLifecycle: 'download-started',
       },
       normalizedFsa: {
         activeElsewhere: false,
@@ -114,8 +128,14 @@ test('OPFS progressive ZIP and FSA directory tasks recover across a real Chromiu
         draftBytes: [11, 12, 13, 14, 15, 16],
       },
     })
-    expect(download.suggestedFilename()).toBe('bundle.zip')
-    expect(await readZip(await readDownloadBytes(download))).toEqual({
+    const singleDownload = downloads.find(download => download.suggestedFilename() === 'committed-single.txt')
+    const zipDownload = downloads.find(download => download.suggestedFilename() === 'bundle.zip')
+    expect(singleDownload).toBeDefined()
+    expect(zipDownload).toBeDefined()
+    expect(new TextDecoder().decode(await readDownloadBytes(singleDownload!))).toBe(
+      'single-file-committed-before-process-exit',
+    )
+    expect(await readZip(await readDownloadBytes(zipDownload!))).toEqual({
       'docs/done.txt': 'done-before-process-exit',
       'docs/part.txt': 'first-part|second-part',
       'docs/uncommitted.txt': 'fresh-after-process-exit',

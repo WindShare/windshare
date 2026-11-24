@@ -1,5 +1,5 @@
 import type { ByteRange } from '../../content/geometry'
-import { catalogCapacityReason, classifyNativeError, storagePauseReason } from '../../transfer/fault'
+import { classifyNativeError, storagePauseReason } from '../../transfer/fault'
 import type { SettledTransferJobResult } from '../../transfer/job'
 import type {
   CompletedOutputFile,
@@ -19,7 +19,6 @@ import {
   completedTuplesBytes,
   fileRecordId,
   fromRangeTuples,
-  maxRangeEnd,
   toRangeTuples,
   type OPFSTargetRecord,
   type ReceiveFileRecord,
@@ -33,6 +32,15 @@ import {
   type BrowserDownloadWindow,
 } from './browser-handoff'
 import { mergeSourceOmittedEntries, resolveZipEntryPath, type OutputSessionHandle, type StartBackendTaskInput } from './contract'
+import {
+  completedZipTailOffset,
+  hasCompletedZipFile,
+  isPersistedCompletedRecord,
+  nextOPFSIncompleteLifecycle,
+  readyToSaveLifecycle,
+  survivingFileCoverage,
+  type IncompleteOPFSJobStatus,
+} from './opfs-settlement'
 
 const OPFS_ROOT_DIR = 'windshare-tasks'
 const OPFS_MAX_CONCURRENT_FILES = 4
@@ -261,6 +269,7 @@ class OPFSSessionHandle implements OutputSessionHandle {
   readonly #windowPort: BrowserDownloadWindow
   readonly #diagnostics: OutputDiagnosticsPorts | undefined
   #closingIO: Promise<void> | undefined
+  #taskWriteTail: Promise<unknown> = Promise.resolve()
 
   constructor(input: Readonly<{
     record: ReceiveTaskRecord
@@ -305,11 +314,13 @@ class OPFSSessionHandle implements OutputSessionHandle {
         checkCompleted: (fileId: string, signal: AbortSignal) => this.#checkCompleted(fileId, signal),
       } : {}),
       openFile: (request: TransferFileRequest, signal: AbortSignal) => this.#openFile(request, signal),
-      markDiscoveryComplete: async () => {
+      markDiscoveryComplete: () => this.#serializeTaskWrite(async () => {
+        // Single-file commit may already have promoted this task to `ready-to-save`.
+        if (this.#record.discoveryComplete || this.#record.lifecycle.kind !== 'downloading') return
         const updated = Object.freeze({ ...this.#record, discoveryComplete: true, updatedAt: Date.now() })
         await this.#store.putTask(updated)
         this.#record = updated
-      },
+      }),
     })
   }
 
@@ -319,8 +330,9 @@ class OPFSSessionHandle implements OutputSessionHandle {
     }
 
     const { files, truncatedLength } = await this.#closeIncompleteSession(result.status)
-    if (this.#zip === undefined && result.status !== 'paused') {
-      // The file commit already truncated and flushed. Its durable row also survives a late stop.
+    if (this.#zip === undefined) {
+      // Single-file commit already truncated, flushed, and sealed `ready-to-save`; a late pause or stop
+      // must not downgrade a complete local file back to an online-only paused state.
       const committed = files.find(file => file.status === 'completed')
       if (committed !== undefined) return this.#publishCompleted(committed.size, result)
     }
@@ -336,11 +348,13 @@ class OPFSSessionHandle implements OutputSessionHandle {
       size = await this.#zip!.finalize()
     } catch (error) {
       await this.#closeIO()
+      await this.#taskWriteTail
       const pauseReason = storagePauseReason(error)
       if (pauseReason !== undefined) return this.#settleIncomplete('paused', { ...result, pauseReason, error })
       return this.#settleIncomplete('failed', { ...result, error })
     }
     await this.#closeIO()
+    await this.#taskWriteTail
     return this.#publishCompleted(size, result)
   }
 
@@ -349,6 +363,7 @@ class OPFSSessionHandle implements OutputSessionHandle {
   ): Promise<Readonly<{ files: readonly ReceiveFileRecord[]; truncatedLength?: bigint }>> {
     if (this.#zip === undefined || status === 'paused' || status === 'completed') {
       await this.#closeIO()
+      await this.#taskWriteTail
       return { files: await this.#store.listTaskFiles(this.taskId) }
     }
     try {
@@ -357,6 +372,7 @@ class OPFSSessionHandle implements OutputSessionHandle {
       return truncatedLength === undefined ? { files } : { files, truncatedLength }
     } finally {
       await this.#closeIO()
+      await this.#taskWriteTail
     }
   }
 
@@ -376,37 +392,27 @@ class OPFSSessionHandle implements OutputSessionHandle {
     if (file !== undefined && BigInt(file.size) !== sealedSize) {
       return this.#interruptTruncatedOutput(BigInt(file.size), result)
     }
+    const currentTarget = this.#record.target as OPFSTargetRecord
     const target: OPFSTargetRecord = Object.freeze({
-      ...(this.#record.target as OPFSTargetRecord),
+      ...currentTarget,
       allocatedLength: this.#zip?.allocatedLength ?? sealedSize,
       sealedSize,
     })
 
-    let nextLifecycle = transitionReceiveState(this.#record.lifecycle, {
-      kind: 'ready-to-save',
-      size: sealedSize,
-      fileName: target.fileName,
-      contentWarning: result.contentWarning ?? null,
-    })
+    let nextLifecycle = readyToSaveLifecycle(this.#record.lifecycle, sealedSize, target.fileName, result.contentWarning)
     const { sourceOmittedEntries: previousOmitted, ...baseRecord } = this.#record
     const sourceOmittedEntries = mergeSourceOmittedEntries(
       result.sourceOmittedEntries,
       previousOmitted,
       result.discoveryComplete,
     )
-    // A late stop can leave a complete file for the user to save at their discretion.
+    // A late stop or pause leaves a complete file in `ready-to-save` for the user to export on demand.
     if (result.status === 'completed' && file !== undefined) {
-      try {
-        const mediaType = artifactDownloadMediaType(this.#record.artifact.kind)
-        triggerBrowserDownload(this.#windowPort, file, target.fileName, mediaType)
-        nextLifecycle = transitionReceiveState(nextLifecycle, {
-          kind: 'download-started', retained: true, fileName: target.fileName,
-        })
-        emitOutputTrace(this.#diagnostics?.trace, 'publication', {
-          backend: 'origin_private', task_id: this.taskId, transition: 'committed',
-          ...(sourceOmittedEntries === undefined ? {} : { source_omitted_entries: String(sourceOmittedEntries) }),
-        })
-      } catch { /* Downloads can retry a handoff that needs a fresh user gesture. */ }
+      nextLifecycle = this.#handoffCompletedFile(file, target.fileName, nextLifecycle, sourceOmittedEntries)
+    }
+
+    if (isPersistedCompletedRecord(this.#record, target, nextLifecycle, sourceOmittedEntries)) {
+      return this.#record
     }
 
     const updated: ReceiveTaskRecord = Object.freeze({
@@ -420,6 +426,26 @@ class OPFSSessionHandle implements OutputSessionHandle {
     await this.#store.putTask(updated)
     this.#record = updated
     return updated
+  }
+
+  #handoffCompletedFile(
+    file: File,
+    fileName: string,
+    lifecycle: ReceiveTaskRecord['lifecycle'],
+    sourceOmittedEntries: bigint | undefined,
+  ): ReceiveTaskRecord['lifecycle'] {
+    try {
+      const mediaType = artifactDownloadMediaType(this.#record.artifact.kind)
+      triggerBrowserDownload(this.#windowPort, file, fileName, mediaType)
+      emitOutputTrace(this.#diagnostics?.trace, 'publication', {
+        backend: 'origin_private', task_id: this.taskId, transition: 'committed',
+        ...(sourceOmittedEntries === undefined ? {} : { source_omitted_entries: String(sourceOmittedEntries) }),
+      })
+      return transitionReceiveState(lifecycle, { kind: 'download-started', retained: true, fileName })
+    } catch {
+      /* Downloads can retry a handoff that needs a fresh user gesture. */
+      return lifecycle
+    }
   }
 
   async #interruptTruncatedOutput(physicalSize: bigint, result: SettledTransferJobResult): Promise<ReceiveTaskRecord> {
@@ -460,9 +486,14 @@ class OPFSSessionHandle implements OutputSessionHandle {
       storedCompletedFiles, storedCompletedBytes,
     })
 
+    const currentTarget = this.#record.target as OPFSTargetRecord
+    // Strip any prior `sealedSize` when settling incomplete (e.g. truncated output recovery).
     const target: OPFSTargetRecord = Object.freeze({
-      ...(this.#record.target as OPFSTargetRecord),
-      allocatedLength: truncatedLength ?? this.#zip?.allocatedLength ?? (this.#record.target as OPFSTargetRecord).allocatedLength,
+      kind: 'opfs',
+      objectName: currentTarget.objectName,
+      fileName: currentTarget.fileName,
+      isZip: currentTarget.isZip,
+      allocatedLength: truncatedLength ?? this.#zip?.allocatedLength ?? currentTarget.allocatedLength,
     })
     const { sourceOmittedEntries: previousOmitted, ...baseRecord } = this.#record
     const sourceOmittedEntries = mergeSourceOmittedEntries(
@@ -561,8 +592,8 @@ class OPFSSessionHandle implements OutputSessionHandle {
     const validExisting = existing === undefined ? undefined : survivingFileCoverage(existing, await this.#io.size())
     if (validExisting !== undefined && validExisting !== existing) await this.#store.putFile(validExisting)
 
-    const persist = (status: 'receiving' | 'completed', ranges: readonly ByteRange[]) => {
-      const row: ReceiveFileRecord = Object.freeze({
+    const buildFileRow = (status: 'receiving' | 'completed', ranges: readonly ByteRange[]): ReceiveFileRecord =>
+      Object.freeze({
         id: fileRecordId(this.taskId, request.fileId),
         taskId: this.taskId,
         fileId: request.fileId,
@@ -573,8 +604,48 @@ class OPFSSessionHandle implements OutputSessionHandle {
         completedRanges: toRangeTuples(ranges),
         status,
       })
+
+    const persistReceiving = (ranges: readonly ByteRange[]) => {
+      const row = buildFileRow('receiving', ranges)
       // Coordinator flushes the SyncAccessHandle BEFORE writing `completedRanges` to IDB.
-      return this.#io.checkpoint(`opfs-file-${status}`, () => this.#store.putFile(row))
+      return this.#io.checkpoint('opfs-file-receiving', () => this.#store.putFile(row))
+    }
+
+    const commitCompleted = (ranges: readonly ByteRange[]) => {
+      const row = buildFileRow('completed', ranges)
+      // Coordinator flushes the truncated SyncAccessHandle BEFORE atomically sealing both the
+      // file row and task record in one IndexedDB transaction so a crash before settle() still
+      // leaves a locally exportable `ready-to-save` task instead of an online-only `paused` task.
+      return this.#io.checkpoint('opfs-file-completed', () =>
+        this.#serializeTaskWrite(async () => {
+          const currentTarget = this.#record.target as OPFSTargetRecord
+          const target: OPFSTargetRecord = Object.freeze({
+            ...currentTarget,
+            allocatedLength: request.exactSize,
+            sealedSize: request.exactSize,
+          })
+          const now = Date.now()
+          const readyTask: ReceiveTaskRecord = Object.freeze({
+            ...this.#record,
+            target,
+            lifecycle: transitionReceiveState(this.#record.lifecycle, {
+              kind: 'ready-to-save',
+              size: request.exactSize,
+              fileName: target.fileName,
+              contentWarning: null,
+            }, now),
+            discoveryComplete: true,
+            updatedAt: now,
+          })
+          await this.#store.putTaskAndFile(readyTask, row)
+          this.#record = readyTask
+          emitOutputTrace(this.#diagnostics?.trace, 'publication', {
+            backend: 'origin_private',
+            task_id: this.taskId,
+            transition: 'ready_to_save',
+            sealed_bytes: String(request.exactSize),
+          })
+        }))
     }
 
     return Object.freeze({
@@ -585,12 +656,12 @@ class OPFSSessionHandle implements OutputSessionHandle {
         savedSize: validExisting.size,
       }),
       writeAt: (offset: bigint, data: Uint8Array) => this.#io.writeAt(offset, data),
-      checkpoint: (ranges: readonly ByteRange[]) => persist('receiving', ranges).then(() => 'saved' as const),
+      checkpoint: (ranges: readonly ByteRange[]) => persistReceiving(ranges).then(() => 'saved' as const),
       commit: async (ranges: readonly ByteRange[]) => {
         await this.#io.truncate(request.exactSize)
-        await persist('completed', ranges)
+        await commitCompleted(ranges)
       },
-      pause: (ranges: readonly ByteRange[]) => persist('receiving', ranges),
+      pause: (ranges: readonly ByteRange[]) => persistReceiving(ranges),
       abort: () => Promise.resolve(),
     })
   }
@@ -622,102 +693,14 @@ class OPFSSessionHandle implements OutputSessionHandle {
     }
   }
 
+  #serializeTaskWrite<T>(write: () => Promise<T>): Promise<T> {
+    const result = this.#taskWriteTail.then(write)
+    this.#taskWriteTail = result.catch(() => undefined)
+    return result
+  }
+
   #closeIO(): Promise<void> {
     this.#closingIO ??= this.#io.close().catch(() => undefined)
     return this.#closingIO
-  }
-}
-
-function hasCompletedZipFile(files: readonly ReceiveFileRecord[]): boolean {
-  return files.some(file => file.status === 'completed' && file.zipEntry?.kind !== 'directory')
-}
-
-function completedZipTailOffset(files: readonly ReceiveFileRecord[]): bigint {
-  let tail = 0n
-  for (const file of files) {
-    if (file.status !== 'completed' || !hasZipLayout(file)) continue
-    // Empty files and directories regenerate headers without reading bytes from the OPFS object.
-    if (file.zipEntry.kind !== 'file' || file.size === 0n) continue
-    if (file.zipEntry.endOffset > tail) tail = file.zipEntry.endOffset
-  }
-  return tail
-}
-
-function survivingFileCoverage(row: ReceiveFileRecord, physicalSize: bigint): ReceiveFileRecord {
-  if (row.status === 'completed' ? physicalSize === row.size : maxRangeEnd(row.completedRanges) <= physicalSize) return row
-  const completedRanges = row.completedRanges.flatMap(([start, end]) =>
-    start < physicalSize ? [[start, end < physicalSize ? end : physicalSize] as const] : [])
-  return { ...row, status: 'receiving', completedRanges }
-}
-
-type IncompleteOPFSJobStatus = Exclude<SettledTransferJobResult['status'], 'completed'>
-
-function nextOPFSIncompleteLifecycle(
-  current: ReceiveTaskRecord['lifecycle'],
-  status: IncompleteOPFSJobStatus,
-  result: SettledTransferJobResult,
-  input: Readonly<{
-    isZip: boolean
-    retainedBytes: bigint
-    storedCompletedFiles: bigint
-    storedCompletedBytes: bigint
-  }>,
-): ReceiveTaskRecord['lifecycle'] {
-  const warning = result.contentWarning ?? null
-  if (status === 'paused') {
-    return transitionReceiveState(current, {
-      kind: 'paused',
-      reason: result.pauseReason ?? 'user',
-      completedFiles: input.storedCompletedFiles,
-      completedBytes: input.storedCompletedBytes,
-      retainedBytes: input.retainedBytes,
-      discoveredFiles: result.discoveredFiles,
-      discoveredBytes: result.discoveredBytes,
-      discoveryComplete: result.discoveryComplete,
-      contentWarning: warning,
-    })
-  }
-
-  const failedCount = result.failedFiles + result.failedDirectories
-  const savedFiles = input.storedCompletedFiles
-  if (input.isZip && savedFiles > 0n) {
-    // Keep completed OPFS ZIP members exportable via zero-copy `buildPartialZipBlob`
-    // instead of sealing in place, which would turn pre-allocated failed slots into dead padding.
-    const reason = catalogCapacityReason(result.error) ?? (
-      status === 'stopped' || (status === 'partial' && failedCount === 0n)
-        ? 'stopped'
-        : 'failures'
-    )
-    return transitionReceiveState(current, {
-      kind: 'partial',
-      reason,
-      savedFiles,
-      failedFiles: failedCount,
-      contentWarning: warning,
-    })
-  }
-
-  return failedOPFSLifecycle(current, status, result.error)
-}
-
-function failedOPFSLifecycle(
-  current: ReceiveTaskRecord['lifecycle'],
-  status: Exclude<IncompleteOPFSJobStatus, 'paused'>,
-  error: unknown,
-): ReceiveTaskRecord['lifecycle'] {
-  switch (status) {
-    case 'stopped':
-      return transitionReceiveState(current, { kind: 'failed', reason: 'cancelled' })
-    case 'source-changed':
-      return transitionReceiveState(current, { kind: 'failed', reason: 'source-changed' })
-    case 'partial':
-    case 'failed': {
-      const reason = catalogCapacityReason(error) ?? 'error'
-      return transitionReceiveState(current, {
-        kind: 'failed',
-        reason,
-        ...(reason === 'error' && error instanceof Error ? { detail: error.message } : {}),
-      })
-    }
   }
 }

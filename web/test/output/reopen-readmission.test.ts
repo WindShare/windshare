@@ -35,6 +35,10 @@ class MemoryReceiveStore {
   async getTask(taskId: string): Promise<ReceiveTaskRecord | undefined> { return this.tasks.get(taskId) }
   async listTasks(): Promise<readonly ReceiveTaskRecord[]> { return [...this.tasks.values()] }
   async putFile(record: ReceiveFileRecord): Promise<void> { this.files.set(record.id, record) }
+  async putTaskAndFile(task: ReceiveTaskRecord, file: ReceiveFileRecord): Promise<void> {
+    this.tasks.set(task.taskId, task)
+    this.files.set(file.id, file)
+  }
   async getFile(taskId: string, fileId: string): Promise<ReceiveFileRecord | undefined> {
     return this.files.get(`${taskId}:${fileId}`)
   }
