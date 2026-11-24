@@ -174,8 +174,10 @@ func (outbound *Responses) tryResponseLanes(
 		if !notSent {
 			outcome.uncertain = true
 		}
-		if stopErr := responseStopError(runtime, ctx, sendErr, notSent); stopErr != nil {
-			outcome.err = errors.Join(outcome.err, stopErr)
+		if stopErr, stop := responseStopError(runtime, ctx, sendErr, notSent); stop {
+			if stopErr != nil {
+				outcome.err = errors.Join(outcome.err, stopErr)
+			}
 			return outcome
 		}
 		// Sender responses (fragments, finals, PeerAnswer, PeerCandidate) are
@@ -190,17 +192,18 @@ func (outbound *Responses) tryResponseLanes(
 	return outcome
 }
 
-func responseStopError(runtime *Runtime, ctx context.Context, sendErr error, notSent bool) error {
+func responseStopError(runtime *Runtime, ctx context.Context, sendErr error, notSent bool) (error, bool) {
 	if runtime.ctx.Err() != nil {
-		return errors.Join(session.ErrRuntimeClosed, runtime.Err())
+		return errors.Join(session.ErrRuntimeClosed, runtime.Err()), true
 	}
 	if ctx != nil && ctx.Err() != nil {
-		return ctx.Err()
+		return ctx.Err(), true
 	}
-	if notSent && !retryableLaneFailure(sendErr) {
-		return sendErr
+	if errors.Is(sendErr, protocolsession.ErrWriterTerminal) ||
+		(notSent && !retryableLaneFailure(sendErr)) {
+		return nil, true
 	}
-	return nil
+	return nil, false
 }
 
 func (outbound *Responses) selectResponseLane(

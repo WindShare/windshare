@@ -615,8 +615,13 @@ func (client *Requests) enqueueBestEffortCancel(call *Call, message protocolsess
 }
 
 func retryableLaneFailure(err error) bool {
+	if errors.Is(err, protocolsession.ErrWriterTerminal) ||
+		errors.Is(err, protocolsession.ErrSessionTerminated) {
+		return false
+	}
+	var deliveryErr *laneDeliveryError
 	return errors.Is(err, protocolsession.ErrWriterStopped) ||
 		errors.Is(err, protocolsession.ErrControlQueueFull) ||
 		errors.Is(err, protocolsession.ErrDataQueueFull) ||
-		protocolsession.IsNotSent(err)
+		errors.As(err, &deliveryErr)
 }

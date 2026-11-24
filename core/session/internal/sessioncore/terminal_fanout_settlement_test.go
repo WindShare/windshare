@@ -11,6 +11,7 @@ import (
 
 	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -115,10 +116,12 @@ type contextTerminalChannel struct {
 	terminalRelease  chan struct{}
 	terminalOnce     sync.Once
 	terminalErr      error
+	normalSends      atomic.Int32
 	delivered        atomic.Int32
 }
 
 func (channel *contextTerminalChannel) Send(ctx context.Context, frame framechannel.Frame) error {
+	channel.normalSends.Add(1)
 	if channel.precedingRelease != nil {
 		channel.precedingOnce.Do(func() { close(channel.precedingEntered) })
 		select {
@@ -289,6 +292,248 @@ func TestTerminalFanoutSiblingRetirementDoesNotCancelHealthyDelivery(t *testing.
 				t.Fatalf("slow terminal deliveries = %d, want 1", slow.delivered.Load())
 			}
 			<-slowLane.done
+			if runtime.Lifetime().Err() == nil {
+				t.Fatal("final terminal lane retirement did not cancel lifetime")
+			}
+		})
+	})
+}
+
+func TestTerminalFanoutQueuedResponsePreservesLifetimeAcrossSiblingRetirement(t *testing.T) {
+	body, err := protocolsession.EncodeSessionTerminal(protocolsession.SessionTerminal{
+		Code: session.SessionStoppedCode, Message: "stop",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	controlBody, err := protocolsession.EncodePeerPathControl(protocolsession.PeerPathControl{
+		PeerPathID:          [16]byte{1},
+		NetworkGenerationID: [16]byte{2},
+		ControlSequence:     1,
+		Kind:                protocolsession.PeerPathRevoke,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	precedingControl, err := protocolsession.NewMessage(protocolsession.MessagePeerPathControl, nil, controlBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		name        string
+		siblingErr  error
+		sendControl bool
+	}{
+		{
+			name:       "queued fragment survives failing sibling",
+			siblingErr: framechannel.RetireSend(io.ErrClosedPipe),
+		},
+		{
+			name:        "queued control response survives fast sibling completion",
+			sendControl: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
+				outbound := NewResponses(runtime, ResponseConfig{})
+				healthy := &contextTerminalChannel{
+					memoryChannel:    newMemoryChannel(t),
+					precedingEntered: make(chan struct{}),
+					precedingRelease: make(chan struct{}),
+					terminalEntered:  make(chan struct{}),
+					terminalRelease:  make(chan struct{}),
+				}
+				sibling := &contextTerminalChannel{
+					memoryChannel: newMemoryChannel(t),
+					terminalErr:   test.siblingErr,
+				}
+				healthyLane, err := runtime.lanes.add(
+					session.LaneIdentity{ID: 2, Epoch: 1}, healthy, permissiveInboundAuthenticator(), false,
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				siblingLane, err := runtime.lanes.add(
+					session.LaneIdentity{ID: 3, Epoch: 1}, sibling, permissiveInboundAuthenticator(), false,
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !runtime.DetachLane(runtime.initial) {
+					t.Fatal("initial lane did not detach")
+				}
+				runtime.Start()
+				defer runtime.Close()
+
+				if err := healthyLane.writer.EnqueueControl(precedingControl, nil); err != nil {
+					t.Fatalf("queue preceding control: %v", err)
+				}
+				<-healthy.precedingEntered
+
+				opID := protocolsession.OperationID(201)
+				request, err := protocolsession.NewMessage(
+					protocolsession.MessageRequestBlocks, &opID, []byte{0xa1, 0x00, 0x01},
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				op := admitTestSenderOperation(t, runtime, healthyLane.identity, request)
+				responseDone := make(chan error, 1)
+				if test.sendControl {
+					completeBody, encodeErr := contentflow.EncodeOperationComplete(1)
+					if encodeErr != nil {
+						t.Fatal(encodeErr)
+					}
+					go func() {
+						responseDone <- outbound.SendControl(
+							runtime.Lifetime(), op, protocolsession.MessageOperationComplete, completeBody,
+						)
+					}()
+				} else {
+					fragments, fragErr := contentflow.FragmentRecord(opID, []byte("queued-fragment"))
+					if fragErr != nil {
+						t.Fatal(fragErr)
+					}
+					go func() {
+						responseDone <- outbound.SendFragment(runtime.Lifetime(), op, fragments[0])
+					}()
+				}
+				synctest.Wait()
+
+				terminalDone := make(chan error, 1)
+				go func() {
+					terminalDone <- outbound.SendTerminalAll(context.Background(), body)
+				}()
+
+				responseErr := <-responseDone
+				if !errors.Is(responseErr, protocolsession.ErrWriterTerminal) || !protocolsession.IsNotSent(responseErr) {
+					t.Fatalf("preempted response err = %v, want NotSent(ErrWriterTerminal)", responseErr)
+				}
+				if errors.Is(responseErr, ErrLaneUnavailable) {
+					t.Fatalf("preempted response retried into ErrLaneUnavailable: %v", responseErr)
+				}
+
+				<-siblingLane.done
+				synctest.Wait()
+
+				if err := runtime.Lifetime().Err(); err != nil {
+					t.Fatalf("sibling retirement canceled lifetime after queued response preemption: %v", err)
+				}
+				if sibling.normalSends.Load() != 0 {
+					t.Fatalf("preempted response leaked %d normal send(s) onto sibling lane", sibling.normalSends.Load())
+				}
+
+				close(healthy.precedingRelease)
+				<-healthy.terminalEntered
+				synctest.Wait()
+				if err := runtime.Lifetime().Err(); err != nil {
+					t.Fatalf("lifetime canceled while healthy lane delivered terminal: %v", err)
+				}
+
+				close(healthy.terminalRelease)
+				if err := <-terminalDone; err != nil {
+					t.Fatalf("terminal fanout failed: %v", err)
+				}
+				if healthy.delivered.Load() != 1 {
+					t.Fatalf("healthy terminal deliveries = %d, want 1", healthy.delivered.Load())
+				}
+				<-healthyLane.done
+				if runtime.Lifetime().Err() == nil {
+					t.Fatal("final terminal lane retirement did not cancel lifetime")
+				}
+			})
+		})
+	}
+
+	t.Run("preempted response stops before failing over to sibling not yet terminal", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
+			outbound := NewResponses(runtime, ResponseConfig{})
+			laneAChannel := &contextTerminalChannel{
+				memoryChannel:    newMemoryChannel(t),
+				precedingEntered: make(chan struct{}),
+				precedingRelease: make(chan struct{}),
+			}
+			laneBChannel := &contextTerminalChannel{
+				memoryChannel: newMemoryChannel(t),
+			}
+			laneA, err := runtime.lanes.add(
+				session.LaneIdentity{ID: 2, Epoch: 1}, laneAChannel, permissiveInboundAuthenticator(), false,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			laneB, err := runtime.lanes.add(
+				session.LaneIdentity{ID: 3, Epoch: 1}, laneBChannel, permissiveInboundAuthenticator(), false,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !runtime.DetachLane(runtime.initial) {
+				t.Fatal("initial lane did not detach")
+			}
+			runtime.Start()
+			defer runtime.Close()
+
+			if err := laneA.writer.EnqueueControl(precedingControl, nil); err != nil {
+				t.Fatalf("queue preceding control: %v", err)
+			}
+			<-laneAChannel.precedingEntered
+
+			opID := protocolsession.OperationID(202)
+			request, err := protocolsession.NewMessage(
+				protocolsession.MessageRequestBlocks, &opID, []byte{0xa1, 0x00, 0x01},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			op := admitTestSenderOperation(t, runtime, laneA.identity, request)
+			fragments, err := contentflow.FragmentRecord(opID, []byte("no-failover"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			responseDone := make(chan error, 1)
+			go func() {
+				responseDone <- outbound.SendFragment(runtime.Lifetime(), op, fragments[0])
+			}()
+			synctest.Wait()
+
+			terminalMsg, err := protocolsession.NewMessage(protocolsession.MessageSessionTerminal, nil, body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Enqueue terminal on laneA first while laneB is still writerAccepting,
+			// matching the mid-loop window inside sendTerminalRecipients.
+			terminalSend, err := laneA.writer.EnqueueTerminal(terminalMsg, runtime.lanes.acceptTerminal)
+			if err != nil {
+				t.Fatalf("enqueue terminal on laneA: %v", err)
+			}
+			responseErr := <-responseDone
+			if !errors.Is(responseErr, protocolsession.ErrWriterTerminal) || !protocolsession.IsNotSent(responseErr) {
+				t.Fatalf("preempted response err = %v, want NotSent(ErrWriterTerminal)", responseErr)
+			}
+			if laneBChannel.normalSends.Load() != 0 {
+				t.Fatalf("preempted response leaked %d send(s) onto still-accepting sibling lane", laneBChannel.normalSends.Load())
+			}
+			// Even an explicit markSelectedClosing must not poison laneA while it delivers terminal.
+			runtime.lanes.markSelectedClosing(laneA.selected())
+			if !runtime.DetachLane(laneB.identity) {
+				t.Fatal("sibling laneB did not detach")
+			}
+			if err := runtime.Lifetime().Err(); err != nil {
+				t.Fatalf("sibling detach canceled lifetime while laneA delivered terminal: %v", err)
+			}
+
+			close(laneAChannel.precedingRelease)
+			if res := terminalSend.Await(context.Background()); res.err != nil {
+				t.Fatalf("laneA terminal delivery failed: %v", res.err)
+			}
+			if laneAChannel.delivered.Load() != 1 {
+				t.Fatalf("laneA terminal deliveries = %d, want 1", laneAChannel.delivered.Load())
+			}
+			<-laneA.done
 			if runtime.Lifetime().Err() == nil {
 				t.Fatal("final terminal lane retirement did not cancel lifetime")
 			}

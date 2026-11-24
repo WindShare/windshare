@@ -219,6 +219,9 @@ func TestLaneWriterTerminalPreemptsQueuedAndRejectsSubsequentSends(t *testing.T)
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if writer.DeliveringTerminal() {
+		t.Fatal("writer reported DeliveringTerminal before terminal enqueue")
+	}
 	termMsg := newTestLaneWriterMessage(t, protocolsession.MessageSessionTerminal, 0, []byte{0xa0})
 	termSend, err := writer.EnqueueTerminal(termMsg, nil)
 	if err != nil {
@@ -227,8 +230,11 @@ func TestLaneWriterTerminalPreemptsQueuedAndRejectsSubsequentSends(t *testing.T)
 	if drained.Load() != 2 {
 		t.Fatalf("terminal drained %d callbacks, want 2", drained.Load())
 	}
-	if writer.Accepting() || !writer.Active() {
-		t.Fatalf("post-enqueue writer states accepting=%t active=%t, want false/true", writer.Accepting(), writer.Active())
+	if writer.Accepting() || !writer.Active() || !writer.DeliveringTerminal() {
+		t.Fatalf(
+			"post-enqueue writer states accepting=%t active=%t terminal=%t, want false/true/true",
+			writer.Accepting(), writer.Active(), writer.DeliveringTerminal(),
+		)
 	}
 	if err := writer.SendControl(context.Background(), msg, nil); !errors.Is(err, protocolsession.ErrWriterTerminal) || !protocolsession.IsNotSent(err) {
 		t.Fatalf("post-terminal control err=%v", err)
@@ -245,8 +251,11 @@ func TestLaneWriterTerminalPreemptsQueuedAndRejectsSubsequentSends(t *testing.T)
 	if err := <-runDone; err != nil {
 		t.Fatalf("writer run after terminal=%v", err)
 	}
-	if writer.Accepting() || writer.Active() {
-		t.Fatalf("stopped writer states accepting=%t active=%t, want false/false", writer.Accepting(), writer.Active())
+	if writer.Accepting() || writer.Active() || writer.DeliveringTerminal() {
+		t.Fatalf(
+			"stopped writer states accepting=%t active=%t terminal=%t, want false/false/false",
+			writer.Accepting(), writer.Active(), writer.DeliveringTerminal(),
+		)
 	}
 	// Only the terminal frame must have crossed the wire.
 	select {

@@ -52,6 +52,16 @@ type laneQueueUsage struct {
 	bytes  int
 }
 
+// laneDeliveryError tags errors produced while sealing or writing on a specific
+// lane so retry logic can distinguish per-lane delivery faults from message
+// validation errors or session-wide terminal preemption.
+type laneDeliveryError struct {
+	err error
+}
+
+func (e *laneDeliveryError) Error() string { return e.err.Error() }
+func (e *laneDeliveryError) Unwrap() error { return e.err }
+
 type envelopeSealer interface {
 	Seal(plaintext []byte) (protocolsession.SealedEnvelope, error)
 }
@@ -115,6 +125,17 @@ func (w *laneWriter) Active() bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.state != writerStopped
+}
+
+// DeliveringTerminal reports whether the writer has admitted a terminal frame
+// and has not yet stopped.
+func (w *laneWriter) DeliveringTerminal() bool {
+	if w == nil {
+		return false
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.state == writerTerminalAccepted
 }
 
 func (w *laneWriter) SendControl(
@@ -440,7 +461,7 @@ func (w *laneWriter) popNext() *writeEntry {
 func (w *laneWriter) deliver(ctx context.Context, entry *writeEntry) error {
 	sealed, err := w.sealer.Seal(entry.plaintext)
 	if err != nil {
-		wrapped := protocolsession.MarkNotSent(fmt.Errorf("write message kind %d: %w", entry.kind, err))
+		wrapped := protocolsession.MarkNotSent(&laneDeliveryError{err: fmt.Errorf("write message kind %d: %w", entry.kind, err)})
 		w.finishEntry(entry, 0, wrapped)
 		return wrapped
 	}
@@ -450,7 +471,7 @@ func (w *laneWriter) deliver(ctx context.Context, entry *writeEntry) error {
 		w.finishEntry(entry, framechannel.SendAccepted, nil)
 		return nil
 	}
-	wrapped := fmt.Errorf("write message kind %d: %w", entry.kind, sendErr)
+	var wrapped error = &laneDeliveryError{err: fmt.Errorf("write message kind %d: %w", entry.kind, sendErr)}
 	if disposition != framechannel.SendAccepted {
 		wrapped = protocolsession.MarkNotSent(wrapped)
 	}

@@ -622,7 +622,8 @@ func (lane *RuntimeLane) selected() selectedLane {
 func (lanes *runtimeLanes) markSelectedClosing(selected selectedLane) {
 	lanes.mu.Lock()
 	lane := lanes.active[selected.identity.ID]
-	if lane != nil && lane.identity == selected.identity && lane.writer == selected.writer {
+	if lane != nil && lane.identity == selected.identity && lane.writer == selected.writer &&
+		!lane.writer.DeliveringTerminal() {
 		lane.closing = true
 	}
 	lanes.mu.Unlock()
