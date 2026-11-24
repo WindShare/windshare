@@ -27,8 +27,8 @@ import {
 } from '../store/types'
 import { mergeSourceOmittedEntries, type BrowserOutputWindow, type OutputSessionHandle, type StartBackendTaskInput } from './contract'
 import {
-  cleanupFSATaskEntries, filterExistingFSADirectories, isMissingFSAEntry, isUncommittedEmptyPlaceholder,
-  matchesFSADiskFingerprint, readFSADiskFingerprint, sameFSAEntry,
+  cleanupFSATaskEntries, isMissingFSAEntry, isUncommittedEmptyPlaceholder,
+  matchesFSADiskFingerprint, readFSADiskFingerprint, sameFSAEntry, settleFSATerminalCleanup,
 } from './fsa-cleanup'
 import { destinationChanged, FSAOutputFile, verifyExistingFSAFile } from './fsa-file'
 import {
@@ -37,7 +37,7 @@ import {
 } from './fsa-reservation'
 import {
   SafeNameRegistry, applySafeRenamedFields, collectSafeRenamedFromRecords,
-  mergeRenamedDirectories, sameSafeRenamedState,
+  mergeRenamedDirectories,
 } from './safe-name'
 
 type FSATaskRecord = ReceiveTaskRecord & { readonly target: FSATargetRecord }
@@ -373,9 +373,13 @@ class FSASessionHandle implements OutputSessionHandle {
   async settle(result: SettledTransferJobResult): Promise<ReceiveTaskRecord> {
     const files = await this.#store.listTaskFiles(this.taskId)
     let retainedBytes = 0n
-    for (const file of files) retainedBytes += completedTuplesBytes(file.completedRanges)
+    let hasUnfinished = false
+    for (const file of files) {
+      retainedBytes += completedTuplesBytes(file.completedRanges)
+      if (file.status !== 'completed') hasUnfinished = true
+    }
 
-    const nextLifecycle = nextFSALifecycle(this.#record.lifecycle, result, retainedBytes)
+    const nextLifecycle = nextFSALifecycle(this.#record.lifecycle, result, retainedBytes, hasUnfinished)
     const candidateDirs = mergeRenamedDirectories(this.#record.safeRenamedDirectories, this.#safeNames.renamedDirectories())
     const initialSafe = nextLifecycle.kind === 'failed'
       ? { summary: undefined, directories: undefined }
@@ -401,21 +405,19 @@ class FSASessionHandle implements OutputSessionHandle {
     if (nextLifecycle.kind === 'failed' || nextLifecycle.kind === 'partial') {
       // An explicitly selected empty folder is part of a partial result. During cancellation, remove task-created scaffolding.
       const directories = result.status === 'stopped' ? [...this.#createdDirectories] : [...this.#fileDirectories]
-      await cleanupFSATaskEntries(this.taskId, nextRecord.target, files, {
-        store: this.#files, diagnostics: this.#diagnostics, directories,
-      }).catch(() => emitOutputTrace(this.#diagnostics?.trace, 'cleanup', {
-        backend: 'file_system_access', task_id: this.taskId, transition: 'deferred',
-      }))
-      if (nextLifecycle.kind === 'partial' && initialSafe.directories !== undefined) {
-        const surviving = await filterExistingFSADirectories(this.#rootHandle, initialSafe.directories)
-          .catch(() => initialSafe.directories!)
-        const reconciled = collectSafeRenamedFromRecords(nextRecord, files, surviving)
-        if (!sameSafeRenamedState(initialSafe, reconciled)) {
-          nextRecord = applySafeRenamedFields({ ...nextRecord, updatedAt: Date.now() }, reconciled)
-          await this.#store.putTask(nextRecord)
-          this.#record = nextRecord
-        }
-      }
+      nextRecord = await settleFSATerminalCleanup({
+        record: nextRecord,
+        rootHandle: this.#rootHandle,
+        files,
+        initialSafe,
+        store: {
+          putTask: row => this.#store.putTask(row),
+          deleteFiles: ids => this.#files.deleteFiles(ids),
+        },
+        diagnostics: this.#diagnostics,
+        directories,
+      })
+      this.#record = nextRecord
     }
     return nextRecord
   }
@@ -683,6 +685,7 @@ function nextFSALifecycle(
   current: ReceiveTaskRecord['lifecycle'],
   result: SettledTransferJobResult,
   retainedBytes: bigint,
+  hasUnfinished: boolean,
 ): ReceiveTaskRecord['lifecycle'] {
   const warning = result.contentWarning ?? null
   switch (result.status) {
@@ -712,6 +715,7 @@ function nextFSALifecycle(
           (result.failedFiles > 0n || result.failedDirectories > 0n ? 'failures' : 'stopped'),
         savedFiles: result.completedFiles,
         failedFiles: result.failedFiles + result.failedDirectories,
+        ...(hasUnfinished ? { cleanupPending: true as const } : {}),
         contentWarning: warning,
       })
     case 'stopped':

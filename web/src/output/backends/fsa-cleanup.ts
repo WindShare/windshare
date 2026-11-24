@@ -4,8 +4,15 @@ import type {
   FSADiskFingerprint,
   FSATargetRecord,
   ReceiveFileRecord,
+  ReceiveTaskRecord,
   SafeRenamedDirectoryRecord,
 } from '../store/types'
+import {
+  applySafeRenamedFields,
+  collectSafeRenamedFromRecords,
+  sameSafeRenamedState,
+  type CollectedSafeRenamedState,
+} from './safe-name'
 
 // FAT32 truncates file timestamps downward to 2-second boundaries.
 const PLACEHOLDER_MTIME_SKEW_MS = 2_000
@@ -223,6 +230,59 @@ export async function removeDirectoryIfEmpty(parent: FileSystemDirectoryHandle, 
     if (error instanceof DOMException && error.name === 'InvalidModificationError') return false
     entryFailure(error)
     return false
+  }
+}
+
+type FSATaskRecord = ReceiveTaskRecord & { readonly target: FSATargetRecord }
+
+export async function settleFSATerminalCleanup(
+  input: Readonly<{
+    record: FSATaskRecord
+    rootHandle: FileSystemDirectoryHandle
+    files: readonly ReceiveFileRecord[]
+    initialSafe: CollectedSafeRenamedState
+    store: Pick<ReceiveStore, 'putTask' | 'deleteFiles'>
+    diagnostics: OutputDiagnosticsPorts | undefined
+    directories: readonly FileSystemDirectoryHandle[]
+  }>,
+): Promise<FSATaskRecord> {
+  const { record, rootHandle, files, initialSafe, store, diagnostics, directories } = input
+  let cleanupSucceeded = true
+  await cleanupFSATaskEntries(record.taskId, record.target, files, { store, diagnostics, directories }).catch(() => {
+    cleanupSucceeded = false
+    emitOutputTrace(diagnostics?.trace, 'cleanup', {
+      backend: 'file_system_access', task_id: record.taskId, transition: 'deferred',
+    })
+  })
+  if (record.lifecycle.kind !== 'partial') return record
+
+  let next = record
+  let changed = false
+  const { cleanupPending, ...settled } = record.lifecycle
+  if (cleanupSucceeded && cleanupPending) {
+    next = Object.freeze({ ...next, lifecycle: Object.freeze(settled) })
+    changed = true
+  }
+  if (initialSafe.directories !== undefined) {
+    const surviving = await filterExistingFSADirectories(rootHandle, initialSafe.directories)
+      .catch(() => initialSafe.directories!)
+    const reconciled = collectSafeRenamedFromRecords(next, files, surviving)
+    if (!sameSafeRenamedState(initialSafe, reconciled)) {
+      next = applySafeRenamedFields(next, reconciled)
+      changed = true
+    }
+  }
+  if (!changed) return record
+  const persisted = Object.freeze({ ...next, updatedAt: Date.now() })
+  try {
+    await store.putTask(persisted)
+    return persisted
+  } catch {
+    // The partial settlement is already durable; keep memory aligned with IndexedDB so retry remains reachable.
+    emitOutputTrace(diagnostics?.trace, 'cleanup', {
+      backend: 'file_system_access', task_id: record.taskId, transition: 'reconcile_deferred',
+    })
+    return record
   }
 }
 

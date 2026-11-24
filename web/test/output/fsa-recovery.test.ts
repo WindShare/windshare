@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { actionsForState, canForgetState } from '../../src/application/receive/admission'
 import { byteRange } from '../../src/content/geometry'
 import { discardFSATask, openNewFSASession, reopenFSASession } from '../../src/output/backends/fsa'
 import type { OutputSessionHandle } from '../../src/output/backends/contract'
@@ -419,6 +420,70 @@ describe('FSA terminal cleanup', () => {
     expect(parent.children.has('Folder')).toBe(false)
     await discardFSATask(record, store)
     expect(prompt).toHaveBeenCalledOnce()
+  })
+
+  it('keeps partial FSA settlement retryable after permission-denied cleanup and preserves completed files on retry', async () => {
+    const { session, open, parent, root, memory, store } = await openFolderFixture()
+    const saved = await open('saved')
+    const savedBytes = Uint8Array.of(1, 2, 3, 4, 5, 6, 7, 8)
+    await saved.writeAt(0n, savedBytes)
+    await saved.commit([byteRange(0n, 8n)])
+
+    const unfinished = await session.transferOutput.openFile({ ...request, path: ['nested', 'large'] }, signal)
+    await unfinished.writeAt(0n, Uint8Array.of(9, 8))
+    await unfinished.pause(prefix)
+
+    const nested = await root.getDirectoryHandle('nested')
+    const denyRemove = vi.spyOn(nested, 'removeEntry').mockRejectedValueOnce(new DOMException('denied', 'NotAllowedError'))
+    const record = await session.settle({ ...paused, status: 'partial', completedFiles: 1n, completedBytes: 8n })
+    await session.close()
+    expect(denyRemove).toHaveBeenCalledOnce()
+
+    expect(record.lifecycle).toMatchObject({ kind: 'partial', reason: 'stopped', savedFiles: 1n, failedFiles: 0n, cleanupPending: true })
+    expect(actionsForState(record.lifecycle, 'fsa')).toEqual(['discard'])
+    expect(canForgetState(record.lifecycle, 'fsa')).toBe(true)
+    expect(nested.children.has('large')).toBe(true)
+    expect(await memory.getFile(session.taskId, 'large')).toBeDefined()
+
+    // Before permissions are restored, discard fails closed and preserves both retry state and completed files.
+    vi.spyOn(parent, 'queryPermission').mockResolvedValueOnce('prompt')
+    vi.spyOn(parent, 'requestPermission').mockResolvedValueOnce('denied')
+    await expect(discardFSATask(record, store)).rejects.toMatchObject({ fault: { code: 'permission-denied' } })
+    expect(await memory.getTask(session.taskId)).toBeDefined()
+    expect(nested.children.has('large')).toBe(true)
+
+    // Once directory permission is restored, retrying discard removes the unfinished file and empty parent while keeping completed files.
+    await discardFSATask(record, store)
+    expect(root.children.has('nested')).toBe(false)
+    expect([...(await root.getFileHandle('saved')).bytes]).toEqual([...savedBytes])
+    expect(await memory.getTask(session.taskId)).toBeUndefined()
+    expect(await memory.listTaskFiles(session.taskId)).toEqual([])
+  })
+
+  it.each(['clean', 'externally-modified'] as const)('clears cleanupPending on partial settlement when unfinished files are %s', async mode => {
+    const { session, open, root, memory } = await openFolderFixture()
+    const saved = await open('saved')
+    await saved.writeAt(0n, new Uint8Array(8).fill(3))
+    await saved.commit([byteRange(0n, 8n)])
+
+    const unfinished = await open('large')
+    await unfinished.writeAt(0n, Uint8Array.of(1, 2))
+    await unfinished.pause(prefix)
+    if (mode === 'externally-modified') {
+      ;(await root.getFileHandle('large')).overwriteExternally(Uint8Array.of(7, 7, 7))
+    }
+
+    const record = await session.settle({ ...paused, status: 'partial', completedFiles: 1n, completedBytes: 8n })
+    await session.close()
+
+    expect(record.lifecycle.kind).toBe('partial')
+    expect(record.lifecycle.kind === 'partial' ? record.lifecycle.cleanupPending : undefined).toBeUndefined()
+    expect(actionsForState(record.lifecycle, 'fsa')).toEqual(['forget'])
+    expect(root.children.has('saved')).toBe(true)
+    expect(root.children.has('large')).toBe(mode === 'externally-modified')
+    if (mode === 'clean') {
+      expect((await memory.listTaskFiles(session.taskId)).map(row => row.fileId)).toEqual(['saved'])
+    }
   })
 })
 

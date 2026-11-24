@@ -49,11 +49,16 @@ export function actionsForState(
     case 'partial':
       // OPFS partial members stay inside browser storage until exported or explicitly discarded,
       // unlike FSA partial results whose completed files already live in the user's folder.
+      // When an FSA partial settlement had to defer unfinished-file cleanup, expose `discard`
+      // so the user can retry removing unfinished files while keeping completed files intact.
       if (backend === 'opfs') {
         return Object.freeze([
           ...(canSavePartial ? ['save-partial' as const] : []),
           'discard',
         ])
+      }
+      if (backend === 'fsa' && state.cleanupPending) {
+        return Object.freeze(['discard'])
       }
       return Object.freeze(['forget'])
     case 'failed':
@@ -97,7 +102,7 @@ export function canForgetState(
   backend: SaveBackendKind,
 ): boolean {
   return actionsForState(state, backend).includes('forget') ||
-    (backend === 'fsa' && (state.kind === 'paused' || state.kind === 'failed'))
+    (backend === 'fsa' && (state.kind === 'paused' || state.kind === 'failed' || state.kind === 'partial'))
 }
 
 export function retainedTaskReadiness(

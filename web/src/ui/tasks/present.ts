@@ -69,6 +69,9 @@ function collectTaskDetails(
     details.unshift(t.partial)
   }
   if (catalogLimitHint !== null) details.unshift(catalogLimitHint)
+  if (facts.lifecycle.kind === 'partial' && facts.lifecycle.cleanupPending) {
+    details.push(receiverCopy[language].downloads.partialCleanupPending)
+  }
   if (facts.sourceOmittedEntries > 0n) {
     details.push(receiverCopy[language].downloads.sourceOmittedCount(facts.sourceOmittedEntries))
     details.push(t.sourceOmittedHint)

@@ -13,6 +13,7 @@ export const downloads = {
   details: 'Details',
   progress: 'Download progress',
   partial: 'Partial result — some selected content is unavailable.',
+  partialCleanupPending: 'Some unfinished files could not be removed from your folder yet. Completed files stay saved; retry discarding below to remove unfinished files.',
   adjustedNames: 'Adjusted filenames',
   destination: 'Destination',
   elapsed: 'Elapsed',

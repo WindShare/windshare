@@ -13,6 +13,7 @@ export const downloads: typeof English = {
   details: '详情',
   progress: '下载进度',
   partial: '部分所选内容不可用，仅保留已完成的部分。',
+  partialCleanupPending: '部分未完成文件未能从所选文件夹移除。已保存的完整文件不受影响，可在下方重试丢弃以清理未完成文件。',
   adjustedNames: '已调整的文件名',
   destination: '保存位置',
   elapsed: '耗时',

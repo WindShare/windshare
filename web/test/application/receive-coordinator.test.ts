@@ -28,7 +28,7 @@ import type { ReceiveTaskRecord } from '../../src/output/store/types'
 import type { OutputTraceEvent } from '../../src/output/diagnostics'
 import { isPermissionDeniedError } from '../../src/transfer/fault'
 import { initialReceiveState, transitionReceiveState } from '../../src/transfer/state'
-import { FakeDirectoryHandle } from '../output/fsa-fixture'
+import { FakeDirectoryHandle, MemoryReceiveStore as FSAMemoryReceiveStore } from '../output/fsa-fixture'
 import { createMemoryOPFSEnv, createMockDownloadWindow, MemoryReceiveStore } from '../output/opfs-fixture'
 import {
   deferred,
@@ -150,6 +150,24 @@ describe('receive admission and coordinator', () => {
     expect(presentedFsaPartial.stage).toBe('saved')
     expect(presentedFsaPartial.publication).toBe('saved')
     expect(presentedFsaPartial.completeness).toBe('partial')
+    expect(presentedFsaPartial.removal).toBeNull()
+
+    const partialFsaPendingLifecycle = transitionReceiveState(base, {
+      kind: 'partial', reason: 'stopped', savedFiles: 1n, failedFiles: 0n, cleanupPending: true,
+    })
+    expect(actionsForState(partialFsaPendingLifecycle, 'fsa')).toEqual(['discard'])
+    expect(canForgetState(partialFsaPendingLifecycle, 'fsa')).toBe(true)
+    const partialFsaPendingTask: RetainedTaskSnapshot = {
+      ...partialFsaTask,
+      taskId: 't-partial-fsa-pending',
+      lifecycle: partialFsaPendingLifecycle,
+      actions: ['discard'],
+    }
+    const presentedFsaPending = presentTask(retainedTaskFacts(partialFsaPendingTask))
+    expect(presentedFsaPending.stage).toBe('saved')
+    expect(presentedFsaPending.destructiveActions.map(action => action.id)).toEqual(['discard'])
+    expect(presentedFsaPending.removal?.fallbackForget?.id).toBe('forget')
+    expect(presentedFsaPending.details.some(line => line.includes('unfinished files'))).toBe(true)
 
     const task: RetainedTaskSnapshot = {
       taskId: 't1',
@@ -1180,6 +1198,108 @@ describe('FSA discard permission fallback', () => {
       'forget',
     )).rejects.toMatchObject({ name: 'InvalidStateError' })
     expect(store.tasks.has('opfs-paused')).toBe(true)
+
+    await coordinator.dispose()
+  })
+
+  it('retries unfinished FSA cleanup on partial(cleanupPending) tasks through ReceiveCoordinator and preserves completed files', async () => {
+    const store = new FSAMemoryReceiveStore()
+    vi.spyOn(ReceiveStore, 'open').mockResolvedValue(Object.assign(store, { close: vi.fn() }) as unknown as ReceiveStore)
+    const parent = new FakeDirectoryHandle('Downloads', [])
+    const folder = await parent.getDirectoryHandle('Album', { create: true })
+    const savedHandle = await folder.getFileHandle('done.txt', { create: true })
+    const savedWriter = await savedHandle.createWritable()
+    await savedWriter.write({ type: 'write', position: 0, data: Uint8Array.of(1, 2, 3, 4) })
+    await savedWriter.close()
+    const unfinishedHandle = await folder.getFileHandle('part.bin', { create: true })
+    const unfinishedWriter = await unfinishedHandle.createWritable()
+    await unfinishedWriter.write({ type: 'write', position: 0, data: Uint8Array.of(9, 8) })
+    await unfinishedWriter.close()
+    const unfinishedDisk = await unfinishedHandle.getFile()
+
+    const partialPending = transitionReceiveState(initialReceiveState('fsa-partial-pending'), {
+      kind: 'partial',
+      reason: 'stopped',
+      savedFiles: 1n,
+      failedFiles: 0n,
+      cleanupPending: true,
+    })
+    await store.putTask({
+      taskId: 'fsa-partial-pending',
+      shareInstance: 'share-1',
+      selectionKey: 'sel-partial',
+      selection: { shareInstance: 'share-1', syntheticRoot: 'root-1', defaultSelected: true, rules: [] },
+      artifact: { kind: 'directory-tree', name: 'Album', rootPath: ['Album'] },
+      backend: 'fsa',
+      lifecycle: partialPending,
+      target: {
+        kind: 'fsa',
+        parentHandle: parent as unknown as FileSystemDirectoryHandle,
+        reservedName: 'Album',
+        collisionIndex: 0,
+        singleFile: false,
+        reservedAtMs: 1_000,
+      },
+      discoveryComplete: true,
+      updatedAt: 2_000,
+    })
+    await store.putFile({
+      id: 'fsa-partial-pending:done',
+      taskId: 'fsa-partial-pending',
+      fileId: 'done',
+      revision: 'rev-1',
+      path: ['done.txt'],
+      fsaPath: ['done.txt'],
+      size: 4n,
+      completedRanges: [[0n, 4n]],
+      status: 'completed',
+      handle: savedHandle as unknown as FileSystemFileHandle,
+    })
+    await store.putFile({
+      id: 'fsa-partial-pending:part',
+      taskId: 'fsa-partial-pending',
+      fileId: 'part',
+      revision: 'rev-2',
+      path: ['part.bin'],
+      fsaPath: ['part.bin'],
+      size: 8n,
+      completedRanges: [[0n, 2n]],
+      status: 'receiving',
+      handle: unfinishedHandle as unknown as FileSystemFileHandle,
+      fsaDiskFingerprint: { size: unfinishedDisk.size, lastModified: unfinishedDisk.lastModified },
+    })
+
+    const queryPermission = vi.spyOn(parent, 'queryPermission').mockResolvedValueOnce('prompt')
+    const requestPermission = vi.spyOn(parent, 'requestPermission').mockResolvedValueOnce('denied')
+    const { windowPort: baseWin } = createMockDownloadWindow()
+    const coordinator = new ReceiveCoordinator({
+      windowPort: { ...baseWin, indexedDB: { open: vi.fn() } as unknown as IDBFactory },
+      currentJoinedShare: () => undefined,
+    })
+    await coordinator.loadRetained()
+
+    const task = coordinator.getSnapshot().retained.tasks.find(entry => entry.taskId === 'fsa-partial-pending')!
+    expect(task.actions).toEqual(['discard'])
+    expect(coordinator.retainedActionAdmission(task, 'forget')).toEqual({ allowed: true, reason: null })
+
+    // Permission still denied keeps the task retryable and leaves files untouched.
+    const denied = deferred<unknown>()
+    coordinator.performRetainedAction(task, 'discard', { onError: error => { denied.resolve(error) } })
+    expect(isPermissionDeniedError(await denied.promise)).toBe(true)
+    expect(queryPermission).toHaveBeenCalledOnce()
+    expect(requestPermission).toHaveBeenCalledOnce()
+    expect(folder.children.has('part.bin')).toBe(true)
+    expect(store.tasks.has('fsa-partial-pending')).toBe(true)
+
+    // Restoring directory permission lets discard clean the unfinished file while keeping done.txt intact.
+    let retryError: unknown
+    coordinator.performRetainedAction(task, 'discard', { onError: error => { retryError = error } })
+    await waitForSnapshot(coordinator, s => s.retained.pending === null && !s.retained.tasks.some(t => t.taskId === 'fsa-partial-pending'))
+    expect(retryError).toBeUndefined()
+    expect(folder.children.has('part.bin')).toBe(false)
+    expect([...(await folder.getFileHandle('done.txt')).bytes]).toEqual([1, 2, 3, 4])
+    expect(store.tasks.has('fsa-partial-pending')).toBe(false)
+    expect(await store.listTaskFiles('fsa-partial-pending')).toEqual([])
 
     await coordinator.dispose()
   })

@@ -95,6 +95,8 @@ export type ReceiveLifecycleState =
       reason: ReceivePartialReason
       savedFiles: bigint
       failedFiles: bigint
+      /** Set while unfinished FSA files remain on disk after a deferred or interrupted settlement cleanup. */
+      cleanupPending?: true
     }>
   | Readonly<ReceiveStateBase & {
       kind: 'failed'
