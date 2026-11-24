@@ -141,7 +141,7 @@ ssh "$SSH_ALIAS" sudo -n /usr/local/sbin/windshare-install-wsrelay \
 
 For a planned relay restart, choose **Drain**. Wait for a fresh report with `applied_policy_version == node.version` and use `active_sessions == 0` to choose a quiet moment. Existing shares still accept joins. For urgent repairs, restart directly.
 
-The installer verifies the checksum and runs `--check-config` as the service user before switching `current`, and advances `last-healthy` only after the loopback health check passes. If restart or the loopback health check fails—including on retry after an interrupted switch—it restores and checks `last-healthy` and exits with an error. A failed first install has no `last-healthy` release. After a healthy restart, the host keeps three releases.
+The installer verifies the checksum and runs `--check-config` as the service user before switching `current`, and advances `last-healthy` only after confirming the systemd unit is running the target release and passes the loopback health check. If restart or health verification fails—including on retry after an interrupted switch—it restores and verifies `last-healthy` and exits with an error. A failed first install has no `last-healthy` release. After a healthy restart, the host keeps three releases.
 
 Before accepting new shares, verify public ingress from outside the host (`curl -fsS https://<node>/.well-known/windshare`), check `journalctl -u windshare-network` for startup or STUN warnings, and confirm a fresh heartbeat in the authority console, then choose **Activate**. When an upgrade changes relay protocol, transport, or STUN behavior, follow up with the external relay or UDP Binding check in [Test a new node](#test-a-new-node).
 

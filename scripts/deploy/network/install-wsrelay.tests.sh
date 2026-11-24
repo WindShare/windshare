@@ -3,10 +3,11 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT
-export WS_TEST_ROOT="$work/host" WS_TEST_CONFIG="$work/node.json" WS_TEST_LOG="$work/restarts" WS_TEST_UNIT_LOG="$work/systemctl" WS_TEST_FAILED="$work/unit-failed"
+export WS_TEST_ROOT="$work/host" WS_TEST_CONFIG="$work/node.json" WS_TEST_LOG="$work/restarts" WS_TEST_UNIT_LOG="$work/systemctl" WS_TEST_FAILED="$work/unit-failed" WS_TEST_UNIT_STATE="$work/unit-state"
 mkdir -p "$work/bin"
 touch "$WS_TEST_CONFIG"
 real_rmdir=$(type -P rmdir)
+real_readlink=$(type -P readlink)
 sed -e "s|^readonly root=.*|readonly root=$WS_TEST_ROOT|" \
     -e "s|^readonly config=.*|readonly config=$WS_TEST_CONFIG|" "$here/install-wsrelay.sh" > "$work/install"
 export PATH="$work/bin:$PATH"
@@ -14,6 +15,19 @@ export PATH="$work/bin:$PATH"
 cat > "$work/bin/id" <<'SH'
 #!/usr/bin/env bash
 [[ $1 == -u ]] && echo 0
+SH
+cat > "$work/bin/readlink" <<SH
+#!/usr/bin/env bash
+set -eu
+if [[ \$# == 1 && \$1 =~ ^/proc/([1-9][0-9]*)/exe\$ ]]; then
+    pid=\${BASH_REMATCH[1]}
+    [[ -f "\$WS_TEST_UNIT_STATE" ]] || exit 1
+    source "\$WS_TEST_UNIT_STATE"
+    [[ \${unit_pid:-0} == "\$pid" && -n \${unit_exe:-} ]] || exit 1
+    printf '%s\n' "\$unit_exe"
+    exit 0
+fi
+exec "$real_readlink" "\$@"
 SH
 cat > "$work/bin/runuser" <<'SH'
 #!/usr/bin/env bash
@@ -25,25 +39,76 @@ SH
 cat > "$work/bin/systemctl" <<'SH'
 #!/usr/bin/env bash
 set -eu
-[[ ! -e /proc/$$/fd/9 && $# == 2 && $2 == windshare-network.service ]]
+[[ ! -e /proc/$$/fd/9 ]]
+load_state() {
+    unit_active=inactive unit_sub=dead unit_invocation= unit_pid=0 unit_exe= unit_inv_seq=0
+    if [[ -f "$WS_TEST_UNIT_STATE" ]]; then
+        source "$WS_TEST_UNIT_STATE"
+    fi
+}
+save_state() {
+    {
+        printf 'unit_active=%q\n' "$unit_active"
+        printf 'unit_sub=%q\n' "$unit_sub"
+        printf 'unit_invocation=%q\n' "$unit_invocation"
+        printf 'unit_pid=%q\n' "$unit_pid"
+        printf 'unit_exe=%q\n' "$unit_exe"
+        printf 'unit_inv_seq=%q\n' "$unit_inv_seq"
+    } > "$WS_TEST_UNIT_STATE"
+}
 case "$1" in
+    show)
+        [[ ${*: -1} == windshare-network.service ]]
+        load_state
+        if [[ $* == *"--property=InvocationID --value"* ]]; then
+            printf '%s\n' "$unit_invocation"
+            exit 0
+        fi
+        printf 'ActiveState=%s\nSubState=%s\nInvocationID=%s\nMainPID=%s\n' \
+            "$unit_active" "$unit_sub" "$unit_invocation" "$unit_pid"
+        exit 0
+        ;;
     reset-failed)
+        [[ $# == 2 && $2 == windshare-network.service ]]
         rm -f -- "$WS_TEST_FAILED"
         echo "reset-failed" >> "$WS_TEST_UNIT_LOG"
         exit 0
         ;;
     stop)
+        [[ $# == 2 && $2 == windshare-network.service ]]
         target=$(basename "$(readlink "$WS_TEST_ROOT/current")")
         [[ -x $WS_TEST_ROOT/releases/$target/wsrelay ]]
         echo "stop:$target" >> "$WS_TEST_UNIT_LOG"
+        load_state
+        unit_active=inactive unit_sub=dead unit_pid=0 unit_exe=
+        save_state
         exit 0
         ;;
     restart)
+        [[ $# == 2 && $2 == windshare-network.service ]]
         [[ ! -e $WS_TEST_FAILED ]]
         target=$(basename "$(readlink "$WS_TEST_ROOT/current")")
         echo "restart:$target" >> "$WS_TEST_UNIT_LOG"
         echo "$target" >> "$WS_TEST_LOG"
-        [[ $target != "${FAIL_RESTART:-}" ]]
+        load_state
+        if [[ $target == "${FAIL_RESTART:-}" ]]; then
+            unit_active=failed unit_sub=failed unit_pid=0 unit_exe=
+            save_state
+            exit 1
+        fi
+        if [[ -z ${STALE_INVOCATION:-} || -z $unit_invocation ]]; then
+            unit_inv_seq=$((unit_inv_seq + 1))
+            unit_invocation="inv-$unit_inv_seq"
+        fi
+        if [[ $target == "${UNIT_CRASH_TARGET:-}" ]]; then
+            unit_active=activating unit_sub=auto-restart unit_pid=0 unit_exe=
+        elif [[ -n ${DRIFT_EXE:-} ]]; then
+            unit_active=active unit_sub=running unit_pid=$((1000 + unit_inv_seq)) unit_exe=$DRIFT_EXE
+        else
+            unit_active=active unit_sub=running unit_pid=$((1000 + unit_inv_seq))
+            unit_exe=$(realpath -e "$WS_TEST_ROOT/releases/$target/wsrelay")
+        fi
+        save_state
         ;;
     *)
         exit 1
@@ -53,8 +118,20 @@ SH
 cat > "$work/bin/curl" <<'SH'
 #!/usr/bin/env bash
 [[ ${*: -1} == http://127.0.0.1:8484/healthz ]] || exit 2
-target=$(basename "$(readlink "$WS_TEST_ROOT/current")")
-if [[ $target == "${FAIL_HEALTH:-}" ]]; then echo 503; else echo 200; fi
+if [[ -n ${FORCE_HEALTH_CODE:-} ]]; then
+    echo "$FORCE_HEALTH_CODE"
+    exit 0
+fi
+unit_active=inactive unit_exe=
+if [[ -f "$WS_TEST_UNIT_STATE" ]]; then
+    source "$WS_TEST_UNIT_STATE"
+fi
+if [[ $unit_active != active || -z $unit_exe ]]; then
+    echo 000
+    exit 0
+fi
+running=$(basename "$(dirname "$unit_exe")")
+if [[ $running == "${FAIL_HEALTH:-}" ]]; then echo 503; else echo 200; fi
 SH
 cat > "$work/bin/sleep" <<'SH'
 #!/usr/bin/env bash
@@ -143,8 +220,12 @@ install_node 7
 [[ $(find "$WS_TEST_ROOT/releases" -mindepth 1 -maxdepth 1 -type d | wc -l) == 3 ]]
 [[ -x $WS_TEST_ROOT/releases/$(revision 5)/wsrelay && ! -d $WS_TEST_ROOT/releases/$(revision 6) ]]
 
+reset_host() {
+    rm -rf -- "$WS_TEST_ROOT" "$WS_TEST_UNIT_STATE"
+}
+
 # A legacy host without last-healthy bootstraps it from a healthy current release only after preflight.
-rm -rf -- "$WS_TEST_ROOT"
+reset_host
 install_node 2
 rm -- "$WS_TEST_ROOT/last-healthy"
 FAIL_CONFIG=1 fails install_node 3
@@ -152,8 +233,48 @@ FAIL_CONFIG=1 fails install_node 3
 FAIL_HEALTH=$(revision 3) fails install_node 3
 [[ $(selected) == "$(revision 2)" && $(last_healthy) == "$(revision 2)" && $(tail -2 "$WS_TEST_LOG") == "$(revision 3)"$'\n'"$(revision 2)" ]]
 
+# A legacy host whose current symlink points to an unstarted candidate while systemd still runs the
+# previous release must anchor last-healthy on the running release rather than the unverified symlink.
+reset_host
+install_node 2
+rm -- "$WS_TEST_ROOT/last-healthy"
+mkdir -p "$WS_TEST_ROOT/releases/$(revision 3)"
+cp "$work/wsrelay" "$WS_TEST_ROOT/releases/$(revision 3)/wsrelay"
+chmod 0755 "$WS_TEST_ROOT/releases/$(revision 3)/wsrelay"
+ln -sfn "$WS_TEST_ROOT/releases/$(revision 3)" "$WS_TEST_ROOT/current"
+stderr=$(FAIL_HEALTH=$(revision 3) fails install_node 3 2>&1)
+[[ $stderr == *"event=wsrelay_install revision=$(revision 3) note=unverified_current current=$(revision 3) last_healthy=$(revision 2)"* ]]
+[[ $(selected) == "$(revision 2)" && $(last_healthy) == "$(revision 2)" && $(tail -2 "$WS_TEST_LOG") == "$(revision 3)"$'\n'"$(revision 2)" ]]
+
+# A legacy host with a stopped unit must not bootstrap last-healthy from a rogue HTTP 200 listener.
+reset_host
+mkdir -p "$WS_TEST_ROOT/releases/$(revision 1)"
+cp "$work/wsrelay" "$WS_TEST_ROOT/releases/$(revision 1)/wsrelay"
+chmod 0755 "$WS_TEST_ROOT/releases/$(revision 1)/wsrelay"
+ln -sfn "$WS_TEST_ROOT/releases/$(revision 1)" "$WS_TEST_ROOT/current"
+: > "$WS_TEST_UNIT_LOG"
+stderr=$(FORCE_HEALTH_CODE=200 UNIT_CRASH_TARGET=$(revision 1) fails install_node 1 2>&1)
+[[ $stderr == *"note=unverified_current current=$(revision 1) last_healthy=none"* ]]
+[[ $stderr == *"note=verify_failed target=$(revision 1) http=200 active=activating sub=auto-restart"* ]]
+[[ ! -e $WS_TEST_ROOT/current && ! -L $WS_TEST_ROOT/current && ! -e $WS_TEST_ROOT/last-healthy && ! -L $WS_TEST_ROOT/last-healthy ]]
+[[ $(cat "$WS_TEST_UNIT_LOG") == $'reset-failed\nrestart:'"$(revision 1)"$'\nstop:'"$(revision 1)"$'\nreset-failed' ]]
+
+# HTTP 200 from an external listener must not mark a crashed unit or drifted ExecStart healthy,
+# nor may same-revision reinstall pass without a fresh systemd InvocationID.
+reset_host
+install_node 2
+stderr=$(FORCE_HEALTH_CODE=200 UNIT_CRASH_TARGET=$(revision 3) fails install_node 3 2>&1)
+[[ $stderr == *"note=verify_failed target=$(revision 3) http=200 active=activating sub=auto-restart"* ]]
+[[ $(selected) == "$(revision 2)" && $(last_healthy) == "$(revision 2)" && ! -d $WS_TEST_ROOT/releases/$(revision 3) ]]
+stderr=$(FORCE_HEALTH_CODE=200 DRIFT_EXE=$(realpath -e "$WS_TEST_ROOT/releases/$(revision 2)/wsrelay") fails install_node 3 2>&1)
+[[ $stderr == *"note=verify_failed target=$(revision 3) http=200 active=active sub=running"* ]]
+[[ $(selected) == "$(revision 2)" && $(last_healthy) == "$(revision 2)" && ! -d $WS_TEST_ROOT/releases/$(revision 3) ]]
+stderr=$(STALE_INVOCATION=1 fails install_node 2 2>&1)
+[[ $stderr == *"note=verify_failed target=$(revision 2) http=200 active=active sub=running invocation_changed=false"* ]]
+[[ $(selected) == "$(revision 2)" && $(last_healthy) == "$(revision 2)" ]]
+
 # An interrupted first install has no last-healthy and unhealthy current; retrying and failing must stop and clear current.
-rm -rf -- "$WS_TEST_ROOT"
+reset_host
 mkdir -p "$WS_TEST_ROOT/releases/$(revision 1)"
 cp "$work/wsrelay" "$WS_TEST_ROOT/releases/$(revision 1)/wsrelay"
 chmod 0755 "$WS_TEST_ROOT/releases/$(revision 1)/wsrelay"
@@ -166,7 +287,7 @@ FAIL_HEALTH=$(revision 1) fails install_node 1
 # Retention cleanup failures must emit a warning without misreporting a committed upgrade as failed,
 # leave unexpected directories intact (without stripping wsrelay or bumping mtime), keep pruning clean
 # older releases, and never let broken directories crowd out genuine rollbackable releases.
-rm -rf -- "$WS_TEST_ROOT"
+reset_host
 install_node 1
 install_node 2
 install_node 3

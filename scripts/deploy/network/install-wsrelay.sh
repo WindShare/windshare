@@ -32,8 +32,41 @@ resolve_release_link() {
     fi
 }
 
+health_code() {
+    curl --silent --max-time 1 --noproxy '*' --output /dev/null --write-out '%{http_code}' "$health_url" || true
+}
+
 health_ok() {
-    [[ $(curl --silent --max-time 1 --noproxy '*' --output /dev/null --write-out '%{http_code}' "$health_url" || true) == 200 ]]
+    [[ $(health_code) == 200 ]]
+}
+
+inspect_running_release() {
+    unit_active= unit_sub= unit_invocation= unit_pid= unit_exe= unit_release=
+    local require_new=false previous_invocation= status line dir
+    if (( $# >= 1 )); then
+        require_new=true
+        previous_invocation=$1
+    fi
+    status=$(systemctl show --property=ActiveState --property=SubState --property=InvocationID --property=MainPID "$unit" 9>&- 2>/dev/null) || return 1
+    while IFS= read -r line; do
+        case "$line" in
+            ActiveState=*) unit_active=${line#ActiveState=} ;;
+            SubState=*) unit_sub=${line#SubState=} ;;
+            InvocationID=*) unit_invocation=${line#InvocationID=} ;;
+            MainPID=*) unit_pid=${line#MainPID=} ;;
+        esac
+    done <<< "$status"
+    if [[ $unit_pid =~ ^[1-9][0-9]*$ ]]; then
+        unit_exe=$(readlink "/proc/$unit_pid/exe" 2>/dev/null) || unit_exe=
+    fi
+    [[ $unit_active == active && $unit_sub == running && $unit_pid =~ ^[1-9][0-9]*$ ]] || return 1
+    if [[ $require_new == true ]]; then
+        [[ -n $unit_invocation && $unit_invocation != "$previous_invocation" ]] || return 1
+    fi
+    [[ ${unit_exe##*/} == wsrelay && -f $unit_exe && ! -L $unit_exe && -x $unit_exe ]] || return 1
+    dir=$(dirname "$unit_exe")
+    [[ -d $dir && ! -L $dir && $(dirname "$dir") == "$releases" && ${dir##*/} =~ ^[0-9a-f]{40}$ ]] || return 1
+    unit_release=$dir
 }
 
 # Separate systemd's active symlink (current) from the rollback anchor (last-healthy)
@@ -81,35 +114,49 @@ record_healthy() {
 }
 
 restart_healthy() {
+    local expected=$1 old_invocation http_code= invocation_changed=false
+    old_invocation=$(systemctl show --property=InvocationID --value "$unit" 9>&- 2>/dev/null || true)
     # Clear any prior start-limit or failed state before both upgrades and rollbacks.
     systemctl reset-failed "$unit" 9>&- || true
     systemctl restart "$unit" 9>&- || return 1
     for ((attempt=0; attempt<health_attempts; attempt++)); do
-        if health_ok; then
+        http_code=$(health_code)
+        # Verify the systemd unit after /healthz succeeds so a crashed new process
+        # cannot ride on an external listener answering HTTP 200 on the same port.
+        if [[ $http_code == 200 ]] && inspect_running_release "$old_invocation" && [[ $unit_release == "$expected" ]]; then
             return 0
         fi
         sleep 1
     done
+    if [[ $http_code != 200 ]]; then
+        inspect_running_release "$old_invocation" || true
+    fi
+    if [[ -n $unit_invocation && $unit_invocation != "$old_invocation" ]]; then
+        invocation_changed=true
+    fi
+    printf 'event=wsrelay_install revision=%s note=verify_failed target=%s http=%s active=%s sub=%s invocation_changed=%s pid=%s exe=%s\n' \
+        "$revision" "${expected##*/}" "${http_code:-000}" "${unit_active:-none}" "${unit_sub:-none}" \
+        "$invocation_changed" "${unit_pid:-0}" "${unit_exe:-none}" >&2
     return 1
 }
 
-if [[ -z $previous && -n $current_release ]]; then
-    if health_ok; then
-        # Persist the verified pre-existing release before mutating current so an
+if [[ -z $previous ]]; then
+    if inspect_running_release && health_ok; then
+        # Persist the verified running release before mutating current so an
         # interruption during the first upgrade on a legacy host keeps a rollback target.
-        previous=$current_release
+        previous=$unit_release
         record_healthy "$previous"
-    else
-        printf 'event=wsrelay_install revision=%s note=unverified_current current=%s last_healthy=none\n' \
-            "$revision" "${current_release##*/}" >&2
     fi
-elif [[ -n $previous && -n $current_release && $current_release != "$previous" ]]; then
+fi
+if [[ -n $current_release && $current_release != "$previous" ]]; then
+    last_healthy_label=none
+    [[ -z $previous ]] || last_healthy_label=${previous##*/}
     printf 'event=wsrelay_install revision=%s note=unverified_current current=%s last_healthy=%s\n' \
-        "$revision" "${current_release##*/}" "${previous##*/}" >&2
+        "$revision" "${current_release##*/}" "$last_healthy_label" >&2
 fi
 
 select_release "$release"
-if ! restart_healthy; then
+if ! restart_healthy "$release"; then
     log startup_failed
     rollback_error=
     if [[ -z $previous ]]; then
@@ -119,7 +166,7 @@ if ! restart_healthy; then
         rm -- "$current"
     elif [[ $previous != "$release" ]]; then
         select_release "$previous"
-        if restart_healthy; then
+        if restart_healthy "$previous"; then
             log "rolled_back_to_${previous##*/}"
         else
             rollback_error="rollback to ${previous##*/} failed"
