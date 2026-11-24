@@ -115,7 +115,7 @@ wind resume discard -o <directory> --item <N>
 - Delivered files stay completed within a task even after being moved or deleted. Saved partials resume only when their source revision matches. Checkpoints survive normal exit; a crash may lose the latest unsaved ranges. See [native output](native-output.md).
 - When a share has stopped, ask for a new link. Progress saved under the original link appears as `share-stopped` once the receiver confirms the stop while it owns the operation. Interactive downloads can discard unfinished output or leave it for `resume discard`.
 - `resume list` shows recovery state and blocked items.
-- `resume discard` re-lists the inventory and confirms the selected operation before removing proven-owned unfinished state. Published and unrecognized files remain.
+- `resume discard` re-lists the inventory and confirms the selected operation before removing its private `.windshare-tmp/<op>/` scratch directory. Published and unrelated files in the destination remain.
 
 Ctrl-C, SIGTERM, and SIGHUP request graceful shutdown and return the command's normal exit status. Repeated SIGTERM/SIGHUP keep cleanup running; a second Ctrl-C forces exit 130. `nohup` keeps ignoring SIGHUP.
 

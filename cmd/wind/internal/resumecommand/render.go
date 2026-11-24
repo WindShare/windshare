@@ -26,11 +26,11 @@ func (textRenderer) Usage() string {
 		"      List unfinished operations owned by that output directory.\n\n" +
 		"  " + DiscardSynopsis + "\n" +
 		"      Re-list one operation and require the exact confirmation \"discard N\".\n" +
-		"      Only identity-matched unfinished state is removed; final and foreign objects stay.\n\n" +
+		"      Removes the operation's .windshare-tmp/<op>/ scratch directory; published and unrelated destination files stay.\n\n" +
 		"States:\n" +
 		"  incomplete                 Unfinished, with no currently usable owned partial.\n" +
 		"  resumable                  At least one verified owned partial can continue.\n" +
-		"  cleanup-pending            Transfer ended, but exact owned cleanup remains.\n" +
+		"  cleanup-pending            Transfer ended, but scratch directory cleanup remains.\n" +
 		"  operation-needs-attention  Root, registry, lease, or operation ownership is uncertain.\n" +
 		"  item-blocked               A child cannot be resolved safely; its objects stay.\n" +
 		"  running=true               Another process holds the operation; details are not inspected.\n" +
@@ -135,7 +135,7 @@ func (textRenderer) DiscardPrompt(
 		return "", err
 	}
 	return fmt.Sprintf(
-		"Selected resume operation:\n%sOnly identity-matched unfinished partial and control records are eligible. Final and foreign objects are preserved.\nType %q exactly to continue: ",
+		"Selected resume operation:\n%sRemoves this operation's .windshare-tmp/<op>/ scratch directory. Published and unrelated destination files are preserved.\nType %q exactly to continue: ",
 		preview,
 		expected,
 	), nil

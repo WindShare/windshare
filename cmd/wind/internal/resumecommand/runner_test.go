@@ -287,8 +287,8 @@ func TestResumeDiscardRequiresFreshOrdinalAndExactTerminalIntent(t *testing.T) {
 	for _, want := range []string{
 		`resume_operation=1 state="resumable"`,
 		`Type "discard 1" exactly`,
-		"identity-matched unfinished partial and control records",
-		"Final and foreign objects are preserved",
+		".windshare-tmp/<op>/ scratch directory",
+		"Published and unrelated destination files are preserved",
 	} {
 		if !strings.Contains(terminal.prompt, want) {
 			t.Fatalf("prompt=%q missing=%q", terminal.prompt, want)
@@ -439,12 +439,12 @@ func TestResumeSurfaceHasNoLegacyGlobalOrTerminalHistoryCommands(t *testing.T) {
 		t.Fatalf("result=%d", result)
 	}
 	help := stderr.String()
-	for _, want := range []string{"resume list", "resume discard", "identity-matched", "final and foreign objects stay"} {
+	for _, want := range []string{"resume list", "resume discard", ".windshare-tmp/<op>/ scratch directory", "published and unrelated destination files stay"} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("help=%q missing=%q", help, want)
 		}
 	}
-	for _, forbidden := range []string{"resume cleanup", "legacy", "--path", "--all", "terminal state"} {
+	for _, forbidden := range []string{"resume cleanup", "legacy", "--path", "--all", "terminal state", "identity-matched"} {
 		if strings.Contains(help, forbidden) {
 			t.Fatalf("help=%q exposed=%q", help, forbidden)
 		}

@@ -324,6 +324,54 @@ func TestDiscardOperationRemovesCorruptJournalUnderDirLock(t *testing.T) {
 	}
 }
 
+func TestOperationRetirementRemovesPrivateScratchAndPreservesExternalEntries(t *testing.T) {
+	ctx := context.Background()
+	for _, mode := range []string{"discard", "complete"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			seed := byte(0xc3)
+			if mode == "complete" {
+				seed = 0xc4
+			}
+			sel, intent, fileID := createPausedSingleFileOp(t, root, seed)
+			opID := intent.OperationID()
+
+			destForeign := filepath.Join(root, "user-note.txt")
+			if err := os.WriteFile(destForeign, []byte("keep-dest"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			ctrlSibling := filepath.Join(root, ControlDirName, "unrelated.txt")
+			if err := os.WriteFile(ctrlSibling, []byte("keep-ctrl"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			opDir := filepath.Join(root, ControlDirName, hex.EncodeToString(opID.Bytes()))
+			scratchExtra := filepath.Join(opDir, "state.log (conflicted copy)")
+			if err := os.WriteFile(scratchExtra, []byte("scratch-junk"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			if mode == "discard" {
+				summary, err := DiscardOperation(ctx, root, opID)
+				if err != nil || summary.State() != RecoveryOperationDiscarded {
+					t.Fatalf("DiscardOperation = (%+v, %v)", summary, err)
+				}
+			} else {
+				finishPausedSingleFileOp(t, root, sel, receivecontract.AutomaticOperation(), fileID, seed)
+			}
+
+			if _, err := os.Stat(opDir); !errors.Is(err, fs.ErrNotExist) {
+				t.Fatalf("operation scratch dir survived %s: %v", mode, err)
+			}
+			if got, err := os.ReadFile(destForeign); err != nil || string(got) != "keep-dest" {
+				t.Fatalf("destination file after %s = (%q, %v)", mode, got, err)
+			}
+			if got, err := os.ReadFile(ctrlSibling); err != nil || string(got) != "keep-ctrl" {
+				t.Fatalf("unrelated control-dir sibling after %s = (%q, %v)", mode, got, err)
+			}
+		})
+	}
+}
+
 func openActiveSingleFileOp(t *testing.T, root string, seed byte) (*Authority, *Operation, transfer.ReceiveIntent) {
 	t.Helper()
 	ctx := context.Background()

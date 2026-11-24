@@ -11,7 +11,7 @@ Durability is tiered by file size to avoid small-file I/O amplification while pr
 - **Small files (`< 8 MiB`)**: staged in `.windshare-tmp/<op>/`, closed, published via one atomic no-replace rename with zero per-file `fsync`, and logged to `state.log` (flushed in batches every 64 files / 2 seconds and on pause/exit).
 - **Large files (`>= 8 MiB`)**: range checkpoints flush `.part` data before updating `state.log` every 8 MiB or 2 seconds idle, and on explicit checkpoint/pause/commit.
 
-`get` automatically continues a matching task. `get --redownload` reserves a separate collision-safe destination and leaves the original continuation target intact; `resume retry --operation <id>` selects either task. Completion or `resume discard` removes `.windshare-tmp/<op>/` (and `.windshare-tmp/` when empty) while preserving all published and foreign files.
+`get` automatically continues a matching task. `get --redownload` reserves a separate collision-safe destination and leaves the original continuation target intact; `resume retry --operation <id>` selects either task. Completion or `resume discard` removes `.windshare-tmp/<op>/` (and `.windshare-tmp/` when empty) while preserving all published and unrelated files in the destination.
 
 Source names are preserved when the destination accepts them. Names rejected by the destination or colliding with `.windshare-tmp*` at the destination container root receive a stable compatible spelling retaining usable extensions; saved mappings are persisted in `state.log`, reused on resume, and emitted via structured diagnostics without writing report files beside the destination.
 

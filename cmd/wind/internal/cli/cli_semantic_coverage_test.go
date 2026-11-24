@@ -78,13 +78,14 @@ func TestTopLevelHelpMatchesOrdinaryOutputCommandContracts(t *testing.T) {
 		"resumable",
 		"cleanup-pending",
 		"item-blocked",
-		"Published files and unknown objects are always preserved.",
+		".windshare-tmp/<op>/ scratch directory",
+		"Published and unrelated files in the destination are always preserved.",
 	} {
 		if !strings.Contains(output, required) {
 			t.Fatalf("help=%q does not contain %q", output, required)
 		}
 	}
-	for _, stale := range []string{"paused state", "live item", "resume cleanup"} {
+	for _, stale := range []string{"paused state", "live item", "resume cleanup", "identity-matched"} {
 		if strings.Contains(output, stale) {
 			t.Fatalf("help=%q contains retired wording %q", output, stale)
 		}

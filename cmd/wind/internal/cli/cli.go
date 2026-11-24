@@ -82,8 +82,8 @@ const usageText = `Usage:
       Locally ambiguous children are reported as item-blocked.
 
   ` + resumecommand.DiscardSynopsis + `
-      Re-list and exactly confirm one operation on a terminal before discarding identity-matched unfinished state.
-      Published files and unknown objects are always preserved.
+      Re-list and exactly confirm one operation on a terminal before removing its .windshare-tmp/<op>/ scratch directory.
+      Published and unrelated files in the destination are always preserved.
 `
 
 // App 是一次 CLI 调用的执行环境;字段即全部外部依赖。

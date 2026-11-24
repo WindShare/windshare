@@ -4,6 +4,7 @@ package output
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"io/fs"
 	"os"
@@ -523,5 +524,32 @@ func TestWindowsHandleOpsExceedMaxPathAndEnforceSafety(t *testing.T) {
 	}
 	if _, err := readDirNames(nil); !errors.Is(err, fs.ErrClosed) {
 		t.Fatalf("readDirNames(nil) = %v, want fs.ErrClosed", err)
+	}
+}
+
+func TestWindowsDiscardUnlinksScratchJunctionWithoutDeletingTarget(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	_, intent, _ := createPausedSingleFileOp(t, root, 0xc7)
+	opID := intent.OperationID()
+
+	victimDir := t.TempDir()
+	victimFile := filepath.Join(victimDir, "keep.txt")
+	if err := os.WriteFile(victimFile, []byte("precious"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	opDir := filepath.Join(root, ControlDirName, hex.EncodeToString(opID.Bytes()))
+	createWindowsJunction(t, filepath.Join(opDir, "linked-dir"), victimDir)
+
+	summary, err := DiscardOperation(ctx, root, opID)
+	if err != nil || summary.State() != RecoveryOperationDiscarded {
+		t.Fatalf("DiscardOperation with scratch junction = (%+v, %v)", summary, err)
+	}
+	if _, err := os.Stat(opDir); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("operation scratch dir survived discard: %v", err)
+	}
+	if got, err := os.ReadFile(victimFile); err != nil || string(got) != "precious" {
+		t.Fatalf("junction target was modified by scratch cleanup: (%q, %v)", got, err)
 	}
 }
