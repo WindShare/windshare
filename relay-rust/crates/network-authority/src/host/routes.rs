@@ -1,18 +1,15 @@
 use super::{WorkerEnvironment, failure, storage::Database};
 use crate::{
     Authority, Block, Fault, Mailbox, NodePolicyChange, PasswordVerifier, Registration,
-    ReportPosition, SettingsChanges, public_blocks::PublicBlockFeed,
+    ReportPosition, SettingsChanges,
 };
 use anyhow::{Result, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Deserialize;
 use worker::{Env, Method, Request, Response};
 
-pub(super) const PUBLIC_BLOCKS_PATH: &str = "/v1/blocks";
-
 pub struct Context {
     pub(super) path: String,
-    if_none_match: Option<String>,
     admin_after: Option<String>,
     account_query: Option<String>,
     pub(super) method: Method,
@@ -49,14 +46,8 @@ impl Context {
         } else {
             None
         };
-        let if_none_match = if path == PUBLIC_BLOCKS_PATH {
-            request.headers().get("If-None-Match")?
-        } else {
-            None
-        };
         Ok(Self {
             path,
-            if_none_match,
             admin_after,
             account_query,
             method: request.method(),
@@ -159,14 +150,9 @@ pub fn dispatch(
     authority: &mut Authority<Database, WorkerEnvironment>,
     context: Context,
     bytes: &[u8],
-    public_blocks: &mut PublicBlockFeed,
 ) -> Result<Response> {
     if context.path.starts_with("/v1/admin/") {
         return admin_routes(authority, context, bytes);
-    }
-    if context.method == Method::Get && context.path == PUBLIC_BLOCKS_PATH {
-        return public_block_response(authority, public_blocks, context.if_none_match.as_deref())
-            .map_err(|error| anyhow::anyhow!("{error}"));
     }
     api_routes(authority, context, bytes)
 }
@@ -239,25 +225,6 @@ fn api_routes(
         _ => return Response::error("not found", 404).map_err(|error| anyhow::anyhow!("{error}")),
     };
     Response::from_json(&value).map_err(|error| anyhow::anyhow!("{error}"))
-}
-
-fn public_block_response(
-    authority: &Authority<Database, WorkerEnvironment>,
-    feed: &mut PublicBlockFeed,
-    validator: Option<&str>,
-) -> worker::Result<Response> {
-    let snapshot = feed.snapshot(authority).map_err(failure)?;
-    let mut response = if validator.is_some_and(|value| snapshot.not_modified(value)) {
-        Response::empty()?.with_status(304)
-    } else {
-        let mut response = Response::ok(&snapshot.body)?;
-        response
-            .headers_mut()
-            .set("Content-Type", "application/json")?;
-        response
-    };
-    response.headers_mut().set("ETag", &snapshot.etag)?;
-    Ok(response)
 }
 
 fn admin_routes(

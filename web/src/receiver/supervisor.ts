@@ -221,6 +221,7 @@ export class ReceiverReconnectSupervisor implements ContentGenerationProvider {
   }
 
   beginConnectivity(intent: ContentIntent): ConnectivityActivation {
+    this.#throwIfTerminal()
     const activation = this.connectivity.begin(intent)
     if (intent === 'download') {
       const metrics = new DownloadMetrics(crypto.randomUUID(), this.#directUsable, () => this.#clock.now())
@@ -679,9 +680,9 @@ export class ReceiverReconnectSupervisor implements ContentGenerationProvider {
     this.#waiters.clear()
     this.#current.retired = true
     this.#generationListeners.clear()
-    this.content.close()
+    this.content.close(reason)
     this.pathActivity.close()
-    this.connectivity.close().catch(() => undefined)
+    this.connectivity.close(reason).catch(() => undefined)
     this.#factory.close()
     this.#current.close().catch(() => undefined)
     for (const generation of this.#retiring.keys()) generation.close().catch(() => undefined)

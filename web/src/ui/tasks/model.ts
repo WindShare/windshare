@@ -11,7 +11,7 @@ import type { ReceiverProgress } from '../model'
 export type TaskRecoveryReadiness = RetainedReadiness
 
 export interface TaskBlocking {
-  readonly kind: 'reconnecting' | 'unavailable' | 'sender-capacity' | 'relay-bandwidth' | 'share-ended' | 'storage'
+  readonly kind: 'reconnecting' | 'unavailable' | 'sender-capacity' | 'relay-bandwidth' | 'share-ended' | 'access-denied' | 'storage'
   readonly description?: string
 }
 

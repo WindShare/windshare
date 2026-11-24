@@ -22,6 +22,8 @@ export const stage = {
   senderCapacityHint: 'The download continues automatically when the sender has capacity.',
   relayBandwidth: 'Waiting for relay bandwidth',
   relayBandwidthHint: 'Relay bandwidth is busy. The download continues automatically when bandwidth becomes available.',
+  relayAccessDenied: 'Relay access denied',
+  accessDeniedHint: 'You can still export files already stored in this browser.',
   shareEnded: 'The share has ended',
   shareEndedHint: 'This share is no longer active. Files already stored in this browser can still be saved.',
   storage: 'More storage is needed',

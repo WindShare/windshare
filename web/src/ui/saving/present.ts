@@ -241,7 +241,7 @@ function unavailable(input: SavingRequest, language: Language): SavingActionPres
   const reason = offers === null ? 'confirming' : offers.kind
   const unavailableOffer = offers?.kind === 'unavailable' ? presentSaveUnavailable(offers.reason, t) : null
   const copy = unavailableOffer?.description ?? unavailableDescription(offers, language)
-  const terminalConnection = input.blockedBy === 'shareEnded' || input.blockedBy === 'connectionUnavailable'
+  const terminalConnection = input.blockedBy === 'shareEnded' || input.blockedBy === 'relayAccessDenied' || input.blockedBy === 'connectionUnavailable'
   return Object.freeze({
     primary: null,
     alternatives: Object.freeze([]),

@@ -1,11 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import { firstUsableRelay, RelayEndpointFailure } from '../../src/receiver/relay-selection/race'
 import { StaleShareInstanceError } from '../../src/receiver/session-factory'
-import { AllRelaysRestrictedError, isShareRecoveryFailure, isTerminalRecoveryFailure } from '../../src/receiver/recovery-failure'
+import { isRelayAccessDenied, isShareRecoveryFailure, isTerminalRecoveryFailure } from '../../src/receiver/recovery-failure'
 import { BandwidthWaitError } from '../../src/contracts/capacity'
 import { receiverRelayBases, RelayCandidates } from '../../src/receiver/relay-selection/candidates'
 import { RelayRecovery } from '../../src/receiver/relay-selection/recovery'
-import { RelayPolicyDeniedError, RELAY_POLICY_RETRY_MS } from '../../src/receiver/relay-admission'
 import { RELAY_ERROR, RelayProtocolError } from '../../src/transport/relay/protocol'
 import { RelayReceiverError } from '../../src/transport/relay/receiver'
 
@@ -83,7 +82,7 @@ describe('first usable relay', () => {
         if (now === 0) throw new Error('Independent relay temporarily unavailable')
         throw new RelayProtocolError('malformed', 'Invalid relay response')
       }
-      if (now < 60_000) throw new RelayPolicyDeniedError()
+      if (now < 60_000) throw new BandwidthWaitError(60_000, new Error('Busy'))
       return base
     })
     const outcome = await recovery.race(signal, connect, close).catch((failure: unknown) => failure)
@@ -93,7 +92,7 @@ describe('first usable relay', () => {
     now = 500
     const nextFailure = await recovery.race(signal, connect, close).catch((failure: unknown) => failure)
     expect(isTerminalRecoveryFailure(nextFailure)).toBe(false)
-    expect(recovery.nextRetry()).toEqual({ retryAt: 60_000, reason: 'authorization' })
+    expect(recovery.nextRetry()).toEqual({ retryAt: 60_000, reason: 'bandwidth' })
     expect(connect.mock.calls.map(([base]) => base)).toEqual(['official', 'independent', 'independent'])
 
     now = 60_000
@@ -101,16 +100,17 @@ describe('first usable relay', () => {
     expect(connect.mock.calls.map(([base]) => base)).toEqual(['official', 'independent', 'independent', 'official'])
   })
 
-  it('does not infer a full policy restriction from the earliest retry alone', async () => {
-    const recovery = new RelayRecovery(['official', 'independent'], { now: () => 0 })
-    const task = recovery.race(new AbortController().signal, async base => {
-      if (base === 'official') throw new RelayPolicyDeniedError()
-      throw new BandwidthWaitError(RELAY_POLICY_RETRY_MS + 1_000, new Error('Independent relay bandwidth is busy'))
-    }, async () => undefined)
-    const failure: unknown = await task.catch((cause: unknown) => cause)
-    expect(failure).toBeInstanceOf(AggregateError)
-    expect(failure).not.toBeInstanceOf(AllRelaysRestrictedError)
-    expect(recovery.nextRetry()).toEqual({ retryAt: RELAY_POLICY_RETRY_MS, reason: 'authorization' })
+  it('keeps alternative relays retryable after a denial and a bandwidth wait', async () => {
+    const recovery = new RelayRecovery(['one', 'two'], { now: () => 0 })
+    const failure: unknown = await recovery.race(new AbortController().signal, async base => {
+      if (base === 'one') throw new RelayReceiverError('Access denied', { relayError: {
+        code: RELAY_ERROR.accessDenied, retryAfterMilliseconds: 0,
+      } })
+      throw new BandwidthWaitError(5_000, new Error('Busy'))
+    }, async () => undefined).catch((cause: unknown) => cause)
+    expect(isRelayAccessDenied(failure)).toBe(false)
+    expect(isTerminalRecoveryFailure(failure)).toBe(false)
+    expect(recovery.nextRetry()).toEqual({ retryAt: 5_000, reason: 'bandwidth' })
   })
 
   it('allows a failed endpoint without delaying a healthy one and bounds configuration fanout', async () => {
@@ -200,18 +200,22 @@ describe('first usable relay', () => {
     const recovery = new RelayRecovery(source, { now: () => 0 })
     const signal = new AbortController().signal
     const close = async () => undefined
-    const connect = vi.fn<(base: string) => Promise<string>>(async () => { throw new RelayPolicyDeniedError() })
+    const connect = vi.fn<(base: string) => Promise<string>>(async () => { throw new RelayReceiverError('Access denied', { relayError: {
+        code: RELAY_ERROR.accessDenied, retryAfterMilliseconds: 0,
+      } }) })
 
     const partialFailure = await recovery.race(signal, connect, close).catch((error: unknown) => error)
     expect(source.complete).toBe(false)
-    expect(partialFailure).not.toBeInstanceOf(AllRelaysRestrictedError)
+    expect(isRelayAccessDenied(partialFailure)).toBe(false)
+    expect(isTerminalRecoveryFailure(partialFailure)).toBe(false)
     expect(recovery.nextRetry()).toBeUndefined()
 
     resolveAlias = true
     const fullFailure = await recovery.race(signal, connect, close).catch((error: unknown) => error)
     expect(source.complete).toBe(true)
-    expect(fullFailure).toBeInstanceOf(AllRelaysRestrictedError)
-    expect(recovery.nextRetry()).toEqual({ retryAt: RELAY_POLICY_RETRY_MS, reason: 'authorization' })
+    expect(isRelayAccessDenied(fullFailure)).toBe(true)
+    expect(isTerminalRecoveryFailure(fullFailure)).toBe(true)
+    expect(recovery.nextRetry()).toBeUndefined()
     expect(connect.mock.calls.map(([base]) => base)).toEqual(['official-a', 'official-b'])
   })
 })

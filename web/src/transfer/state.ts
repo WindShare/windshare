@@ -14,6 +14,7 @@ export type ReceivePartialReason =
   | CatalogCapacityReason
 
 export type ReceiveFailureReason =
+  | 'relay-access-denied'
   | 'source-changed'
   | 'cancelled'
   | 'session-ended'

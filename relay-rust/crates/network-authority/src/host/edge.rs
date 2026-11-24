@@ -3,13 +3,11 @@ use worker::{Context, Env, Method, Request, Response, Result, event};
 
 const POLICY: &str = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 const IMMUTABLE_CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
-const PRIVATE_REVALIDATE_CACHE_CONTROL: &str = "private, no-cache";
 const NO_STORE_CACHE_CONTROL: &str = "no-store";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CachePolicy {
     Immutable,
-    PrivateRevalidate,
     NoStore,
 }
 
@@ -17,7 +15,6 @@ impl CachePolicy {
     const fn header(self) -> &'static str {
         match self {
             Self::Immutable => IMMUTABLE_CACHE_CONTROL,
-            Self::PrivateRevalidate => PRIVATE_REVALIDATE_CACHE_CONTROL,
             Self::NoStore => NO_STORE_CACHE_CONTROL,
         }
     }
@@ -33,8 +30,6 @@ pub async fn fetch(request: Request, env: Env, _context: Context) -> Result<Resp
         return Response::error("not found", 404);
     }
     let usage_report = request.method() == Method::Post && request.path() == "/v1/node/usage";
-    let public_blocks =
-        request.method() == Method::Get && request.path() == super::routes::PUBLIC_BLOCKS_PATH;
     let origin = request.headers().get("Origin")?;
     let own = request.url()?.origin().ascii_serialization();
     if !allowed_origin(&request.path(), origin.as_deref(), &own, &env) {
@@ -77,10 +72,6 @@ pub async fn fetch(request: Request, env: Env, _context: Context) -> Result<Resp
             forward(request, &env).await?
         }
     };
-    if public_blocks && matches!(response.status_code(), 200 | 304) {
-        // Revalidate on each poll so normal browser caching adds no delay to blocks.
-        cache_policy = CachePolicy::PrivateRevalidate;
-    }
     apply_response_headers(response, origin.as_deref(), cache_policy, usage_report)
 }
 

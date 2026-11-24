@@ -364,11 +364,7 @@ impl State {
         if self.admission() == super::Admission::Disabled {
             return Refusal::denied(RefusalReason::NodePublicDisabled);
         }
-        if self
-            .restrictions
-            .values()
-            .any(|restrictions| restrictions.shares.contains(share.as_bytes()))
-        {
+        if self.share_restricted(share) {
             return Refusal::denied(RefusalReason::ShareRestricted);
         }
 

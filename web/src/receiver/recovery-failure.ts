@@ -1,4 +1,3 @@
-import { RelayPolicyDeniedError, RELAY_POLICY_RETRY_MS } from './relay-admission'
 import { BandwidthWaitError } from '../contracts/capacity'
 import { RelayEndpointFailure } from './relay-selection/race'
 import { BlockLaneAttemptsError } from '../content/broker'
@@ -11,6 +10,12 @@ import { CborError } from '../protocol/cbor'
 import { TranscriptError } from '../session/transcript'
 import { EnvelopeError } from '../session/envelope'
 import { StaleShareInstanceError } from './session-factory'
+
+export function isRelayAccessDenied(error: unknown): boolean {
+  if (error instanceof RelayEndpointFailure) return isRelayAccessDenied(error.cause)
+  if (error instanceof AggregateError) return error.errors.length > 0 && error.errors.every(isRelayAccessDenied)
+  return error instanceof RelayReceiverError && error.relayError?.code === RELAY_ERROR.accessDenied
+}
 
 export function isTerminalRecoveryFailure(error: unknown): boolean {
   if (error instanceof RelayEndpointFailure) return isTerminalRecoveryFailure(error.cause)
@@ -47,7 +52,7 @@ export function recoveryBandwidthWait(error: unknown, depth = 0): number {
 
 export interface RecoveryRetry {
   readonly retryAt: number
-  readonly reason: 'authorization' | 'bandwidth' | 'server'
+  readonly reason: 'bandwidth' | 'server'
 }
 
 export class RelayCooldownError extends Error {
@@ -60,16 +65,6 @@ export class RelayCooldownError extends Error {
   }
 }
 
-export class AllRelaysRestrictedError extends Error {
-  readonly retry: RecoveryRetry
-
-  constructor(retryAt: number, cause: unknown) {
-    super('Official relay access is restricted for this share', { cause })
-    this.name = 'AllRelaysRestrictedError'
-    this.retry = { retryAt, reason: 'authorization' }
-  }
-}
-
 export function latestRecoveryRetry(first: RecoveryRetry | undefined, second: RecoveryRetry | undefined): RecoveryRetry | undefined {
   return first === undefined || (second !== undefined && second.retryAt > first.retryAt) ? second : first
 }
@@ -77,8 +72,7 @@ export function latestRecoveryRetry(first: RecoveryRetry | undefined, second: Re
 export function recoveryRetry(error: unknown, now: number, depth = 0): RecoveryRetry | undefined {
   // A relay race delegates endpoint-scoped waits to the owner of its candidates.
   if (depth >= 8 || error instanceof RelayEndpointFailure) return undefined
-  if (error instanceof RelayCooldownError || error instanceof AllRelaysRestrictedError) return error.retry
-  if (error instanceof RelayPolicyDeniedError) return { retryAt: now + RELAY_POLICY_RETRY_MS, reason: 'authorization' }
+  if (error instanceof RelayCooldownError) return error.retry
   if (error instanceof BandwidthWaitError) return { retryAt: now + error.retryAfterMilliseconds, reason: 'bandwidth' }
   if (error instanceof AggregateError) {
     return error.errors.reduce<RecoveryRetry | undefined>(

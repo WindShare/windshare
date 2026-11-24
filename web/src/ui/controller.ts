@@ -1,3 +1,4 @@
+import { terminalConnectionBlock } from '../application/receive/admission'
 import { SelectionPolicy } from '../catalog/selection'
 import { BrowserReceiverGateway, type BrowsePage, type JoinedBrowserShare } from '../application/browser-share/gateway'
 import {
@@ -112,7 +113,7 @@ export class ReceiverController {
       ownsJoinedShare: joined => !this.#disposed && this.#joined === joined,
       isJoining: () => this.#joinNavigation !== undefined,
       onConnection: connection => {
-        this.#receive.observeConnection(connection.kind)
+        this.#receive.observeConnection(terminalConnectionBlock(connection))
         this.#publish({ ...this.#snapshot, connection })
       },
       onPathActivity: pathActivity => this.#publish({ ...this.#snapshot, pathActivity }),
@@ -213,7 +214,7 @@ export class ReceiverController {
       this.#joined = undefined
       joined.close().catch(() => undefined)
     }
-    this.#receive.observeConnection('idle')
+    this.#receive.observeConnection(null)
     this.#publish({
       ...this.#snapshot,
       phase: 'awaiting-key',
@@ -493,6 +494,7 @@ export class ReceiverController {
       this.#joinNavigation = navigation
       previous = this.#joined
       lease.activate()
+      if (previous === undefined) this.#receive.observeConnection(null)
       this.#receive.suspendForNewShare()
       await this.#previews.close()
       navigation.signal.throwIfAborted()
@@ -652,11 +654,19 @@ export class ReceiverController {
 
   #fail(error: unknown, lease?: CapabilityJoinLease): void {
     const detail = lease?.publicError(error) ?? this.#publicError(error)
+    const failure = joinFailure(error, detail)
+    let connection = this.#snapshot.connection
+    // A failed replacement must not block downloads on the previously joined share.
+    if (this.#joined === undefined && typeof failure !== 'string' && failure.kind === 'relayAccessDenied') {
+      connection = { kind: 'unavailable', reason: 'access-denied' }
+      this.#receive.observeConnection(terminalConnectionBlock(connection))
+    }
     this.#publish({
       ...this.#snapshot,
       phase: 'failed',
       status: 'stopped',
-      error: joinFailure(error, detail),
+      connection,
+      error: failure,
     })
   }
 

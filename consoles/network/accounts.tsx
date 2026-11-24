@@ -132,18 +132,6 @@ function Usage({ account }: { account: AccountDetails }) {
   </section>
 }
 
-function Shares({ account, restrictions, inherited }: { account: AccountDetails; restrictions: Restrictions; inherited: boolean }) {
-  const t = useCopy(networkCopy)
-  const direct = new Set(restrictions.shares.map(encode))
-  return <section className="panel padded"><h2>{t.attributedShares}</h2>
-    {account.shares.length === 0 ? <p>{t.noShares}</p> : <ul className="identity-list">{account.shares.map(encode).map(share =>
-      <li key={share}><code>{share}</code><div className="actions">
-        {direct.has(share) && <Badge tone="warning">{t.directlyRestricted}</Badge>}
-        {inherited && <Badge tone="warning">{t.viaAccount}</Badge>}</div></li>)}</ul>}
-    {account.has_more_shares && <p>{t.shareLimit}</p>}
-  </section>
-}
-
 function AccountDetail({ id, refresh, ...access }: AccessProps & { id: string; refresh: () => void }) {
   const t = useCopy(networkCopy)
   const shared = useCopy(sharedCopy)
@@ -163,14 +151,14 @@ function AccountDetail({ id, refresh, ...access }: AccessProps & { id: string; r
     {resource.busy && !account && <p className="resource-loading" role="status"><Icon name="loader" />{t.loadingAccount}</p>}
     {account === null && <section className="panel padded"><h2>{bytes ? t.accountNotFound : invalid.account}</h2>
       {bytes && <><code>{encode(bytes)}</code><DirectRestriction {...access} blocked={blocked} target={{ kind: 'account', id: bytes }} /></>}</section>}
-    {account && <><div className="node-detail-grid"><section className="panel padded"><h2>{t.profile}</h2>
+    {account && <div className="node-detail-grid"><section className="panel padded"><h2>{t.profile}</h2>
       <dl className="facts"><dt>{t.accountId}</dt><dd><code>{encode(account.id)}</code></dd>
         <dt>{shared.username}</dt><dd>{account.username ?? '—'}</dd><dt>{t.nickname}</dt><dd>{account.nickname ?? '—'}</dd>
         <dt>{t.verifiedEmail}</dt><dd>{account.email ?? '—'}</dd><dt>{t.passwordSet}</dt><dd>{account.has_password ? t.yes : t.no}</dd>
         <dt>{t.registeredAt}</dt><dd><DateStamp millis={account.created_at * 1000} /></dd>
         <dt>{t.entitlementVersion}</dt><dd>{account.entitlement_version}</dd></dl>
       <DirectRestriction {...access} blocked={blocked} target={{ kind: 'account', id: account.id }} /></section>
-      <Usage account={account} /></div>{!stale && <Shares account={account} inherited={blocked} restrictions={access.restrictions} />}</>}
+      <Usage account={account} /></div>}
   </div>
 }
 

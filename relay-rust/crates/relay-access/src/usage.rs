@@ -90,13 +90,6 @@ pub struct Load {
     pub admission_refusals: u64,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ShareAttribution {
-    pub share: [u8; 12],
-    pub account: AccountId,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Batch {
@@ -106,7 +99,6 @@ pub struct Batch {
     pub created_at: u64,
     pub records: Vec<UsageRecord>,
     pub resident_accounts: Vec<AccountId>,
-    pub shares: Vec<ShareAttribution>,
     pub load: Load,
 }
 
@@ -117,13 +109,7 @@ impl Batch {
             && self.issuer != [0; 32]
             && self.records.len() <= MAX_REPORT_RECORDS
             && self.resident_accounts.len() <= STATUS_BATCH_ENTRIES
-            && self.shares.len() <= STATUS_BATCH_ENTRIES
-            && (self.records.is_empty()
-                || (self.resident_accounts.is_empty() && self.shares.is_empty()))
-            && self
-                .shares
-                .iter()
-                .all(|entry| entry.share != [0; 12] && entry.account != [0; 16])
+            && (self.records.is_empty() || self.resident_accounts.is_empty())
             && self.records.iter().all(|record| {
                 record.account != [0; 16]
                     && record.bytes > 0

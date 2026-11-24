@@ -3,6 +3,7 @@ import { CATALOG_PATH_DEPTH, snapshotCatalogPath } from '../catalog/path-policy'
 import type { CatalogEntry, ShareDescriptor } from '../catalog/records'
 import type { FrozenSelectionPolicy } from '../catalog/selection'
 import { encodeBase64Url } from '../crypto/bytes'
+import { isRelayAccessDenied } from '../receiver/recovery-failure'
 import { catalogCapacityReason, isBrowserCatalogStoreExhausted } from './fault'
 
 export interface DiscoveredDirectory {
@@ -393,7 +394,7 @@ async function loadProbeDirectory(
   try {
     return await catalog.loadDirectory(frame.id, { signal })
   } catch (error) {
-    if (signal.aborted) throw error
+    if (signal.aborted || isRelayAccessDenied(error)) throw error
     // Tolerate per-directory failures while probing so one unreadable subtree
     // cannot block healthy selected siblings; TransferJob reports the failure.
     state.firstDirectoryError ??= error
@@ -618,6 +619,7 @@ async function loadDiscoveryDirectory(
   } catch (error) {
     if (signal.aborted) throw error
     callbacks.onDirectoryFailed?.(current.idText, error)
+    if (isRelayAccessDenied(error)) throw error
     if (isBrowserCatalogStoreExhausted(error)) return { kind: 'stop' }
     if (catalogCapacityReason(error) === undefined) {
       return { kind: 'skip', consecutiveCapacityFailures }

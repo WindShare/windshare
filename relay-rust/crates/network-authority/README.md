@@ -70,8 +70,8 @@ daily allowance, node admission, and share/account blocks. Under the default
 after 1,000 accounts and to email verification after 4,000 when mail delivery
 is configured (otherwise staying on proof of work); selecting a fixed mode keeps
 it unchanged. Both milestones prompt a capacity review.
-Use **Accounts** to find an account by ID or username and inspect its daily usage
-and attributed shares. **Reports** lists active account and share restrictions.
+Use **Accounts** to find an account by ID or username and inspect its daily usage.
+**Reports** lists active account and share restrictions.
 
 Tickets last 12 hours; entitlements last five minutes and apply to one UTC day.
 Usage retries preserve batch IDs and accounting days across restarts. Current

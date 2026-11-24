@@ -152,7 +152,7 @@ class GalleryController {
     }
     this.#publish({
       preview: this.#snapshot.share?.kind === 'file'
-        ? { state: 'error', fileId: id, name: this.#snapshot.share.name, message: 'This format cannot be previewed in this browser.' }
+        ? { state: 'error', fileId: id, name: this.#snapshot.share.name, failure: 'This format cannot be previewed in this browser.' }
         : photoPreview(true, id),
     })
   }
@@ -195,7 +195,7 @@ class GalleryController {
   }
 
   previewMediaFailed = () => {
-    this.#publish({ preview: { state: 'error', fileId: 'photo', name: 'Photo', message: 'The browser could not decode this preview.' } })
+    this.#publish({ preview: { state: 'error', fileId: 'photo', name: 'Photo', failure: 'The browser could not decode this preview.' } })
   }
 
   chooseArtifact = (id: string) => { this.intents.push('choose:' + id) }

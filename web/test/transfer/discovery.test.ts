@@ -13,6 +13,8 @@ import {
 } from '../../src/catalog/records'
 import { frozenSelectionPolicy, SelectionPolicy, type FrozenSelectionPolicy } from '../../src/catalog/selection'
 import { RemoteOperationError } from '../../src/content/session-operations'
+import { RelayReceiverError } from '../../src/transport/relay/receiver'
+import { RELAY_ERROR } from '../../src/transport/relay/protocol'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import { createReceivedProtocolError } from '../../src/session/diagnostics'
 import { createDiagnosticIdentity } from '../../src/session/identities'
@@ -444,7 +446,43 @@ describe('selection shape probing and progressive discovery', () => {
   })
 })
 
+function treeWithFirstDirectoryFailure(failureForFirst: Error) {
+  const tree = makeCatalogTree([[
+    { kind: 'directory', seed: 120, name: 'dir-1', entries: [] },
+    { kind: 'directory', seed: 121, name: 'dir-2', entries: [{ kind: 'file', seed: 122, name: 'later.txt', size: 10n }] },
+    { kind: 'directory', seed: 123, name: 'dir-3', entries: [{ kind: 'file', seed: 124, name: 'also-ok.txt', size: 20n }] },
+  ]])
+  const firstIdText = tree.entry(120).idText
+  const loaded: string[] = []
+  const catalog: CatalogClient = Object.freeze({
+    loadDirectory: async (directoryId: Uint8Array) => {
+      const idText = encodeBase64Url(directoryId)
+      loaded.push(idText)
+      if (idText === firstIdText) throw failureForFirst
+      return tree.catalog.loadDirectory(directoryId)
+    },
+    page: (committed: CommittedDirectory, pageIndex: number) => tree.catalog.page(committed, pageIndex),
+  }) as unknown as CatalogClient
+  return { tree, catalog, loaded, firstIdText }
+}
+
 describe('folder offer probing and directory failure tolerance', () => {
+  it('propagates a relay denial before probing or downloading later directories', async () => {
+    const denied = new RelayReceiverError('denied', { relayError: { code: RELAY_ERROR.accessDenied, retryAfterMilliseconds: 0 } })
+    const { tree, catalog, loaded, firstIdText } = treeWithFirstDirectoryFailure(denied)
+    const selection = new SelectionPolicy(false)
+    selection.set(tree.entry(122), [tree.rootIdText, tree.entry(121).idText], true)
+    const unhinted = frozenSelectionPolicy(false, selection.snapshot().canonicalRules)
+    const signal = new AbortController().signal
+    await expect(inspectSelectionShape(tree.descriptor, catalog, unhinted, signal)).rejects.toBe(denied)
+    expect(loaded).toEqual([tree.rootIdText, firstIdText])
+
+    loaded.length = 0
+    const discovery = discoverSelection(tree.descriptor, catalog, unhinted, [], signal)
+    await expect(discovery.next()).rejects.toBe(denied)
+    expect(loaded).toEqual([tree.rootIdText, firstIdText])
+  })
+
   it('offers folder downloads without probing unreadable or slow selected subtrees', async () => {
     const tree = makeCatalogTree([[
       { kind: 'directory', seed: 70, name: 'photos', entries: [{ kind: 'file', seed: 71, name: 'ok.jpg', size: 128n }] },
@@ -616,26 +654,6 @@ describe('folder offer probing and directory failure tolerance', () => {
 
 describe('catalog capacity isolation and saturation halting', () => {
   it('isolates a single oversized directory capacity failure and continues past healthy siblings', async () => {
-    const buildTreeWithFailure = (failureForFirst: Error) => {
-      const tree = makeCatalogTree([[
-        { kind: 'directory', seed: 120, name: 'dir-1', entries: [] },
-        { kind: 'directory', seed: 121, name: 'dir-2', entries: [{ kind: 'file', seed: 122, name: 'later.txt', size: 10n }] },
-        { kind: 'directory', seed: 123, name: 'dir-3', entries: [{ kind: 'file', seed: 124, name: 'also-ok.txt', size: 20n }] },
-      ]])
-      const firstIdText = tree.entry(120).idText
-      const loaded: string[] = []
-      const catalog: CatalogClient = Object.freeze({
-        loadDirectory: async (directoryId: Uint8Array) => {
-          const idText = encodeBase64Url(directoryId)
-          loaded.push(idText)
-          if (idText === firstIdText) throw failureForFirst
-          return tree.catalog.loadDirectory(directoryId)
-        },
-        page: (committed: CommittedDirectory, pageIndex: number) => tree.catalog.page(committed, pageIndex),
-      }) as unknown as CatalogClient
-      return { tree, catalog, loaded, firstIdText }
-    }
-
     const singleDirectoryCapacityCases: readonly Error[] = [
       new CatalogPageStoreError('resource-limit', 'Catalog cache exceeded its share entry or metadata budget'),
       new DirectoryFailureError(Object.freeze({
@@ -663,7 +681,7 @@ describe('catalog capacity isolation and saturation halting', () => {
     ]
 
     for (const capacityError of singleDirectoryCapacityCases) {
-      const { tree, catalog, loaded, firstIdText } = buildTreeWithFailure(capacityError)
+      const { tree, catalog, loaded, firstIdText } = treeWithFirstDirectoryFailure(capacityError)
       const failed: unknown[] = []
       const discoveredFiles: string[] = []
       for await (const item of discoverSelection(

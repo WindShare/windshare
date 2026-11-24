@@ -28,7 +28,6 @@ impl Reporter {
             created_at,
             records,
             resident_accounts,
-            shares: Vec::new(),
             load: Load {
                 applied_policy_version,
                 resident_shares,
@@ -87,8 +86,7 @@ impl Reporter {
             .into_iter()
             .filter_map(|(i, a)| (i == issuer).then_some(a))
             .collect();
-        let mut batch = self.batch(Vec::new(), accounts, super::super::now().unsigned_abs())?;
-        batch.shares = self.node.access.resident_shares(issuer);
+        let batch = self.batch(Vec::new(), accounts, super::super::now().unsigned_abs())?;
         let (generation, reply, login) = self.report(&batch).await?;
         let ReportResult::Status {
             entitlements,

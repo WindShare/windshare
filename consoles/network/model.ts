@@ -50,8 +50,6 @@ export interface AccountDetails extends AccountSummary {
   entitlement_version: number
   recent_usage: DailyUsage[]
   has_older_usage: boolean
-  shares: number[][]
-  has_more_shares: boolean
 }
 
 export interface NodeSetup { url: string; issuer: string; certificate: string }

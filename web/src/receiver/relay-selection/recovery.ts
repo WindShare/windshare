@@ -5,7 +5,7 @@ import { firstUsableRelay, RelayEndpointFailure } from './race'
 import { systemReconnectClock, type ReconnectClock } from '../recovery-clock'
 import {
   isShareRecoveryFailure, isTerminalRecoveryFailure, latestRecoveryRetry, recoveryRetry,
-  AllRelaysRestrictedError, RelayCooldownError, type RecoveryRetry,
+  RelayCooldownError, type RecoveryRetry,
 } from '../recovery-failure'
 
 type EndpointRejection =
@@ -93,11 +93,6 @@ export class RelayRecovery {
         'All relay endpoints rejected this share', { cause: failure })
     }
     const cooldowns = rejections.filter(rejection => rejection?.kind === 'cooldown')
-    const allRestricted = this.candidates.complete && cooldowns.length > 0 && cooldowns.length === rejections.length &&
-      cooldowns.every(({ retry }) => retry.reason === 'authorization')
-    // Incomplete discovery and expired cooldowns can still yield other routes.
-    const retry = allRestricted ? this.nextRetry() : undefined
-    if (retry !== undefined) return new AllRelaysRestrictedError(retry.retryAt, failure)
     if (cooldowns.length > 0 && isTerminalRecoveryFailure(failure)) {
       return new AggregateError([failure, ...cooldowns.map(rejection => rejection.failure)],
         'Some relay endpoints are cooling down', { cause: failure })

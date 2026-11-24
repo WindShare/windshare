@@ -1,25 +1,5 @@
 use super::*;
-use crate::public_blocks::{PublicBlockFeed, RENEW_AFTER_SECONDS};
 use serde_json::json;
-use windshare_relay_access::usage::ShareAttribution;
-
-fn public(authority: &Authority<Memory, Clock>) -> serde_json::Value {
-    let mut feed = PublicBlockFeed::default();
-    let envelope: serde_json::Value =
-        serde_json::from_str(&feed.snapshot(authority).unwrap().body).unwrap();
-    let signed = URL_SAFE_NO_PAD
-        .decode(envelope["body"].as_str().unwrap())
-        .unwrap();
-    serde_json::from_slice(
-        trust::verify(
-            b"windshare/public-blocks/v1\0",
-            &signed,
-            &authority.signing.generation.key,
-        )
-        .unwrap(),
-    )
-    .unwrap()
-}
 
 #[test]
 fn policy_updates_merge_only_specified_fields() {
@@ -140,108 +120,31 @@ fn node_policy_versions_survive_same_second_changes_and_disabled_reports() {
 }
 
 #[test]
-fn account_blocks_cover_observed_shares_without_polluting_explicit_share_blocks() {
+fn share_and_account_blocks_advance_version_only_when_membership_changes() {
     let mut authority = fixture();
     let admin = authority
         .initialize("once", "once", "admin", "correct horse battery")
         .unwrap();
-    let account = authority
-        .register("source", registration(1))
-        .unwrap()
-        .account;
-    let first = ShareAttribution {
-        share: [1; 12],
-        account,
-    };
-    authority.remember_shares(&[first]).unwrap();
-    assert_eq!(public(&authority)["version"], 0);
-    authority
-        .block(
-            &admin,
-            Block::Account {
-                id: account,
-                blocked: true,
-            },
-        )
-        .unwrap();
-    let blocked = public(&authority);
-    assert_eq!(
-        blocked["shares"],
-        serde_json::to_value(vec![[1; 12]]).unwrap()
-    );
-    let second = ShareAttribution {
-        share: [2; 12],
-        account,
-    };
-    authority.remember_shares(&[second]).unwrap();
-    let expanded = public(&authority);
-    assert!(expanded["version"].as_u64().unwrap() > blocked["version"].as_u64().unwrap());
-    authority.remember_shares(&[first, second]).unwrap();
-    assert_eq!(public(&authority), expanded);
-    authority
-        .block(
-            &admin,
-            Block::Share {
-                id: first.share,
-                blocked: true,
-            },
-        )
-        .unwrap();
-    authority
-        .block(
-            &admin,
-            Block::Account {
-                id: account,
-                blocked: false,
-            },
-        )
-        .unwrap();
-    assert_eq!(
-        public(&authority)["shares"],
-        serde_json::to_value(vec![[1; 12]]).unwrap()
-    );
-    assert_eq!(authority.blocks().unwrap().shares.len(), 1);
-}
-
-#[test]
-fn public_snapshot_reuses_bytes_until_renewal_or_policy_change() {
-    let mut authority = fixture();
-    let admin = authority
-        .initialize("once", "once", "admin", "correct horse battery")
-        .unwrap();
-    let mut feed = PublicBlockFeed::default();
-    let initial = feed.snapshot(&authority).unwrap();
-    let initial_tag = initial.etag.clone();
-    let initial_body = initial.body.clone();
-    let writes = authority.store.put_count;
-
-    authority.environment.now += RENEW_AFTER_SECONDS - 1;
-    let reused = feed.snapshot(&authority).unwrap();
-    assert!(reused.not_modified(&format!("W/{initial_tag}")));
-    assert_eq!(reused.body, initial_body);
-
-    authority.environment.now += 1;
-    let renewed = feed.snapshot(&authority).unwrap();
-    assert!(!renewed.not_modified(&initial_tag));
-    let renewed_tag = renewed.etag.clone();
-    assert_eq!(authority.store.put_count, writes);
-
-    authority
-        .block(
-            &admin,
-            Block::Share {
-                id: [7; 12],
-                blocked: true,
-            },
-        )
-        .unwrap();
-    let updated = feed.snapshot(&authority).unwrap();
-    assert!(!updated.not_modified(&renewed_tag));
-    let updated_tag = updated.etag.clone();
-
-    authority.signing = signing_fixture(2);
-    let rotated = feed.snapshot(&authority).unwrap();
-    assert!(!rotated.not_modified(&updated_tag));
+    let share = [7; 12];
+    let account = [9; 16];
+    for (blocked, version) in [(true, 2), (true, 2), (false, 4), (false, 4)] {
+        authority
+            .block(&admin, Block::Share { id: share, blocked })
+            .unwrap();
+        authority
+            .block(
+                &admin,
+                Block::Account {
+                    id: account,
+                    blocked,
+                },
+            )
+            .unwrap();
+        let blocks = authority.blocks().unwrap();
+        assert_eq!(blocks.version, version);
+        assert_eq!(blocks.shares.contains(&share), blocked);
+        assert_eq!(blocks.accounts.contains(&account), blocked);
+    }
 }
 
 #[test]

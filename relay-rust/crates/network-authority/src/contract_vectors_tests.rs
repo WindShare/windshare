@@ -1,5 +1,4 @@
 use super::*;
-use crate::public_blocks::PublicBlockFeed;
 use sha2::{Digest, Sha256};
 
 #[test]
@@ -43,9 +42,6 @@ fn account_contract_vectors_match_go_and_browser() {
         "expires_at":authority.environment.now()+300,"relay_available":true,"anonymous":true
     })).unwrap();
     let signed = trust::sign(b"windshare/node-descriptor/v2\0", &descriptor, &node);
-    let mut feed = PublicBlockFeed::default();
-    let blocks: serde_json::Value =
-        serde_json::from_str(&feed.snapshot(&authority).unwrap().body).unwrap();
     let data = serde_json::to_vec_pretty(&serde_json::json!({
         "now":authority.environment.now(),
         "root":URL_SAFE_NO_PAD.encode(authority.signing.generation.issuer),
@@ -53,8 +49,7 @@ fn account_contract_vectors_match_go_and_browser() {
         "next_certificate":second_certificate,
         "noncanonical_ticket":noncanonical,
         "node_key":URL_SAFE_NO_PAD.encode(node.verifying_key().to_bytes()),
-        "descriptor":{"version":2,"descriptor":URL_SAFE_NO_PAD.encode(&descriptor),"signature":URL_SAFE_NO_PAD.encode(&signed[descriptor.len()..])},
-        "blocks":blocks
+        "descriptor":{"version":2,"descriptor":URL_SAFE_NO_PAD.encode(&descriptor),"signature":URL_SAFE_NO_PAD.encode(&signed[descriptor.len()..])}
     })).unwrap();
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../../testdata/network/authority.json");

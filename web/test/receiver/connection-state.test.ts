@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { ReceiverConnectionState, type ReceiverConnectionSnapshot } from '../../src/receiver/connection-state'
+import { RelayEndpointFailure } from '../../src/receiver/relay-selection/race'
+import { isRelayAccessDenied } from '../../src/receiver/recovery-failure'
 import { StaleShareInstanceError } from '../../src/receiver/session-factory'
 import { RelayReceiverError } from '../../src/transport/relay/receiver'
 import { RELAY_ERROR } from '../../src/transport/relay/protocol'
@@ -17,6 +19,26 @@ describe('receiver connection observations', () => {
       { kind: 'reconnecting', activity: { kind: 'connecting' } },
       { kind: 'reconnecting', activity: { kind: 'waiting', reason: 'capacity', retryAt: 75_000 } },
       { kind: 'connected' }])
+  })
+
+  it('publishes a denial only when every endpoint confirms it', () => {
+    const state = new ReceiverConnectionState()
+    const snapshots: ReceiverConnectionSnapshot[] = []
+    state.subscribe(snapshot => snapshots.push(snapshot))
+    const denied = new RelayReceiverError('Access denied', { relayError: {
+      code: RELAY_ERROR.accessDenied, retryAfterMilliseconds: 0,
+    } })
+    const first = new RelayEndpointFailure('first', denied)
+    const all = new AggregateError([first, new RelayEndpointFailure('second', new AggregateError([denied]))])
+    for (const error of [denied, first, all]) {
+      state.failed(error)
+      expect(snapshots.at(-1)).toEqual({ kind: 'unavailable', reason: 'access-denied' })
+    }
+    for (const error of [new AggregateError([]), new AggregateError([first, new Error('offline')])]) {
+      expect(isRelayAccessDenied(error)).toBe(false)
+      state.failed(error)
+      expect(snapshots.at(-1)).toEqual({ kind: 'unavailable', reason: 'protocol-failed' })
+    }
   })
 
   it('requires authenticated replacement or all stopped endpoints and isolates observers', () => {

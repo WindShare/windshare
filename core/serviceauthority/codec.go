@@ -14,7 +14,6 @@ const (
 	CertificateDomain      = "windshare/authority-certificate/v1\x00"
 	TicketDomain           = "windshare/account-ticket/v1\x00"
 	DescriptorDomain       = "windshare/node-descriptor/v2\x00"
-	BlocksDomain           = "windshare/public-blocks/v1\x00"
 	MaximumTicketBytes     = 512
 	MaximumDescriptorBytes = 16 << 10
 	MaximumResponseBytes   = 512 << 10

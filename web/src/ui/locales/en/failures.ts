@@ -2,6 +2,7 @@ export const failures = {
   invalidLink: 'This share link or key is invalid. Reopen the original link or ask the sender for a new one.',
   secureContext: 'This browser cannot decrypt the share. Open the link in a browser with secure connections enabled.',
   open: 'Could not open this share. Reopen the original link or check that the sender is online.',
+  relayAccessDenied: 'Relay access was denied for this share.',
   permissionDenied: 'Folder access was not granted. Allow access to the chosen folder and try again.',
   action: 'The download action could not be completed.',
   directory: 'Could not load this folder.',

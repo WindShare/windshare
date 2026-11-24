@@ -112,7 +112,6 @@ fn usage_batch() -> Batch {
             bytes: 17,
         }],
         resident_accounts: vec![],
-        shares: vec![],
         load: Load {
             relay_budget: None,
             applied_policy_version: 0,

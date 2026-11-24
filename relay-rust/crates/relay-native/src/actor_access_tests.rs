@@ -558,6 +558,42 @@ async fn revoked_resident_share_refuses_resume_and_join_after_access_change_is_c
 }
 
 #[tokio::test]
+async fn restricted_nonresident_share_refuses_each_join_including_pending_siblings() {
+    let fixture = Fixture::new();
+    let identity = fixture.identity();
+    for stopped in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let store =
+            Database::open(&directory.path().join("authority.sqlite"), identity.relay).unwrap();
+        if stopped {
+            for operation in fixture.works() {
+                store.execute(identity.share, &operation).unwrap();
+            }
+        }
+        let node = Runtime::default();
+        let mut restrictions = Restrictions {
+            version: 1,
+            ..Default::default()
+        };
+        restrictions.insert(Restriction::Share(*identity.share.as_bytes()));
+        assert!(node.access.restrict([7; 32], restrictions));
+
+        with_access_actor(node, store, &fixture, async |harness| {
+            let mut single = harness.send_join(1, &fixture).await;
+            assert_refused(&mut single, ErrorFrame::AccessDenied).await;
+
+            let mut first = harness.connect(2, None, &fixture).await;
+            let mut second = harness.connect(3, None, &fixture).await;
+            harness.send(2, fixture.bytes("joinB64")).await;
+            harness.send(3, fixture.bytes("joinB64")).await;
+            assert_refused(&mut first, ErrorFrame::AccessDenied).await;
+            assert_refused(&mut second, ErrorFrame::AccessDenied).await;
+        })
+        .await;
+    }
+}
+
+#[tokio::test]
 async fn draining_preserves_join_and_resume_for_an_existing_owner_share() {
     let fixture = Fixture::new();
     let now_seconds = fixture.now(false).0 / 1000;

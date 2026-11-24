@@ -136,7 +136,6 @@ impl<R: Store, E: Environment> Authority<R, E> {
                     );
                 }
             }
-            self.update_public_blocks()?;
         }
         Ok(())
     }

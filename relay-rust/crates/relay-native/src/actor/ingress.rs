@@ -33,6 +33,19 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
                         {
                             return self.refuse_control_access(connection, kind, revocation, now);
                         }
+                        // A direct share restriction outlives residency. Each pending JOIN
+                        // still needs its own terminal protocol response.
+                        if kind == FrameKind::Join
+                            && self.residency.is_none()
+                            && self.node.access.share_restricted(self.identity.share)
+                        {
+                            return self.refuse_connection_access(
+                                connection,
+                                kind,
+                                super::access::RevocationReason::AccessPolicy,
+                                now,
+                            );
+                        }
                         input
                     }
                 };

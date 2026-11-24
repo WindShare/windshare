@@ -9,6 +9,7 @@ import type { BrowseDirectory, JoinedBrowserShare } from '../application/browser
 import type { FailureReporter } from '../application/diagnostics/receive-trace'
 import type { PreviewTraceEvent } from '../application/receive/contracts'
 import type { TraceSource } from '../diagnostics/runtime'
+import { mapReceiverFailure } from './controller/failures'
 import { EMPTY_PREVIEW, type ReceiverSnapshot } from './model'
 import {
   isAbortError,
@@ -153,15 +154,7 @@ export class PreviewController {
           this.#publishVideoFailure(active, this.#host.publicError(error))
           return
         }
-        this.#reportFailure('preview_seek', error)
-        const failure = Object.freeze({
-          state: 'error' as const,
-          fileId: active.entry.idText,
-          name: active.entry.name,
-          message: this.#host.publicError(error),
-        })
-        void this.#closeActive()
-        this.#publishPreview(failure)
+        this.#failPreview(active.entry, 'preview_seek', error)
       },
     )
   }
@@ -216,7 +209,7 @@ export class PreviewController {
       state: 'error' as const,
       fileId: active.entry.idText,
       name: active.entry.name,
-      message: MEDIA_FAILURE_MESSAGE,
+      failure: MEDIA_FAILURE_MESSAGE,
     })
     void this.#closeActive()
     this.#publishPreview(failure)
@@ -235,7 +228,15 @@ export class PreviewController {
   ): void {
     // Connectivity must be the first post-guard action so the user's click
     // remains the activation boundary even when it replaces another preview.
-    const connectivity = joined.beginPreviewConnectivity()
+    let connectivity: ActivePreview['connectivity']
+    try {
+      connectivity = joined.beginPreviewConnectivity()
+    } catch (error) {
+      if (intent === 'automatic-photo') throw error
+      this.#target = Object.freeze({ entry, directory })
+      this.#failPreview(entry, 'preview_open', error)
+      return
+    }
     void this.#closeActive()
     const active: ScopedActivePreview = {
       id: this.#nextId++,
@@ -283,15 +284,17 @@ export class PreviewController {
         this.cancel()
         return
       }
-      this.#reportFailure('preview_open', error)
-      void this.#closeActive()
-      this.#publishPreview(Object.freeze({
-        state: 'error',
-        fileId: active.entry.idText,
-        name: active.entry.name,
-        message: this.#host.publicError(error),
-      }))
+      this.#failPreview(active.entry, 'preview_open', error)
     }
+  }
+
+  #failPreview(entry: Extract<CatalogEntry, { kind: 'file' }>, stage: 'preview_open' | 'preview_seek', error: unknown): void {
+    this.#reportFailure(stage, error)
+    void this.#closeActive()
+    this.#publishPreview(Object.freeze({
+      state: 'error', fileId: entry.idText, name: entry.name,
+      failure: mapReceiverFailure(error, this.#host.publicError),
+    }))
   }
 
   #traceAutomaticDeferral(

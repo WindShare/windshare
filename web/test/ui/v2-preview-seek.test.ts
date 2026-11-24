@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { PreviewRuntimeError } from '../../src/preview/preview'
 import { VideoPreviewError } from '../../src/preview/mp4-range'
 import { FaultScope, SourceFaultCode, TransferFaultError, sourceFault } from '../../src/transfer/fault'
+import { RelayReceiverError } from '../../src/transport/relay/receiver'
+import { RELAY_ERROR } from '../../src/transport/relay/protocol'
 import { PreviewController } from '../../src/ui/preview-controller'
 import type { JoinedBrowserShare } from '../../src/application/browser-share/gateway'
 import {
@@ -17,6 +19,25 @@ import {
 } from './v2-preview-fixture'
 
 describe('v2 preview seek failure presentation', () => {
+  it('publishes a typed denial when a manual preview can no longer acquire connectivity', () => {
+    const denied = new RelayReceiverError('Access denied', { relayError: {
+      code: RELAY_ERROR.accessDenied, retryAfterMilliseconds: 0,
+    } })
+    const joined = new DiagnosticPreviewJoined({})
+    joined.beginPreviewConnectivity = () => { throw denied }
+    let snapshot = directPreviewSnapshot()
+    const previews = new PreviewController({
+      snapshot: () => snapshot,
+      publish: next => { snapshot = next },
+      publicError: () => 'sanitized detail',
+    })
+
+    previews.open(joined as unknown as JoinedBrowserShare, entry, rootDirectory)
+    expect(snapshot.preview).toMatchObject({
+      state: 'error', fileId: entry.idText, failure: { kind: 'relayAccessDenied', detail: 'sanitized detail' },
+    })
+  })
+
   it('keeps seek failure primary and records session-close failure during cleanup', async () => {
     const joined = new DiagnosticPreviewJoined({
       seekFailure: new Error('seek failed'),
@@ -40,7 +61,7 @@ describe('v2 preview seek failure presentation', () => {
 
     // An unclassified seek failure is not known to be local to one position.
     expect(snapshot.preview).toEqual({
-      state: 'error', fileId: entry.idText, name: entry.name, message: 'preview failed',
+      state: 'error', fileId: entry.idText, name: entry.name, failure: 'preview failed',
     })
     expect(joined.closed).toBe(1)
     expect(failures.events).toMatchObject([
@@ -76,7 +97,8 @@ describe('v2 preview seek failure presentation', () => {
     await turn()
 
     expect(snapshot.preview).toEqual({
-      state: 'error', fileId: entry.idText, name: entry.name, message: error.message,
+      state: 'error', fileId: entry.idText, name: entry.name,
+      failure: error instanceof TransferFaultError ? { kind: 'source-changed' } : error.message,
     })
     expect(joined.closed).toBe(1)
     expect(failures.events).toMatchObject([{ stage: 'preview_seek', error }])
@@ -100,7 +122,7 @@ describe('v2 preview seek failure presentation', () => {
     await turn()
 
     expect(snapshot.preview).toEqual({
-      state: 'error', fileId: entry.idText, name: entry.name, message: 'preview failed',
+      state: 'error', fileId: entry.idText, name: entry.name, failure: 'preview failed',
     })
     expect(joined.closed).toBe(1)
   })

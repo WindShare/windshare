@@ -47,6 +47,7 @@ import type {
   ReceiveRuntimeSnapshot,
   RetainedTaskSnapshot,
   SingleFileDownloadOutcome,
+  TerminalConnectionBlock,
 } from './contracts'
 import { ExecutionState, WorkspaceTask, type RetainedLocalCommand } from './execution-state'
 import { ReceiveStorage, type ReceiveStoreAccess } from './receive-storage'
@@ -106,8 +107,7 @@ export class ReceiveCoordinator {
   #lastShape: SelectionShape | null = null
   #selectionSpec: SelectionSpec | null = null
   #selectionPolicy: FrozenSelectionPolicy | null = null
-  #connectionUnavailable = false
-  #shareEnded = false
+  #connectionBlock: TerminalConnectionBlock | null = null
   #snapshot: ReceiveRuntimeSnapshot
   #disposed = false
 
@@ -193,12 +193,9 @@ export class ReceiveCoordinator {
     return !this.#execution.isRunning && this.#workspace.canRetain
   }
 
-  observeConnection(kind: 'idle' | 'connected' | 'reconnecting' | 'unavailable' | 'ended'): void {
-    const unavailable = kind === 'unavailable' || kind === 'ended'
-    const ended = kind === 'ended'
-    if (this.#connectionUnavailable === unavailable && this.#shareEnded === ended) return
-    this.#connectionUnavailable = unavailable
-    this.#shareEnded = ended
+  observeConnection(block: TerminalConnectionBlock | null): void {
+    if (this.#connectionBlock === block) return
+    this.#connectionBlock = block
     this.#publish()
   }
 
@@ -223,10 +220,7 @@ export class ReceiveCoordinator {
 
   /** Checks remote download admission, letting terminal share/connection states preempt local busyness. */
   startBlockedReason(): ReceiveBlockReason | null {
-    if (this.#options.currentJoinedShare() === undefined) return 'connectFirst'
-    const terminal = this.#terminalConnectionReason()
-    if (terminal !== null) return terminal
-    return this.localStartBlockedReason()
+    return this.#connectionBlock ?? this.localStartBlockedReason()
   }
 
   shareNavigationBlockedReason(): ReceiveBlockReason | null {
@@ -248,7 +242,7 @@ export class ReceiveCoordinator {
         canForgetState(this.#workspace.lifecycle, this.#workspace.backend))
     if (!supported) return blockedAdmission('actionUnavailable')
     if (action === 'continue') {
-      const terminal = this.#terminalConnectionReason()
+      const terminal = this.#connectionBlock
       if (terminal !== null) return blockedAdmission(terminal)
     }
     return ALLOWED_ADMISSION
@@ -261,8 +255,7 @@ export class ReceiveCoordinator {
       currentShareInstance: shareInstance,
       hasActiveDownload: this.#execution.isTransferActive,
       hasPendingAction: this.#execution.pendingRetained !== null,
-      connectionUnavailable: this.#connectionUnavailable,
-      shareEnded: this.#shareEnded,
+      connectionBlock: this.#connectionBlock,
     })
   }
 
@@ -400,12 +393,6 @@ export class ReceiveCoordinator {
     const choice = allChoices.find(candidate => candidate.choiceId === choiceId)
     if (choice === undefined) return undefined
     return { joined, choice, spec, key: offers.selectionKey }
-  }
-
-  #terminalConnectionReason(): 'shareEnded' | 'connectionUnavailable' | null {
-    if (this.#shareEnded) return 'shareEnded'
-    if (this.#connectionUnavailable) return 'connectionUnavailable'
-    return null
   }
 
   startSingleFileDownload(
@@ -602,7 +589,7 @@ export class ReceiveCoordinator {
     if (!this.#execution.ownsTransfer(token)) return
     // Re-check terminal connection state after async picker resolution so we never
     // reserve empty disk placeholders or failed IDB records for a dead session.
-    const terminal = this.#terminalConnectionReason()
+    const terminal = this.#connectionBlock
     if (terminal !== null) {
       if (!this.#execution.releaseTransferIfOwned(token)) return
       this.#publish()

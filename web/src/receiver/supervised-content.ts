@@ -64,7 +64,7 @@ export class SupervisedContent {
   readonly #randomBytes: (length: number) => Uint8Array
   readonly #authorizations = new Map<string, RevisionAuthorization>()
   readonly #bandwidthCleanups = new Set<() => void>()
-  #closed = false
+  readonly #lifetime = new AbortController()
 
   constructor(
     provider: ContentGenerationProvider,
@@ -75,7 +75,7 @@ export class SupervisedContent {
   }
 
   forRoutes(routes: BlockRouteEligibility): ScopedContent {
-    this.#requireOpen()
+    this.#lifetime.signal.throwIfAborted()
     routes.assertActive()
     const metrics = this.#provider.downloadMetrics?.(routes)
     const status = new SupervisedLaneStatus(() => this.#currentLaneCount(routes))
@@ -102,12 +102,12 @@ export class SupervisedContent {
     })
   }
 
-  close(): void {
-    if (this.#closed) return
-    this.#closed = true
+  close(reason: unknown = new DOMException('Supervised content is closed', 'AbortError')): void {
+    if (this.#lifetime.signal.aborted) return
+    this.#lifetime.abort(reason)
     for (const cleanup of [...this.#bandwidthCleanups]) cleanup()
     this.#bandwidthCleanups.clear()
-    for (const authorization of this.#authorizations.values()) authorization.close()
+    for (const authorization of this.#authorizations.values()) authorization.close(reason)
     this.#authorizations.clear()
   }
 
@@ -128,7 +128,7 @@ export class SupervisedContent {
     const bind = () => {
       unsubscribeLane?.()
       unsubscribeLane = undefined
-      if (closed || this.#closed || !routes.active) {
+      if (closed || this.#lifetime.signal.aborted || !routes.active) {
         publish(false)
         return
       }
@@ -155,7 +155,7 @@ export class SupervisedContent {
       cleanup()
     }
     try { listener(false) } catch { /* Bandwidth-wait observation is passive. */ }
-    if (this.#closed || !routes.active) return () => undefined
+    if (this.#lifetime.signal.aborted || !routes.active) return () => undefined
     this.#bandwidthCleanups.add(closeFromOwner)
     bind()
     unsubscribeGeneration = this.#provider.subscribeGeneration?.(() => bind())
@@ -170,12 +170,13 @@ export class SupervisedContent {
     routes: BlockRouteEligibility,
     signal?: AbortSignal,
   ): Promise<OpenedRevision> {
-    this.#requireOpen()
+    this.#lifetime.signal.throwIfAborted()
     routes.assertActive()
     const normalizedFileId = fileId.slice()
     const result = await this.#provider.execute(signal, (generation) =>
       generation.revisions.open(normalizedFileId, routes, signal))
     try {
+      this.#lifetime.signal.throwIfAborted()
       routes.assertActive()
     } catch (error) {
       await result.value.release().catch(() => undefined)
@@ -206,7 +207,7 @@ export class SupervisedContent {
     routes: BlockRouteEligibility,
     options: BlockRangeReaderOptions,
   ): AsyncGenerator<BlockSlice> {
-    this.#requireOpen()
+    this.#lifetime.signal.throwIfAborted()
     routes.assertActive()
     const authorization = this.#authorization(token)
     authorization.requireDescriptor(descriptor)
@@ -284,12 +285,8 @@ export class SupervisedContent {
   }
 
   #currentLaneCount(routes: BlockRouteEligibility): number {
-    if (this.#closed || !routes.active) return 0
+    if (this.#lifetime.signal.aborted || !routes.active) return 0
     return this.#provider.contentLaneCount(routes)
-  }
-
-  #requireOpen(): void {
-    if (this.#closed) throw new Error('Supervised content is closed')
   }
 }
 
@@ -392,8 +389,8 @@ class RevisionAuthorization {
   }
 
   async binding(signal?: AbortSignal): Promise<GenerationRevision> {
-    if (this.#closed) throw new Error('Supervised revision authorization is closed')
     while (true) {
+      this.#lifetime.signal.throwIfAborted()
       signal?.throwIfAborted()
       const existing = this.#current
       if (existing !== undefined && this.#provider.isCurrent(existing.generation)) return existing
@@ -438,11 +435,11 @@ class RevisionAuthorization {
     return this.#releaseTask
   }
 
-  close(): void {
+  close(reason: unknown): void {
     if (this.#closed) return
     this.#closed = true
     this.#released = true
-    this.#lifetime.abort(new DOMException('Supervised revision authorization closed', 'AbortError'))
+    this.#lifetime.abort(reason)
     this.#unsubscribeRoutes()
     this.#current = undefined
     this.#expiredBindings.clear()

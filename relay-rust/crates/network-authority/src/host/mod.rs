@@ -9,10 +9,7 @@ mod mail;
 mod routes;
 mod storage;
 mod telemetry;
-use crate::{
-    Authority, Environment, Fault, NodeLoadReport, PepperRing, Signing,
-    public_blocks::PublicBlockFeed,
-};
+use crate::{Authority, Environment, Fault, NodeLoadReport, PepperRing, Signing};
 use futures_util::StreamExt;
 use std::{
     cell::{Cell, OnceCell, RefCell},
@@ -70,7 +67,6 @@ pub struct NetworkAuthority {
     signing: OnceCell<Signing>,
     peppers: OnceCell<PepperRing>,
     schema_ready: Cell<bool>,
-    public_blocks: Rc<RefCell<PublicBlockFeed>>,
     publishing: futures_util::lock::Mutex<()>,
     kv_alarm_deadline: Cell<Option<u64>>,
     node_loads: Rc<RefCell<BTreeMap<[u8; 32], NodeLoadReport>>>,
@@ -154,7 +150,6 @@ impl DurableObject for NetworkAuthority {
             signing: OnceCell::new(),
             peppers: OnceCell::new(),
             schema_ready: Cell::new(false),
-            public_blocks: Rc::default(),
             node_loads: Rc::default(),
             publishing: futures_util::lock::Mutex::new(()),
             kv_alarm_deadline: Cell::new(None),
@@ -181,9 +176,8 @@ impl DurableObject for NetworkAuthority {
         }
         let context = routes::Context::new(&request, &self.env)?;
         let registration_email_configured = mail::Webhook::configured(&self.env).is_some();
-        let public_blocks = self.public_blocks.clone();
         match self.transact(registration_email_configured, move |authority, _| {
-            match routes::dispatch(authority, context, &bytes, &mut public_blocks.borrow_mut()) {
+            match routes::dispatch(authority, context, &bytes) {
                 Ok(response) => Ok(response),
                 Err(error) => {
                     if let Some(fault) = error.downcast_ref::<Fault>() {

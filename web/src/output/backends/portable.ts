@@ -1,5 +1,5 @@
 import { bigintToSafeNumber } from '../../content/geometry'
-import { catalogCapacityReason, classifyNativeError, isPortableLimitExceededError, portableLimitExceededError } from '../../transfer/fault'
+import { transferFailureReason, classifyNativeError, isPortableLimitExceededError, portableLimitExceededError } from '../../transfer/fault'
 import type { SettledTransferJobResult } from '../../transfer/job'
 import type {
   TransferDirectoryRequest,
@@ -346,8 +346,8 @@ function portableDisplay(
 
 function failedReasonFor(result: SettledTransferJobResult): ReceiveFailureReason {
   if (isPortableLimitExceededError(result.error)) return 'portable-limit-exceeded'
-  const catalogLimit = catalogCapacityReason(result.error)
-  if (catalogLimit !== undefined) return catalogLimit
+  const reason = transferFailureReason(result.error)
+  if (reason !== 'error') return reason
   if (result.status === 'source-changed') return 'source-changed'
   if (result.status === 'stopped') return 'cancelled'
   return 'error'

@@ -1,9 +1,10 @@
+import type { ReceiverConnectionSnapshot } from '../../receiver/connection-state'
 import type { SaveBackendKind } from '../../output/model'
 import {
   isActiveReceiveState,
   type ReceiveLifecycleState,
 } from '../../transfer/state'
-import type { ReceiveAction, ReceiveAdmission, RetainedReadiness, RetainedTaskSnapshot } from './contracts'
+import type { ReceiveAction, ReceiveAdmission, RetainedReadiness, RetainedTaskSnapshot, TerminalConnectionBlock } from './contracts'
 
 export const ALLOWED_ADMISSION: ReceiveAdmission = Object.freeze({ allowed: true, reason: null })
 
@@ -114,12 +115,17 @@ export function retainedTaskReadiness(
   return task.shareInstance === currentShareInstance ? 'matching-share' : 'different-share'
 }
 
+export function terminalConnectionBlock(connection: ReceiverConnectionSnapshot | Readonly<{ kind: 'idle' }>): TerminalConnectionBlock | null {
+  if (connection.kind === 'ended') return 'shareEnded'
+  if (connection.kind === 'unavailable') return connection.reason === 'access-denied' ? 'relayAccessDenied' : 'connectionUnavailable'
+  return null
+}
+
 export interface RetainedAdmissionContext {
   readonly currentShareInstance: string | null
   readonly hasActiveDownload: boolean
   readonly hasPendingAction: boolean
-  readonly connectionUnavailable: boolean
-  readonly shareEnded: boolean
+  readonly connectionBlock: TerminalConnectionBlock | null
 }
 
 export function admitRetainedAction(
@@ -140,8 +146,7 @@ export function admitRetainedAction(
   if (readiness === 'original-link-required' || readiness === 'different-share') {
     return blockedAdmission('matchingShare')
   }
-  if (context.shareEnded) return blockedAdmission('shareEnded')
-  if (context.connectionUnavailable) return blockedAdmission('connectionUnavailable')
+  if (context.connectionBlock !== null) return blockedAdmission(context.connectionBlock)
   if (context.hasPendingAction) return blockedAdmission('busy')
   if (context.hasActiveDownload) return blockedAdmission('downloading')
   return ALLOWED_ADMISSION

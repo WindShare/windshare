@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   actionsForState,
   admitRetainedAction,
+  terminalConnectionBlock,
   type RetainedAdmissionContext,
 } from '../../src/application/receive/admission'
 import type {
@@ -174,8 +175,7 @@ function workspaceSnapshot(overrides: Readonly<{
     currentShareInstance: share?.shareInstance ?? null,
     hasActiveDownload: activeReceiveOperationId !== null || output.activation !== null || pending?.action === 'continue',
     hasPendingAction: pending !== null,
-    connectionUnavailable: connection.kind === 'unavailable' || connection.kind === 'ended',
-    shareEnded: connection.kind === 'ended',
+    connectionBlock: terminalConnectionBlock(connection),
   }
   const taskInputs = {
     output,
@@ -212,32 +212,28 @@ describe('admitRetainedAction structural vs transient blocker precedence', () =>
       currentShareInstance: SHARE_A,
       hasActiveDownload: false,
       hasPendingAction: true,
-      connectionUnavailable: true,
-      shareEnded: true,
+      connectionBlock: 'shareEnded',
     })).toEqual({ allowed: false, reason: 'shareEnded' })
 
     expect(admitRetainedAction(paused, 'continue', {
       currentShareInstance: SHARE_A,
       hasActiveDownload: false,
       hasPendingAction: true,
-      connectionUnavailable: true,
-      shareEnded: false,
+      connectionBlock: 'connectionUnavailable',
     })).toEqual({ allowed: false, reason: 'connectionUnavailable' })
 
     expect(admitRetainedAction(paused, 'continue', {
       currentShareInstance: SHARE_B,
       hasActiveDownload: false,
       hasPendingAction: true,
-      connectionUnavailable: false,
-      shareEnded: false,
+      connectionBlock: null,
     })).toEqual({ allowed: false, reason: 'matchingShare' })
 
     expect(admitRetainedAction(paused, 'continue', {
       currentShareInstance: SHARE_A,
       hasActiveDownload: false,
       hasPendingAction: true,
-      connectionUnavailable: false,
-      shareEnded: false,
+      connectionBlock: null,
     })).toEqual({ allowed: false, reason: 'busy' })
   })
 })
@@ -495,8 +491,7 @@ describe('resolveWorkspaceTaskLayout', () => {
         currentShareInstance: SHARE_A,
         hasActiveDownload: false,
         hasPendingAction: false,
-        connectionUnavailable: false,
-        shareEnded: false,
+        connectionBlock: null,
       },
       isIgnored: () => true,
     })).toEqual({ kind: 'none' })

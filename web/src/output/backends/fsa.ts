@@ -5,6 +5,7 @@ import {
   catalogCapacityReason,
   classifyNativeError,
   outputFault,
+  transferFailureReason,
 } from '../../transfer/fault'
 import type { SettledTransferJobResult } from '../../transfer/job'
 import type {
@@ -719,7 +720,7 @@ function nextFSALifecycle(
     case 'source-changed':
       return transitionReceiveState(current, { kind: 'failed', reason: 'source-changed' })
     case 'failed': {
-      const reason = catalogCapacityReason(result.error) ?? 'error'
+      const reason = transferFailureReason(result.error)
       return transitionReceiveState(current, {
         kind: 'failed',
         reason,

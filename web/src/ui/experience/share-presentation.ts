@@ -14,7 +14,7 @@ export function shareConnectionLabel(connection: ReceiverSnapshot['connection'],
     case 'connected': return t.senderConnected
     case 'reconnecting': return connection.activity.kind === 'waiting' ? t.waitingReconnect : t.reconnecting
     case 'ended': return t.shareEnded
-    case 'unavailable': return t.unavailable
+    case 'unavailable': return connection.reason === 'access-denied' ? t.relayAccessDenied : t.unavailable
     case 'idle': {
       const join = connection.join
       if (join?.kind === 'paused' || join?.kind === 'waiting') return initialJoinHoldLabel(join, t)
@@ -24,7 +24,6 @@ export function shareConnectionLabel(connection: ReceiverSnapshot['connection'],
 }
 
 function initialJoinHoldLabel(join: Exclude<InitialJoinState, { kind: 'connecting' }>, t: typeof receiverCopy.en.connection): string {
-  if (join.reason === 'authorization') return t.relayRestricted
   if (join.kind === 'paused') {
     return join.reason === 'bandwidth' ? t.relayUnavailable : t.senderUnreachable
   }
@@ -32,9 +31,6 @@ function initialJoinHoldLabel(join: Exclude<InitialJoinState, { kind: 'connectin
 }
 
 export function initialJoinStatus(join: InitialJoinState, t = receiverCopy.en.connection): string {
-  if (join.kind !== 'connecting' && join.reason === 'authorization') {
-    return t.restrictedStatus
-  }
   switch (join.kind) {
     case 'paused': return join.reason === 'bandwidth'
       ? t.bandwidthTimeout
@@ -49,6 +45,7 @@ export function initialJoinStatus(join: InitialJoinState, t = receiverCopy.en.co
 const RECONNECTING: TaskBlocking = Object.freeze({ kind: 'reconnecting' })
 const RELAY_BANDWIDTH: TaskBlocking = Object.freeze({ kind: 'relay-bandwidth' })
 const SHARE_ENDED: TaskBlocking = Object.freeze({ kind: 'share-ended' })
+const ACCESS_DENIED: TaskBlocking = Object.freeze({ kind: 'access-denied' })
 const UNAVAILABLE: TaskBlocking = Object.freeze({ kind: 'unavailable' })
 
 export function taskConnectionBlocking(connection: ReceiverSnapshot['connection']): TaskBlocking | null {
@@ -57,7 +54,7 @@ export function taskConnectionBlocking(connection: ReceiverSnapshot['connection'
       ? RELAY_BANDWIDTH : RECONNECTING
   }
   if (connection.kind === 'ended') return SHARE_ENDED
-  if (connection.kind === 'unavailable') return UNAVAILABLE
+  if (connection.kind === 'unavailable') return connection.reason === 'access-denied' ? ACCESS_DENIED : UNAVAILABLE
   return null
 }
 

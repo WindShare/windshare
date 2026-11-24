@@ -12,8 +12,6 @@ import { SESSION_HANDSHAKE_TIMEOUT_MILLISECONDS } from '../../src/session/runtim
 import * as relayReceiver from '../../src/transport/relay/receiver'
 import type { RelayReceiverConnection } from '../../src/transport/relay/receiver'
 import { decodeDescriptorDelivery, RELAY_ERROR } from '../../src/transport/relay/protocol'
-import { RelayPolicyDeniedError } from '../../src/receiver/relay-admission'
-import { RelayCandidates } from '../../src/receiver/relay-selection/candidates'
 import { joinBrowserRelays } from '../../src/receiver/browser-join'
 import { InitialJoinControl, type InitialJoinState } from '../../src/receiver/initial-join'
 import type { RecoveryObservation } from '../../src/receiver/recovery-observation'
@@ -199,16 +197,16 @@ describe('initial browser handshake under relay congestion', () => {
 })
 
 describe('production browser handshake recovery', () => {
-  it('retries a starting independent relay within the first window while the official relay cools down', async () => {
+  it('retries a starting independent relay within the first window after another relay denies access', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(0)
     const { capability, descriptorObject, descriptor } = await shareFixture()
     const channel = new HandshakeChannel('valid')
-    const watch = vi.fn((base: string, deny: (reason: Error) => void) => {
-      if (base === 'official') deny(new RelayPolicyDeniedError())
-      return { beforeDial: undefined, close() {} }
-    })
-    const dial = vi.spyOn(relayReceiver, 'dialRelayReceiver').mockImplementation(async () => {
+    const denied = new relayReceiver.RelayReceiverError('Access denied', { relayError: {
+      code: RELAY_ERROR.accessDenied, retryAfterMilliseconds: 0,
+    } })
+    const dial = vi.spyOn(relayReceiver, 'dialRelayReceiver').mockImplementation(async base => {
+      if (base === 'official') throw denied
       if (Date.now() < 1_000) throw new relayReceiver.RelayReceiverError('Share is starting', { relayError: {
         code: RELAY_ERROR.starting, retryAfterMilliseconds: 250,
       } })
@@ -218,8 +216,7 @@ describe('production browser handshake recovery', () => {
     const parent = new AbortController()
     const control = new InitialJoinControl()
     const states: InitialJoinState[] = []
-    const sources = new RelayCandidates(['official', 'independent'], undefined, { watch })
-    const task = joinBrowserRelays(sources, capability, parent.signal, undefined, {
+    const task = joinBrowserRelays(['official', 'independent'], capability, parent.signal, undefined, {
       control, clock: { now: () => Date.now(), sleep: systemReconnectClock.sleep },
       onState: state => states.push(state),
     })
@@ -228,16 +225,15 @@ describe('production browser handshake recovery', () => {
       await vi.advanceTimersByTimeAsync(200)
       control.request('retry')
       await vi.advanceTimersByTimeAsync(49)
-      expect(dial).toHaveBeenCalledTimes(1)
-      await vi.advanceTimersByTimeAsync(1)
       expect(dial).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(dial).toHaveBeenCalledTimes(3)
 
       await vi.advanceTimersByTimeAsync(1_450)
       expect(channel.state).toBe('open')
-      expect(dial.mock.calls.every(([base]) => base === 'independent')).toBe(true)
       expect(states.some(state => state.kind === 'paused')).toBe(false)
-      expect(watch.mock.calls.filter(([base]) => base === 'official')).toHaveLength(1)
-      // Handoff to the connected receiver must carry the already observed cooldown.
+      expect(dial.mock.calls.filter(([base]) => base === 'official')).toHaveLength(1)
+      // Handoff to the connected receiver must carry the already observed refusal.
       const result = await outcome
       if ('error' in result) throw result.error
       expect(result.joined.relayBase).toBe('independent')
@@ -245,8 +241,8 @@ describe('production browser handshake recovery', () => {
         capability, descriptor, descriptorObject })
       try {
         await expect(factory.attachRelay(result.joined.session, parent.signal, 'official'))
-          .rejects.toMatchObject({ retry: { retryAt: 60_000, reason: 'authorization' } })
-        expect(watch.mock.calls.filter(([base]) => base === 'official')).toHaveLength(1)
+          .rejects.toBe(denied)
+        expect(dial.mock.calls.filter(([base]) => base === 'official')).toHaveLength(1)
       } finally { factory.close() }
     } finally {
       parent.abort()

@@ -49,7 +49,6 @@ fn report_status(
         created_at: auth.environment.now,
         records: vec![],
         resident_accounts: vec![],
-        shares: vec![],
         load: Load {
             relay_budget: None,
             applied_policy_version,

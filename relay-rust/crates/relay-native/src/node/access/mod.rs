@@ -200,28 +200,8 @@ impl Service {
         changed
     }
 
-    pub fn resident_shares(
-        &self,
-        authority: Issuer,
-    ) -> Vec<windshare_relay_access::usage::ShareAttribution> {
-        let state = self.read();
-        let shares = state
-            .residents
-            .iter()
-            .filter_map(|(share, (attribution, _))| match attribution {
-                Attribution::Account {
-                    issuer, account, ..
-                } if *issuer == authority => {
-                    Some(windshare_relay_access::usage::ShareAttribution {
-                        share: *share.as_bytes(),
-                        account: *account,
-                    })
-                }
-                _ => None,
-            })
-            .collect();
-        drop(state);
-        shares
+    pub fn share_restricted(&self, share: ShareId) -> bool {
+        self.read().share_restricted(share)
     }
 
     pub fn resident_accounts(&self) -> Vec<(Issuer, AccountId)> {
@@ -244,6 +224,12 @@ impl Service {
 }
 
 impl State {
+    fn share_restricted(&self, share: ShareId) -> bool {
+        self.restrictions
+            .values()
+            .any(|restrictions| restrictions.shares.contains(share.as_bytes()))
+    }
+
     fn share_limit(&self, priority: crate::connection::AdmissionPriority) -> usize {
         use crate::connection::AdmissionPriority;
         let public = crate::config::MAX_RESIDENT_SHARES - self.policy.owner_reserved_shares;

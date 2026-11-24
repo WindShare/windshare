@@ -19,7 +19,7 @@ import { discoverSelection, inspectSelectionShape } from '../../src/transfer/dis
 import { TransferJob } from '../../src/transfer/job'
 import type { TransferFileRequest, TransferOutputFile, TransferOutputSession } from '../../src/transfer/output-port'
 
-import { id, makeShareFixture } from './share-fixture'
+import { id, makeShareFixture, outputFile } from './share-fixture'
 
 describe('transfer discovery and job execution', () => {
   it('classifies single-file and multi-file selections cleanly', async () => {
@@ -857,6 +857,31 @@ describe('TransferJob resumable interruption handling', () => {
     expect(pausedRanges).toEqual([byteRange(0n, 4n)])
   })
 
+  it.each([false, true])('stops the remaining selection on relay denial, preserving completed files (first file saved: %s)', async saved => {
+    const files = [10, 11, 12, 13].map(seed => ({ seed, name: String(seed), bytes: Uint8Array.of(seed) }))
+    const fixture = makeShareFixture(files)
+    const denied = new RelayReceiverError('denied', { relayError: { code: RELAY_ERROR.accessDenied, retryAfterMilliseconds: 0 } })
+    const open = vi.fn(async (fileId: Uint8Array) => {
+      if (fileId[0] === 12) throw denied
+      if (fileId[0] === 11 || !saved) throw new Error('File unavailable')
+      return fixture.revisions.open(fileId)
+    })
+    const result = await new TransferJob({
+      ...fixture,
+      selection: new SelectionPolicy(true).snapshot(),
+      revisions: { open },
+      output: {
+        sessionId: 'denied',
+        capabilities: { maxConcurrentFiles: 1, resumable: true },
+        openFile: async () => outputFile({}),
+      },
+    }).run()
+    expect(result.error).toBe(denied)
+    expect(result.status).toBe(saved ? 'partial' : 'failed')
+    expect(result.completedFiles).toBe(saved ? 1n : 0n)
+    expect(open.mock.calls.map(([id]) => id[0])).toEqual([10, 11, 12])
+  })
+
   it('aborts 0-byte placeholders on resumable interruption and keeps non-resumable and share-stopped failures terminal', async () => {
     const fileId = id(55)
     const { shareInstance, descriptor, catalog } = makeSingleFileCatalog(fileId, 'clip.mkv', 8n)
@@ -878,11 +903,7 @@ describe('TransferJob resumable interruption handling', () => {
       output: {
         sessionId: 'sess-zero-interrupted',
         capabilities: { maxConcurrentFiles: 1, resumable: true },
-        openFile: async (): Promise<TransferOutputFile> => ({
-          completedRanges: [],
-          writeAt: async () => undefined,
-          checkpoint: async () => 'saved',
-          commit: async () => undefined,
+        openFile: async () => outputFile({
           pause: async () => { zeroPauseCalls += 1 },
           abort: async () => { zeroAbortCalls += 1 },
         }),
@@ -909,14 +930,7 @@ describe('TransferJob resumable interruption handling', () => {
       output: {
         sessionId: 'sess-portable-interrupted',
         capabilities: { maxConcurrentFiles: 1, resumable: false },
-        openFile: async (): Promise<TransferOutputFile> => ({
-          completedRanges: [],
-          writeAt: async () => undefined,
-          checkpoint: async () => 'saved',
-          commit: async () => undefined,
-          pause: async () => undefined,
-          abort: async () => { portableAborts += 1 },
-        }),
+        openFile: async () => outputFile({ abort: async () => { portableAborts += 1 } }),
       },
     }).run()
     expect(portableResult.status).toBe('failed')
@@ -940,14 +954,7 @@ describe('TransferJob resumable interruption handling', () => {
       output: {
         sessionId: 'sess-share-stopped',
         capabilities: { maxConcurrentFiles: 1, resumable: true },
-        openFile: async (): Promise<TransferOutputFile> => ({
-          completedRanges: [],
-          writeAt: async () => undefined,
-          checkpoint: async () => 'saved',
-          commit: async () => undefined,
-          pause: async () => undefined,
-          abort: async () => { stoppedAborts += 1 },
-        }),
+        openFile: async () => outputFile({ abort: async () => { stoppedAborts += 1 } }),
       },
     }).run()
     expect(stoppedResult.status).toBe('failed')

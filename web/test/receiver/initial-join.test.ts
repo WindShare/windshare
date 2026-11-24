@@ -10,9 +10,8 @@ import { RelayReceiverError } from '../../src/transport/relay/receiver'
 import { RELAY_ERROR } from '../../src/transport/relay/protocol'
 import { SenderObjectError } from '../../src/crypto/sender-object'
 import { RecoveryWake } from '../../src/receiver/recovery-wake'
-import { RelayCandidates } from '../../src/receiver/relay-selection/candidates'
 import { RelayRecovery } from '../../src/receiver/relay-selection/recovery'
-import { RelayPolicyDeniedError, RELAY_POLICY_RETRY_MS } from '../../src/receiver/relay-admission'
+import { isRelayAccessDenied } from '../../src/receiver/recovery-failure'
 import { systemReconnectClock } from '../../src/receiver/recovery-clock'
 
 const directoryVectors = JSON.parse(readFileSync(new URL('../../../testdata/network/directory.json', import.meta.url), 'utf8')) as {
@@ -70,90 +69,20 @@ describe('initial receiver waiting', () => {
     expect(states).toContainEqual({ kind: 'waiting', reason: 'sender' })
   })
 
-  it('pauses immediately with retry deadline on official relay restriction and allows retry after cooldown', async () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(0)
-    const clock = { now: () => Date.now(), sleep: systemReconnectClock.sleep }
-    const control = new InitialJoinControl()
-    const lifetime = new AbortController()
-    const candidates = new RelayCandidates(['official-a'], Promise.resolve(['official-b']))
-    const relayRecovery = new RelayRecovery(candidates, clock)
-    const states: InitialJoinState[] = []
-    let restricted = true
-    const dial = vi.fn(async () => {
-      if (restricted) throw new RelayPolicyDeniedError()
-      return 'authenticated-session'
-    })
+  it.each([{ bases: ['one'] }, { bases: ['one', 'two'] }])('ends the initial join immediately when $bases deny access', async ({ bases }) => {
+    const clock = advancingClock()
+    const relayRecovery = new RelayRecovery(bases, clock)
+    const dial = vi.fn(async () => { throw new RelayReceiverError('Access denied', { relayError: {
+        code: RELAY_ERROR.accessDenied, retryAfterMilliseconds: 0,
+      } }) })
     const close = async () => undefined
-    const task = runInitialJoin({
-      clock, control, signal: lifetime.signal, relayRecovery, close,
+    const error: unknown = await runInitialJoin({
+      clock, signal: new AbortController().signal, relayRecovery, close,
       connect: attempt => relayRecovery.race(attempt.signal, dial, close),
-      onState: state => states.push(state),
-    }).catch((failure: unknown) => failure)
-    try {
-      await vi.advanceTimersByTimeAsync(0)
-      expect(states.at(-1)).toEqual({ kind: 'paused', reason: 'authorization', retryAt: RELAY_POLICY_RETRY_MS })
-      // Early retry clicks cannot bypass the policy cooldown.
-      control.request('retry')
-      await vi.advanceTimersByTimeAsync(RELAY_POLICY_RETRY_MS - 1)
-      expect(dial).toHaveBeenCalledTimes(candidates.bases.length)
-      expect(states.at(-1)).toEqual({ kind: 'paused', reason: 'authorization', retryAt: RELAY_POLICY_RETRY_MS })
-      await vi.advanceTimersByTimeAsync(1)
-      restricted = false
-      control.request('retry')
-      await expect(task).resolves.toBe('authenticated-session')
-    } finally {
-      lifetime.abort()
-      await task
-    }
-  })
-
-  it('continues waiting through an active cooldown and fails fast without interactive control', async () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(0)
-    const clock = { now: () => Date.now(), sleep: systemReconnectClock.sleep }
-    const close = async () => undefined
-    const headlessRecovery = new RelayRecovery(['official'], clock)
-    await expect(runInitialJoin({
-      clock, signal: new AbortController().signal, relayRecovery: headlessRecovery, close,
-      connect: attempt => headlessRecovery.race(attempt.signal, async () => { throw new RelayPolicyDeniedError() }, close),
-    })).rejects.toBeInstanceOf(InitialJoinUnavailableError)
-    expect(Date.now()).toBe(0)
-    expect(vi.getTimerCount()).toBe(0)
-
-    const control = new InitialJoinControl()
-    const lifetime = new AbortController()
-    const relayRecovery = new RelayRecovery(['official'], clock)
-    const states: InitialJoinState[] = []
-    let restricted = true
-    const dial = vi.fn(async () => {
-      if (restricted) throw new RelayPolicyDeniedError()
-      return 'authenticated-session'
-    })
-    const task = runInitialJoin({
-      clock, control, signal: lifetime.signal, relayRecovery, close,
-      connect: attempt => relayRecovery.race(attempt.signal, dial, close),
-      onState: state => states.push(state),
-    })
-    try {
-      await vi.advanceTimersByTimeAsync(0)
-      expect(states.at(-1)).toEqual({ kind: 'paused', reason: 'authorization', retryAt: RELAY_POLICY_RETRY_MS })
-      await vi.advanceTimersByTimeAsync(10_000)
-      control.request('continue')
-      await vi.advanceTimersByTimeAsync(0)
-      expect(states.at(-1)).toEqual({ kind: 'waiting', reason: 'authorization', retryAt: RELAY_POLICY_RETRY_MS })
-      expect(dial).toHaveBeenCalledTimes(1)
-      restricted = false
-      await vi.advanceTimersByTimeAsync(RELAY_POLICY_RETRY_MS - 10_001)
-      expect(dial).toHaveBeenCalledTimes(1)
-      await vi.advanceTimersByTimeAsync(1)
-      await expect(task).resolves.toBe('authenticated-session')
-      expect(dial).toHaveBeenCalledTimes(2)
-      expect(vi.getTimerCount()).toBe(0)
-    } finally {
-      lifetime.abort()
-      await task.catch(() => undefined)
-    }
+    }).catch((cause: unknown) => cause)
+    expect(isRelayAccessDenied(error)).toBe(true)
+    expect(clock.now()).toBe(0)
+    expect(dial).toHaveBeenCalledTimes(bases.length)
   })
 
   it('cancels paused join ownership without another dial', async () => {

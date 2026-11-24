@@ -220,7 +220,7 @@ describe('root-authorized network directory', () => {
     })).toThrow('Too many network mirrors')
 
     const requests: string[] = []
-    const network = new BuiltinNetwork(undefined, undefined, {
+    const network = new BuiltinNetwork(undefined, {
       directory: {
         cache: new MemoryDirectoryCache(),
         origin: 'https://self-hosted.example',

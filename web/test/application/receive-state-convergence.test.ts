@@ -1,3 +1,4 @@
+import { terminalConnectionBlock } from '../../src/application/receive/admission'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { BrowseDirectory, JoinedBrowserShare } from '../../src/application/browser-share/gateway'
 import { ReceiveCoordinator } from '../../src/application/receive/coordinator'
@@ -844,15 +845,15 @@ describe('receive capability cache, pre-activation errors, and stale record clea
     await waitForSnapshot(coordinator, s => s.offers?.kind === 'ready' && s.retained.tasks.length === 1)
 
     // Reconnecting is transient and must stay admitted for new downloads.
-    coordinator.observeConnection('reconnecting')
+    coordinator.observeConnection(terminalConnectionBlock({ kind: 'reconnecting', activity: { kind: 'connecting' } }))
     expect(coordinator.startBlockedReason()).toBeNull()
 
-    // Terminal share-ended and connection-unavailable states block remote starts without opening a picker.
-    for (const [kind, expectedReason] of [
-      ['ended', 'shareEnded'],
-      ['unavailable', 'connectionUnavailable'],
+    for (const [connection, expectedReason] of [
+      [{ kind: 'ended', reason: 'share-stopped' }, 'shareEnded'],
+      [{ kind: 'unavailable', reason: 'protocol-failed' }, 'connectionUnavailable'],
+      [{ kind: 'unavailable', reason: 'access-denied' }, 'relayAccessDenied'],
     ] as const) {
-      coordinator.observeConnection(kind)
+      coordinator.observeConnection(terminalConnectionBlock(connection))
       expect(coordinator.startBlockedReason()).toBe(expectedReason)
       expect(coordinator.localStartBlockedReason()).toBeNull()
       expect(coordinator.startDownload('fsa:file')).toBe(false)
@@ -860,8 +861,7 @@ describe('receive capability cache, pre-activation errors, and stale record clea
       expect(picker).not.toHaveBeenCalled()
     }
 
-    // Retained browser copies and local photo blobs remain saveable after the share ends.
-    coordinator.observeConnection('ended')
+    // A remote denial must not prevent exporting complete local copies.
     const readyTask = coordinator.getSnapshot().retained.tasks.find(t => t.taskId === 'ready-copy')!
     expect(coordinator.retainedActionAdmission(readyTask, 'save')).toEqual({ allowed: true, reason: null })
     const blob = new Blob([Uint8Array.of(137, 80, 78, 71)], { type: 'image/png' })
@@ -871,10 +871,10 @@ describe('receive capability cache, pre-activation errors, and stale record clea
 
     // If the share ends while the FSA directory picker is open, settling the picker fails cleanly
     // without reserving entries on disk or writing a failed IndexedDB task.
-    coordinator.observeConnection('connected')
+    coordinator.observeConnection(null)
     expect(coordinator.startDownload('fsa:file')).toBe(true)
     expect(picker).toHaveBeenCalledTimes(1)
-    coordinator.observeConnection('ended')
+    coordinator.observeConnection('shareEnded')
 
     const pickedDir = new FakeDirectoryHandle('Downloads', [])
     pickerGate.resolve(pickedDir as unknown as FileSystemDirectoryHandle)

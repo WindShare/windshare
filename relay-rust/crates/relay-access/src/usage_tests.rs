@@ -8,7 +8,6 @@ fn sample_batch(relay_budget: Option<MonthlyBudget>) -> Batch {
         created_at: crate::entitlement::DAY_SECONDS * 2,
         records: Vec::new(),
         resident_accounts: Vec::new(),
-        shares: Vec::new(),
         load: Load {
             relay_budget,
             applied_policy_version: 0,
