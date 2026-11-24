@@ -238,11 +238,16 @@ func (table *operationTable) lookupRecord(id protocolsession.OperationID) *opera
 }
 
 // BeginOutboundResponse serializes one sender response against its operation
-// record, checks active/continuation authority, and pins retention while in flight.
+// record, checks session/active/continuation authority, and pins retention
+// while in flight.
 func (table *operationTable) BeginOutboundResponse(
-	id protocolsession.OperationID,
+	op protocolsession.Operation,
 	message protocolsession.Message,
 ) (*outboundResponseLease, error) {
+	if !table.owns(op) {
+		return nil, protocolsession.MarkNotSent(session.ErrOperationMissing)
+	}
+	id := op.ID()
 	rec := table.lookupRecord(id)
 	if rec == nil {
 		return nil, protocolsession.ErrOperationSuppressed

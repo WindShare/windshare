@@ -28,12 +28,29 @@ func NewResponses(runtime *Runtime, config ResponseConfig) *Responses {
 	}
 }
 
+func (outbound *Responses) ownsOperation(op protocolsession.Operation) bool {
+	return outbound != nil && outbound.runtime != nil && outbound.runtime.operations.owns(op)
+}
+
+func (outbound *Responses) rejectUnownedOperation(
+	kind protocolsession.MessageKind,
+) (protocolsession.SendEvidence, error) {
+	if outbound != nil && outbound.runtime != nil {
+		sequence := outbound.sequence.Add(1)
+		outbound.traceResponseSend(0, 0, kind, sequence, session.LaneIdentity{}, sessionobs.SendStatusNotSent, 0, sessionobs.ProtocolErrorContent{})
+	}
+	return protocolsession.SendNotSent, protocolsession.MarkNotSent(session.ErrOperationMissing)
+}
+
 func (outbound *Responses) SendControl(
 	ctx context.Context,
 	op protocolsession.Operation,
 	kind protocolsession.MessageKind,
 	body []byte,
 ) (protocolsession.SendEvidence, error) {
+	if !outbound.ownsOperation(op) {
+		return outbound.rejectUnownedOperation(kind)
+	}
 	id := op.ID()
 	message, err := protocolsession.NewMessage(kind, &id, body)
 	if err != nil {
@@ -47,6 +64,10 @@ func (outbound *Responses) SendFragment(
 	op protocolsession.Operation,
 	message protocolsession.Message,
 ) error {
+	if !outbound.ownsOperation(op) {
+		_, err := outbound.rejectUnownedOperation(message.Kind())
+		return err
+	}
 	id, ok := message.OperationID()
 	if !ok || id != op.ID() {
 		_, err := outbound.failPreparation(op, message.Kind(), sessionobs.ProtocolErrorContent{}, session.ErrOperationMissing)
@@ -61,6 +82,10 @@ func (outbound *Responses) SendOperationError(
 	op protocolsession.Operation,
 	failure contentflow.OperationFailure,
 ) error {
+	if !outbound.ownsOperation(op) {
+		_, err := outbound.rejectUnownedOperation(protocolsession.MessageOperationError)
+		return err
+	}
 	body, err := protocolsession.EncodeOperationFailure(failure)
 	if err != nil {
 		_, prepErr := outbound.failPreparation(op, protocolsession.MessageOperationError, sessionobs.ProtocolErrorContent{}, err)
@@ -80,10 +105,13 @@ func (outbound *Responses) failPreparation(
 	content sessionobs.ProtocolErrorContent,
 	cause error,
 ) (protocolsession.SendEvidence, error) {
+	if !outbound.ownsOperation(op) {
+		return outbound.rejectUnownedOperation(kind)
+	}
 	runtime := outbound.runtime
 	sequence := outbound.sequence.Add(1)
 	requestKind, _ := op.RequestKind()
-	if senderResponseFinal(kind) && !op.IsZero() {
+	if senderResponseFinal(kind) {
 		_, _ = runtime.operations.CancelOperation(op.ID())
 	}
 	outbound.traceResponseSend(op.ID(), requestKind, kind, sequence, session.LaneIdentity{}, sessionobs.SendStatusNotSent, 0, content)
@@ -97,15 +125,14 @@ func (outbound *Responses) executeResponse(
 	isData bool,
 	content sessionobs.ProtocolErrorContent,
 ) (protocolsession.SendEvidence, error) {
+	if !outbound.ownsOperation(op) {
+		return outbound.rejectUnownedOperation(message.Kind())
+	}
 	runtime := outbound.runtime
 	sequence := outbound.sequence.Add(1)
 	kind := message.Kind()
 	final := senderResponseFinal(kind)
-	if op.IsZero() {
-		outbound.traceResponseSend(0, 0, kind, sequence, session.LaneIdentity{}, sessionobs.SendStatusNotSent, 0, content)
-		return protocolsession.SendNotSent, protocolsession.MarkNotSent(session.ErrOperationMissing)
-	}
-	lease, err := runtime.operations.BeginOutboundResponse(op.ID(), message)
+	lease, err := runtime.operations.BeginOutboundResponse(op, message)
 	if err != nil {
 		requestKind, _ := op.RequestKind()
 		if final && !errors.Is(err, protocolsession.ErrOperationSuppressed) {

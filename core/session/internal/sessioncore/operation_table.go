@@ -230,6 +230,13 @@ func (table *operationTable) operation(id protocolsession.OperationID) protocols
 	return protocolsession.NewOperation(id, table)
 }
 
+// owns verifies that an explicit Operation handle was minted by this exact
+// session table rather than carrying only a matching numeric ID from a sibling
+// session or synthetic test state.
+func (table *operationTable) owns(op protocolsession.Operation) bool {
+	return table != nil && op.Same(table.operation(op.ID()))
+}
+
 func (table *operationTable) Active(id protocolsession.OperationID) bool {
 	if table == nil || id.IsZero() {
 		return false
