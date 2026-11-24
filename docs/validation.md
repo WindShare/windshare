@@ -34,7 +34,7 @@ Make targets operate on the repository root and use the installed Go, Rust, Node
 | `make web` | Web and Consoles ESLint, Consoles typecheck and embedded bundle verification, Web TypeScript/Vite build, and Vitest. |
 | `make e2e` | `TestUserTraceCriticalSenderRelayReceiver` over real CLI processes. |
 | `make browser` | Chromium relay smoke and short browser contracts. |
-| `make browser-weekly` | `browser` plus Firefox/WebKit contracts, Chromium periodic contracts, progressive catalog, direct relay-cut routes, and Pion interop. |
+| `make browser-weekly` | `browser` plus Firefox/WebKit contracts and product routes, progressive catalog, direct and parallel TURN routes, and Pion interop. |
 | `make long-go` | Long E2E, integration, catalog, and output-runtime suites. |
 | `make hygiene` | gofmt, whitespace, release packaging contracts, pinned-Pion reproduction, generated Unicode tables, dependency boundaries, and package ownership. |
 | `make workflow-lint` | actionlint. |
@@ -117,8 +117,8 @@ CI calls the reusable [native output workflow](../.github/workflows/native-outpu
 - Linux and Windows integration tests;
 - named long-running Go E2E and catalog tests;
 - Linux and Windows output and process-restart tests;
-- progressive catalog, direct relay-cut switching, and browser/Pion interoperability scenarios;
-- Firefox and WebKit product scenarios and component contracts (including native-size relay bursts), and periodic Chromium component contracts;
+- progressive catalog, direct and parallel TURN routes, and browser/Pion interoperability scenarios;
+- Firefox and WebKit product scenarios and component contracts (including native-size relay bursts);
 - Windows browser and process smoke tests;
 - Linux and Windows native-output release-artifact checks, plus the Linux relay container build/probe.
 

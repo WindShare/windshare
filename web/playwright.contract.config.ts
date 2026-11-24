@@ -9,7 +9,6 @@ const WEB_DIRECTORY = fileURLToPath(new URL('.', import.meta.url))
 const MAX_CONTRACT_WORKERS = 2
 
 const ALL_COMPONENT_SPECS = '**/*.spec.ts'
-const PERIODIC_COMPONENT_SPECS = '**/*.periodic.spec.ts'
 const CROSS_BROWSER_COMPONENT_SPECS = '**/*.cross-browser.spec.ts'
 
 function contractPort(configured: string | undefined): number {
@@ -40,7 +39,6 @@ export default defineConfig({
     {
       name: 'chromium-short',
       testMatch: ALL_COMPONENT_SPECS,
-      testIgnore: PERIODIC_COMPONENT_SPECS,
       use: { browserName: 'chromium' },
     },
     {
@@ -52,11 +50,6 @@ export default defineConfig({
       name: 'webkit-short',
       testMatch: CROSS_BROWSER_COMPONENT_SPECS,
       use: { browserName: 'webkit' },
-    },
-    {
-      name: 'chromium-periodic',
-      testMatch: PERIODIC_COMPONENT_SPECS,
-      use: { browserName: 'chromium' },
     },
   ],
   use: {
