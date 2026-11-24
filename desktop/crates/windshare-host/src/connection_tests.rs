@@ -75,6 +75,7 @@ fn a_rejected_settings_submission_retains_its_own_failure() {
         };
         model.setup_request = crate::SetupRequest::Pending {
             id: "setup:2".into(),
+            operation_id: String::new(),
             kind: crate::SetupRequestKind::Configure,
         };
     });
@@ -137,6 +138,7 @@ fn cancel_setup_ignores_stale_failure_until_acknowledged() {
     shared.update(|draft| {
         draft.write().setup_request = crate::SetupRequest::Pending {
             id: "setup:1".into(),
+            operation_id: "share:a".into(),
             kind: crate::SetupRequestKind::Cancel {
                 acknowledged: false,
             },
@@ -157,6 +159,14 @@ fn cancel_setup_ignores_stale_failure_until_acknowledged() {
     });
     receive(&shared, &mut pending, &stale_snapshot.to_string()).unwrap();
     assert!(shared.model.lock().unwrap().setup_pending());
+    assert_eq!(
+        shared.model.lock().unwrap().in_flight_setup_id("share:a"),
+        Some("setup:1")
+    );
+    assert_eq!(
+        shared.model.lock().unwrap().in_flight_setup_id("share:b"),
+        None
+    );
 
     pending.insert(
         2,
@@ -167,7 +177,7 @@ fn cancel_setup_ignores_stale_failure_until_acknowledged() {
             },
         },
     );
-    let settled = serde_json::json!({
+    let cancelling = serde_json::json!({
         "version": 1,
         "id": "2",
         "snapshot": {
@@ -175,8 +185,32 @@ fn cancel_setup_ignores_stale_failure_until_acknowledged() {
             "revision": 2,
             "shares": [],
             "setup": {
+                "state": "cancelling",
+                "id": "setup:1",
+                "operation_id": "share:a"
+            }
+        }
+    });
+    receive(&shared, &mut pending, &cancelling.to_string()).unwrap();
+    assert_eq!(
+        shared.model.lock().unwrap().setup_request,
+        crate::SetupRequest::Pending {
+            id: "setup:1".into(),
+            operation_id: "share:a".into(),
+            kind: crate::SetupRequestKind::Cancel { acknowledged: true },
+        }
+    );
+
+    let settled = serde_json::json!({
+        "version": 1,
+        "snapshot": {
+            "session_id": "session",
+            "revision": 3,
+            "shares": [],
+            "setup": {
                 "state": "cancel_failed",
                 "id": "setup:1",
+                "operation_id": "share:a",
                 "error": { "code": "setup_cancel_failed", "message": "new failure" }
             }
         }
@@ -237,6 +271,7 @@ fn cancel_setup_same_revision_reply_settles_against_authoritative_setup() {
         shared.update(|draft| {
             draft.write().setup_request = crate::SetupRequest::Pending {
                 id: "setup:1".into(),
+                operation_id: String::new(),
                 kind: crate::SetupRequestKind::Cancel {
                     acknowledged: false,
                 },

@@ -57,28 +57,65 @@ impl Desktop {
             )
         });
         let initial_focus = dialog.read(cx).focus_target(cx);
-        let subscription = cx.subscribe_in(&dialog, window, |this, _, event, window, cx| {
-            this.handle_setup_dialog_event(event.clone(), window, cx);
+        let subscription = cx.subscribe_in(&dialog, window, |this, dialog, event, window, cx| {
+            this.handle_setup_dialog_event(dialog, event.clone(), window, cx);
         });
-        self.open_scoped_overlay(
-            Overlay::SharingSetup(target, dialog.clone()),
-            scope,
-            &initial_focus,
-            Some(subscription),
-            window,
-            cx,
-        );
+        let overlay = Overlay::SharingSetup(target, dialog.clone());
+        // The host owns a single global setup workflow; navigating to the active
+        // setup replaces the current setup modal rather than stacking duplicates.
+        if self
+            .overlays
+            .last()
+            .is_some_and(|frame| matches!(frame.content, Overlay::SharingSetup(..)))
+        {
+            self.replace_top_overlay(
+                overlay,
+                scope,
+                &initial_focus,
+                Some(subscription),
+                window,
+                cx,
+            );
+        } else {
+            self.open_scoped_overlay(
+                overlay,
+                scope,
+                &initial_focus,
+                Some(subscription),
+                window,
+                cx,
+            );
+        }
         dialog
+    }
+
+    fn is_top_setup_dialog(&self, dialog: &gpui::Entity<SetupDialog>) -> bool {
+        matches!(
+            self.overlays.last().map(|frame| &frame.content),
+            Some(Overlay::SharingSetup(_, top)) if top == dialog
+        )
     }
 
     fn handle_setup_dialog_event(
         &mut self,
+        dialog: &gpui::Entity<SetupDialog>,
         event: SetupDialogEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.is_top_setup_dialog(dialog) {
+            tracing::debug!(
+                event = "desktop.setup_dialog_event_ignored",
+                session = std::process::id(),
+                overlay_depth = self.overlays.len(),
+            );
+            return;
+        }
         match event {
-            SetupDialogEvent::PageChanged => {}
+            SetupDialogEvent::PageChanged | SetupDialogEvent::FocusChanged => {
+                let focus = dialog.read(cx).focus_target(cx);
+                window.focus(&focus, cx);
+            }
             SetupDialogEvent::ReturnToRunningSetup => self.return_to_sharing_setup(window, cx),
             SetupDialogEvent::Toast(message) => self.notify(message, cx),
             SetupDialogEvent::Completed(toast) => {
@@ -140,7 +177,7 @@ impl Desktop {
         {
             let dialog = dialog.clone();
             dialog.update(cx, |dialog, cx| {
-                dialog.prepare_relay_authorization(relay_url, window, cx);
+                dialog.prepare_relay_authorization(relay_url, cx);
             });
             cx.notify();
             return;

@@ -154,6 +154,7 @@ pub enum SetupRequest {
     Idle,
     Pending {
         id: String,
+        operation_id: String,
         kind: SetupRequestKind,
     },
     Finished {

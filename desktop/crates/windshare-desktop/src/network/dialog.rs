@@ -31,6 +31,7 @@ pub enum SetupSource {
 #[derive(Clone)]
 pub enum SetupDialogEvent {
     PageChanged,
+    FocusChanged,
     ReturnToRunningSetup,
     Toast(Text),
     Completed(Option<Text>),
@@ -64,7 +65,7 @@ impl SetupDialog {
         initial_page: SetupPage,
         initial_relay_url: Option<String>,
         overlay_scope: FocusHandle,
-        window: &mut Window,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let locale = language(cx);
@@ -93,18 +94,14 @@ impl SetupDialog {
             ));
         }
         let in_flight_id = match &source {
-            SetupSource::Native { host, .. } => {
-                subscriptions.push(cx.observe_in(host, window, |this, host, window, cx| {
-                    this.on_host_updated(&host, window, cx);
+            SetupSource::Native { host, operation_id } => {
+                subscriptions.push(cx.observe(host, |this, host, cx| {
+                    this.on_host_updated(&host, cx);
                 }));
-                let model = host.read(cx).model();
-                if model.setup_pending() {
-                    model.setup_request.id().map(str::to_owned)
-                } else if model.setup.busy() {
-                    model.setup.context().map(|ctx| ctx.id.clone())
-                } else {
-                    None
-                }
+                host.read(cx)
+                    .model()
+                    .in_flight_setup_id(operation_id)
+                    .map(str::to_owned)
             }
             SetupSource::Preview { .. } => None,
         };
@@ -262,31 +259,20 @@ impl SetupDialog {
         }
     }
 
-    pub(super) fn set_page(
-        &mut self,
-        page: SetupPage,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn set_page(&mut self, page: SetupPage, cx: &mut Context<Self>) {
         if self.pending(cx) || self.setup(cx).unfinished() {
             return;
         }
-        self.switch_page(page, None, window, cx);
+        self.switch_page(page, None, cx);
     }
 
-    pub fn prepare_relay_authorization(
-        &mut self,
-        relay_url: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn prepare_relay_authorization(&mut self, relay_url: String, cx: &mut Context<Self>) {
         if self.pending(cx) || self.setup(cx).unfinished() {
             return;
         }
         self.switch_page(
             SetupPage::Relay(RelayOperation::AuthorizeDevice),
             Some(relay_url),
-            window,
             cx,
         );
         self.submit(cx);
@@ -296,12 +282,10 @@ impl SetupDialog {
         &mut self,
         page: SetupPage,
         prefill_relay: Option<String>,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.configure_page(page, prefill_relay, cx);
-        let focus = self.focus_target(cx);
-        window.focus(&focus, cx);
+        // Desktop owns overlay focus so only the active top dialog can move window focus.
         cx.emit(SetupDialogEvent::PageChanged);
         cx.notify();
     }

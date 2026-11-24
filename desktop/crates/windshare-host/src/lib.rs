@@ -317,6 +317,7 @@ impl Controller {
                     queued = true;
                     SetupRequest::Pending {
                         id: id.clone(),
+                        operation_id: operation_id.into(),
                         kind: SetupRequestKind::Configure,
                     }
                 }
@@ -346,6 +347,20 @@ impl Controller {
                 );
                 return;
             }
+            let operation_id = model
+                .setup
+                .context()
+                .filter(|ctx| ctx.id == id)
+                .map(|ctx| ctx.operation_id.clone())
+                .or_else(|| match &model.setup_request {
+                    SetupRequest::Pending {
+                        id: pending_id,
+                        operation_id,
+                        ..
+                    } if pending_id == &id => Some(operation_id.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default();
             let next = match self.enqueue(Command::CancelSetup {
                 setup_id: id.clone(),
             }) {
@@ -353,6 +368,7 @@ impl Controller {
                     queued = true;
                     SetupRequest::Pending {
                         id,
+                        operation_id,
                         kind: SetupRequestKind::Cancel {
                             acknowledged: false,
                         },

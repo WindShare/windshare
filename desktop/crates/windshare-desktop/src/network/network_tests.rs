@@ -1,7 +1,11 @@
-use super::{NetworkSettingsState, SetupDialogHandoff, settings_visible_setup};
+use super::{
+    NetworkSettingsState, SetupDialogHandoff, dialog_host::other_running_for_model,
+    settings_visible_setup,
+};
 use crate::localization::Text;
 use windshare_host::{
     Failure, Model, RelayOperation, SavedRelay, Setup, SetupContext, SetupRecovery, SetupRequest,
+    SetupRequestKind,
 };
 
 fn global_context(id: &str) -> SetupContext {
@@ -185,4 +189,34 @@ fn observe_active_setup_tracks_only_settings_visible_unfinished_setups() {
     state.observe_active_setup(&settled_failure);
     assert_eq!(state.inline_request_id, None);
     assert!(state.inline_feedback(&settled_failure).is_none());
+}
+
+#[test]
+fn blocked_share_dialog_does_not_adopt_another_shares_running_setup() {
+    let mut context = global_context("setup:7");
+    context.operation_id = "share:a".into();
+    let model = Model {
+        setup: Setup::Running {
+            context,
+            stage: "discover".into(),
+            verification_url: String::new(),
+            user_code: String::new(),
+            service_login: None,
+        },
+        setup_request: SetupRequest::Pending {
+            id: "setup:7".into(),
+            operation_id: "share:a".into(),
+            kind: SetupRequestKind::Configure,
+        },
+        ..Model::default()
+    };
+
+    assert!(other_running_for_model(&model, "share:b").is_some());
+    assert_eq!(model.in_flight_setup_id("share:b"), None);
+
+    assert!(other_running_for_model(&model, "share:a").is_none());
+    assert_eq!(model.in_flight_setup_id("share:a"), Some("setup:7"));
+
+    assert!(other_running_for_model(&model, "").is_none());
+    assert_eq!(model.in_flight_setup_id(""), Some("setup:7"));
 }

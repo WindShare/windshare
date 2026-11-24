@@ -381,6 +381,27 @@ impl Model {
         self.setup_request.is_pending()
     }
 
+    /// Returns the active setup ID only when it belongs to `operation_id`
+    /// (or any setup when `operation_id` is empty for the global/fallback modal).
+    pub fn in_flight_setup_id(&self, operation_id: &str) -> Option<&str> {
+        let owns = |setup_operation_id: &str| {
+            operation_id.is_empty() || setup_operation_id == operation_id
+        };
+        match &self.setup_request {
+            crate::SetupRequest::Pending {
+                id,
+                operation_id: request_operation_id,
+                ..
+            } => owns(request_operation_id).then_some(id.as_str()),
+            _ if self.setup.busy() => self
+                .setup
+                .context()
+                .filter(|ctx| owns(&ctx.operation_id))
+                .map(|ctx| ctx.id.as_str()),
+            _ => None,
+        }
+    }
+
     pub fn waits_for_official_authorization(&self, operation_id: &str) -> bool {
         self.operations
             .iter()
@@ -432,6 +453,7 @@ impl Model {
             crate::SetupRequest::Pending {
                 id,
                 kind: crate::SetupRequestKind::Cancel { .. },
+                ..
             } if id == setup_id
         ) {
             return false;
@@ -441,6 +463,7 @@ impl Model {
             crate::SetupRequest::Pending {
                 id,
                 kind: crate::SetupRequestKind::Configure,
+                ..
             } if id == setup_id
         ) {
             return true;
@@ -553,7 +576,7 @@ impl Model {
     }
 
     pub(crate) fn reconcile_setup_request(&mut self) {
-        let crate::SetupRequest::Pending { id, kind } = &mut self.setup_request else {
+        let crate::SetupRequest::Pending { id, kind, .. } = &mut self.setup_request else {
             return;
         };
         if self.setup.context().is_none_or(|ctx| &ctx.id != id) {

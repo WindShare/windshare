@@ -272,6 +272,7 @@ fn setup_cancel_request_settles_if_setup_finishes_first() {
     let mut model = Model {
         setup_request: crate::SetupRequest::Pending {
             id: "setup:1".into(),
+            operation_id: String::new(),
             kind: crate::SetupRequestKind::Cancel {
                 acknowledged: false,
             },
@@ -293,6 +294,52 @@ fn setup_cancel_request_settles_if_setup_finishes_first() {
             id: "setup:1".into()
         }
     );
+}
+
+#[test]
+fn in_flight_setup_id_respects_operation_ownership() {
+    let mut model = Model {
+        setup_request: crate::SetupRequest::Pending {
+            id: "setup:1".into(),
+            operation_id: "share:a".into(),
+            kind: crate::SetupRequestKind::Configure,
+        },
+        ..Model::default()
+    };
+    assert_eq!(model.in_flight_setup_id("share:a"), Some("setup:1"));
+    assert_eq!(model.in_flight_setup_id("share:b"), None);
+    assert_eq!(model.in_flight_setup_id(""), Some("setup:1"));
+
+    model.setup_request = crate::SetupRequest::Pending {
+        id: "setup:2".into(),
+        operation_id: String::new(),
+        kind: crate::SetupRequestKind::Configure,
+    };
+    assert_eq!(model.in_flight_setup_id("share:b"), None);
+    assert_eq!(model.in_flight_setup_id(""), Some("setup:2"));
+
+    // After reconnect, a busy host setup without a local pending request still enforces ownership.
+    model.setup_request = crate::SetupRequest::Idle;
+    model.setup = serde_json::from_value(serde_json::json!({
+        "state": "running",
+        "id": "setup:3",
+        "operation_id": "share:a",
+        "relay_url": "https://relay.example"
+    }))
+    .unwrap();
+    assert_eq!(model.in_flight_setup_id("share:a"), Some("setup:3"));
+    assert_eq!(model.in_flight_setup_id("share:b"), None);
+    assert_eq!(model.in_flight_setup_id(""), Some("setup:3"));
+
+    model.setup = serde_json::from_value(serde_json::json!({
+        "state": "finished",
+        "id": "setup:3",
+        "operation_id": "share:a",
+        "relay_saved": true
+    }))
+    .unwrap();
+    assert_eq!(model.in_flight_setup_id("share:a"), None);
+    assert_eq!(model.in_flight_setup_id(""), None);
 }
 
 #[test]

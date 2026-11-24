@@ -248,18 +248,20 @@ fn apply_reply(draft: &mut crate::ModelDraft<'_>, command: Option<Command>, mess
     } else if let Some(error) = message.error {
         apply_command_error(draft, command, error);
     } else if let Some(Command::CancelSetup { setup_id }) = &command
-        && matches!(
-            &draft.read().setup_request,
-            crate::SetupRequest::Pending {
-                id,
-                kind: crate::SetupRequestKind::Cancel {
+        && let crate::SetupRequest::Pending {
+            id,
+            operation_id,
+            kind:
+                crate::SetupRequestKind::Cancel {
                     acknowledged: false,
                 },
-            } if id == setup_id
-        )
+        } = &draft.read().setup_request
+        && id == setup_id
     {
+        let operation_id = operation_id.clone();
         draft.write().setup_request = crate::SetupRequest::Pending {
             id: setup_id.clone(),
+            operation_id,
             kind: crate::SetupRequestKind::Cancel { acknowledged: true },
         };
         cancel_acknowledged = Some(setup_id.clone());

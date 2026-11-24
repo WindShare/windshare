@@ -164,7 +164,7 @@ impl SetupDialog {
             if !confirmed.await {
                 return;
             }
-            let _ = view.update_in(cx, |this, window, cx| {
+            let _ = view.update_in(cx, |this, _, cx| {
                 if this.busy(cx)
                     || !this
                         .prefs(cx)
@@ -179,7 +179,7 @@ impl SetupDialog {
                     event = "desktop.relay_reauthorize_confirmed",
                     session = std::process::id()
                 );
-                this.prepare_relay_authorization(relay_url, window, cx);
+                this.prepare_relay_authorization(relay_url, cx);
             });
         })
         .detach();
@@ -220,12 +220,7 @@ impl SetupDialog {
         .detach();
     }
 
-    pub(super) fn on_host_updated(
-        &mut self,
-        host: &Entity<HostStore>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn on_host_updated(&mut self, host: &Entity<HostStore>, cx: &mut Context<Self>) {
         let (previous_model, model) = {
             let store = host.read(cx);
             (
@@ -257,7 +252,8 @@ impl SetupDialog {
                     && matches!(
                         &model.setup,
                         Setup::Finished { context }
-                            if context.relay_operation == Some(RelayOperation::AuthorizeDevice)
+                            if context.operation_id == op_id
+                                && context.relay_operation == Some(RelayOperation::AuthorizeDevice)
                                 && context.relay_saved
                     );
                 let share_unblocked = prev.is_some_and(|s| !host_share_running(s))
@@ -270,9 +266,10 @@ impl SetupDialog {
             cx.emit(SetupDialogEvent::Completed(toast));
             return;
         }
-        if self.page != previous_page || form_visible_for(&model, &op_id) != previous_form_visible {
-            let focus = self.focus_target(cx);
-            window.focus(&focus, cx);
+        if self.page != previous_page {
+            cx.emit(SetupDialogEvent::PageChanged);
+        } else if form_visible_for(&model, &op_id) != previous_form_visible {
+            cx.emit(SetupDialogEvent::FocusChanged);
         }
         cx.notify();
     }

@@ -212,12 +212,13 @@ fn account_and_setup_submissions_record_pending_and_local_failure_atomically() {
     assert!(controller.model().has_unfinished_work());
 
     let setup_id = controller
-        .edit_preference("", PreferenceEdit::Mode(RelayMode::Selected))
+        .edit_preference("share:1", PreferenceEdit::Mode(RelayMode::Selected))
         .unwrap();
     assert_eq!(
         controller.model().setup_request,
         SetupRequest::Pending {
             id: setup_id,
+            operation_id: "share:1".into(),
             kind: SetupRequestKind::Configure,
         }
     );
@@ -276,7 +277,7 @@ fn cancel_setup_ignores_terminal_and_superseded_setups() {
 
     // Starting a new setup: cancelling the old setup must not clobber the active one.
     let second = controller
-        .edit_preference("", PreferenceEdit::Mode(RelayMode::Automatic))
+        .edit_preference("share:2", PreferenceEdit::Mode(RelayMode::Automatic))
         .unwrap();
     let _ = receiver.try_recv().unwrap();
     controller.cancel_setup(&first);
@@ -285,6 +286,7 @@ fn cancel_setup_ignores_terminal_and_superseded_setups() {
         controller.model().setup_request,
         SetupRequest::Pending {
             id: second.clone(),
+            operation_id: "share:2".into(),
             kind: SetupRequestKind::Configure,
         }
     );
@@ -299,6 +301,7 @@ fn cancel_setup_ignores_terminal_and_superseded_setups() {
         controller.model().setup_request,
         SetupRequest::Pending {
             id: second.clone(),
+            operation_id: "share:2".into(),
             kind: SetupRequestKind::Cancel {
                 acknowledged: false,
             },

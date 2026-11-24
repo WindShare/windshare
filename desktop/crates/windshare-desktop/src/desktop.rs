@@ -246,6 +246,43 @@ impl Desktop {
         });
     }
 
+    pub fn replace_top_overlay(
+        &mut self,
+        overlay: Overlay,
+        scope: FocusHandle,
+        initial_focus: &FocusHandle,
+        subscription: Option<Subscription>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(previous) = self.overlays.pop() else {
+            self.open_scoped_overlay(overlay, scope, initial_focus, subscription, window, cx);
+            return;
+        };
+        if let Overlay::SharingSetup(target, dialog) = &previous.content {
+            self.handoff_setup_dialog(*target, dialog, cx);
+        }
+        self.dialog_sequence += 1;
+        // Preserve the replaced overlay's return_focus so dismissing the new dialog
+        // returns to the caller beneath rather than the dropped modal.
+        window.focus(initial_focus, cx);
+        tracing::info!(
+            event = "desktop.overlay_replaced",
+            session = std::process::id(),
+            previous = ?previous.content,
+            overlay = ?overlay,
+            has_return_focus = previous.return_focus.is_some(),
+            depth = self.overlays.len() + 1,
+        );
+        self.overlays.push(OverlayFrame {
+            content: overlay,
+            return_focus: previous.return_focus,
+            scope,
+            sequence: self.dialog_sequence,
+            _subscription: subscription,
+        });
+    }
+
     pub fn close_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(frame) = self.overlays.pop() else {
             return;

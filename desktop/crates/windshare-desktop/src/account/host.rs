@@ -78,8 +78,8 @@ impl Desktop {
         let dialog =
             cx.new(|cx| AccountDialog::new(page, source, origin, scope.clone(), window, cx));
         let initial_focus = dialog.read(cx).focus_target(cx);
-        let subscription = cx.subscribe_in(&dialog, window, |this, _, event, window, cx| {
-            this.handle_account_dialog_event(event, window, cx);
+        let subscription = cx.subscribe_in(&dialog, window, |this, dialog, event, window, cx| {
+            this.handle_account_dialog_event(dialog, event, window, cx);
         });
         self.open_scoped_overlay(
             Overlay::Account(dialog),
@@ -91,12 +91,28 @@ impl Desktop {
         );
     }
 
+    fn is_top_account_dialog(&self, dialog: &gpui::Entity<AccountDialog>) -> bool {
+        matches!(
+            self.overlays.last().map(|frame| &frame.content),
+            Some(Overlay::Account(top)) if top == dialog
+        )
+    }
+
     fn handle_account_dialog_event(
         &mut self,
+        dialog: &gpui::Entity<AccountDialog>,
         event: &AccountDialogEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.is_top_account_dialog(dialog) {
+            tracing::debug!(
+                event = "desktop.account_dialog_event_ignored",
+                session = std::process::id(),
+                overlay_depth = self.overlays.len(),
+            );
+            return;
+        }
         match event {
             AccountDialogEvent::Completed(toast) => {
                 self.close_overlay(window, cx);

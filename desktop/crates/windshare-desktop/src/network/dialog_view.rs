@@ -158,8 +158,8 @@ impl SetupDialog {
                         .style(ButtonStyle::Secondary)
                         .compact()
                         .disabled(busy)
-                        .on_press(cx.listener(|this, (), window, cx| {
-                            this.set_page(SetupPage::Relay(RelayOperation::AddProfile), window, cx);
+                        .on_press(cx.listener(|this, (), _, cx| {
+                            this.set_page(SetupPage::Relay(RelayOperation::AddProfile), cx);
                         })),
                 ),
         );
@@ -234,8 +234,8 @@ impl SetupDialog {
                             .style(ButtonStyle::Quiet)
                             .compact()
                             .disabled(busy)
-                            .on_press(cx.listener(|this, (), window, cx| {
-                                this.set_page(SetupPage::ReceiverSite, window, cx);
+                            .on_press(cx.listener(|this, (), _, cx| {
+                                this.set_page(SetupPage::ReceiverSite, cx);
                             })),
                     ),
             )
@@ -530,11 +530,11 @@ impl SetupDialog {
             .icon(icon)
             .style(ButtonStyle::Quiet)
             .disabled(busy)
-            .on_press(cx.listener(move |this, (), window, cx| {
+            .on_press(cx.listener(move |this, (), _, cx| {
                 if close_on_back {
                     cx.emit(SetupDialogEvent::Close);
                 } else {
-                    this.set_page(SetupPage::Selection, window, cx);
+                    this.set_page(SetupPage::Selection, cx);
                 }
             }))
     }
