@@ -234,6 +234,31 @@ func TestPackagePolicyEnforcesCoreAndModuleBoundaries(t *testing.T) {
 			wantProblem: "prohibited host filesystem path capability path/filepath",
 		},
 		{
+			name: "production core cannot directly import syscall",
+			pkg: listedPackage{
+				ImportPath: coreImportPath + "/liveshare",
+				Imports:    []string{"syscall"},
+				Module:     &listedModule{Path: repositoryModulePath},
+			},
+			wantProblem: "prohibited standard library syscall capability syscall",
+		},
+		{
+			name: "production core cannot directly import syscall subpackage",
+			pkg: listedPackage{
+				ImportPath: coreImportPath + "/liveshare",
+				Imports:    []string{"syscall/js"},
+				Module:     &listedModule{Path: repositoryModulePath},
+			},
+			wantProblem: "prohibited standard library syscall capability syscall/js",
+		},
+		{
+			name: "transitive standard library syscall remains valid in production",
+			pkg: listedPackage{
+				ImportPath: "syscall",
+				Standard:   true,
+			},
+		},
+		{
 			name: "production core cannot directly import x/sys",
 			pkg: listedPackage{
 				ImportPath: coreImportPath + "/liveshare",
@@ -252,20 +277,20 @@ func TestPackagePolicyEnforcesCoreAndModuleBoundaries(t *testing.T) {
 			wantProblem: "production core package imports test helper",
 		},
 		{
-			name: "internal test helper may directly import os and x/sys",
+			name: "internal test helper may directly import os, syscall, and x/sys",
 			pkg: listedPackage{
 				ImportPath: coreImportPath + "/internal/testoutputroot",
-				Imports:    []string{"os", "path/filepath", "golang.org/x/sys/windows"},
+				Imports:    []string{"os", "path/filepath", "syscall", "golang.org/x/sys/windows"},
 				Module:     &listedModule{Path: repositoryModulePath},
 			},
 		},
 		{
-			name:  "core test delta may directly import os and filepath",
+			name:  "core test delta may directly import os, filepath, and syscall",
 			scope: testDeltaScope,
 			pkg: listedPackage{
 				ImportPath: coreImportPath + "/catalog [" + coreImportPath + "/catalog.test]",
 				ForTest:    coreImportPath + "/catalog",
-				Imports:    []string{"os", "path/filepath"},
+				Imports:    []string{"os", "path/filepath", "syscall"},
 				Module:     &listedModule{Path: repositoryModulePath},
 			},
 		},
@@ -537,4 +562,57 @@ func TestNativeStorageIsOnlyAllowedInCoreTestGraphDelta(t *testing.T) {
 	if got := packagePolicyViolations(testDeltaScope, foreign); len(got) == 0 {
 		t.Fatal("fixture exception admitted application assembly")
 	}
+}
+
+func TestRunBoundaryEnforcesTransitiveCoreSyscallBoundary(t *testing.T) {
+	t.Parallel()
+
+	t.Run("rejects syscall imported through an internal core helper", func(t *testing.T) {
+		t.Parallel()
+		production := []listedPackage{
+			{
+				ImportPath: coreImportPath + "/catalog",
+				Imports:    []string{coreImportPath + "/internal/fshelper"},
+				Module:     &listedModule{Path: repositoryModulePath},
+			},
+			{
+				ImportPath: coreImportPath + "/internal/fshelper",
+				Imports:    []string{"syscall"},
+				Module:     &listedModule{Path: repositoryModulePath},
+			},
+			{ImportPath: "syscall", Standard: true},
+		}
+		lister := &recordingGraphLister{production: production, tests: production}
+		findings := runBoundary(context.Background(), lister, &bytes.Buffer{})
+		if len(findings) != len(supportedTargets) {
+			t.Fatalf("runBoundary() findings = %v, want %d findings", findings, len(supportedTargets))
+		}
+		for _, finding := range findings {
+			if finding.ImportPath != coreImportPath+"/internal/fshelper" ||
+				!strings.Contains(finding.Reason, "prohibited standard library syscall capability syscall") {
+				t.Fatalf("unexpected finding: %s", finding)
+			}
+		}
+	})
+
+	t.Run("allows syscall imported transitively by the standard library", func(t *testing.T) {
+		t.Parallel()
+		production := []listedPackage{
+			{
+				ImportPath: coreImportPath + "/catalog",
+				Imports:    []string{"time"},
+				Module:     &listedModule{Path: repositoryModulePath},
+			},
+			{
+				ImportPath: "time",
+				Imports:    []string{"syscall"},
+				Standard:   true,
+			},
+			{ImportPath: "syscall", Standard: true},
+		}
+		lister := &recordingGraphLister{production: production, tests: production}
+		if findings := runBoundary(context.Background(), lister, &bytes.Buffer{}); len(findings) != 0 {
+			t.Fatalf("runBoundary() findings = %v, want none", findings)
+		}
+	})
 }

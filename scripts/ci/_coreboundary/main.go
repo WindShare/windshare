@@ -50,9 +50,13 @@ var prohibitedPackageCapabilities = []pathFamily{
 
 // Production core packages must stay free of direct host OS, filesystem path,
 // and syscall dependencies; only internal test-helper packages may touch them.
+// These are checked on every core package in the production closure rather than
+// banned globally because standard library packages (time, fmt, crypto/rand)
+// transitively depend on os and syscall.
 var coreProductionForbiddenDirectImports = []pathFamily{
 	{Root: "os", Capability: "OS filesystem/process"},
 	{Root: "path/filepath", Capability: "host filesystem path"},
+	{Root: "syscall", Capability: "standard library syscall"},
 	{Root: "golang.org/x/sys", Capability: "platform syscall"},
 }
 
