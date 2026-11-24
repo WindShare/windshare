@@ -328,9 +328,10 @@ async function handleFileError(
   if (ctx.output.capabilities.resumable && !ctx.signal.aborted && isRecoverableTransferInterruption(error)) {
     return pauseFile(ctx, writer, active, error, 'interrupted')
   }
-  return abortFile(writer, error, error instanceof RemoteRevisionError
-    ? { kind: 'source-unavailable', error }
-    : { kind: 'failed', error })
+  return abortFile(writer, error,
+    error instanceof RemoteRevisionError && !(error instanceof RevisionCapacityBusyError)
+      ? { kind: 'source-unavailable', error }
+      : { kind: 'failed', error })
 }
 
 /** A storage failure retires its writer. Healthy siblings can still save their own ranges when the job pauses. */
@@ -385,11 +386,13 @@ function nextRetryStateFor(
       reopenedFrom: error.previous,
     }
   }
-  if (requiresRevisionLeaseReplacement(error) && state.leaseRetries < MAX_LEASE_RETRIES) {
+  if (requiresRevisionLeaseReplacement(error)) {
+    const leaseRetries = madeProgress ? 0 : state.leaseRetries + 1
+    if (leaseRetries > MAX_LEASE_RETRIES) return undefined
     return {
       ...state,
       attemptIndex: state.attemptIndex + 1,
-      leaseRetries: state.leaseRetries + 1,
+      leaseRetries,
       stalledReopens: madeProgress ? 0 : state.stalledReopens,
     }
   }

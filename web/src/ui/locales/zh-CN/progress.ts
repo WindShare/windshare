@@ -7,7 +7,7 @@ export const progress: typeof English = {
   sourceChanged: '源文件已更改或已删除。',
   sourceUnavailable: '源文件不可用或已删除。',
   fileFailed: '无法接收此文件。',
-  destinationConflict: path => `请检查文件夹中的「${path}」，将它移到其他位置后再重试。`,
+  destinationConflict: path => `请检查文件夹中的「${path}」，如需重新下载该文件，请先将其移到其他位置。`,
   countFailed: '未能完成统计，总大小未知。',
   receivedHint: '重启后可恢复的进度以已保存的断点为准。',
   missingFileCount: (done, total, missing, paused) => paused ? `已收到 ${done}/${total} 个文件，${missing} 个尚未完成。` : `已收到 ${done}/${total} 个文件，缺少 ${missing} 个。`,

@@ -7,7 +7,7 @@ export const progress = {
   sourceChanged: 'The source file changed or was deleted.',
   sourceUnavailable: 'The source file is unavailable or was deleted.',
   fileFailed: 'The file could not be received.',
-  destinationConflict: (path: string) => `Check “${path}” in your folder. Move it aside before retrying this file.`,
+  destinationConflict: (path: string) => `Check “${path}” in your folder. Move it aside before downloading this file again.`,
   countFailed: 'Counting did not finish; final total unknown.',
   receivedHint: 'Progress recoverable after a restart depends on saved checkpoints.',
   missingFileCount: (done: bigint, total: bigint, missing: bigint, paused: boolean) => paused ? `${done}/${total} ${plural(total, 'file')} received. ${missing} unfinished.` : `${done}/${total} ${plural(total, 'file')} received. ${missing} missing.`,

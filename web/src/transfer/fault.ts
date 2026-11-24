@@ -1,4 +1,5 @@
 import { BlockLaneAttemptsError } from '../content/broker'
+import { RevisionCapacityBusyError, requiresRevisionLeaseReplacement } from '../content/session-services'
 import { BandwidthWaitError } from '../contracts/capacity'
 import { GenerationRecoveryExhaustedError } from '../receiver/generation-recovery'
 import {
@@ -121,7 +122,7 @@ export class FileDestinationConflictError extends TransferFaultError {
 
   constructor(destinationPath: string, options?: ErrorOptions) {
     super(outputFault(FaultScope.FileLocal, OutputFaultCode.TargetCollision),
-      `WindShare could not verify "${destinationPath}". Check the file in your folder and move it aside before retrying.`, options)
+      `WindShare could not verify "${destinationPath}". Check the file in your folder and move it aside before downloading it again.`, options)
     this.name = 'FileDestinationConflictError'
     this.destinationPath = destinationPath
   }
@@ -205,7 +206,8 @@ export function isSourceInvalidatedError(error: unknown): boolean {
 const MAX_INTERRUPTION_INSPECTION_DEPTH = 8
 
 /**
- * Classifies transient transport, lane, and session-recovery interruptions
+ * Classifies transient transport, lane, session-recovery, and exhausted remote
+ * revision-budget interruptions (capacity backpressure or lease replacement)
  * that should pause resumable backends rather than aborting saved progress.
  * Permanent share stops, protocol violations, revision drift, and local I/O
  * faults return false so they keep their terminal semantics.
@@ -213,6 +215,7 @@ const MAX_INTERRUPTION_INSPECTION_DEPTH = 8
 export function isRecoverableTransferInterruption(error: unknown, depth = 0): boolean {
   if (depth >= MAX_INTERRUPTION_INSPECTION_DEPTH) return false
   if (error instanceof BlockLaneAttemptsError) return true
+  if (error instanceof RevisionCapacityBusyError || requiresRevisionLeaseReplacement(error)) return true
   if (error instanceof RelayEndpointFailure) {
     return isRecoverableTransferInterruption(error.cause, depth + 1)
   }
