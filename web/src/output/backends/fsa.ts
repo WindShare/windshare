@@ -2,6 +2,7 @@ import {
   FaultScope,
   OutputFaultCode,
   TransferFaultError,
+  catalogCapacityReason,
   outputFault,
 } from '../../transfer/fault'
 import type { SettledTransferJobResult } from '../../transfer/job'
@@ -682,7 +683,8 @@ function nextFSALifecycle(
     case 'partial':
       return transitionReceiveState(current, {
         kind: 'partial',
-        reason: result.failedFiles > 0n || result.failedDirectories > 0n ? 'failures' : 'stopped',
+        reason: catalogCapacityReason(result.error) ??
+          (result.failedFiles > 0n || result.failedDirectories > 0n ? 'failures' : 'stopped'),
         savedFiles: result.completedFiles,
         failedFiles: result.failedFiles + result.failedDirectories,
         contentWarning: warning,
@@ -691,11 +693,13 @@ function nextFSALifecycle(
       return transitionReceiveState(current, { kind: 'failed', reason: 'cancelled' })
     case 'source-changed':
       return transitionReceiveState(current, { kind: 'failed', reason: 'source-changed' })
-    case 'failed':
+    case 'failed': {
+      const reason = catalogCapacityReason(result.error) ?? 'error'
       return transitionReceiveState(current, {
         kind: 'failed',
-        reason: 'error',
-        ...(result.error instanceof Error ? { detail: result.error.message } : {}),
+        reason,
+        ...(reason === 'error' && result.error instanceof Error ? { detail: result.error.message } : {}),
       })
+    }
   }
 }

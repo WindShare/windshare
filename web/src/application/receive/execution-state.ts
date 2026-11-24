@@ -1,6 +1,6 @@
 import type { ReceiveOperationDisplay, SaveBackendKind } from '../../output/model'
 import type { ReceiveTaskRecord } from '../../output/store/types'
-import { isAbortError, isPortableLimitExceededError } from '../../transfer/fault'
+import { catalogCapacityReason, isAbortError, isPortableLimitExceededError } from '../../transfer/fault'
 import type { TransferJob } from '../../transfer/job'
 import { EMPTY_TRANSFER_PROGRESS, type TransferProgress } from '../../transfer/progress'
 import {
@@ -369,7 +369,7 @@ export class WorkspaceTask {
   markFailed(error: unknown): void {
     this.#interruption = null
     if (this.#lifecycle === null) return
-    let reason: ReceiveFailureReason = 'error'
+    let reason: ReceiveFailureReason = catalogCapacityReason(error) ?? 'error'
     if (isAbortError(error)) reason = 'cancelled'
     else if (isPortableLimitExceededError(error)) reason = 'portable-limit-exceeded'
     this.#lifecycle = transitionReceiveState(this.#lifecycle, {

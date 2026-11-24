@@ -4,13 +4,21 @@ export type ReceivePauseReason =
   | 'storage-full'
   | 'permission-needed'
 
-export type ReceivePartialReason = 'failures' | 'stopped'
+export type CatalogCapacityReason =
+  | 'browser-catalog-limit'
+  | 'share-catalog-limit'
+
+export type ReceivePartialReason =
+  | 'failures'
+  | 'stopped'
+  | CatalogCapacityReason
 
 export type ReceiveFailureReason =
   | 'source-changed'
   | 'cancelled'
   | 'session-ended'
   | 'portable-limit-exceeded'
+  | CatalogCapacityReason
   | 'error'
 
 export interface ReceiveTiming {

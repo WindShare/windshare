@@ -10,6 +10,7 @@ import type {
 } from '../../application/browser-share/gateway'
 import { breadcrumbsFor, projectBrowsePage, type RetryableBrowseRequest } from '../controller-state'
 import type { ReceiverSnapshot } from '../model'
+import { mapReceiverFailure } from './failures'
 
 export interface BrowserNavigationCoordinatorOptions {
   readonly currentJoinedShare: () => JoinedBrowserShare | undefined
@@ -73,7 +74,7 @@ export class BrowserNavigationCoordinator {
       this.#reportFailure(error, false)
       this.#options.publish({
         ...this.#options.snapshot(),
-        browse: { kind: 'failed', error: this.#options.publicError(error) },
+        browse: { kind: 'failed', error: mapReceiverFailure(error, this.#options.publicError) },
         directoryRetryable: false,
       })
       return
@@ -227,7 +228,7 @@ export class BrowserNavigationCoordinator {
     this.#options.publish({
       ...this.#options.snapshot(),
       phase: 'browsing',
-      browse: { kind: 'failed', error: this.#options.publicError(error) },
+      browse: { kind: 'failed', error: mapReceiverFailure(error, this.#options.publicError) },
       breadcrumbs: breadcrumbsFor(this.#directories),
       directoryRetryable: retryable,
     })

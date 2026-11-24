@@ -1,7 +1,7 @@
 import type { SingleFileDownloadOutcome } from '../../application/receive/contracts'
 import { ReceiveBlockedError, SaveUnavailableError } from '../../application/receive/single-file'
 import { CryptoError } from '../../crypto/errors'
-import { isPermissionDeniedError, isSourceInvalidatedError } from '../../transfer/fault'
+import { catalogCapacityReason, isPermissionDeniedError, isSourceInvalidatedError } from '../../transfer/fault'
 import type { ReceiverFailure } from '../model'
 
 export type ChooseArtifactIntent = 'default' | 'redownload'
@@ -47,6 +47,13 @@ export function mapReceiverFailure(
   }
   if (isPermissionDeniedError(error)) {
     return Object.freeze({ kind: 'permissionDenied', detail: publicError(error) })
+  }
+  const catalogLimit = catalogCapacityReason(error)
+  if (catalogLimit === 'browser-catalog-limit') {
+    return Object.freeze({ kind: 'browserCatalogLimit', detail: publicError(error) })
+  }
+  if (catalogLimit === 'share-catalog-limit') {
+    return Object.freeze({ kind: 'shareCatalogLimit', detail: publicError(error) })
   }
   return publicError(error)
 }

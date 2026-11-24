@@ -1,4 +1,8 @@
+import { DirectoryFailureError } from '../catalog/client'
+import { CatalogPageStoreError } from '../catalog/page-store'
+import { DIRECTORY_FAILURE_CODE_RESOURCE_LIMIT } from '../catalog/records'
 import { BlockLaneAttemptsError } from '../content/broker'
+import { RemoteOperationError } from '../content/session-operations'
 import { RevisionCapacityBusyError, requiresRevisionLeaseReplacement } from '../content/session-services'
 import { BandwidthWaitError } from '../contracts/capacity'
 import { GenerationRecoveryExhaustedError } from '../receiver/generation-recovery'
@@ -17,7 +21,7 @@ import {
   WebRTCRemoteClosedError,
   WebRTCTransportError,
 } from '../transport/webrtc/errors'
-import type { ReceivePauseReason } from './state'
+import type { CatalogCapacityReason, ReceivePauseReason } from './state'
 
 export const FaultDomain = Object.freeze({
   Protocol: 'protocol',
@@ -201,6 +205,34 @@ export function isSourceInvalidatedError(error: unknown): boolean {
     error.fault.code === SourceFaultCode.RevisionChanged ||
     error.fault.code === SourceFaultCode.RevisionInvalidated
   )
+}
+
+/**
+ * Classifies permanent catalog capacity ceilings by owner so browsing and
+ * downloads can give accurate guidance: browser-local cache exhaustion can still
+ * succeed via `wind get` or a narrower folder, whereas sender share capacity
+ * exhaustion is permanent for every receiver on this live share.
+ */
+export function catalogCapacityReason(error: unknown): CatalogCapacityReason | undefined {
+  if (error instanceof CatalogPageStoreError && error.kind === 'resource-limit') {
+    return 'browser-catalog-limit'
+  }
+  if (
+    error instanceof DirectoryFailureError &&
+    error.failure.kind === 'resource-limit' &&
+    !error.failure.retryable
+  ) {
+    return 'share-catalog-limit'
+  }
+  if (
+    error instanceof RemoteOperationError &&
+    error.scope === 'directory' &&
+    error.code === DIRECTORY_FAILURE_CODE_RESOURCE_LIMIT &&
+    !error.retryable
+  ) {
+    return 'share-catalog-limit'
+  }
+  return undefined
 }
 
 const MAX_INTERRUPTION_INSPECTION_DEPTH = 8

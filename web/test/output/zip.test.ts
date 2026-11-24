@@ -1,7 +1,7 @@
 import { BlobReader, Uint8ArrayWriter, ZipReader, type FileEntry } from '@zip.js/zip.js'
 import { assert, describe, expect, it, vi } from 'vitest'
 import type { CatalogClient } from '../../src/catalog/client'
-import type { CommittedDirectory } from '../../src/catalog/page-store'
+import { CatalogPageStoreError, type CommittedDirectory } from '../../src/catalog/page-store'
 import type { CatalogEntry, CatalogPage, ShareDescriptor } from '../../src/catalog/records'
 import { SelectionPolicy } from '../../src/catalog/selection'
 import type { BlockRangeReader } from '../../src/content/broker'
@@ -980,5 +980,36 @@ describe('ZIP result-root layout integration', () => {
         reason: 'portable-limit-exceeded',
       },
     })
+  })
+})
+
+describe('portable catalog capacity settlement', () => {
+  it('settles portable failures caused by browser catalog exhaustion with browser-catalog-limit reason', async () => {
+    const { windowPort, blobs } = createMockDownloadWindow()
+    const session = openPortableSession({
+      task: {
+        taskId: 'portable-catalog-limit',
+        selection: { shareInstance: 's', syntheticRoot: 'r', defaultSelected: true, rules: [] },
+        selectionKey: 'sel-catalog-limit',
+        artifact: Object.freeze({ kind: 'zip-archive', name: 'bundle.zip' }),
+        lifecycle: initialReceiveState('portable-catalog-limit'),
+      },
+      windowPort,
+    })
+    const settled = await session.settle({
+      status: 'failed',
+      completedFiles: 0n,
+      completedBytes: 0n,
+      discoveredFiles: 0n,
+      discoveredBytes: 0n,
+      discoveryComplete: false,
+      failedFiles: 0n,
+      failedDirectories: 1n,
+      error: new CatalogPageStoreError('resource-limit', 'cache full'),
+    })
+    await session.close()
+    expect(blobs).toHaveLength(0)
+    expect(settled.lifecycle).toMatchObject({ kind: 'failed', reason: 'browser-catalog-limit' })
+    if (settled.lifecycle.kind === 'failed') expect(settled.lifecycle.detail).toBeUndefined()
   })
 })

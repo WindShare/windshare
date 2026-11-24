@@ -7,6 +7,8 @@ export const failures: typeof English = {
   permissionDenied: '未授予文件夹访问权限。请允许访问所选文件夹后重试。',
   action: '无法完成此下载操作。',
   directory: '无法加载此文件夹。',
+  browserCatalogLimit: '此分享包含的项目过多，已超出当前浏览器标签页的目录缓存上限。可刷新页面重置缓存以查看其他文件夹、缩小下载范围，或安装 WindShare 并使用 wind get 和此分享链接下载。',
+  shareCatalogLimit: '此分享已达到发送方的在线目录数量上限。请让发送方分批分享较小的文件夹，或打包后再分享。',
   preview: '无法预览此文件。',
   frame: '无法加载所选视频帧。',
   history: '无法加载此浏览器中保存的下载记录。',

@@ -37,6 +37,10 @@ const (
 	DefaultShareScanWork   = 4_194_304
 	DefaultProcessScanWork = 16_777_216
 
+	// Protocol/ledger entry ceilings. Because committed NodeRecord and
+	// PagePayload values stay resident in memory for FileID revision opens and
+	// immutable generation replay until Close, DefaultShareCatalogMemory is the
+	// practical binding ceiling for large shares.
 	DefaultShareCommittedEntries   = 4_194_304
 	DefaultProcessCommittedEntries = 16_777_216
 

@@ -5,7 +5,7 @@ import type { BlockRangeReader, ContentLaneStatus } from '../content/broker'
 import type { RevisionReader } from '../content/session-services'
 import { discoverSelection, type DiscoveredDirectory, type DiscoveredFile } from './discovery'
 import type { ActiveFileWrite } from './active-file-write'
-import { FaultScope, FileDestinationConflictError, TransferFaultError, isRecoverableTransferInterruption, storagePauseReason } from './fault'
+import { FaultScope, FileDestinationConflictError, TransferFaultError, catalogCapacityReason, isRecoverableTransferInterruption, storagePauseReason } from './fault'
 import { transferSingleFile, type FileTransferContext, type SingleFileTransferOutcome, type TransferExit, type TransferPause } from './file-transfer'
 import type { TransferOutputSession } from './output-port'
 import { TransferProgressTracker, type TransferProgress } from './progress'
@@ -284,7 +284,10 @@ export class TransferJob {
     if (this.#discoveryInterrupted(error)) return
     this.#discoveryFailed = true
     this.#failedDirectories += 1n
-    this.#firstError ??= error
+    // A share-wide capacity ceiling halts remaining discovery, so preserve it
+    // as the primary failure even if an earlier sibling directory failed locally.
+    if (catalogCapacityReason(error) !== undefined) this.#firstError = error
+    else this.#firstError ??= error
     this.#tracker.observeDirectoryFailed()
   }
 

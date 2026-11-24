@@ -31,6 +31,17 @@ function presentRemoval(
   })
 }
 
+function partialCatalogLimitHint(
+  state: TaskFacts['lifecycle'],
+  language: Language,
+): string | null {
+  if (state.kind !== 'partial') return null
+  const stageCopy = receiverCopy[language].stage
+  if (state.reason === 'browser-catalog-limit') return stageCopy.browserCatalogLimitHint
+  if (state.reason === 'share-catalog-limit') return stageCopy.shareCatalogLimitHint
+  return null
+}
+
 function collectTaskDetails(
   facts: TaskFacts,
   progress: ReturnType<typeof presentTaskProgress>,
@@ -44,11 +55,13 @@ function collectTaskDetails(
     details.push(...progress.details)
   }
   if (facts.lifecycle.kind === 'failed' && facts.lifecycle.detail) details.push(facts.lifecycle.detail)
+  const catalogLimitHint = partialCatalogLimitHint(facts.lifecycle, language)
   if (facts.lifecycle.contentWarning !== undefined) {
     details.unshift(...contentWarningDetails(facts.lifecycle.contentWarning, facts.lifecycle.kind === 'paused', language))
   } else if (facts.completeness === 'partial') {
     details.unshift(t.partial)
   }
+  if (catalogLimitHint !== null) details.unshift(catalogLimitHint)
   if (facts.sourceOmittedEntries > 0n) {
     details.push(receiverCopy[language].downloads.sourceOmittedCount(facts.sourceOmittedEntries))
     details.push(t.sourceOmittedHint)

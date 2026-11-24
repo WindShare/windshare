@@ -5,6 +5,8 @@ export const failures = {
   permissionDenied: 'Folder access was not granted. Allow access to the chosen folder and try again.',
   action: 'The download action could not be completed.',
   directory: 'Could not load this folder.',
+  browserCatalogLimit: 'This share has too many items for this browser tab to keep open. Refresh the page to browse a different folder, select fewer items, or install WindShare and run wind get with this share link.',
+  shareCatalogLimit: 'This share reached the sender’s live directory limit. Ask the sender to share smaller folders separately or archive them before sharing.',
   preview: 'This file could not be previewed.',
   frame: 'Could not load the requested video frame.',
   history: 'Saved downloads could not be loaded.',

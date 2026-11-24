@@ -1,9 +1,17 @@
 import { describe, expect, it } from 'vitest'
-import type { CatalogClient } from '../../src/catalog/client'
-import type { CommittedDirectory } from '../../src/catalog/page-store'
-import type { CatalogEntry, CatalogPage, ShareDescriptor } from '../../src/catalog/records'
+import { DirectoryFailureError, type CatalogClient } from '../../src/catalog/client'
+import { CatalogPageStoreError, type CommittedDirectory } from '../../src/catalog/page-store'
+import {
+  DIRECTORY_FAILURE_CODE_RESOURCE_LIMIT,
+  type CatalogEntry,
+  type CatalogPage,
+  type ShareDescriptor,
+} from '../../src/catalog/records'
 import { frozenSelectionPolicy, SelectionPolicy, type FrozenSelectionPolicy } from '../../src/catalog/selection'
+import { RemoteOperationError } from '../../src/content/session-operations'
 import { encodeBase64Url } from '../../src/crypto/bytes'
+import { createReceivedProtocolError } from '../../src/session/diagnostics'
+import { createDiagnosticIdentity } from '../../src/session/identities'
 import { discoverSelection, inspectSelectionShape } from '../../src/transfer/discovery'
 
 interface TreeDirSpec {
@@ -595,5 +603,103 @@ describe('folder offer probing and directory failure tolerance', () => {
     })
     expect(tree.loadedDirectories).toEqual([tree.rootIdText])
     expect(tree.loadedPages).toEqual([`${tree.rootIdText}#0`])
+  })
+
+  it('stops discovery immediately on permanent catalog capacity limits while continuing past retryable contention', async () => {
+    const buildTreeWithFailure = (failureForFirst: Error) => {
+      const tree = makeCatalogTree([[
+        { kind: 'directory', seed: 120, name: 'dir-1', entries: [] },
+        { kind: 'directory', seed: 121, name: 'dir-2', entries: [{ kind: 'file', seed: 122, name: 'later.txt', size: 10n }] },
+        { kind: 'directory', seed: 123, name: 'dir-3', entries: [] },
+      ]])
+      const firstIdText = tree.entry(120).idText
+      const loaded: string[] = []
+      const catalog: CatalogClient = Object.freeze({
+        loadDirectory: async (directoryId: Uint8Array) => {
+          const idText = encodeBase64Url(directoryId)
+          loaded.push(idText)
+          if (idText === firstIdText) throw failureForFirst
+          return tree.catalog.loadDirectory(directoryId)
+        },
+        page: (committed: CommittedDirectory, pageIndex: number) => tree.catalog.page(committed, pageIndex),
+      }) as unknown as CatalogClient
+      return { tree, catalog, loaded, firstIdText }
+    }
+
+    const permanentCases: readonly Error[] = [
+      new CatalogPageStoreError('resource-limit', 'Catalog cache exceeded its share entry or metadata budget'),
+      new DirectoryFailureError(Object.freeze({
+        shareInstance: makeId(1),
+        directoryId: makeId(120),
+        directoryIdText: encodeBase64Url(makeId(120)),
+        attemptId: makeId(200),
+        attemptIdText: encodeBase64Url(makeId(200)),
+        code: DIRECTORY_FAILURE_CODE_RESOURCE_LIMIT,
+        kind: 'resource-limit',
+        retryable: false,
+      })),
+      new RemoteOperationError(createReceivedProtocolError({
+        requestKind: 'list_children',
+        correlation: Object.freeze({
+          protocolSessionId: createDiagnosticIdentity('protocol_session', makeId(9)),
+          protocolOperationId: createDiagnosticIdentity('protocol_operation', 12n),
+        }),
+        content: {
+          scope: 'directory',
+          code: DIRECTORY_FAILURE_CODE_RESOURCE_LIMIT,
+          retryable: false,
+        },
+      })),
+    ]
+
+    for (const permanentError of permanentCases) {
+      const { tree, catalog, loaded, firstIdText } = buildTreeWithFailure(permanentError)
+      const failed: unknown[] = []
+      const yielded: string[] = []
+      for await (const item of discoverSelection(
+        tree.descriptor,
+        catalog,
+        new SelectionPolicy(true).snapshot(),
+        [],
+        new AbortController().signal,
+        { onDirectoryFailed: (_id, error) => failed.push(error) },
+      )) {
+        yielded.push(`${item.kind}:${item.relativePath.join('/')}`)
+      }
+      expect(yielded).toEqual(['directory:dir-1', 'directory:dir-2', 'directory:dir-3'])
+      expect(loaded).toEqual([tree.rootIdText, firstIdText])
+      expect(failed).toEqual([permanentError])
+    }
+
+    // Transient retryable budget contention remains directory-local and continues to siblings.
+    const retryableBudgetError = new DirectoryFailureError(Object.freeze({
+      shareInstance: makeId(1),
+      directoryId: makeId(120),
+      directoryIdText: encodeBase64Url(makeId(120)),
+      attemptId: makeId(201),
+      attemptIdText: encodeBase64Url(makeId(201)),
+      code: DIRECTORY_FAILURE_CODE_RESOURCE_LIMIT,
+      kind: 'resource-limit',
+      retryable: true,
+      retryAfterMilliseconds: 250,
+    }))
+    const retryableCase = buildTreeWithFailure(retryableBudgetError)
+    const discovered: string[] = []
+    for await (const item of discoverSelection(
+      retryableCase.tree.descriptor,
+      retryableCase.catalog,
+      new SelectionPolicy(true).snapshot(),
+      [],
+      new AbortController().signal,
+    )) {
+      if (item.kind === 'file') discovered.push(item.relativePath.join('/'))
+    }
+    expect(retryableCase.loaded).toEqual([
+      retryableCase.tree.rootIdText,
+      retryableCase.firstIdText,
+      retryableCase.tree.entry(121).idText,
+      retryableCase.tree.entry(123).idText,
+    ])
+    expect(discovered).toEqual(['dir-2/later.txt'])
   })
 })

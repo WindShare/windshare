@@ -1,5 +1,5 @@
 import type { ByteRange } from '../../content/geometry'
-import { classifyNativeError, storagePauseReason } from '../../transfer/fault'
+import { catalogCapacityReason, classifyNativeError, storagePauseReason } from '../../transfer/fault'
 import type { SettledTransferJobResult } from '../../transfer/job'
 import type {
   CompletedOutputFile,
@@ -621,9 +621,11 @@ function nextOPFSIncompleteLifecycle(
   if (input.isZip && savedFiles > 0n) {
     // Keep completed OPFS ZIP members exportable via zero-copy `buildPartialZipBlob`
     // instead of sealing in place, which would turn pre-allocated failed slots into dead padding.
-    const reason = status === 'stopped' || (status === 'partial' && failedCount === 0n)
-      ? 'stopped'
-      : 'failures'
+    const reason = catalogCapacityReason(result.error) ?? (
+      status === 'stopped' || (status === 'partial' && failedCount === 0n)
+        ? 'stopped'
+        : 'failures'
+    )
     return transitionReceiveState(current, {
       kind: 'partial',
       reason,
@@ -647,11 +649,13 @@ function failedOPFSLifecycle(
     case 'source-changed':
       return transitionReceiveState(current, { kind: 'failed', reason: 'source-changed' })
     case 'partial':
-    case 'failed':
+    case 'failed': {
+      const reason = catalogCapacityReason(error) ?? 'error'
       return transitionReceiveState(current, {
         kind: 'failed',
-        reason: 'error',
-        ...(error instanceof Error ? { detail: error.message } : {}),
+        reason,
+        ...(reason === 'error' && error instanceof Error ? { detail: error.message } : {}),
       })
+    }
   }
 }

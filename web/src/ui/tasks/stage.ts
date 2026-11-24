@@ -115,6 +115,12 @@ function failedStage(
   if (reason === 'portable-limit-exceeded') {
     return stage('failed', t.portableLimitExceeded, t.portableLimitExceededHint, reason)
   }
+  if (reason === 'browser-catalog-limit') {
+    return stage('failed', t.browserCatalogLimit, t.browserCatalogLimitHint, reason)
+  }
+  if (reason === 'share-catalog-limit') {
+    return stage('failed', t.shareCatalogLimit, t.shareCatalogLimitHint, reason)
+  }
   if (reason === 'cancelled') {
     return stage('cancelled', t.cancelled, t.discardedHint, reason)
   }

@@ -70,7 +70,9 @@ export interface MemoryCatalogCacheBudgetLimits {
 }
 
 // Bounds in-tab heap usage per live share; committed directories stay intact
-// for progressive discovery and replay until the share closes.
+// for progressive discovery and replay until the share closes. Under the
+// default per-page metadata charge, maxMetadataBytes (256 MiB) is the binding
+// ceiling while maxEntries guards custom budget configurations.
 export const DEFAULT_MEMORY_CATALOG_CACHE_BUDGET_LIMITS: MemoryCatalogCacheBudgetLimits = Object.freeze({
   maxEntries: 524_288,
   maxMetadataBytes: 256 * 1024 * 1024,
@@ -132,6 +134,9 @@ export class MemoryCatalogPageStore implements CatalogPageStore {
   }
 
   async stage(page: CatalogPage): Promise<void> {
+    if (this.#directories.has(page.directoryIdText)) {
+      throw ownershipFailure('Catalog directory is already committed')
+    }
     const pendingNodes = new Set<string>()
     const pendingNames = new Set<string>()
     const ownedNames = this.#nameOwners.get(page.directoryIdText)
@@ -183,6 +188,9 @@ export class MemoryCatalogPageStore implements CatalogPageStore {
 
   async commit(directory: CommittedDirectory): Promise<void> {
     this.#failures.delete(directory.directoryIdText)
+    // Sibling name collision checks only span pages staged for one generation;
+    // releasing the transient index avoids retaining duplicate name maps after commit.
+    this.#nameOwners.delete(directory.directoryIdText)
     this.#directories.set(directory.directoryIdText, snapshotDirectory(directory))
   }
 

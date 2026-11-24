@@ -1,5 +1,8 @@
 import { BlobReader, Uint8ArrayWriter, ZipReader, type FileEntry } from '@zip.js/zip.js'
 import { describe, expect, it, vi } from 'vitest'
+import { DirectoryFailureError } from '../../src/catalog/client'
+import { CatalogPageStoreError } from '../../src/catalog/page-store'
+import { DIRECTORY_FAILURE_CODE_RESOURCE_LIMIT } from '../../src/catalog/records'
 import { byteRange } from '../../src/content/geometry'
 import type { StartBackendTaskInput } from '../../src/output/backends/contract'
 import {
@@ -247,5 +250,55 @@ describe('OPFS object ownership and recovery', () => {
     aborted.abort()
     await expect(buildPartialZipBlob(largeSource, largeFiles, { signal: aborted.signal }))
       .rejects.toMatchObject({ name: 'AbortError' })
+  })
+
+  it('settles permanent catalog capacity errors into distinct partial and failed lifecycle reasons', async () => {
+    const f = fixture(zip)
+    const session = await f.open()
+    const file = await session.transferOutput.openFile(fileRequest, new AbortController().signal)
+    await file.writeAt(0n, bytes)
+    await file.commit([byteRange(0n, 4n)])
+    const partial = await session.settle({
+      ...completion,
+      status: 'partial',
+      discoveryComplete: false,
+      failedDirectories: 1n,
+      error: new CatalogPageStoreError('resource-limit', 'cache full'),
+    })
+    await session.close()
+    expect(partial.lifecycle).toMatchObject({
+      kind: 'partial',
+      reason: 'browser-catalog-limit',
+      savedFiles: 1n,
+    })
+
+    const f2 = fixture(zip)
+    const session2 = await f2.open()
+    const failed = await session2.settle({
+      ...completion,
+      status: 'failed',
+      completedFiles: 0n,
+      completedBytes: 0n,
+      discoveredFiles: 0n,
+      discoveredBytes: 0n,
+      discoveryComplete: false,
+      failedDirectories: 1n,
+      error: new DirectoryFailureError(Object.freeze({
+        shareInstance: new Uint8Array(16).fill(1),
+        directoryId: new Uint8Array(16).fill(2),
+        directoryIdText: 'dir',
+        attemptId: new Uint8Array(16).fill(3),
+        attemptIdText: 'attempt',
+        code: DIRECTORY_FAILURE_CODE_RESOURCE_LIMIT,
+        kind: 'resource-limit',
+        retryable: false,
+      })),
+    })
+    await session2.close()
+    expect(failed.lifecycle).toMatchObject({
+      kind: 'failed',
+      reason: 'share-catalog-limit',
+    })
+    if (failed.lifecycle.kind === 'failed') expect(failed.lifecycle.detail).toBeUndefined()
   })
 })

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { DirectoryFailureError } from '../../src/catalog/client'
+import { CatalogPageStoreError } from '../../src/catalog/page-store'
 import { SelectionPolicy } from '../../src/catalog/selection'
 import type { CatalogEntry } from '../../src/catalog/records'
 import { encodeBase64Url } from '../../src/crypto/bytes'
@@ -287,6 +288,10 @@ describe('browser navigation failure reporting', () => {
     await loading
 
     expect(snapshot.directoryRetryable).toBe(false)
+    expect(snapshot.browse).toEqual({
+      kind: 'failed',
+      error: { kind: 'shareCatalogLimit', detail: 'failed' },
+    })
     expect(reported).toEqual([{ stage: 'browse', error: permanentBudgetFailure, retryable: false }])
 
     navigation.retryDirectory()
@@ -305,8 +310,43 @@ describe('browser navigation failure reporting', () => {
     await secondLoad
 
     expect(snapshot.directoryRetryable).toBe(false)
+    expect(snapshot.browse).toEqual({
+      kind: 'failed',
+      error: { kind: 'shareCatalogLimit', detail: 'failed' },
+    })
     navigation.retryDirectory()
     expect(joined.requests).toHaveLength(2)
+
+    const browserCacheLimit = new CatalogPageStoreError('resource-limit', 'cache full')
+    const thirdLoad = navigation.loadPage(requested, 0, Object.freeze([requested]))
+    joined.requests[2]?.result.reject(browserCacheLimit)
+    await thirdLoad
+
+    expect(snapshot.directoryRetryable).toBe(false)
+    expect(snapshot.browse).toEqual({
+      kind: 'failed',
+      error: { kind: 'browserCatalogLimit', detail: 'failed' },
+    })
+    navigation.retryDirectory()
+    expect(joined.requests).toHaveLength(3)
+
+    const transientBudgetFailure = new DirectoryFailureError(Object.freeze({
+      shareInstance: identity(7),
+      directoryId: identity(2),
+      directoryIdText: 'first',
+      attemptId: identity(4),
+      attemptIdText: identityText(4),
+      code: 0x2005,
+      kind: 'resource-limit',
+      retryable: true,
+      retryAfterMilliseconds: 250,
+    }))
+    const fourthLoad = navigation.loadPage(requested, 0, Object.freeze([requested]))
+    joined.requests[3]?.result.reject(transientBudgetFailure)
+    await fourthLoad
+
+    expect(snapshot.directoryRetryable).toBe(true)
+    expect(snapshot.browse).toEqual({ kind: 'failed', error: 'failed' })
   })
 })
 

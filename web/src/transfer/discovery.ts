@@ -3,6 +3,7 @@ import { CATALOG_PATH_DEPTH, snapshotCatalogPath } from '../catalog/path-policy'
 import type { CatalogEntry, ShareDescriptor } from '../catalog/records'
 import type { FrozenSelectionPolicy } from '../catalog/selection'
 import { encodeBase64Url } from '../crypto/bytes'
+import { catalogCapacityReason } from './fault'
 
 export interface DiscoveredDirectory {
   readonly kind: 'directory'
@@ -562,8 +563,10 @@ export async function* discoverSelection(
     const next = queues.next(tracker)
     if (next === undefined) break
     const current = next.frame
-    const committed = await loadDiscoveryDirectory(catalog, current, signal, callbacks)
-    if (committed === undefined) continue
+    const outcome = await loadDiscoveryDirectory(catalog, current, signal, callbacks)
+    if (outcome.kind === 'stop') break
+    if (outcome.kind === 'skip') continue
+    const committed = outcome.committed
     if (current.selected && committed.omittedCount > 0n) {
       callbacks.onOmittedEntries?.(committed.omittedCount)
     }
@@ -582,18 +585,25 @@ export async function* discoverSelection(
   }
 }
 
+type DiscoveryLoadOutcome =
+  | Readonly<{ kind: 'loaded'; committed: CommittedDir }>
+  | Readonly<{ kind: 'skip' }>
+  | Readonly<{ kind: 'stop' }>
+
 async function loadDiscoveryDirectory(
   catalog: CatalogClient,
   current: DiscoveryFrame,
   signal: AbortSignal,
   callbacks: DiscoveryCallbacks,
-): Promise<CommittedDir | undefined> {
+): Promise<DiscoveryLoadOutcome> {
   try {
-    return await catalog.loadDirectory(current.id, { signal })
+    return { kind: 'loaded', committed: await catalog.loadDirectory(current.id, { signal }) }
   } catch (error) {
     if (signal.aborted) throw error
     callbacks.onDirectoryFailed?.(current.idText, error)
-    return undefined
+    // Permanent browser-cache or sender-share capacity limits apply to the whole
+    // share; continuing to fetch remaining queued directories only burns round-trips.
+    return catalogCapacityReason(error) === undefined ? { kind: 'skip' } : { kind: 'stop' }
   }
 }
 

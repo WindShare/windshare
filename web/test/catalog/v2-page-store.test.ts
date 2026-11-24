@@ -215,6 +215,31 @@ describe('v2 catalog page store', () => {
     expect(abortExistingVisits).toBeLessThanOrEqual(4)
   })
 
+  it('rejects staging into an already-committed directory until reset via begin', async () => {
+    const store = new MemoryCatalogPageStore()
+    await store.begin('committed-dir')
+    await store.stage(page(0, 'committed-dir', [entry(1, 'alpha')]))
+    await store.commit({
+      directoryIdText: 'committed-dir',
+      generationText: 'generation',
+      directoryId: new Uint8Array(16).fill(1),
+      generation: new Uint8Array(16).fill(2),
+      pageCount: 1,
+      entryCount: 1,
+      omittedCount: 0n,
+      terminalCommitment: new Uint8Array(32),
+    })
+
+    await expect(store.stage(page(1, 'committed-dir', [entry(2, 'beta')])))
+      .rejects.toMatchObject({
+        name: 'CatalogPageStoreError',
+        kind: 'authenticated-ownership',
+      })
+
+    await store.begin('committed-dir')
+    await expect(store.stage(page(0, 'committed-dir', [entry(2, 'beta')]))).resolves.toBeUndefined()
+  })
+
   it('supports wide directories and cumulative multi-directory browsing within default share budgets', async () => {
     const wideStore = new MemoryCatalogPageStore()
     const widePages = 100

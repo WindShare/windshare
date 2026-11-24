@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { CatalogClient } from '../../src/catalog/client'
-import type { CommittedDirectory } from '../../src/catalog/page-store'
+import { CatalogPageStoreError, type CommittedDirectory } from '../../src/catalog/page-store'
 import type { CatalogEntry, CatalogPage, ShareDescriptor } from '../../src/catalog/records'
 import { SelectionPolicy } from '../../src/catalog/selection'
 import { BlockLaneAttemptsError, type BlockRangeReader } from '../../src/content/broker'
@@ -971,5 +971,103 @@ describe('TransferJob resumable interruption handling', () => {
     }).run()
     expect(discoveryResult.status).toBe('paused')
     expect(discoveryResult.pauseReason).toBe('interrupted')
+  })
+
+  it('preserves permanent catalog capacity limits over earlier local failures while finishing already-discovered files', async () => {
+    const shareInstance = id(1)
+    const rootId = id(2)
+    const firstDirId = id(10)
+    const limitDirId = id(11)
+    const unreachedDirId = id(12)
+    const fileId = id(20)
+    const rootIdText = encodeBase64Url(rootId)
+    const firstDirIdText = encodeBase64Url(firstDirId)
+    const limitDirIdText = encodeBase64Url(limitDirId)
+    const unreachedDirIdText = encodeBase64Url(unreachedDirId)
+    const payload = new Uint8Array([1, 2, 3, 4])
+
+    const rootEntries: readonly CatalogEntry[] = Object.freeze([
+      Object.freeze({ kind: 'file', id: fileId, idText: encodeBase64Url(fileId), name: 'ready.bin', expectedSize: 4n }),
+      Object.freeze({ kind: 'directory', id: firstDirId, idText: firstDirIdText, name: 'local-error' }),
+      Object.freeze({ kind: 'directory', id: limitDirId, idText: limitDirIdText, name: 'hits-limit' }),
+      Object.freeze({ kind: 'directory', id: unreachedDirId, idText: unreachedDirIdText, name: 'never-queried' }),
+    ])
+    const rootCommitted: CommittedDirectory = Object.freeze({
+      directoryId: rootId,
+      directoryIdText: rootIdText,
+      generation: id(50),
+      generationText: encodeBase64Url(id(50)),
+      pageCount: 1,
+      entryCount: rootEntries.length,
+      omittedCount: 0n,
+      terminalCommitment: new Uint8Array(32),
+    })
+    const rootPage: CatalogPage = Object.freeze({
+      shareInstance,
+      directoryId: rootId,
+      directoryIdText: rootIdText,
+      generation: id(50),
+      generationText: encodeBase64Url(id(50)),
+      pageIndex: 0,
+      terminal: true,
+      previousCommitment: new Uint8Array(32),
+      entries: rootEntries,
+      omittedCount: 0n,
+      objectCommitment: new Uint8Array(32),
+      encodedBytes: 128,
+    })
+
+    const descriptor = Object.freeze({
+      shareInstance,
+      shareInstanceId: encodeBase64Url(shareInstance),
+      syntheticRoot: rootId,
+      syntheticRootId: rootIdText,
+    }) as unknown as ShareDescriptor
+    const capacityError = new CatalogPageStoreError('resource-limit', 'Catalog cache exceeded its share entry or metadata budget')
+    const queriedDirs: string[] = []
+    const catalog = {
+      loadDirectory: async (directoryId: Uint8Array) => {
+        const dirText = encodeBase64Url(directoryId)
+        queriedDirs.push(dirText)
+        if (dirText === rootIdText) return rootCommitted
+        if (dirText === firstDirIdText) throw new Error('local directory unreadable')
+        if (dirText === limitDirIdText) throw capacityError
+        throw new Error(`unexpected directory query ${dirText}`)
+      },
+      page: async () => rootPage,
+    } as unknown as CatalogClient
+
+    const rev = makeDescriptor({ shareInstance, fileId, revision: id(60), exactSize: 4n })
+    let committedFiles = 0
+    const result = await new TransferJob({
+      descriptor,
+      catalog,
+      selection: new SelectionPolicy(true).snapshot(),
+      revisions: { open: async () => Object.freeze({ descriptor: rev, leaseId: id(1), release: async () => undefined }) },
+      broker: {
+        readRange: async function* () {
+          yield Object.freeze({ offset: 0n, data: payload })
+        },
+      },
+      output: {
+        sessionId: 'sess-catalog-limit',
+        capabilities: { maxConcurrentFiles: 1, resumable: true },
+        openFile: async (): Promise<TransferOutputFile> => ({
+          completedRanges: [],
+          writeAt: async () => undefined,
+          checkpoint: async () => 'saved',
+          commit: async () => { committedFiles += 1 },
+          pause: async () => undefined,
+          abort: async () => undefined,
+        }),
+      },
+    }).run()
+
+    expect(result.status).toBe('partial')
+    expect(result.completedFiles).toBe(1n)
+    expect(committedFiles).toBe(1)
+    expect(result.failedDirectories).toBe(2n)
+    expect(result.error).toBe(capacityError)
+    expect(queriedDirs).toEqual([rootIdText, firstDirIdText, limitDirIdText])
   })
 })

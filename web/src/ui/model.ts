@@ -81,7 +81,7 @@ export type ShareIdentity =
 export type BrowseState =
   | Readonly<{ kind: 'idle' | 'ready'; error: null }>
   | Readonly<{ kind: 'loading'; directoryName: string | null; discoveredEntries?: bigint; error: null }>
-  | Readonly<{ kind: 'failed'; error: string }>
+  | Readonly<{ kind: 'failed'; error: ReceiverFailure }>
 
 export type ReceiverStatus = 'enter-key' | 'connecting' | 'cancelled' | 'stopped' | 'replacement-selected' |
   Readonly<{ kind: 'finding-replacement'; path: string }> | null
@@ -99,7 +99,10 @@ export type ReceiverFailure =
   | Readonly<{ kind: 'blocked'; reason: ReceiveBlockReason }>
   | Readonly<{ kind: 'save-unavailable'; reason: SaveUnavailableReason }>
   | Readonly<{ kind: 'source-changed' }>
-  | Readonly<{ kind: 'invalidLink' | 'secureContext' | 'permissionDenied'; detail: string }>
+  | Readonly<{
+      kind: 'invalidLink' | 'secureContext' | 'permissionDenied' | 'browserCatalogLimit' | 'shareCatalogLimit'
+      detail: string
+    }>
 
 export interface LocalChoiceAdmission {
   readonly choiceId: string

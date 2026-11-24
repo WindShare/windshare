@@ -31,6 +31,7 @@ export const CATALOG_PAGE_ENTRIES = 256
 export const CATALOG_DIRECTORY_ENTRIES = 1_048_576
 export const MAX_CATALOG_PAYLOAD_BYTES = 60 << 10
 export const DIRECTORY_ERROR_OBJECT_BYTES = 16 << 10
+export const DIRECTORY_FAILURE_CODE_RESOURCE_LIMIT = 0x2005
 export const MINIMUM_CHUNK_BYTES = 1 << 10
 export const MAXIMUM_CHUNK_BYTES = 4 << 20
 
@@ -450,7 +451,7 @@ function directoryFailureKind(code: number): DirectoryFailureKind {
     case 0x2002: return 'permission'
     case 0x2003: return 'collision'
     case 0x2004: return 'too-wide'
-    case 0x2005: return 'resource-limit'
+    case DIRECTORY_FAILURE_CODE_RESOURCE_LIMIT: return 'resource-limit'
     case 0x2006: return 'permanent'
     case 0x2007: return 'retryable'
     case 0x2008: return 'cancelled'
