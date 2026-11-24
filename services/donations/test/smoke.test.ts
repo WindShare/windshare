@@ -26,6 +26,10 @@ import {
   hmacSha512Hex,
   md5Hex,
 } from '../src/verify'
+import { computePublicWallEtag } from '../src/wall-store'
+
+const EMPTY_WALL_JSON = JSON.stringify({ version: 0, entries: [], topSupporters: [] })
+const EMPTY_WALL_ETAG = computePublicWallEtag(0, EMPTY_WALL_JSON)
 
 function createStubEnv(): DonationsEnv {
   const namespace = {
@@ -33,8 +37,8 @@ function createStubEnv(): DonationsEnv {
     get: () => ({
       getPublicWall: async () => ({
         notModified: false as const,
-        etag: '"wall-v0"',
-        json: JSON.stringify({ version: 0, entries: [] }),
+        etag: EMPTY_WALL_ETAG,
+        json: EMPTY_WALL_JSON,
       }),
     }),
   } as unknown as DurableObjectNamespace<DonationWallRpc>
@@ -158,8 +162,8 @@ describe('donations worker scaffold', () => {
     const wall = await handleWorkerFetch(new Request('https://donate.windshare.cc/v1/donations/wall'), env)
     expect(wall.status).toBe(200)
     expect(wall.headers.get('access-control-allow-origin')).toBe('*')
-    expect(wall.headers.get('etag')).toBe('"wall-v0"')
-    expect(await wall.json()).toEqual({ version: 0, entries: [] })
+    expect(wall.headers.get('etag')).toBe(EMPTY_WALL_ETAG)
+    expect(await wall.json()).toEqual({ version: 0, entries: [], topSupporters: [] })
 
     const admin = await handleWorkerFetch(new Request('https://donate.windshare.cc/admin'), env)
     expect(admin.status).toBe(200)

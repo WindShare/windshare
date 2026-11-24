@@ -242,7 +242,7 @@ describe('windshare-donations Worker + SQLite DO HTTP integration', () => {
     expect(initialWall.headers.get('access-control-allow-origin')).toBe('*')
     expect(initialWall.headers.get('cache-control')).toBe('public, max-age=15, stale-while-revalidate=60')
     const initialEtag = initialWall.headers.get('etag')
-    expect(initialEtag).toBe('"wall-v0"')
+    expect(initialEtag).toMatch(/^"wall-v0-[0-9a-f]{16}"$/)
 
     const cachedWall = await mf.dispatchFetch(`${DONATE_ORIGIN}/v1/donations/wall`, {
       headers: { 'If-None-Match': initialEtag ?? '' },
@@ -829,5 +829,52 @@ describe('admin manual donations and all-time Top 3 integration', () => {
     const wallAfterRedact = await wallAfterRedactRes.json() as PublicWallResponse
     expect(wallAfterRedact.entries.some(e => e.displayName === 'Private Ko-fi Donor')).toBe(false)
     expect(wallAfterRedact.topSupporters[0]?.displayName).toBe('Direct Patron')
+  })
+})
+
+describe('windshare-donations public wall ETag cache validation', () => {
+  it('returns 200 with topSupporters when revalidating a legacy version-only ETag at the same wall version', async () => {
+    const emptyRes = await mf.dispatchFetch(`${DONATE_ORIGIN}/v1/donations/wall`, {
+      headers: { 'If-None-Match': '"wall-v0"' },
+    })
+    expect(emptyRes.status).toBe(200)
+    expect(emptyRes.headers.get('etag')).toMatch(/^"wall-v0-[0-9a-f]{16}"$/)
+
+    const webhookRes = await postKofiWebhook({
+      kofi_transaction_id: 'KOFI-ETAG-1',
+      amount: '25.00',
+      currency: 'USD',
+      is_public: true,
+      from_name: 'Rank Supporter',
+      message: 'Great work!',
+    })
+    expect(webhookRes.status).toBe(200)
+
+    const freshRes = await mf.dispatchFetch(`${DONATE_ORIGIN}/v1/donations/wall`)
+    expect(freshRes.status).toBe(200)
+    const currentEtag = freshRes.headers.get('etag') ?? ''
+    const freshWall = await freshRes.json() as PublicWallResponse
+    expect(currentEtag).toMatch(new RegExp(`^"wall-v${freshWall.version}-[0-9a-f]{16}"$`))
+    expect(freshWall.topSupporters.map(e => e.displayName)).toEqual(['Rank Supporter'])
+
+    // Same wall version with the pre-ranking version-only ETag (strong or weak) must return 200.
+    for (const legacyTag of [`"wall-v${freshWall.version}"`, `W/"wall-v${freshWall.version}"`]) {
+      const legacyRes = await mf.dispatchFetch(`${DONATE_ORIGIN}/v1/donations/wall`, {
+        headers: { 'If-None-Match': legacyTag },
+      })
+      expect(legacyRes.status).toBe(200)
+      expect(legacyRes.headers.get('etag')).toBe(currentEtag)
+      const legacyBody = await legacyRes.json() as PublicWallResponse
+      expect(legacyBody.topSupporters).toEqual(freshWall.topSupporters)
+    }
+
+    // Revalidating with the current content-hashed ETag (strong or edge-weakened) still returns 304.
+    for (const validTag of [currentEtag, `W/${currentEtag}`]) {
+      const cachedRes = await mf.dispatchFetch(`${DONATE_ORIGIN}/v1/donations/wall`, {
+        headers: { 'If-None-Match': validTag },
+      })
+      expect(cachedRes.status).toBe(304)
+      expect(cachedRes.headers.get('etag')).toBe(currentEtag)
+    }
   })
 })

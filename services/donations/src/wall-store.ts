@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import {
   ADMIN_SESSION_TTL_SECONDS,
   CRYPTO_INTENT_TTL_SECONDS,
@@ -53,6 +53,8 @@ const CLEANUP_BATCH_SIZE = 32
 const RATE_LIMIT_STALE_SECONDS = 3600
 // Keep parameterized IN-clause chunks well under SQLite's 999 bound parameter ceiling.
 const SQL_IN_BATCH_SIZE = 100
+// Truncate SHA-256 to 64 bits (16 hex chars) for compact strong ETag content suffixes.
+const WALL_ETAG_DIGEST_HEX_LENGTH = 16
 
 export type RateLimitScope = 'crypto' | 'admin_login'
 
@@ -119,6 +121,17 @@ function firstRow(cursor: Iterable<Record<string, unknown>>): Record<string, unk
     return row
   }
   return null
+}
+
+export function computePublicWallEtag(wallVersion: number, serializedJson: string): string {
+  // Bind the strong ETag to the serialized representation bytes as well as wallVersion
+  // so projection changes (schema fields, ranking/FX rules) invalidate stale 304 caches
+  // even when no database mutation incremented wall_version.
+  const digest = createHash('sha256')
+    .update(serializedJson, 'utf8')
+    .digest('hex')
+    .slice(0, WALL_ETAG_DIGEST_HEX_LENGTH)
+  return `"wall-v${wallVersion}-${digest}"`
 }
 
 function normalizeEtag(raw: string): string {
@@ -261,10 +274,11 @@ export class WallStore {
       entries: allPublished.slice(0, PUBLIC_WALL_LIMIT),
       topSupporters: selectTopSupporters(allPublished),
     }
+    const json = JSON.stringify(payload)
     this.cachedWall = {
       version: wallVersion,
-      etag: `"wall-v${wallVersion}"`,
-      json: JSON.stringify(payload),
+      etag: computePublicWallEtag(wallVersion, json),
+      json,
     }
     return this.cachedWall
   }

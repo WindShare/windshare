@@ -47,7 +47,7 @@ import {
   verifyKofiWebhookToken,
   verifyNowPaymentsSignature,
 } from '../src/verify'
-import { matchesIfNoneMatch } from '../src/wall-store'
+import { computePublicWallEtag, matchesIfNoneMatch } from '../src/wall-store'
 import {
   createInMemoryWallStore,
   createInMemoryWallStoreWithDb,
@@ -558,11 +558,11 @@ describe('provider protocol signing, parsing, and outbound adapters', () => {
 })
 
 describe('WallStore SQLite persistence, caching, rate limiting, and pagination', () => {
-  it('enforces webhook idempotency, versioned ETag invalidation, and 50-entry wall cap', () => {
+  it('enforces webhook idempotency, content-hashed ETag invalidation, and 50-entry wall cap', () => {
     const store = createInMemoryWallStore()
     const initial = store.getPublicWallSnapshot()
-    expect(initial.etag).toBe('"wall-v0"')
-    expect(matchesIfNoneMatch('W/"wall-v0"', initial.etag)).toBe(true)
+    expect(initial.etag).toBe(computePublicWallEtag(0, initial.json))
+    expect(matchesIfNoneMatch(`W/${initial.etag}`, initial.etag)).toBe(true)
 
     const first = store.commitDonation({
       provider: 'afdian',
@@ -594,11 +594,11 @@ describe('WallStore SQLite persistence, caching, rate limiting, and pagination',
 
     const afterFirst = store.getPublicWallSnapshot()
     expect(afterFirst.version).toBe(1)
-    expect(afterFirst.etag).toBe('"wall-v1"')
+    expect(afterFirst.etag).toBe(computePublicWallEtag(1, afterFirst.json))
     expect(JSON.parse(afterFirst.json)).not.toHaveProperty('moderationEnabled')
 
     store.patchConfig({ moderationEnabled: true })
-    expect(store.getPublicWallSnapshot().etag).toBe('"wall-v1"')
+    expect(store.getPublicWallSnapshot().etag).toBe(afterFirst.etag)
     store.patchConfig({ moderationEnabled: false })
 
     for (let i = 2; i <= PUBLIC_WALL_LIMIT + 5; i += 1) {

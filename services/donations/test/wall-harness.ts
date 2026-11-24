@@ -19,8 +19,7 @@ export type AsyncWallStub = {
     : never
 }
 
-export function createInMemoryWallStoreWithDb(): { readonly store: WallStore; readonly db: DatabaseSync } {
-  const db = new DatabaseSync(':memory:')
+export function createWallStoreFromDb(db: DatabaseSync): WallStore {
   const sqlPort: SqlStoragePort = {
     exec(query: string, ...bindings: unknown[]): Iterable<Record<string, unknown>> {
       const stmt = db.prepare(query)
@@ -52,7 +51,12 @@ export function createInMemoryWallStoreWithDb(): { readonly store: WallStore; re
       inTx = false
     }
   }
-  return { store: new WallStore(sqlPort, runTx), db }
+  return new WallStore(sqlPort, runTx)
+}
+
+export function createInMemoryWallStoreWithDb(): { readonly store: WallStore; readonly db: DatabaseSync } {
+  const db = new DatabaseSync(':memory:')
+  return { store: createWallStoreFromDb(db), db }
 }
 
 export function createInMemoryWallStore(): WallStore {
