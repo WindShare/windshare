@@ -31,6 +31,7 @@ type DirectoryFailureRecord struct {
 	generation      DirectoryGeneration
 	previousAttempt ScanAttemptID
 	kind            FailureKind
+	retryable       bool
 	retryAfter      time.Duration
 }
 
@@ -41,11 +42,12 @@ func newDirectoryFailureRecord(
 	generation DirectoryGeneration,
 	previousAttempt ScanAttemptID,
 	kind FailureKind,
+	retryable bool,
 	retryAfter time.Duration,
 ) (DirectoryFailureRecord, error) {
 	record := DirectoryFailureRecord{
 		share: share, directory: directory, attempt: attempt, generation: generation,
-		previousAttempt: previousAttempt, kind: kind, retryAfter: retryAfter,
+		previousAttempt: previousAttempt, kind: kind, retryable: retryable, retryAfter: retryAfter,
 	}
 	if err := record.valid(); err != nil {
 		return DirectoryFailureRecord{}, err
@@ -60,11 +62,12 @@ func (r DirectoryFailureRecord) Generation() DirectoryGeneration  { return r.gen
 func (r DirectoryFailureRecord) PreviousAttemptID() ScanAttemptID { return r.previousAttempt }
 func (r DirectoryFailureRecord) Kind() FailureKind                { return r.kind }
 
-// Retryable reports whether a later explicit scan attempt may succeed. Budget
-// exhaustion reflects runtime capacity (concurrent scans or sibling shares),
-// not an immutable property of the directory, so it must never brick a share.
+// Retryable reports whether a later explicit scan attempt may succeed.
+// Transient I/O and runtime budget contention (concurrent scans, sibling
+// shares on the process budget, or per-session caps) remain retryable;
+// uncontended share capacity exhaustion is permanent for this live share.
 func (r DirectoryFailureRecord) Retryable() bool {
-	return r.kind == FailureKindTransientIO || r.kind == FailureKindBudget
+	return r.retryable
 }
 
 func (r DirectoryFailureRecord) RetryAfter() time.Duration { return r.retryAfter }
@@ -74,7 +77,20 @@ func (r DirectoryFailureRecord) valid() error {
 		r.kind <= FailureKindUnknown || r.kind > FailureKindTransientIO {
 		return errors.New("catalog failure record has invalid identity or kind")
 	}
-	if r.Retryable() {
+	switch r.kind {
+	case FailureKindTransientIO:
+		if !r.retryable {
+			return errors.New("catalog transient I/O failure must be retryable")
+		}
+	case FailureKindBudget:
+		// Budget failures may be retryable (transient contention) or permanent
+		// (uncontended share-lifetime capacity exhaustion).
+	default:
+		if r.retryable {
+			return errors.New("catalog permanent failure kind cannot be retryable")
+		}
+	}
+	if r.retryable {
 		if r.retryAfter < MinScanRetryCooldown || r.retryAfter > MaxScanRetryCooldown ||
 			r.retryAfter%time.Millisecond != 0 {
 			return errors.New("catalog transient failure has an invalid retry delay")
@@ -134,9 +150,10 @@ func (s *CatalogStore) prepareAttemptFailure(
 	cause error,
 ) (preparedFailure, error) {
 	kind := classifyFailureKind(cause)
+	retryable := failureRetryable(kind, cause)
 	record, err := newDirectoryFailureRecord(
 		s.shareInstance, attempt.directory, attempt.id, attempt.generation, attempt.previous,
-		kind, failureRetryAfter(kind, cause),
+		kind, retryable, failureRetryAfter(kind, retryable, cause),
 	)
 	if err != nil {
 		return preparedFailure{}, err
@@ -180,7 +197,7 @@ func (s *CatalogStore) commitPreparedFailureLocked(
 	}
 	attempts := s.failures[prepared.record.directory]
 	if len(attempts) >= maxFailureAttemptsPerDirectory {
-		return nil, ErrBudgetExceeded
+		return nil, &shareCapacityExceededError{cause: ErrBudgetExceeded}
 	}
 	retained, err := attempt.resources.retain(prepared.charge, session)
 	if err != nil {
@@ -195,6 +212,34 @@ func (s *CatalogStore) commitPreparedFailureLocked(
 	return directoryFailureFromRecord(prepared.record, cause), nil
 }
 
+// classifyScanBudgetError promotes an uncontended ShareBudget entry/memory
+// overflow to ErrShareCapacityExceeded. Committed directories remain resident
+// until Close, so retrying within the same share cannot reclaim share capacity.
+func (s *CatalogStore) classifyScanBudgetError(err error, exclusivePass bool) error {
+	if err == nil || errors.Is(err, ErrShareCapacityExceeded) {
+		return err
+	}
+	var budgetErr *budgetExceededError
+	if !errors.As(err, &budgetErr) || budgetErr.account != s.shareBudget || !budgetErr.retainedExceeded {
+		return err
+	}
+	if !exclusivePass && budgetErr.contendedForActiveScan() {
+		return err
+	}
+	return &shareCapacityExceededError{cause: err}
+}
+
+func (s *CatalogStore) classifyDirectCommitBudgetError(err error) error {
+	if err == nil || errors.Is(err, ErrShareCapacityExceeded) {
+		return err
+	}
+	var budgetErr *budgetExceededError
+	if !errors.As(err, &budgetErr) || budgetErr.account != s.shareBudget || !budgetErr.retainedExceeded || budgetErr.activeScans > 0 {
+		return err
+	}
+	return &shareCapacityExceededError{cause: err}
+}
+
 func classifyFailureKind(cause error) FailureKind {
 	var scanError *ScanError
 	switch {
@@ -206,7 +251,7 @@ func classifyFailureKind(cause error) FailureKind {
 		return FailureKindCollision
 	case errors.Is(cause, ErrPageLimit):
 		return FailureKindTooWide
-	case errors.Is(cause, ErrBudgetExceeded):
+	case errors.Is(cause, ErrBudgetExceeded) || errors.Is(cause, ErrShareCapacityExceeded):
 		return FailureKindBudget
 	case errors.As(cause, &scanError) && scanError.transient:
 		return FailureKindTransientIO
@@ -215,12 +260,23 @@ func classifyFailureKind(cause error) FailureKind {
 	}
 }
 
-func failureRetryAfter(kind FailureKind, cause error) time.Duration {
-	if kind != FailureKindTransientIO && kind != FailureKindBudget {
+func failureRetryable(kind FailureKind, cause error) bool {
+	switch kind {
+	case FailureKindTransientIO:
+		return true
+	case FailureKindBudget:
+		return !errors.Is(cause, ErrShareCapacityExceeded)
+	default:
+		return false
+	}
+}
+
+func failureRetryAfter(kind FailureKind, retryable bool, cause error) time.Duration {
+	if !retryable {
 		return 0
 	}
 	var scanError *ScanError
-	if errors.As(cause, &scanError) && scanError.transient {
+	if kind == FailureKindTransientIO && errors.As(cause, &scanError) && scanError.transient {
 		return scanError.cooldown
 	}
 	return DefaultScanRetryCooldown
@@ -286,6 +342,7 @@ func (s *CatalogStore) completeFailedAttempt(
 		failure, persistErr = s.commitPreparedFailureLocked(attempt, *prepared, cause, session)
 	}
 	if persistErr != nil {
+		persistErr = s.classifyScanBudgetError(persistErr, s.activeScans == 0)
 		attempt.err = errors.Join(cause, fmt.Errorf("persist catalog directory failure: %w", persistErr))
 		delete(s.attempts, attempt.directory)
 		return

@@ -12,13 +12,14 @@ import (
 
 func testFailureRecord(t *testing.T, attempt, generation byte, previous ScanAttemptID, kind FailureKind) DirectoryFailureRecord {
 	t.Helper()
+	retryable := kind == FailureKindTransientIO || kind == FailureKindBudget
 	retryAfter := time.Duration(0)
-	if kind == FailureKindTransientIO || kind == FailureKindBudget {
+	if retryable {
 		retryAfter = MinScanRetryCooldown
 	}
 	record, err := newDirectoryFailureRecord(
 		idValue[ShareInstance](1), idValue[DirectoryID](2), idValue[ScanAttemptID](attempt),
-		idValue[DirectoryGeneration](generation), previous, kind, retryAfter,
+		idValue[DirectoryGeneration](generation), previous, kind, retryable, retryAfter,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -30,7 +31,7 @@ func TestFailureRecordValidationAndClassificationRejectAmbiguousAuthority(t *tes
 	valid := testFailureRecord(t, 3, 4, ScanAttemptID{}, FailureKindPermanentIO)
 	if _, err := newDirectoryFailureRecord(
 		ShareInstance{}, valid.directory, valid.attempt, valid.generation, ScanAttemptID{},
-		FailureKindPermanentIO, 0,
+		FailureKindPermanentIO, false, 0,
 	); err == nil {
 		t.Fatal("zero-share failure record was accepted")
 	}
@@ -39,6 +40,10 @@ func TestFailureRecordValidationAndClassificationRejectAmbiguousAuthority(t *tes
 		"future kind":  func(record *DirectoryFailureRecord) { record.kind = FailureKindTransientIO + 1 },
 		"self link":    func(record *DirectoryFailureRecord) { record.previousAttempt = record.attempt },
 		"permanent retry": func(record *DirectoryFailureRecord) {
+			record.retryAfter = MinScanRetryCooldown
+		},
+		"permanent kind marked retryable": func(record *DirectoryFailureRecord) {
+			record.retryable = true
 			record.retryAfter = MinScanRetryCooldown
 		},
 	} {
@@ -51,6 +56,12 @@ func TestFailureRecordValidationAndClassificationRejectAmbiguousAuthority(t *tes
 		})
 	}
 	transient := testFailureRecord(t, 5, 6, valid.attempt, FailureKindTransientIO)
+	if _, err := newDirectoryFailureRecord(
+		transient.share, transient.directory, transient.attempt, transient.generation,
+		transient.previousAttempt, FailureKindTransientIO, false, 0,
+	); err == nil {
+		t.Fatal("non-retryable transient I/O failure was accepted")
+	}
 	for name, delay := range map[string]time.Duration{
 		"too short": MinScanRetryCooldown - time.Millisecond,
 		"too long":  MaxScanRetryCooldown + time.Millisecond,
@@ -79,12 +90,13 @@ func TestFailureRecordValidationAndClassificationRejectAmbiguousAuthority(t *tes
 	}
 
 	for cause, want := range map[error]FailureKind{
-		ErrDirectoryStale:   FailureKindStale,
-		fs.ErrPermission:    FailureKindPermission,
-		ErrSiblingCollision: FailureKindCollision,
-		ErrPageLimit:        FailureKindTooWide,
-		ErrBudgetExceeded:   FailureKindBudget,
-		errors.New("I/O"):   FailureKindPermanentIO,
+		ErrDirectoryStale:        FailureKindStale,
+		fs.ErrPermission:         FailureKindPermission,
+		ErrSiblingCollision:      FailureKindCollision,
+		ErrPageLimit:             FailureKindTooWide,
+		ErrBudgetExceeded:        FailureKindBudget,
+		ErrShareCapacityExceeded: FailureKindBudget,
+		errors.New("I/O"):        FailureKindPermanentIO,
 	} {
 		if got := classifyFailureKind(cause); got != want {
 			t.Fatalf("classify %v = %d want %d", cause, got, want)
@@ -95,14 +107,33 @@ func TestFailureRecordValidationAndClassificationRejectAmbiguousAuthority(t *tes
 		t.Fatalf("classify transient = %d", got)
 	}
 	budgetRecord := testFailureRecord(t, 7, 8, transient.attempt, FailureKindBudget)
-	if !budgetRecord.Retryable() || failureRetryAfter(FailureKindBudget, ErrBudgetExceeded) != DefaultScanRetryCooldown {
-		t.Fatalf("budget failure retryability = %v / %v", budgetRecord.Retryable(), failureRetryAfter(FailureKindBudget, ErrBudgetExceeded))
+	if !budgetRecord.Retryable() || !failureRetryable(FailureKindBudget, ErrBudgetExceeded) ||
+		failureRetryAfter(FailureKindBudget, true, ErrBudgetExceeded) != DefaultScanRetryCooldown {
+		t.Fatalf("retryable budget failure = %v / %v", budgetRecord.Retryable(), failureRetryAfter(FailureKindBudget, true, ErrBudgetExceeded))
+	}
+	permanentBudgetRecord, err := newDirectoryFailureRecord(
+		budgetRecord.share, budgetRecord.directory, budgetRecord.attempt, budgetRecord.generation,
+		budgetRecord.previousAttempt, FailureKindBudget, false, 0,
+	)
+	if err != nil || permanentBudgetRecord.Retryable() || permanentBudgetRecord.RetryAfter() != 0 {
+		t.Fatalf("permanent budget failure = %+v err=%v", permanentBudgetRecord, err)
+	}
+	permanentShareCause := &shareCapacityExceededError{cause: ErrBudgetExceeded}
+	if failureRetryable(FailureKindBudget, permanentShareCause) ||
+		failureRetryAfter(FailureKindBudget, false, permanentShareCause) != 0 {
+		t.Fatal("permanent share capacity cause was classified as retryable")
 	}
 	if _, err := newDirectoryFailureRecord(
 		budgetRecord.share, budgetRecord.directory, budgetRecord.attempt, budgetRecord.generation,
-		budgetRecord.previousAttempt, FailureKindBudget, 0,
+		budgetRecord.previousAttempt, FailureKindBudget, true, 0,
 	); err == nil {
-		t.Fatal("budget failure without retry cooldown was accepted")
+		t.Fatal("retryable budget failure without retry cooldown was accepted")
+	}
+	if _, err := newDirectoryFailureRecord(
+		budgetRecord.share, budgetRecord.directory, budgetRecord.attempt, budgetRecord.generation,
+		budgetRecord.previousAttempt, FailureKindBudget, false, DefaultScanRetryCooldown,
+	); err == nil {
+		t.Fatal("permanent budget failure with retry cooldown was accepted")
 	}
 }
 
@@ -349,16 +380,18 @@ func TestPersistAttemptFailureEnforcesEncoderBudgetAndAttemptBounds(t *testing.T
 			t.Fatalf("empty directory under sub-60KiB budget = %+v err=%v", emptyCommitted, err)
 		}
 
-		// A directory exceeding the remaining ~12 KiB budget must still persist a
-		// retryable FailureKindBudget record instead of failing encoder reservation.
+		// A directory exceeding the remaining ~12 KiB share budget must still
+		// persist a permanent FailureKindBudget record instead of failing encoder
+		// reservation, because committed share memory cannot shrink until Close.
 		_, overflowErr := store.ListChildren(context.Background(), overflowDir, session, ScanOptions{}, DirectoryScannerFunc(
 			func(ctx context.Context, request ScanRequest) (ScanResult, error) {
 				return ScanResult{}, request.Children.Add(ctx, fixedSizeScannedFile(t, 181, "too-big", 24<<10))
 			},
 		))
 		var failure *DirectoryFailure
-		if !errors.As(overflowErr, &failure) || failure.Kind != FailureKindBudget || !failure.Transient {
-			t.Fatalf("overflow under sub-60KiB budget = %v, want retryable FailureKindBudget", overflowErr)
+		if !errors.As(overflowErr, &failure) || failure.Kind != FailureKindBudget ||
+			failure.Transient || failure.RetryAfter != 0 || !errors.Is(overflowErr, ErrShareCapacityExceeded) {
+			t.Fatalf("overflow under sub-60KiB share budget = %v, want permanent FailureKindBudget", overflowErr)
 		}
 		if _, found, err := store.FailurePayload(context.Background(), overflowDir, failure.AttemptID); err != nil || !found {
 			t.Fatalf("persisted failure under sub-60KiB budget: found=%v err=%v", found, err)

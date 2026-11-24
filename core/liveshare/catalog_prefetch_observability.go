@@ -60,7 +60,7 @@ func rootPrefetchFailureDecision(root error) (decision RootPrefetchDecision) {
 		if current == nil {
 			continue
 		}
-		if reflect.TypeOf(current).Comparable() && current == catalog.ErrBudgetExceeded {
+		if reflect.TypeOf(current).Comparable() && (current == catalog.ErrBudgetExceeded || current == catalog.ErrShareCapacityExceeded) {
 			return RootPrefetchBudgetFailed
 		}
 		remaining := maximumRootPrefetchFailureNodes - inspected - 1 - len(pending)

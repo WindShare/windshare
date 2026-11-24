@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { DirectoryFailureError } from '../../src/catalog/client'
 import { SelectionPolicy } from '../../src/catalog/selection'
 import type { CatalogEntry } from '../../src/catalog/records'
 import { encodeBase64Url } from '../../src/crypto/bytes'
@@ -255,6 +256,57 @@ describe('browser navigation failure reporting', () => {
 
     expect(snapshot.directoryRetryable).toBe(true)
     expect(reported).toEqual([{ stage: 'browse', error: failure, retryable: true }])
+  })
+
+  it('disables directory retry for permanent share capacity failures', async () => {
+    const joined = new NavigableJoinedShare()
+    const reported: FailureReportEvent[] = []
+    let snapshot = directNavigationSnapshot()
+    const navigation = new BrowserNavigationCoordinator({
+      currentJoinedShare: () => joined as unknown as JoinedBrowserShare,
+      isDisposed: () => false,
+      snapshot: () => snapshot,
+      publish: (next) => { snapshot = next },
+      publicError: () => 'failed',
+      recordFailure: (event) => reported.push(event),
+    })
+    const requested = directory(2, 'first', ['First'], ['first'])
+    const permanentBudgetFailure = new DirectoryFailureError(Object.freeze({
+      shareInstance: identity(7),
+      directoryId: identity(2),
+      directoryIdText: 'first',
+      attemptId: identity(3),
+      attemptIdText: identityText(3),
+      code: 0x2005,
+      kind: 'resource-limit',
+      retryable: false,
+    }))
+
+    const loading = navigation.loadPage(requested, 0, Object.freeze([requested]))
+    joined.requests[0]?.result.reject(permanentBudgetFailure)
+    await loading
+
+    expect(snapshot.directoryRetryable).toBe(false)
+    expect(reported).toEqual([{ stage: 'browse', error: permanentBudgetFailure, retryable: false }])
+
+    navigation.retryDirectory()
+    expect(joined.requests).toHaveLength(1)
+
+    const permanentOperationFailure = new RemoteOperationError(createReceivedProtocolError({
+      requestKind: 'list_children', correlation: Object.freeze({
+        protocolSessionId: createDiagnosticIdentity('protocol_session', identity(9)),
+        protocolOperationId: createDiagnosticIdentity('protocol_operation', 11n),
+      }), content: {
+        scope: 'directory', code: 0x2005, retryable: false,
+      },
+    }))
+    const secondLoad = navigation.loadPage(requested, 0, Object.freeze([requested]))
+    joined.requests[1]?.result.reject(permanentOperationFailure)
+    await secondLoad
+
+    expect(snapshot.directoryRetryable).toBe(false)
+    navigation.retryDirectory()
+    expect(joined.requests).toHaveLength(2)
   })
 })
 

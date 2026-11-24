@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"testing"
@@ -207,6 +208,90 @@ func TestLongWideCatalogScale(t *testing.T) {
 	metrics := exerciseCatalogWidth(t, 200_000)
 	if metrics.entries != 200_000 || metrics.pages != 782 || metrics.retainedCatalogMemory == 0 {
 		t.Fatalf("unexpected wide catalog metrics: %+v", metrics)
+	}
+}
+
+func TestLongCumulativeCatalogScaleUnderDefaultShareBudget(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping cumulative catalog scale test in -short mode")
+	}
+	share := wideCatalogIdentity[ShareInstance](29)
+	process, shareBudget, startup, session := wideCatalogBudgets(t, "cumulative-scale")
+	store := wideCatalogStore(t, share, process, shareBudget)
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+
+	const (
+		totalDirs    = 64
+		filesPerDir  = 12_000
+		minSupported = 300_000
+	)
+	rootDirectory := wideCatalogIdentity[DirectoryID](41)
+	selected := make([]NodeRecord, 0, totalDirs)
+	dirIDs := make([]DirectoryID, 0, totalDirs)
+	for index := range totalDirs {
+		var dirID DirectoryID
+		dirID[0] = 0x55
+		binary.BigEndian.PutUint32(dirID[12:], uint32(index+1))
+		locator, err := NewSourceReference([]byte(fmt.Sprintf("sub-%03d", index)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		identity, err := NewSourceIdentity([]byte(fmt.Sprintf("dir-id-%d", index)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		record, err := NewDirectoryNodeRecord(dirID, rootDirectory, fmt.Sprintf("sub-%03d", index), locator, identity, ModifiedTime{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		selected = append(selected, record)
+		dirIDs = append(dirIDs, dirID)
+	}
+	rootCommit, err := NewSyntheticRootCommit(SyntheticRootCommitSpec{
+		ShareInstance: share, SyntheticRoot: rootDirectory,
+		Generation: wideCatalogIdentity[DirectoryGeneration](71), SelectedRoots: selected,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CommitSyntheticRoot(context.Background(), rootCommit, startup); err != nil {
+		t.Fatalf("commit synthetic root: %v", err)
+	}
+
+	var committedEntries uint64
+	var exhaustedErr error
+	for dirIndex, dirID := range dirIDs {
+		baseIndex := dirIndex * filesPerDir
+		scanner := DirectoryScannerFunc(func(ctx context.Context, request ScanRequest) (ScanResult, error) {
+			for offset := range filesPerDir {
+				child, childErr := benchmarkWideScannedFile(baseIndex + offset)
+				if childErr != nil {
+					return ScanResult{}, childErr
+				}
+				if addErr := request.Children.Add(ctx, child); addErr != nil {
+					return ScanResult{}, addErr
+				}
+			}
+			return ScanResult{}, nil
+		})
+		committed, listErr := store.ListChildren(context.Background(), dirID, session, ScanOptions{}, scanner)
+		if listErr != nil {
+			exhaustedErr = listErr
+			break
+		}
+		committedEntries += committed.EntryCount()
+	}
+	if committedEntries < minSupported {
+		t.Fatalf("cumulative default share budget committed only %d entries, want >= %d", committedEntries, minSupported)
+	}
+	var failure *DirectoryFailure
+	if !errors.As(exhaustedErr, &failure) || failure.Kind != FailureKindBudget ||
+		failure.Transient || !errors.Is(exhaustedErr, ErrShareCapacityExceeded) {
+		t.Fatalf("cumulative share exhaustion = %v, want permanent FailureKindBudget", exhaustedErr)
 	}
 }
 

@@ -199,7 +199,7 @@ function ExplorerRow({ row, draftMode, downloadReadiness, actions, t }: {
 }
 
 export function Explorer({
-  rows, breadcrumbs, pageIndex, pageCount, omittedCount, browse, draft, downloadReadiness, actions,
+  rows, breadcrumbs, pageIndex, pageCount, omittedCount, browse, directoryRetryable, draft, downloadReadiness, actions,
 }: {
   readonly rows: readonly BrowseRow[]
   readonly breadcrumbs: readonly Breadcrumb[]
@@ -207,6 +207,7 @@ export function Explorer({
   readonly pageCount: number
   readonly omittedCount: bigint
   readonly browse: ReceiverSnapshot['browse']
+  readonly directoryRetryable: boolean
   readonly draft: ReceiverSnapshot['draft']
   readonly downloadReadiness: SingleFileDownloadReadiness
   readonly actions: ExplorerActions
@@ -262,7 +263,8 @@ export function Explorer({
         ? t.loadingDirectory(browse.directoryName ?? t.sharedFiles)
         : t.scanningDirectory(browse.directoryName ?? t.sharedFiles, browse.discoveredEntries)}</p>}
       {browse.error !== null && <div className="directory-notice directory-error" role="alert">
-        <FailureNotice failure={browse.error} context="directory" /><button type="button" onClick={actions.retry}>{t.retryDirectory}</button>
+        <FailureNotice failure={browse.error} context="directory" />
+        {directoryRetryable && <button type="button" onClick={actions.retry}>{t.retryDirectory}</button>}
       </div>}
       {rows.length === 0 && browse.kind === 'ready' && <p className="directory-empty">
         {omittedCount > 0n ? t.noAvailable : t.emptyFolder}

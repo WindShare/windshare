@@ -131,6 +131,7 @@ export function ReceiverBrowsing({ controller }: { readonly controller: Receiver
         pageCount: snapshot.pageCount,
         omittedCount: snapshot.omittedCount,
         browse: snapshot.browse,
+        directoryRetryable: snapshot.directoryRetryable,
         draft: snapshot.draft,
         downloadReadiness,
         actions: {

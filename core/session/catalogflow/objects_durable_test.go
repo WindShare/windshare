@@ -555,6 +555,112 @@ func TestCatalogStoreBudgetFailureEncodesRetryableWireObjectAndRecovers(t *testi
 	}
 }
 
+func TestCatalogStorePermanentShareBudgetFailureEncodesNonRetryableWireObject(t *testing.T) {
+	fixture := newCatalogObjectFixture(t)
+	clock := &stepClock{now: time.Unix(1_700_000_000, 0)}
+	process, err := catalog.NewBudgetAccount("perm-wire-process", catalog.DefaultProcessBudgetLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	shareBudget, err := catalog.NewBudgetAccount("perm-wire-share", catalog.BudgetLimits{
+		ActiveScans: 4, ScanWork: 10_000, Entries: 1_000, MemoryBytes: 90 << 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var attempts, generations atomic.Uint32
+	store, err := catalog.NewCatalogStore(catalog.StoreConfig{
+		ShareInstance:  fixture.share,
+		ProcessBudget:  process,
+		ShareBudget:    shareBudget,
+		FailureEncoder: CatalogFailureEncoder{},
+		Clock:          clock,
+		AttemptIDs: catalog.ScanAttemptIDGeneratorFunc(func() (catalog.ScanAttemptID, error) {
+			return scanAttemptID(t, byte(attempts.Add(1))), nil
+		}),
+		Generations: catalog.DirectoryGenerationGeneratorFunc(func() (catalog.DirectoryGeneration, error) {
+			return generationID(t, byte(generations.Add(1))), nil
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	session, err := catalog.NewBudgetAccount("perm-wire-session", catalog.DefaultSessionBudgetLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := directoryID(t, 200)
+	dirA := directoryID(t, 201)
+	dirB := directoryID(t, 202)
+	commitSelectedDirectories(t, store, fixture.share, root, []catalog.DirectoryID{dirA, dirB}, session)
+
+	bigRef, err := catalog.NewSourceReference(bytes.Repeat([]byte("y"), 45<<10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dirBScans atomic.Int32
+	scanner := catalog.DirectoryScannerFunc(func(ctx context.Context, request catalog.ScanRequest) (catalog.ScanResult, error) {
+		dirID, _ := request.Directory.DirectoryID()
+		seed := byte(210)
+		if dirID == dirB {
+			seed = 211
+			dirBScans.Add(1)
+		}
+		identity, _ := catalog.NewSourceIdentity([]byte{seed})
+		candidate, _ := catalog.NewVersionCandidate([]byte{seed + 1})
+		return catalog.ScanResult{}, request.Children.Add(ctx, catalog.ScannedChild{
+			FileID: fileID(t, seed), Name: "file-" + string(rune('a'+(seed%26))),
+			SourceReference: bigRef, SourceIdentity: identity, VersionCandidate: candidate, ExpectedSize: 1,
+		})
+	})
+
+	source, err := NewCatalogStoreSource(CatalogStoreSourceConfig{
+		ShareInstance: fixture.share, Store: store, SessionBudget: session, Scanner: scanner,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewAddressedSenderService(fixture.share, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var transportCalls atomic.Int32
+	client, err := NewClient(ClientConfig{
+		ShareInstance: fixture.share,
+		Transport: PageTransportFunc(func(ctx context.Context, req ListRequest) ([]byte, error) {
+			transportCalls.Add(1)
+			return service.Serve(ctx, req, nil)
+		}),
+		Verifier: CatalogPayloadDecoder{},
+		Now:      clock.Now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if snapshot, err := client.LoadDirectory(context.Background(), dirA); err != nil || snapshot.EntryCount() != 1 {
+		t.Fatalf("dirA load = %+v err=%v", snapshot, err)
+	}
+	_, err = client.LoadDirectory(context.Background(), dirB)
+	var wireFailure DirectoryFailure
+	if !errors.As(err, &wireFailure) || wireFailure.Code != DirectoryCodeBudget ||
+		wireFailure.Retryable || wireFailure.RetryAfter != 0 {
+		t.Fatalf("permanent share wire failure = %v, want non-retryable DirectoryCodeBudget", err)
+	}
+
+	// Advancing time must not trigger a second transport call or rescan.
+	callsBefore := transportCalls.Load()
+	clock.now = clock.now.Add(catalog.MaxScanRetryCooldown)
+	_, err = client.LoadDirectory(context.Background(), dirB)
+	var replayed DirectoryFailure
+	if !errors.As(err, &replayed) || replayed.AttemptID != wireFailure.AttemptID ||
+		replayed.Retryable || transportCalls.Load() != callsBefore || dirBScans.Load() != 1 {
+		t.Fatalf("replayed permanent wire failure = %v calls=%d/%d scans=%d", err, transportCalls.Load(), callsBefore, dirBScans.Load())
+	}
+}
+
 func commitSelectedDirectories(
 	t *testing.T,
 	store *catalog.CatalogStore,

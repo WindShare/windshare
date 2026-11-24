@@ -303,7 +303,7 @@ func (s *CatalogStore) admitAttempt(directory DirectoryID, previous ScanAttemptI
 		[]*BudgetAccount{s.processBudget, s.shareBudget}, ResourceUsage{MemoryBytes: ScanAttemptLedgerBytes},
 	)
 	if err != nil {
-		return fail(err)
+		return fail(s.classifyScanBudgetError(err, s.activeScans == 0))
 	}
 	resources, err := newAttemptResourceMeter(s.hierarchy(session))
 	if err != nil {
@@ -398,11 +398,18 @@ func (s *CatalogStore) runAttempt(attempt *scanAttempt, directory NodeRecord, se
 		s.completeFailedAttempt(attempt, resultErr, prepared, prepareErr, sessionBudget)
 	}()
 	var overlapped bool
+	exclusivePass := false
 	committed, overlapped, resultErr = s.runParallelScanPass(attempt, directory, sessionBudget, scanner)
-	if resultErr == nil || attemptContext.Err() != nil || !s.shouldRetryContendedBudget(resultErr, sessionBudget, overlapped) {
+	if resultErr == nil || attemptContext.Err() != nil {
 		return
 	}
-	committed, resultErr = s.runExclusiveRetryPass(attempt, directory, sessionBudget, scanner)
+	if s.shouldRetryContendedBudget(resultErr, sessionBudget, overlapped) {
+		exclusivePass = true
+		committed, resultErr = s.runExclusiveRetryPass(attempt, directory, sessionBudget, scanner)
+	}
+	if resultErr != nil {
+		resultErr = s.classifyScanBudgetError(resultErr, exclusivePass)
+	}
 }
 
 func (s *CatalogStore) runParallelScanPass(
@@ -625,7 +632,7 @@ func (s *CatalogStore) leaveExclusiveRetry() {
 
 func (s *CatalogStore) shouldRetryContendedBudget(err error, sessionBudget *BudgetAccount, overlapped bool) bool {
 	var budgetErr *budgetExceededError
-	if !errors.As(err, &budgetErr) || !budgetErr.contended {
+	if !errors.As(err, &budgetErr) || !budgetErr.contendedForActiveScan() {
 		return false
 	}
 	// Session contention belongs to concurrent scans on that session; share or

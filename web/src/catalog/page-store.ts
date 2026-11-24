@@ -7,7 +7,9 @@ import {
   type DirectoryFailure,
 } from './records'
 
-const CATALOG_PAGE_RECORD_BASE_BYTES = 16 * 1024
+// Bounds the in-memory JS page object, fixed identity typed arrays, and
+// per-directory map slots without inheriting IndexedDB's 16 KiB record floor.
+const CATALOG_PAGE_RECORD_BASE_BYTES = 2 * 1024
 const CATALOG_ENTRY_RECORD_BYTES = 512
 const CATALOG_AUTHENTICATED_BYTES_MULTIPLIER = 4
 const MAX_SHARE_CATALOG_ENTRIES = 4_194_304

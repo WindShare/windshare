@@ -123,6 +123,13 @@ func (handler *catalogHandler) process(ctx context.Context, op protocolsession.O
 }
 
 func classifyCatalogOperationFailure(err error) contentflow.OperationFailure {
+	if errors.Is(err, catalog.ErrShareCapacityExceeded) {
+		return contentflow.OperationFailure{
+			Scope:   protocolsession.OperationScopeDirectory,
+			Code:    catalogflow.DirectoryCodeBudget,
+			Message: "Catalog share capacity exhausted",
+		}
+	}
 	if errors.Is(err, catalog.ErrBudgetExceeded) {
 		return contentflow.OperationFailure{
 			Scope:      protocolsession.OperationScopeDirectory,

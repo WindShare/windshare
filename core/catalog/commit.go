@@ -102,7 +102,7 @@ func (s *CatalogStore) CommitDirectory(ctx context.Context, commit DirectoryComm
 	s.commitMu.Lock()
 	defer s.commitMu.Unlock()
 	committed, _, err := s.commitDirectoryLocked(ctx, commit, sessionBudget, meter, false, nil)
-	return committed, err
+	return committed, s.classifyDirectCommitBudgetError(err)
 }
 
 func (s *CatalogStore) CommitSyntheticRoot(ctx context.Context, commit DirectoryCommit, startupBudget *BudgetAccount) (CommittedRoot, error) {
@@ -128,7 +128,7 @@ func (s *CatalogStore) CommitSyntheticRoot(ctx context.Context, commit Directory
 	}
 	committed, reservation, err := s.commitDirectoryLocked(ctx, commit, startupBudget, meter, false, nil)
 	if err != nil {
-		return CommittedRoot{}, err
+		return CommittedRoot{}, s.classifyDirectCommitBudgetError(err)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -47,7 +47,7 @@ describe('v2 catalog page store', () => {
       maxEntries: 524_288,
       maxMetadataBytes: 256 * 1024 * 1024,
     })
-    expect(catalogPageMetadataCharge(page(0, 'root', [entry(1, 'first')]))).toBe(20_992)
+    expect(catalogPageMetadataCharge(page(0, 'root', [entry(1, 'first')]))).toBe(6_656)
     const maximumPageCharge = catalogPageMetadataCharge({
       ...page(0, 'root', Array.from(
         { length: CATALOG_PAGE_ENTRIES },
@@ -55,7 +55,7 @@ describe('v2 catalog page store', () => {
       )),
       encodedBytes: MAX_CATALOG_PAYLOAD_BYTES,
     })
-    expect(maximumPageCharge).toBe(393_216)
+    expect(maximumPageCharge).toBe(378_880)
     expect(() => catalogPageMetadataCharge({
       ...page(0, 'root', []),
       encodedBytes: 0,
@@ -213,6 +213,65 @@ describe('v2 catalog page store', () => {
 
     const abortExistingVisits = await countMapIterations(() => store.abort('dir-0'))
     expect(abortExistingVisits).toBeLessThanOrEqual(4)
+  })
+
+  it('supports wide directories and cumulative multi-directory browsing within default share budgets', async () => {
+    const wideStore = new MemoryCatalogPageStore()
+    const widePages = 100
+    let nextWideId = 1
+    await wideStore.begin('wide-dir')
+    for (let pageIndex = 0; pageIndex < widePages; pageIndex += 1) {
+      const entries = Array.from({ length: CATALOG_PAGE_ENTRIES }, (_, slot) =>
+        entry(nextWideId++, `file-${pageIndex}-${slot}`),
+      )
+      await wideStore.stage({
+        ...page(pageIndex, 'wide-dir', entries),
+        terminal: pageIndex === widePages - 1,
+        encodedBytes: 16_384,
+      })
+    }
+    await wideStore.commit({
+      directoryIdText: 'wide-dir',
+      generationText: 'generation',
+      directoryId: new Uint8Array(16).fill(1),
+      generation: new Uint8Array(16).fill(2),
+      pageCount: widePages,
+      entryCount: widePages * CATALOG_PAGE_ENTRIES,
+      omittedCount: 0n,
+      terminalCommitment: new Uint8Array(32),
+    })
+    const loadedWide = await wideStore.loadDirectory('wide-dir')
+    expect(loadedWide?.entryCount).toBe(25_600)
+
+    // With the calibrated 2 KiB in-memory per-page base, 20,000 small directories
+    // (5 files each, 100,000 entries total) fit cleanly within the 256 MiB share
+    // budget instead of tripping an artificial 16 KiB/page IndexedDB ceiling.
+    const nestedStore = new MemoryCatalogPageStore()
+    const smallDirectories = 20_000
+    const entriesPerSmallDir = 5
+    const encodedSmallPageBytes = 400
+    let nextNestedId = 1
+    for (let dirIndex = 0; dirIndex < smallDirectories; dirIndex += 1) {
+      const dirId = `small-${dirIndex}`
+      const entries = Array.from({ length: entriesPerSmallDir }, (_, slot) =>
+        entry(nextNestedId++, `item-${slot}`),
+      )
+      await nestedStore.stage({
+        ...page(0, dirId, entries),
+        terminal: true,
+        encodedBytes: encodedSmallPageBytes,
+      })
+    }
+    expect(await nestedStore.loadPage({
+      directoryIdText: 'small-19999',
+      generationText: 'generation',
+      directoryId: new Uint8Array(16).fill(1),
+      generation: new Uint8Array(16).fill(2),
+      pageCount: 1,
+      entryCount: entriesPerSmallDir,
+      omittedCount: 0n,
+      terminalCommitment: new Uint8Array(32),
+    }, 0)).toBeDefined()
   })
 })
 
