@@ -106,6 +106,17 @@ func (w *laneWriter) Accepting() bool {
 	return w.state == writerAccepting
 }
 
+// Active reports whether the writer has not yet stopped, covering both normal
+// acceptance and in-flight delivery of an already-admitted terminal frame.
+func (w *laneWriter) Active() bool {
+	if w == nil {
+		return false
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.state != writerStopped
+}
+
 func (w *laneWriter) SendControl(
 	ctx context.Context,
 	message protocolsession.Message,

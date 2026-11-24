@@ -227,6 +227,9 @@ func TestLaneWriterTerminalPreemptsQueuedAndRejectsSubsequentSends(t *testing.T)
 	if drained.Load() != 2 {
 		t.Fatalf("terminal drained %d callbacks, want 2", drained.Load())
 	}
+	if writer.Accepting() || !writer.Active() {
+		t.Fatalf("post-enqueue writer states accepting=%t active=%t, want false/true", writer.Accepting(), writer.Active())
+	}
 	if err := writer.SendControl(context.Background(), msg, nil); !errors.Is(err, protocolsession.ErrWriterTerminal) || !protocolsession.IsNotSent(err) {
 		t.Fatalf("post-terminal control err=%v", err)
 	}
@@ -242,8 +245,8 @@ func TestLaneWriterTerminalPreemptsQueuedAndRejectsSubsequentSends(t *testing.T)
 	if err := <-runDone; err != nil {
 		t.Fatalf("writer run after terminal=%v", err)
 	}
-	if writer.Accepting() {
-		t.Fatal("writer still accepting after terminal")
+	if writer.Accepting() || writer.Active() {
+		t.Fatalf("stopped writer states accepting=%t active=%t, want false/false", writer.Accepting(), writer.Active())
 	}
 	// Only the terminal frame must have crossed the wire.
 	select {

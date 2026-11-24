@@ -57,6 +57,14 @@ func (lane *RuntimeLane) usableLocked() bool {
 		lane.channel != nil && lane.done != nil
 }
 
+// activeLocked reports whether this lane still keeps session lifetime alive.
+// A lane delivering an admitted terminal frame is no longer usable for new
+// traffic, but sibling retirement must not cancel its context before delivery.
+func (lane *RuntimeLane) activeLocked() bool {
+	return lane != nil && !lane.closing && lane.writer != nil && lane.writer.Active() &&
+		lane.channel != nil && lane.done != nil
+}
+
 func (lane *RuntimeLane) closeChannel() {
 	if lane != nil {
 		lane.closeChannelReference(lane.channel)
@@ -432,16 +440,16 @@ func (lanes *runtimeLanes) finishLane(lane *RuntimeLane) {
 		delete(lanes.active, lane.identity.ID)
 	}
 	hook := lanes.onDetach
-	lastUsable := !lanes.stopping && !lanes.hasUsableLocked()
+	lastActive := !lanes.stopping && !lanes.hasActiveLocked()
 	var claim TerminationClaim
-	if lastUsable {
+	if lastActive {
 		claim = lanes.runtime.claimTermination(TerminationPathsExhausted)
 	}
 	lanes.mu.Unlock()
 	if hook != nil {
 		hook(lane.identity)
 	}
-	if lastUsable {
+	if lastActive {
 		lanes.runtime.cancelContext()
 		claim.Publish()
 	}
@@ -483,6 +491,15 @@ func (lanes *runtimeLanes) hasUsable() bool {
 func (lanes *runtimeLanes) hasUsableLocked() bool {
 	for _, lane := range lanes.active {
 		if lane.usableLocked() {
+			return true
+		}
+	}
+	return false
+}
+
+func (lanes *runtimeLanes) hasActiveLocked() bool {
+	for _, lane := range lanes.active {
+		if lane.activeLocked() {
 			return true
 		}
 	}
