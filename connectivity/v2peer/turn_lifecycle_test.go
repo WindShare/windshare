@@ -1,14 +1,19 @@
 package v2peer
 
 import (
+	"context"
+	"fmt"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/turnsession"
 	"github.com/windshare/windshare/connectivity/v2signal"
+	coreSession "github.com/windshare/windshare/core/session"
 	p "github.com/windshare/windshare/core/session/protocolsession"
+	"github.com/windshare/windshare/core/session/turngrant"
 	"github.com/windshare/windshare/core/transfer/lanes"
 )
 
@@ -144,5 +149,108 @@ func TestReceiverTURNPermitEndsAtAuthenticatedAttachment(t *testing.T) {
 		}
 		give()
 		receiveTest(t, extra)()
+	})
+}
+
+type multiServiceTURNProvider struct{ count int }
+
+func (provider multiServiceTURNProvider) Issue(_ context.Context, _ turngrant.IssueRequest) turngrant.IssueResult {
+	result := turngrant.IssueResult{Status: p.TURNOK}
+	for i := range provider.count {
+		result.Credentials = append(result.Credentials, turngrant.Credential{
+			ServiceID: fmt.Sprintf("turn-%d", i+1),
+			URLs:      []string{"turn:127.0.0.1:3478"},
+			Username:  "user",
+			Password:  "pass",
+		})
+	}
+	return result
+}
+
+func TestPairedFullLoadTURNNegotiationCompletesThroughAttachmentWithIsolatedCapacities(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		senderCapacity := turnsession.NewCapacity()
+		receiverCapacity := turnsession.NewCapacity()
+		clock := &handshakeClock{now: time.Unix(100, 0)}
+
+		senderFactory := mustTestFactory(t, Config{
+			TURNCapacity: senderCapacity,
+			TURNProvider: multiServiceTURNProvider{count: p.MaxGrantsPerMessage},
+			Now:          clock.Now,
+			DataChannels: DataChannelAdapterFunc(func(*pion.DataChannel) (PeerDataChannel, error) {
+				return newTestPeerChannel(), nil
+			}),
+		})
+		senderPeers := make(chan *testTURNPeer, p.MaxGrantsPerMessage)
+		senderFactory.turnPeers = func(nativepeer.AttemptRequest, p.TURNGrant) (turnPeerConnection, error) {
+			peer := &testTURNPeer{newReceiverTestPeerConnection()}
+			senderPeers <- peer
+			return peer, nil
+		}
+
+		session := newTestPeerSession(7)
+		handler, ctx, stop, done := startSenderTestRuntime(t, senderFactory, session)
+		defer stopSenderTestRuntime(t, stop, done)
+		synctest.Wait()
+
+		grants := requestTestTURNGrants(t, ctx, session, 1)
+		if len(grants) != p.MaxGrantsPerMessage {
+			t.Fatalf("issued %d TURN grants, want %d", len(grants), p.MaxGrantsPerMessage)
+		}
+
+		receivers := make([]*receiverHarness, 0, p.MaxGrantsPerMessage)
+		for i, grant := range grants {
+			h := newTURNReceiverHarness(t, receiverCapacity, byte(i+1))
+			h.binding.PeerSlot = uint8(i)
+			attempt, err := h.factory.StartTURNBinding(ctx, h.signaling, h.lanes, h.binding, grant)
+			if err != nil {
+				t.Fatal(err)
+			}
+			h.attempt = attempt
+			defer attempt.Close()
+			offerBody := receiveTest(t, h.signaling.offers)
+			op := testPeerOperation(testOperationID(byte(i + 1)))
+			if err := handler.HandleMessage(ctx, op, testMessage(t, p.MessagePeerOffer, op.ID(), offerBody)); err != nil {
+				t.Fatal(err)
+			}
+			receivers = append(receivers, h)
+		}
+
+		// All four paired offers receive answers while all four receiver permits remain held.
+		for range p.MaxGrantsPerMessage {
+			control := receiveTest(t, session.controls)
+			if control.kind != p.MessagePeerAnswer {
+				t.Fatalf("unexpected sender control kind %v", control.kind)
+			}
+		}
+
+		for i, h := range receivers {
+			h.answer(t)
+			h.openAndAwaitLane(t)
+			defer h.admittedOwner.Close()
+
+			session.lane = coreSession.LaneIdentity{ID: uint32(10 + i), Epoch: 1}
+			peer := receiveTest(t, senderPeers)
+			peer.emitUnexpectedDataChannel(&pion.DataChannel{})
+			receiveTest(t, session.admissions)
+			owner := receiveTest(t, session.ownedAdmissions)
+			defer owner.Close()
+			synctest.Wait()
+		}
+
+		// After authenticated attachment on both sides, every permit is returned.
+		for _, pool := range []*turnsession.Capacity{receiverCapacity, senderCapacity} {
+			var releases []func()
+			for range p.MaxGrantsPerMessage {
+				release, err := pool.Acquire(ctx)
+				if err != nil {
+					t.Fatalf("permit remained held after attachment: %v", err)
+				}
+				releases = append(releases, release)
+			}
+			for _, release := range releases {
+				release()
+			}
+		}
 	})
 }

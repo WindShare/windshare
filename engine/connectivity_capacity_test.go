@@ -12,6 +12,7 @@ import (
 	"github.com/windshare/windshare/connectivity/networkstate"
 	"github.com/windshare/windshare/connectivity/reachability"
 	"github.com/windshare/windshare/connectivity/v2signal"
+	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
 const capacityTestTimeout = 5 * time.Second
@@ -110,4 +111,50 @@ func TestEngineAdmissionSurvivesOwnerReplacementAndIsolatesOtherEngines(t *testi
 	if err := <-pending; !errors.Is(err, context.Canceled) {
 		t.Fatalf("exhausted owner escaped its queue: %v", err)
 	}
+}
+
+func TestEngineIsolatesSenderAndReceiverTURNPermitsAcrossDirectionsAndEngines(t *testing.T) {
+	first := newTestEngine(t, Config{})
+	second := newTestEngine(t, Config{})
+	ctx, cancel := context.WithTimeout(context.Background(), capacityTestTimeout)
+	defer cancel()
+
+	var receiverReleases []func()
+	for range protocolsession.MaxGrantsPerMessage {
+		release, err := first.connectivity.ReceiverTURN().Acquire(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		receiverReleases = append(receiverReleases, release)
+	}
+	defer func() {
+		for _, release := range receiverReleases {
+			release()
+		}
+	}()
+
+	var senderReleases []func()
+	for range protocolsession.MaxGrantsPerMessage {
+		release, err := first.connectivity.SenderTURN().Acquire(ctx)
+		if err != nil {
+			t.Fatalf("same-engine sender TURN acquire blocked by full receiver pool: %v", err)
+		}
+		senderReleases = append(senderReleases, release)
+	}
+	defer func() {
+		for _, release := range senderReleases {
+			release()
+		}
+	}()
+
+	otherReceiver, err := second.connectivity.ReceiverTURN().Acquire(ctx)
+	if err != nil {
+		t.Fatalf("independent Engine inherited exhausted receiver TURN pool: %v", err)
+	}
+	otherReceiver()
+	otherSender, err := second.connectivity.SenderTURN().Acquire(ctx)
+	if err != nil {
+		t.Fatalf("independent Engine inherited exhausted sender TURN pool: %v", err)
+	}
+	otherSender()
 }

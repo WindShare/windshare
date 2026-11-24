@@ -46,7 +46,7 @@ func senderConfig(config SenderConfig) (v2peer.Config, error) {
 		return v2peer.Config{}, err
 	}
 	result := v2peer.Config{
-		Trace: config.Trace, TURNCapacity: config.Capacity.TURN(), TURNProvider: config.TURNProvider,
+		Trace: config.Trace, TURNCapacity: config.Capacity.SenderTURN(), TURNProvider: config.TURNProvider,
 		Configuration: v2peer.DefaultConfiguration(),
 		Native:        native,
 		Now:           config.Now,
@@ -62,8 +62,7 @@ func senderConfig(config SenderConfig) (v2peer.Config, error) {
 }
 
 type ReceiverConfig struct {
-	TURNCapacity   *turnsession.Capacity
-	SendCapacity   *wsrtc.SendCapacity
+	Capacity       *Capacity
 	Random         io.Reader
 	Native         *nativepeer.NativePeerConnectivity
 	Diagnostics    bool
@@ -76,11 +75,11 @@ func NewReceiver(config ReceiverConfig) (*v2peer.ReceiverFactory, error) {
 
 func receiverConfig(config ReceiverConfig) v2peer.ReceiverFactoryConfig {
 	result := v2peer.ReceiverFactoryConfig{
-		TURNCapacity:  config.TURNCapacity,
+		TURNCapacity:  config.Capacity.ReceiverTURN(),
 		Random:        config.Random,
 		Native:        config.Native,
 		Configuration: v2peer.DefaultConfiguration(),
-		DataChannels:  channelAdapter(config.Diagnostics, config.ObserveChannel, config.SendCapacity),
+		DataChannels:  channelAdapter(config.Diagnostics, config.ObserveChannel, config.Capacity.Sends()),
 	}
 	if config.Diagnostics {
 		result.ReceiverTerminationObservationCapacity = v2peer.DefaultReceiverTerminationObservationCapacity

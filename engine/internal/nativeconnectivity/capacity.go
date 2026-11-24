@@ -14,19 +14,25 @@ var ErrCapacityRequired = errors.New("application connectivity capacity is requi
 // Capacity belongs to one Engine, above tasks and connection generations.
 // Keeping the authorities together prevents factory replacement from minting
 // admission tokens while each module retains its own scheduling policy.
+//
+// Sender and receiver TURN permits are isolated because a receiver holds its
+// permit until LANE_ATTACH; sharing one pool lets four outbound receiver lines
+// deadlock or starve the paired local sender in the same Engine.
 type Capacity struct {
-	turn      *turnsession.Capacity
-	sends     *wsrtc.SendCapacity
-	admission *nativepeer.Admission
-	monitor   nativepeer.NetworkMonitor
+	senderTURN   *turnsession.Capacity
+	receiverTURN *turnsession.Capacity
+	sends        *wsrtc.SendCapacity
+	admission    *nativepeer.Admission
+	monitor      nativepeer.NetworkMonitor
 }
 
 func NewCapacity(clock nativepeer.AdmissionClock, monitor nativepeer.NetworkMonitor) *Capacity {
 	return &Capacity{
-		turn:      turnsession.NewCapacity(),
-		sends:     wsrtc.NewSendCapacity(),
-		admission: nativepeer.NewAdmission(clock),
-		monitor:   monitor,
+		senderTURN:   turnsession.NewCapacity(),
+		receiverTURN: turnsession.NewCapacity(),
+		sends:        wsrtc.NewSendCapacity(),
+		admission:    nativepeer.NewAdmission(clock),
+		monitor:      monitor,
 	}
 }
 
@@ -48,9 +54,16 @@ func (capacity *Capacity) Sends() *wsrtc.SendCapacity {
 	return capacity.sends
 }
 
-func (c *Capacity) TURN() *turnsession.Capacity {
-	if c == nil {
+func (capacity *Capacity) SenderTURN() *turnsession.Capacity {
+	if capacity == nil {
 		return nil
 	}
-	return c.turn
+	return capacity.senderTURN
+}
+
+func (capacity *Capacity) ReceiverTURN() *turnsession.Capacity {
+	if capacity == nil {
+		return nil
+	}
+	return capacity.receiverTURN
 }
