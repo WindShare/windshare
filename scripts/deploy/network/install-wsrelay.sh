@@ -133,20 +133,46 @@ if ! restart_healthy; then
     exit 1
 fi
 
-record_healthy "$release"
-# Keep the actual rollback target even when older releases were reinstalled.
-touch "$release"
-kept=1
-if [[ -n $previous && $previous != "$release" ]]; then kept=2; fi
-while read -r _ name; do
-    [[ $name =~ ^[0-9a-f]{40}$ ]] || continue
-    dir="$releases/$name"
-    [[ $dir != "$release" && $dir != "$previous" ]] || continue
-    if (( kept < retain_releases )); then
-        kept=$((kept+1))
-    else
-        rm -f -- "$dir/wsrelay"
-        rmdir -- "$dir"
+warn_prune() {
+    printf 'event=wsrelay_install revision=%s note=prune_warning target=%s reason=%s\n' \
+        "$revision" "$1" "$2" >&2
+}
+
+prune_releases() {
+    # Keep the actual rollback target even when older releases were reinstalled.
+    # Cleanup runs best-effort after the new release is live and recorded healthy so
+    # housekeeping errors never misreport a committed upgrade as failed.
+    touch -- "$release" || warn_prune "$revision" touch_failed
+    local listed name dir extra kept=1
+    if [[ -n $previous && $previous != "$release" ]]; then kept=2; fi
+    if ! listed=$(find "$releases" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %f\n' | LC_ALL=C sort -nr); then
+        warn_prune "releases" list_failed
+        return 0
     fi
-done < <(find "$releases" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %f\n' | LC_ALL=C sort -nr)
+    while IFS=' ' read -r _ name; do
+        [[ $name =~ ^[0-9a-f]{40}$ ]] || continue
+        dir="$releases/$name"
+        [[ $dir != "$release" && $dir != "$previous" ]] || continue
+        if [[ -f $dir/wsrelay && ! -L $dir/wsrelay && -x $dir/wsrelay ]] && (( kept < retain_releases )); then
+            kept=$((kept + 1))
+            continue
+        fi
+        # Check for unexpected files before unlinking wsrelay so cleanup neither wipes
+        # operator files nor leaves a binary-less directory with a bumped mtime.
+        if ! extra=$(find "$dir" -mindepth 1 -maxdepth 1 ! \( -name wsrelay -type f \) -print -quit); then
+            warn_prune "$name" inspect_failed
+            continue
+        fi
+        if [[ -n $extra ]]; then
+            warn_prune "$name" unexpected_entries
+            continue
+        fi
+        if ! rm -f -- "$dir/wsrelay" || ! rmdir -- "$dir"; then
+            warn_prune "$name" remove_failed
+        fi
+    done <<< "$listed"
+}
+
+record_healthy "$release"
+prune_releases
 log healthy

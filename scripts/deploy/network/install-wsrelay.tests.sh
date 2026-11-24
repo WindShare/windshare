@@ -6,6 +6,7 @@ trap 'rm -rf -- "$work"' EXIT
 export WS_TEST_ROOT="$work/host" WS_TEST_CONFIG="$work/node.json" WS_TEST_LOG="$work/restarts" WS_TEST_UNIT_LOG="$work/systemctl" WS_TEST_FAILED="$work/unit-failed"
 mkdir -p "$work/bin"
 touch "$WS_TEST_CONFIG"
+real_rmdir=$(type -P rmdir)
 sed -e "s|^readonly root=.*|readonly root=$WS_TEST_ROOT|" \
     -e "s|^readonly config=.*|readonly config=$WS_TEST_CONFIG|" "$here/install-wsrelay.sh" > "$work/install"
 export PATH="$work/bin:$PATH"
@@ -58,6 +59,14 @@ SH
 cat > "$work/bin/sleep" <<'SH'
 #!/usr/bin/env bash
 exit 0
+SH
+cat > "$work/bin/rmdir" <<SH
+#!/usr/bin/env bash
+if [[ -n \${FAIL_RMDIR:-} && \${*: -1} == */\$FAIL_RMDIR ]]; then
+    echo "rmdir: simulated failure: \${*: -1}" >&2
+    exit 1
+fi
+exec "$real_rmdir" "\$@"
 SH
 cat > "$work/wsrelay" <<'SH'
 #!/usr/bin/env bash
@@ -153,4 +162,57 @@ ln -sfn "$WS_TEST_ROOT/releases/$(revision 1)" "$WS_TEST_ROOT/current"
 FAIL_HEALTH=$(revision 1) fails install_node 1
 [[ ! -e $WS_TEST_ROOT/current && ! -L $WS_TEST_ROOT/current && ! -e $WS_TEST_ROOT/last-healthy && ! -L $WS_TEST_ROOT/last-healthy ]]
 [[ $(cat "$WS_TEST_UNIT_LOG") == $'reset-failed\nrestart:'"$(revision 1)"$'\nstop:'"$(revision 1)"$'\nreset-failed' ]]
+
+# Retention cleanup failures must emit a warning without misreporting a committed upgrade as failed,
+# leave unexpected directories intact (without stripping wsrelay or bumping mtime), keep pruning clean
+# older releases, and never let broken directories crowd out genuine rollbackable releases.
+rm -rf -- "$WS_TEST_ROOT"
+install_node 1
+install_node 2
+install_node 3
+mkdir -p "$WS_TEST_ROOT/releases/$(revision 10)"
+cp "$work/wsrelay" "$WS_TEST_ROOT/releases/$(revision 10)/wsrelay"
+chmod 0755 "$WS_TEST_ROOT/releases/$(revision 10)/wsrelay"
+echo "operator note" > "$WS_TEST_ROOT/releases/$(revision 1)/note.txt"
+touch -t 202001010000 "$WS_TEST_ROOT/releases/$(revision 10)"
+touch -t 202001020000 "$WS_TEST_ROOT/releases/$(revision 1)"
+touch -t 202001030000 "$WS_TEST_ROOT/releases/$(revision 2)"
+touch -t 202001040000 "$WS_TEST_ROOT/releases/$(revision 3)"
+stderr=$(install_node 4 2>&1)
+[[ $(selected) == "$(revision 4)" && $(last_healthy) == "$(revision 4)" ]]
+[[ $stderr == *"event=wsrelay_install revision=$(revision 4) note=prune_warning target=$(revision 1) reason=unexpected_entries"* ]]
+[[ $stderr == *"event=wsrelay_install revision=$(revision 4) result=healthy"* ]]
+[[ -x $WS_TEST_ROOT/releases/$(revision 1)/wsrelay && -f $WS_TEST_ROOT/releases/$(revision 1)/note.txt ]]
+[[ ! -d $WS_TEST_ROOT/releases/$(revision 10) ]]
+[[ -x $WS_TEST_ROOT/releases/$(revision 2)/wsrelay && -x $WS_TEST_ROOT/releases/$(revision 3)/wsrelay ]]
+
+# A subsequent upgrade must keep the 3 newest rollbackable releases (5, 4, 3), prune clean 2,
+# and keep skipped 1 untouched rather than letting it steal a retention slot via bumped mtime.
+stderr=$(install_node 5 2>&1)
+[[ $(selected) == "$(revision 5)" && $(last_healthy) == "$(revision 5)" ]]
+[[ $stderr == *"event=wsrelay_install revision=$(revision 5) note=prune_warning target=$(revision 1) reason=unexpected_entries"* ]]
+[[ $stderr == *"event=wsrelay_install revision=$(revision 5) result=healthy"* ]]
+[[ -x $WS_TEST_ROOT/releases/$(revision 3)/wsrelay && -x $WS_TEST_ROOT/releases/$(revision 4)/wsrelay && -x $WS_TEST_ROOT/releases/$(revision 5)/wsrelay ]]
+[[ ! -d $WS_TEST_ROOT/releases/$(revision 2) ]]
+[[ -x $WS_TEST_ROOT/releases/$(revision 1)/wsrelay && -f $WS_TEST_ROOT/releases/$(revision 1)/note.txt ]]
+
+# A pre-existing binary-less 40-hex directory with a newer mtime must not occupy a retention slot.
+mkdir -p "$WS_TEST_ROOT/releases/$(revision 9)"
+echo "stray" > "$WS_TEST_ROOT/releases/$(revision 9)/stray.txt"
+touch -t 202001030000 "$WS_TEST_ROOT/releases/$(revision 3)"
+touch -t 202001040000 "$WS_TEST_ROOT/releases/$(revision 4)"
+touch -t 202001050000 "$WS_TEST_ROOT/releases/$(revision 5)"
+touch -t 202501010000 "$WS_TEST_ROOT/releases/$(revision 9)"
+stderr=$(install_node 6 2>&1)
+[[ $(selected) == "$(revision 6)" && $(last_healthy) == "$(revision 6)" ]]
+[[ $stderr == *"event=wsrelay_install revision=$(revision 6) note=prune_warning target=$(revision 9) reason=unexpected_entries"* ]]
+[[ $stderr == *"event=wsrelay_install revision=$(revision 6) result=healthy"* ]]
+[[ -x $WS_TEST_ROOT/releases/$(revision 4)/wsrelay && -x $WS_TEST_ROOT/releases/$(revision 5)/wsrelay && -x $WS_TEST_ROOT/releases/$(revision 6)/wsrelay ]]
+[[ ! -d $WS_TEST_ROOT/releases/$(revision 3) ]]
+
+# An OS-level rmdir failure on a clean stale release also logs a prune warning without failing the upgrade.
+stderr=$(FAIL_RMDIR=$(revision 4) install_node 7 2>&1)
+[[ $(selected) == "$(revision 7)" && $(last_healthy) == "$(revision 7)" ]]
+[[ $stderr == *"event=wsrelay_install revision=$(revision 7) note=prune_warning target=$(revision 4) reason=remove_failed"* ]]
+[[ $stderr == *"event=wsrelay_install revision=$(revision 7) result=healthy"* ]]
 echo "wsrelay install, preflight, rollback and retention passed"
