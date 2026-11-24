@@ -22,8 +22,16 @@ on:
       - relay-rust/crates/relay-access/**
       - relay-rust/crates/relay-cloudflare/**
       - relay-rust/tests/_goclient/**
+      # Go wire-contract inputs exercised by _goclient against the local Worker;
+      # excluded from push.paths so Go-only syncs never trigger fork deployments.
+      - core/networkendpoint/**
+      - core/session/protocolsession/turn_control.go
+      - core/session/turngrant/**
+      - engine/relayconfig/turn.go
+      - engine/relayprofile/**
       - engine/relaysetup/**
       - engine/turnissuer/**
+      - relay/protocol/v2/**
   push:
     branches:
       - main
