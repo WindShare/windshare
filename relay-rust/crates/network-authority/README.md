@@ -60,7 +60,7 @@ The authority serves the signed head at `/.well-known/windshare-network`. A tran
 
 Nodes report load every minute. The console marks a previously reporting node offline after three minutes, and shows policy updates awaiting application. For binary updates, follow the [host upgrade procedure](../../../deploy/network/operations.md#official-node-upgrades).
 
-Before upgrading an existing authority, finish outstanding maintenance operations on the previous release, including releasing the host hold. The first access converts listed nodes and withdraws staging drafts in one transaction. The signed directory, alias ledger and policy version history remain authoritative.
+In-place Worker upgrades assume a compatible Durable Object storage schema. Pre-v1.0 schema breaks in persisted credentials or node records require a fresh authority Durable Object and administrator initialization; bundled `deploy/network/release.json` and `history/` restore the signed directory and alias ledger, and any node with a higher cached `policy.version` needs its local access cache cleared.
 
 ## Operations
 

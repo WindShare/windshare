@@ -82,10 +82,6 @@ impl NetworkAuthority {
             // Run table and index DDL once per DO instance outside rollbackable
             // transactions so online requests never run DDL or lose schema setup on abort.
             database.ensure_schema()?;
-            let mut fleet_store = database.clone();
-            storage::transaction(&self.state, move || {
-                crate::fleet::migration::migrate(&mut fleet_store)
-            })?;
             self.schema_ready.set(true);
             tracing::debug!(event = "authority_schema_ready");
         }

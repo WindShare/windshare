@@ -3,8 +3,6 @@ pub mod descriptor;
 #[cfg(any(test, target_arch = "wasm32"))]
 pub(crate) mod dns;
 mod endpoints;
-#[cfg(any(test, target_arch = "wasm32"))]
-pub(crate) mod migration;
 pub mod operations;
 pub mod publication;
 pub mod signature;
