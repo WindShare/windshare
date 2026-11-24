@@ -1,10 +1,15 @@
-import { TOP_SUPPORTERS_LIMIT, type PublicWallEntry } from './model'
+import {
+  TOP_SUPPORTERS_LIMIT,
+  isKnownCurrency,
+  type KnownCurrency,
+  type PublicWallEntry,
+} from './model'
 
 const MAX_RANKABLE_MINOR_DIGITS = 4
 
 // Fixed reference micro-USD per 1 major currency unit, used solely to establish a
 // stable cross-currency ordering for Top Supporters without rewriting original amounts.
-export const REFERENCE_MICRO_USD_PER_MAJOR: Readonly<Record<string, bigint>> = Object.freeze({
+export const REFERENCE_MICRO_USD_PER_MAJOR: Readonly<Record<KnownCurrency, bigint>> = Object.freeze({
   USD: 1_000_000n,
   CNY: 138_000n,
   EUR: 1_080_000n,
@@ -35,8 +40,9 @@ export function computeComparableUsdScore(
   ) {
     return null
   }
-  const microUsdPerMajor = REFERENCE_MICRO_USD_PER_MAJOR[currency.trim().toUpperCase()]
-  if (microUsdPerMajor === undefined) return null
+  const normalizedCurrency = currency.trim().toUpperCase()
+  if (!isKnownCurrency(normalizedCurrency)) return null
+  const microUsdPerMajor = REFERENCE_MICRO_USD_PER_MAJOR[normalizedCurrency]
   const scale = 10n ** BigInt(MAX_RANKABLE_MINOR_DIGITS - minorDigits)
   return BigInt(amountMinor) * microUsdPerMajor * scale
 }

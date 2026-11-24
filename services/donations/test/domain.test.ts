@@ -68,9 +68,9 @@ describe('sanitization, fixed-point money, and visibility classification', () =>
       minorDigits: 2,
       knownCurrency: true,
     })
-    expect(parseFixedPointAmount('12.3456', 'AUD')).toEqual({
+    expect(parseFixedPointAmount('12.3456', 'BRL')).toEqual({
       amountMinor: 123456,
-      currency: 'AUD',
+      currency: 'BRL',
       minorDigits: 4,
       knownCurrency: false,
     })
@@ -92,28 +92,28 @@ describe('sanitization, fixed-point money, and visibility classification', () =>
       minorDigits: 2,
       knownCurrency: true,
     })
-    expect(parseFixedPointAmount('10.50', 'CAD')).toEqual({
+    expect(parseFixedPointAmount('10.50', 'SEK')).toEqual({
       amountMinor: 1050,
-      currency: 'CAD',
+      currency: 'SEK',
       minorDigits: 2,
       knownCurrency: false,
     })
-    expect(parseFixedPointAmount('12.34500', 'CAD')).toEqual({
+    expect(parseFixedPointAmount('12.34500', 'SEK')).toEqual({
       amountMinor: 12345,
-      currency: 'CAD',
+      currency: 'SEK',
       minorDigits: 3,
       knownCurrency: false,
     })
-    expect(parseFixedPointAmount('10.00000', 'CAD')).toEqual({
+    expect(parseFixedPointAmount('10.00000', 'SEK')).toEqual({
       amountMinor: 10,
-      currency: 'CAD',
+      currency: 'SEK',
       minorDigits: 0,
       knownCurrency: false,
     })
     expect(parseFixedPointAmount('500.50', 'JPY')).toBeNull()
     expect(parseFixedPointAmount('10.0010', 'USD')).toBeNull()
-    expect(parseFixedPointAmount('12.34567', 'AUD')).toBeNull()
-    expect(parseFixedPointAmount('12.345670', 'AUD')).toBeNull()
+    expect(parseFixedPointAmount('12.34567', 'BRL')).toBeNull()
+    expect(parseFixedPointAmount('12.345670', 'BRL')).toBeNull()
     expect(parseFixedPointAmount('500.', 'JPY')).toBeNull()
     expect(parseFixedPointAmount('10.', 'USD')).toBeNull()
     expect(parseFixedPointAmount(-5, 'USD')).toBeNull()

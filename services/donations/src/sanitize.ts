@@ -2,6 +2,7 @@ import {
   KNOWN_CURRENCY_DECIMALS,
   MAX_CRYPTO_USD_MINOR,
   MIN_CRYPTO_USD_MINOR,
+  isKnownCurrency,
   type DonationConfig,
   type WallVisibility,
 } from './model'
@@ -134,7 +135,9 @@ export function parseFixedPointAmount(
 
   const wholePart = match[1] ?? ''
   const fractionPart = match[2] ?? ''
-  const knownDigits = KNOWN_CURRENCY_DECIMALS[currency]
+  const knownDigits = isKnownCurrency(currency)
+    ? KNOWN_CURRENCY_DECIMALS[currency]
+    : undefined
   const fraction = resolveNormalizedFraction(fractionPart, knownDigits)
   if (fraction === null) return null
 

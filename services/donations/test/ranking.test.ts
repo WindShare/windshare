@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { parseManualDonationInput } from '../src/admin/manual'
 import {
+  KNOWN_CURRENCIES,
+  KNOWN_CURRENCY_DECIMALS,
   PUBLIC_WALL_LIMIT,
   type PublicWallEntry,
   type PublicWallResponse,
 } from '../src/model'
 import {
+  REFERENCE_MICRO_USD_PER_MAJOR,
   computeComparableUsdScore,
   normalizeDonorDedupKey,
   selectTopSupporters,
@@ -54,6 +57,12 @@ describe('top supporters ranking semantics', () => {
     expect(computeComparableUsdScore(-100, 'USD', 2)).toBeNull()
     expect(computeComparableUsdScore(1000, 'USD', -1)).toBeNull()
     expect(computeComparableUsdScore(1000, 'USD', 5)).toBeNull()
+
+    // Known currency catalog, minor-unit precision map, and ranking rate table share one exact key set.
+    expect(Object.keys(KNOWN_CURRENCY_DECIMALS)).toEqual([...KNOWN_CURRENCIES])
+    expect(Object.keys(REFERENCE_MICRO_USD_PER_MAJOR)).toEqual([...KNOWN_CURRENCIES])
+    expect(computeComparableUsdScore(100_000, 'KRW', 0)).toBe(720_000_000_000n)
+    expect(computeComparableUsdScore(10_000, 'NZD', 2)).toBe(590_000_000_000n)
   })
 
   it('deduplicates named supporters by NFKC case-insensitive key keeping highest single order while keeping anonymous independent', () => {
@@ -191,6 +200,52 @@ describe('WallStore long-term Top 3 persistence and manual donations', () => {
         displayName: null,
         amountMinor: 10_000,
         currency: 'USD',
+        minorDigits: 2,
+        message: null,
+        donatedAt: null,
+        idempotencyKey: null,
+      },
+    })
+    expect(parseManualDonationInput({ amount: '50000', currency: 'krw' })).toEqual({
+      ok: true,
+      input: {
+        provider: 'direct',
+        externalId: null,
+        displayName: null,
+        amountMinor: 50_000,
+        currency: 'KRW',
+        minorDigits: 0,
+        message: null,
+        donatedAt: null,
+        idempotencyKey: null,
+      },
+    })
+    expect(parseManualDonationInput({ amount: '50000.00', currency: 'KRW' })).toEqual({
+      ok: true,
+      input: {
+        provider: 'direct',
+        externalId: null,
+        displayName: null,
+        amountMinor: 50_000,
+        currency: 'KRW',
+        minorDigits: 0,
+        message: null,
+        donatedAt: null,
+        idempotencyKey: null,
+      },
+    })
+    expect(parseManualDonationInput({ amount: '50000.5', currency: 'KRW' })).toEqual({
+      ok: false,
+      code: 'invalid_amount',
+    })
+    expect(parseManualDonationInput({ amount: '80', currency: 'NZD' })).toEqual({
+      ok: true,
+      input: {
+        provider: 'direct',
+        externalId: null,
+        displayName: null,
+        amountMinor: 8_000,
+        currency: 'NZD',
         minorDigits: 2,
         message: null,
         donatedAt: null,

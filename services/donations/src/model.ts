@@ -27,13 +27,43 @@ export const VISIBILITY_KINDS = [
 ] as const
 export type VisibilityKind = (typeof VISIBILITY_KINDS)[number]
 
-export const KNOWN_CURRENCY_DECIMALS: Readonly<Record<string, number>> = Object.freeze({
-  CNY: 2,
+// Single source of truth for currencies shared across manual entry, fixed-point parsing, and Top Supporters ranking.
+export const KNOWN_CURRENCIES = [
+  'USD',
+  'CNY',
+  'EUR',
+  'GBP',
+  'JPY',
+  'HKD',
+  'TWD',
+  'CAD',
+  'AUD',
+  'SGD',
+  'CHF',
+  'KRW',
+  'NZD',
+] as const
+export type KnownCurrency = (typeof KNOWN_CURRENCIES)[number]
+
+export const KNOWN_CURRENCY_DECIMALS: Readonly<Record<KnownCurrency, number>> = Object.freeze({
   USD: 2,
+  CNY: 2,
   EUR: 2,
   GBP: 2,
   JPY: 0,
+  HKD: 2,
+  TWD: 2,
+  CAD: 2,
+  AUD: 2,
+  SGD: 2,
+  CHF: 2,
+  KRW: 0,
+  NZD: 2,
 })
+
+export function isKnownCurrency(currency: string): currency is KnownCurrency {
+  return Object.hasOwn(KNOWN_CURRENCY_DECIMALS, currency)
+}
 
 export type PendingReviewReason =
   | 'moderation_mode'

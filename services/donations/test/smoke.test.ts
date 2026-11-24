@@ -122,9 +122,15 @@ describe('donations worker scaffold', () => {
       minorDigits: 0,
       knownCurrency: true,
     })
-    expect(parseFixedPointAmount('12.345', 'CAD')).toEqual({
+    expect(parseFixedPointAmount('10000', 'krw')).toEqual({
+      amountMinor: 10000,
+      currency: 'KRW',
+      minorDigits: 0,
+      knownCurrency: true,
+    })
+    expect(parseFixedPointAmount('12.345', 'SEK')).toEqual({
       amountMinor: 12345,
-      currency: 'CAD',
+      currency: 'SEK',
       minorDigits: 3,
       knownCurrency: false,
     })

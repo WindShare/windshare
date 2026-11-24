@@ -1,5 +1,6 @@
 import {
   DONATION_PROVIDERS,
+  KNOWN_CURRENCIES,
   MAX_DISPLAY_NAME_CODEPOINTS,
   MAX_MANUAL_EXTERNAL_ID_CODEPOINTS,
   MAX_MESSAGE_CODEPOINTS,
@@ -10,20 +11,6 @@ import { renderNotice } from './chrome'
 import { h } from './dom'
 import { icon } from './icons'
 import type { CopyCatalog } from './locales'
-
-const MANUAL_CURRENCIES = [
-  'USD',
-  'CNY',
-  'EUR',
-  'GBP',
-  'JPY',
-  'HKD',
-  'TWD',
-  'CAD',
-  'AUD',
-  'SGD',
-  'CHF',
-] as const
 
 const FALLBACK_IDEMPOTENCY_KEY_BYTES = 16
 
@@ -54,7 +41,7 @@ interface ManualFormControls {
 
 function buildCurrencySelect(id: string): HTMLSelectElement {
   const select = h('select', { id })
-  for (const code of MANUAL_CURRENCIES) {
+  for (const code of KNOWN_CURRENCIES) {
     const opt = h('option', { attrs: { value: code } }, code)
     opt.selected = code === 'USD'
     select.appendChild(opt)
