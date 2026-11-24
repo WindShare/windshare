@@ -15,7 +15,11 @@ import (
 	"github.com/windshare/windshare/engine/relayconfig"
 )
 
-const Usage = "Usage: " + command.Name + " config import <file|-> [--front-url <url>] [-v|--verbose]\n" +
+// Synopsis is the single source of truth for config command lines shared
+// between configcommand.Usage and top-level wind usage.
+const Synopsis = command.Name + " config import <file|-> [--front-url <url>] [-v|--verbose]"
+
+const Usage = "Usage: " + Synopsis + "\n" +
 	"  Replace sharing defaults; --front-url saves the website address; '-' reads JSON from stdin.\n"
 
 // Runner keeps the destination authority injected so embedded callers cannot

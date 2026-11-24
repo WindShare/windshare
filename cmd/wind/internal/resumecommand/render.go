@@ -8,15 +8,23 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/command"
 )
 
+// Resume synopses are the single source of truth shared between resumecommand
+// help and top-level wind usage.
+const (
+	RetrySynopsis   = command.Name + " resume retry [-o <directory>] [--operation <id>] [--only <path>]... <link>"
+	ListSynopsis    = command.Name + " resume list -o <directory>"
+	DiscardSynopsis = command.Name + " resume discard -o <directory> --item <N>"
+)
+
 type textRenderer struct{}
 
 func (textRenderer) Usage() string {
 	return "Usage:\n" +
-		"  " + command.Name + " resume retry [-o <directory>] [--operation <id>] [--only <path>] <link>\n" +
+		"  " + RetrySynopsis + "\n" +
 		"      Continue the matching retained download; never create a new one.\n\n" +
-		"  " + command.Name + " resume list -o <directory>\n" +
+		"  " + ListSynopsis + "\n" +
 		"      List unfinished operations owned by that output directory.\n\n" +
-		"  " + command.Name + " resume discard -o <directory> --item <N>\n" +
+		"  " + DiscardSynopsis + "\n" +
 		"      Re-list one operation and require the exact confirmation \"discard N\".\n" +
 		"      Only identity-matched unfinished state is removed; final and foreign objects stay.\n\n" +
 		"States:\n" +

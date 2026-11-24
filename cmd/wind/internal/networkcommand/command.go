@@ -33,12 +33,22 @@ type Runner struct {
 	Interactive func() bool
 }
 
+// DoctorSynopsis and SetupSynopsis are the single source of truth for network
+// command lines shared between subcommand usage and top-level wind usage.
+const (
+	DoctorSynopsis = command.Name + " doctor network [--json]"
+	SetupSynopsis  = command.Name + " setup network [--skip|--remove] [--non-interactive] [--json]"
+)
+
 func networkUsage(cmd string) string {
-	usage := "Usage: " + command.Name + " " + cmd + " network [--json]"
-	if cmd == "setup" {
-		usage += " [--skip|--remove] [--non-interactive]"
+	switch cmd {
+	case "doctor":
+		return "Usage: " + DoctorSynopsis
+	case "setup":
+		return "Usage: " + SetupSynopsis
+	default:
+		return "Usage:\n  " + DoctorSynopsis + "\n  " + SetupSynopsis
 	}
-	return usage
 }
 
 func (runner Runner) Run(ctx context.Context, cmd string, args []string) command.ExitCode {

@@ -16,6 +16,7 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/command"
 	"github.com/windshare/windshare/cmd/wind/internal/configcommand"
 	"github.com/windshare/windshare/cmd/wind/internal/networkcommand"
+	"github.com/windshare/windshare/cmd/wind/internal/resumecommand"
 	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/builtinnetwork"
@@ -36,7 +37,7 @@ const (
 )
 
 const usageText = `Usage:
-  ` + command.Name + ` share <path...> [--relay <url>] [--block-size <bytes>] [--split-key] [--front-url <url>] [--browser-trace] [-v|--verbose] [--trace <file>|--trace-dir <directory>]
+  ` + command.Name + ` share <path...> [--relay <url>]... [--configured-relays-only] [--block-size <bytes>] [--split-key] [--front-url <url>] [--browser-trace] [-v|--verbose] [--trace <file>|--trace-dir <directory>]
       Commit selected roots, wait for relay registration, print a suite-02 link, and scan descendants on demand.
       --split-key prints a bare link and key string for delivery over separate channels.
       Sharing defaults load from the user config directory's windshare/config.json (or WINDSHARE_CONFIG).
@@ -44,10 +45,11 @@ const usageText = `Usage:
       --configured-relays-only disables built-in candidates for this share.
       --relay overrides the saved candidate set, retaining credentials for matching addresses.
 
-  ` + command.Name + ` get <link> [--only <path>]... [--key <key-string>] [--connectivity auto|relay-only|p2p-only] [-v|--verbose] [--trace <file>|--trace-dir <directory>]
-  ` + command.Name + ` get -o <directory> <link> [--only <path>]... [--key <key-string>] [--connectivity auto|relay-only|p2p-only] [-v|--verbose] [--trace <file>|--trace-dir <directory>]
+  ` + command.Name + ` get <link> [--only <path>]... [--redownload] [--key <key-string>] [--connectivity auto|relay-only|p2p-only] [--wait-timeout <duration>] [-v|--verbose] [--trace <file>|--trace-dir <directory>]
+  ` + command.Name + ` get -o <directory> <link> [--only <path>]... [--redownload] [--key <key-string>] [--connectivity auto|relay-only|p2p-only] [--wait-timeout <duration>] [-v|--verbose] [--trace <file>|--trace-dir <directory>]
       Save one ordinary named result inside the output container; -o defaults to the current directory.
       Compatible active downloads reuse their frozen result name and verified progress.
+      --redownload starts a separate download in a new reserved destination while retaining existing progress.
       Temporary outages reconnect automatically; --wait-timeout <duration> limits initial or each later connection wait.
       The default waits 10 seconds on first join and indefinitely after joining; Ctrl-C preserves resumable progress.
       relay-only skips direct peer setup and transfers content through the configured relay.
@@ -56,32 +58,30 @@ const usageText = `Usage:
       -v and --verbose show static diagnostic milestones; --trace creates one exact file and --trace-dir generates one run-specific file.
       Trace targets are mutually exclusive; '-' is unsupported because trace data never shares a human or capability stream.
 
-  ` + command.Name + ` relay add <url> [--access-key <key>] [--name <device>] [--no-browser]
-  ` + command.Name + ` relay onboard <url> [--name <device>] [--no-browser]
+  ` + relayAddSynopsis + `
+  ` + relayOnboardSynopsis + `
       Pair this device in the browser. New relays are enabled when a slot is available.
-  ` + command.Name + ` relay list | mode <automatic|selected> | enable|disable <url> | frontend <url|default>
-  ` + command.Name + ` relay cancel <url>
+  ` + relayPreferenceSynopsis + `
+  ` + relayCancelSynopsis + `
       Cancel a pending enrollment.
 
-  ` + command.Name + ` account status [--json] | register | refresh
-  ` + command.Name + ` account login <username> | password <username> [--password-stdin]
-  ` + command.Name + ` account email <address> | verify <code> | revoke <credential>
+` + accountcommand.Synopsis + `
       Manage the account shared with the desktop app. Login applies to new shares.
 
-  ` + command.Name + ` config import <file|-> [--front-url <url>] [-v|--verbose]
+  ` + configcommand.Synopsis + `
       Validate and replace sharing defaults. --front-url saves the website address; '-' reads JSON from stdin.
 
-  ` + command.Name + ` doctor network [--json]
-  ` + command.Name + ` setup network [--skip|--remove] [--non-interactive] [--json]
+  ` + networkcommand.DoctorSynopsis + `
+  ` + networkcommand.SetupSynopsis + `
 
-  ` + command.Name + ` resume retry [-o <directory>] [--only <path>] <link>
+  ` + resumecommand.RetrySynopsis + `
       Continue an existing download with its original link and selection.
 
-  ` + command.Name + ` resume list -o <directory>
+  ` + resumecommand.ListSynopsis + `
       List destination-owned incomplete, resumable, cleanup-pending, and attention state.
       Locally ambiguous children are reported as item-blocked.
 
-  ` + command.Name + ` resume discard -o <directory> --item <N>
+  ` + resumecommand.DiscardSynopsis + `
       Re-list and exactly confirm one operation on a terminal before discarding identity-matched unfinished state.
       Published files and unknown objects are always preserved.
 `

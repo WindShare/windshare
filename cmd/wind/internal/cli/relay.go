@@ -16,13 +16,20 @@ import (
 	"github.com/windshare/windshare/engine/relaysetup"
 )
 
-const relayUsage = "Usage: " + command.Name + " relay add <url> [--access-key <key>] [--name <device>] [--no-browser] | " +
-	command.Name + " relay onboard <url> [--name <device>] [--no-browser] | " +
-	command.Name + " relay cancel <url> | " +
-	command.Name + " relay list | " +
-	command.Name + " relay mode <automatic|selected> | " +
-	command.Name + " relay enable|disable|remove <url> | " +
-	command.Name + " relay frontend <url|default>"
+// Relay synopses are the single source of truth shared between `wind relay`
+// help and top-level `wind` usage so subcommands cannot drift out of sync.
+const (
+	relayAddSynopsis        = command.Name + " relay add <url> [--access-key <key>] [--name <device>] [--no-browser]"
+	relayOnboardSynopsis    = command.Name + " relay onboard <url> [--name <device>] [--no-browser]"
+	relayPreferenceSynopsis = command.Name + " relay list | mode <automatic|selected> | enable|disable|remove <url> | frontend <url|default>"
+	relayCancelSynopsis     = command.Name + " relay cancel <url>"
+)
+
+const relayUsage = "Usage:\n" +
+	"  " + relayAddSynopsis + "\n" +
+	"  " + relayOnboardSynopsis + "\n" +
+	"  " + relayPreferenceSynopsis + "\n" +
+	"  " + relayCancelSynopsis
 
 func (app *App) runRelay(ctx context.Context, args []string) (code int) {
 	if len(args) == 0 {

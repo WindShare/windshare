@@ -17,10 +17,13 @@ import (
 	"golang.org/x/term"
 )
 
-const Usage = "Usage:\n" +
-	"  " + command.Name + " account status [--json] | register | refresh\n" +
+// Synopsis is the single source of truth for account command lines shared
+// between accountcommand.Usage and top-level wind usage.
+const Synopsis = "  " + command.Name + " account status [--json] | register | refresh\n" +
 	"  " + command.Name + " account login <username> | password <username> [--password-stdin]\n" +
 	"  " + command.Name + " account email <address> | verify <code> | revoke <credential>"
+
+const Usage = "Usage:\n" + Synopsis
 
 type usageError struct{ message string }
 

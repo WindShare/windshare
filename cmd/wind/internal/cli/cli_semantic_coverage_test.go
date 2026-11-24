@@ -94,6 +94,80 @@ func TestTopLevelHelpMatchesOrdinaryOutputCommandContracts(t *testing.T) {
 	}
 }
 
+func TestTopLevelHelpStaysAlignedWithSubcommandSynopsesAndFlags(t *testing.T) {
+	app, stdout, stderr := newSemanticTestApp(strings.NewReader(""))
+	if code := app.Run(context.Background(), []string{"help"}); code != ExitOK || stdout.Len() != 0 {
+		t.Fatalf("top-level help exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	topLevel := stderr.String()
+
+	for _, args := range [][]string{
+		{"relay", "--help"},
+		{"account", "--help"},
+		{"config", "--help"},
+		{"doctor", "--help"},
+		{"setup", "--help"},
+		{"resume", "--help"},
+	} {
+		subApp, subOut, subErr := newSemanticTestApp(strings.NewReader(""))
+		if code := subApp.Run(context.Background(), args); code != ExitOK || subOut.Len() != 0 {
+			t.Fatalf("args=%v exit=%d stdout=%q stderr=%q", args, code, subOut.String(), subErr.String())
+		}
+		var synopses []string
+		for line := range strings.SplitSeq(subErr.String(), "\n") {
+			if rest, ok := strings.CutPrefix(line, "Usage: wind "); ok {
+				synopses = append(synopses, "wind "+rest)
+			} else if rest, ok := strings.CutPrefix(line, "  wind "); ok {
+				synopses = append(synopses, "wind "+rest)
+			}
+		}
+		if len(synopses) == 0 {
+			t.Fatalf("args=%v produced no synopsis lines:\n%s", args, subErr.String())
+		}
+		for _, synopsis := range synopses {
+			if !strings.Contains(topLevel, synopsis) {
+				t.Fatalf("top-level help is missing synopsis %q from %v", synopsis, args)
+			}
+		}
+	}
+
+	// Verify every flag registered on flag-based commands is surfaced in top-level help.
+	for _, args := range [][]string{
+		{"share", "--help"},
+		{"get", "--help"},
+		{"relay", "add", "--help"},
+		{"relay", "onboard", "--help"},
+	} {
+		subApp, subOut, subErr := newSemanticTestApp(strings.NewReader(""))
+		if code := subApp.Run(context.Background(), args); code != ExitOK || subOut.Len() != 0 {
+			t.Fatalf("args=%v exit=%d stdout=%q stderr=%q", args, code, subOut.String(), subErr.String())
+		}
+		_, optionsSection, ok := strings.Cut(subErr.String(), "\nOptions:\n")
+		if !ok {
+			t.Fatalf("args=%v help missing Options section:\n%s", args, subErr.String())
+		}
+		flagCount := 0
+		for line := range strings.SplitSeq(optionsSection, "\n") {
+			rest, isFlagLine := strings.CutPrefix(line, "  -")
+			if !isFlagLine {
+				continue
+			}
+			flagCount++
+			name, _, _ := strings.Cut(rest, " ")
+			spelling := "-" + name
+			if len(name) > 1 {
+				spelling = "--" + name
+			}
+			if !strings.Contains(topLevel, spelling) {
+				t.Fatalf("top-level help is missing flag %q registered by %v", spelling, args)
+			}
+		}
+		if flagCount == 0 {
+			t.Fatalf("args=%v parsed zero options from:\n%s", args, optionsSection)
+		}
+	}
+}
+
 func TestShareRequestValidationPreservesSuiteBoundaries(t *testing.T) {
 	t.Run("valid explicit configuration", func(t *testing.T) {
 		app, _, _ := newSemanticTestApp(strings.NewReader(""))
