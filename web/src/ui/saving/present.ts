@@ -83,6 +83,7 @@ function savingChoice(
     label: actionLabel ?? choiceLabel(choice, language),
     outcome: kind,
     summary: copy.summary,
+    detail: copy.detail,
     badges: Object.freeze(copy.badges),
     notes: Object.freeze(copy.notes),
     disabledReason,
@@ -101,16 +102,33 @@ function choiceLabel(choice: ArtifactChoice, language: Language): string {
   }
 }
 
+function resumeBadge(
+  resumeSupport: ArtifactChoice['resumeSupport'],
+  t: typeof receiverCopy.en.saving,
+): string {
+  switch (resumeSupport) {
+    case 'continuous':
+      return t.crashRecovery
+    case 'pause':
+      return t.pauseResume
+    case 'none':
+      return t.noResume
+  }
+}
+
 function routeCopy(
   choice: ArtifactChoice,
   kind: SavingOutcomeKind,
   language: Language,
-): Readonly<{ summary: string; badges: string[]; notes: string[] }> {
+): Readonly<{ summary: string; detail: string; badges: string[]; notes: string[] }> {
   const t = receiverCopy[language].saving
+  const resume = resumeBadge(choice.resumeSupport, t)
   if (choice.backend === 'fsa') {
+    const singleFile = choice.artifact.singleFileId !== undefined
     return {
-      summary: t.directFolderSummary,
-      badges: [t.keepsFolders, t.resumable],
+      summary: singleFile ? t.directFileSummary : t.directFolderSummary,
+      detail: singleFile ? t.directFileDetail : t.directFolderDetail,
+      badges: [singleFile ? t.directWrite : t.keepsFolders, resume],
       notes: [t.directPause],
     }
   }
@@ -118,24 +136,28 @@ function routeCopy(
     return kind === 'zip'
       ? {
           summary: t.workspaceZip,
-          badges: [t.largeFiles, t.resumable, t.singleZip],
-          notes: [t.zipExport, t.clearingData],
+          detail: t.workspaceZipDetail,
+          badges: [t.saferForLong, resume, t.singleZip],
+          notes: [t.clearingData],
         }
       : {
           summary: t.workspaceFile,
-          badges: [t.largeFiles, t.resumable],
-          notes: [t.longDownloads, t.clearingData],
+          detail: t.workspaceFileDetail,
+          badges: [t.saferForLong, resume],
+          notes: [t.clearingData],
         }
   }
   return kind === 'zip'
     ? {
         summary: t.portableZip,
-        badges: [t.quick, t.singleZip, t.noResume],
+        detail: t.portableZip,
+        badges: [t.quick, t.singleZip, resume],
         notes: [t.tabCancels],
       }
     : {
         summary: t.portableFile,
-        badges: [t.quick, t.noResume],
+        detail: t.portableFile,
+        badges: [t.quick, resume],
         notes: [t.tabCancels],
       }
 }

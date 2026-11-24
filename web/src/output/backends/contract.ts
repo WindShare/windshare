@@ -1,4 +1,4 @@
-import type { ArtifactChoice, ArtifactOffers, SaveBackendKind } from '../model/offers'
+import type { ArtifactChoice, ArtifactOffers, OfferResumeSupport, SaveBackendKind } from '../model/offers'
 import type { ReceiveOperationDisplay } from '../model/operation-display'
 import type { NativeSupportRuntime } from '../native-object/support'
 import { probeNativeObjectSupport } from '../native-object/support'
@@ -131,13 +131,13 @@ function planSingleFileOffers(
     : ['opfs', 'portable']
   for (const backend of primaryCandidates) {
     if (backend === 'portable' && fitsPortable) {
-      choices.push(makeChoice('portable:file', 'portable', artifact, false, choices.length === 0, shape.exactBytes))
+      choices.push(makeChoice('portable:file', 'portable', artifact, choices.length === 0, shape.exactBytes))
     } else if (backend === 'opfs' && fitsOpfs) {
-      choices.push(makeChoice('opfs:file', 'opfs', artifact, true, choices.length === 0, shape.exactBytes))
+      choices.push(makeChoice('opfs:file', 'opfs', artifact, choices.length === 0, shape.exactBytes))
     }
   }
   if (caps.fsa) {
-    choices.push(makeChoice('fsa:file', 'fsa', fsaArtifact, true, choices.length === 0, shape.exactBytes))
+    choices.push(makeChoice('fsa:file', 'fsa', fsaArtifact, choices.length === 0, shape.exactBytes))
   }
 
   if (choices.length === 0) {
@@ -181,14 +181,14 @@ function planTreeOffers(
 
   const choices: ArtifactChoice[] = []
   if (caps.fsa) {
-    choices.push(makeChoice('fsa:tree', 'fsa', folderArtifact, true, true, shape.knownBytes))
+    choices.push(makeChoice('fsa:tree', 'fsa', folderArtifact, true, shape.knownBytes))
   }
 
   const fitsOpfs = caps.opfs && (caps.availableStorageBytes === null || shape.knownBytes <= caps.availableStorageBytes)
   const zip = selectTreeZipChoice(shape, caps, fitsOpfs, zipArtifact, choices.length === 0)
   if (zip !== null) choices.push(zip)
   if (shouldOfferQuickPortableZip(shape, caps, zip)) {
-    choices.push(makeChoice('portable:zip', 'portable', zipArtifact, false, false, shape.knownBytes))
+    choices.push(makeChoice('portable:zip', 'portable', zipArtifact, false, shape.knownBytes))
   }
 
   if (choices.length === 0) {
@@ -218,11 +218,11 @@ function selectTreeZipChoice(
   recommended: boolean,
 ): ArtifactChoice | null {
   if (fitsOpfs) {
-    return makeChoice('opfs:zip', 'opfs', zipArtifact, true, recommended, shape.knownBytes)
+    return makeChoice('opfs:zip', 'opfs', zipArtifact, recommended, shape.knownBytes)
   }
   // knownBytes is a monotonic lower bound, so reject portable ZIP as soon as it exceeds the cap.
   if (caps.portable && shape.knownBytes <= PORTABLE_MAX_BYTES) {
-    return makeChoice('portable:zip', 'portable', zipArtifact, false, recommended, shape.knownBytes)
+    return makeChoice('portable:zip', 'portable', zipArtifact, recommended, shape.knownBytes)
   }
   return null
 }
@@ -246,11 +246,15 @@ function unavailableOfferReason(
   return 'no-safe-destination'
 }
 
+function resumeSupportForBackend(backend: SaveBackendKind): OfferResumeSupport {
+  if (backend === 'opfs') return 'continuous'
+  return backend === 'fsa' ? 'pause' : 'none'
+}
+
 function makeChoice(
   choiceId: string,
   backend: SaveBackendKind,
   artifact: ResolvedArtifactSpec,
-  resumable: boolean,
   recommended: boolean,
   estimatedBytes: bigint,
 ): ArtifactChoice {
@@ -259,7 +263,7 @@ function makeChoice(
     backend,
     artifactKind: artifact.kind,
     artifact,
-    resumable,
+    resumeSupport: resumeSupportForBackend(backend),
     recommended,
     suggestedName: artifact.name,
     estimatedBytes,

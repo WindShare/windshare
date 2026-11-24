@@ -46,7 +46,7 @@ function Choice({ choice, recommended, sharedDisabledReason, choose }: {
           {recommended && <span className="saving-badge saving-badge-accent">{t.recommended}</span>}
           {choice.badges.map(badge => <span className="saving-badge" key={badge}>{badge}</span>)}
         </span>
-        <span className="saving-choice-summary">{choice.summary}</span>
+        <span className="saving-choice-summary">{choice.detail}</span>
       </span>
       <span className="saving-choice-arrow" aria-hidden="true">
         <ReceiverIcon name="download" />

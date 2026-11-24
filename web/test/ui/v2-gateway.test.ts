@@ -254,7 +254,7 @@ describe('v2 joined-share projection authority', () => {
       suggestedName: 'shared.zip',
       backend: 'opfs',
       artifactKind: 'zip-archive',
-      resumable: true,
+      resumeSupport: 'continuous',
     })
   })
 })

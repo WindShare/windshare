@@ -7,6 +7,7 @@ export interface SavingChoice {
   readonly label: string
   readonly outcome: SavingOutcomeKind
   readonly summary: string
+  readonly detail: string
   readonly badges: readonly string[]
   readonly notes: readonly string[]
   readonly disabledReason: string | null

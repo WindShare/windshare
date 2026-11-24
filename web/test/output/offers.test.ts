@@ -37,8 +37,10 @@ describe('artifact offer planning', () => {
     expect(smallWithOpfs.kind).toBe('ready')
     if (smallWithOpfs.kind === 'ready') {
       expect(smallWithOpfs.primary.backend).toBe('portable')
+      expect(smallWithOpfs.primary.resumeSupport).toBe('none')
       expect(smallWithOpfs.primary.recommended).toBe(true)
       expect(smallWithOpfs.alternatives.map(choice => choice.backend)).toEqual(['opfs', 'fsa'])
+      expect(smallWithOpfs.alternatives.map(choice => choice.resumeSupport)).toEqual(['continuous', 'pause'])
       expect(smallWithOpfs.alternatives.every(choice => !choice.recommended)).toBe(true)
     }
 
@@ -51,8 +53,10 @@ describe('artifact offer planning', () => {
     expect(largeWithOpfs.kind).toBe('ready')
     if (largeWithOpfs.kind === 'ready') {
       expect(largeWithOpfs.primary.backend).toBe('opfs')
+      expect(largeWithOpfs.primary.resumeSupport).toBe('continuous')
       expect(largeWithOpfs.primary.recommended).toBe(true)
       expect(largeWithOpfs.alternatives.map(choice => choice.backend)).toEqual(['portable', 'fsa'])
+      expect(largeWithOpfs.alternatives.map(choice => choice.resumeSupport)).toEqual(['none', 'pause'])
     }
 
     const portableOnly = planArtifactOffers({
@@ -106,9 +110,11 @@ describe('artifact offer planning', () => {
     expect(withFsa.kind).toBe('ready')
     if (withFsa.kind === 'ready') {
       expect(withFsa.primary.backend).toBe('fsa')
+      expect(withFsa.primary.resumeSupport).toBe('pause')
       expect(withFsa.primary.artifactKind).toBe('directory-tree')
       expect(withFsa.primary.artifact.rootPath).toEqual(['Album'])
       expect(withFsa.zip?.backend).toBe('opfs')
+      expect(withFsa.zip?.resumeSupport).toBe('continuous')
       expect(withFsa.zip?.suggestedName).toBe('Album.zip')
       expect(withFsa.zip?.artifact.rootPath).toEqual(['Album'])
     }

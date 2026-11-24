@@ -2,6 +2,15 @@ import type { ArtifactKind, ResolvedArtifactSpec } from '../../transfer/selectio
 
 export type SaveBackendKind = 'portable' | 'fsa' | 'opfs'
 
+/**
+ * Distinguishes how each save backend preserves progress across interruptions:
+ * - `none`: in-memory stream; progress is lost if the tab closes.
+ * - `pause`: direct filesystem writes; pause, retry, long disconnects, and completed files survive,
+ *   while an unexpected crash can still lose an uncheckpointed in-flight file.
+ * - `continuous`: periodic in-place browser storage checkpoints for crash recovery.
+ */
+export type OfferResumeSupport = 'none' | 'pause' | 'continuous'
+
 export type OfferUnavailableReason =
   | 'confirming'
   | 'selection-empty'
@@ -15,7 +24,7 @@ export interface ArtifactChoice {
   readonly backend: SaveBackendKind
   readonly artifactKind: ArtifactKind
   readonly artifact: ResolvedArtifactSpec
-  readonly resumable: boolean
+  readonly resumeSupport: OfferResumeSupport
   readonly recommended: boolean
   readonly suggestedName: string
   readonly estimatedBytes?: bigint
