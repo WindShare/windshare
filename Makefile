@@ -70,7 +70,7 @@ rust:
 	@echo "== rust =="
 	cd $(RUST_WORKSPACE) && $(RUST_CARGO) fmt --all -- --check
 	cd $(RUST_WORKSPACE) && $(RUST_CARGO) clippy --workspace --all-targets --locked --jobs $(RUST_BUILD_JOBS) -- -D warnings
-	node --test scripts/ci/rust/line-coverage.test.mjs
+	node --test scripts/ci/rust/*.test.mjs
 	node scripts/ci/rust/check-coverage.mjs "$(RUST_WORKSPACE)" $(RUST_COVERAGE_MIN) $(RUST_COVERAGE_PACKAGE_MIN) $(RUST_BUILD_JOBS)
 	cd $(RUST_WORKSPACE) && $(RUST_CARGO) test --workspace --doc --locked --jobs $(RUST_BUILD_JOBS)
 	cd $(RUST_WORKSPACE) && $(RUST_CARGO) clippy -p windshare-relay-cloudflare -p windshare-network-authority --target wasm32-unknown-unknown --locked --jobs $(RUST_BUILD_JOBS) -- -D warnings

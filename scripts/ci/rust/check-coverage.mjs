@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { buildCacheStamp, commitCoverageCacheStamp, prepareCoverageCache } from "./coverage-cache.mjs";
 import { meetsMinimum, summarizeCoverage } from "./line-coverage.mjs";
 
 const MAX_REPORT_BYTES = 32 * 1024 * 1024;
@@ -55,10 +56,31 @@ function hasEmptyProfile() {
   return profile.status === 0 && /^Total functions:\s+0\r?$/m.test(profile.stdout);
 }
 
-// Old workspace binaries can retain deleted code. Keep dependency builds, but
-// discard workspace artifacts and profiles before measuring this invocation.
-requireSuccess(cargo(["clean", "--workspace"]));
-requireSuccess(cargo(["--workspace", "--locked", "--jobs", jobs, "--no-report"]));
+const metadata = JSON.parse(requireSuccess(run("rustup", [
+  "run", "stable", "cargo", "metadata", "--no-deps", "--format-version", "1", "--locked",
+], true)));
+const rustcVersion = requireSuccess(run("rustup", ["run", "stable", "rustc", "-vV"], true));
+const cargoVersion = requireSuccess(run("rustup", ["run", "stable", "cargo", "--version"], true));
+const llvmCovVersion = requireSuccess(cargo(["--version"], true));
+const cacheStamp = buildCacheStamp({ rustcVersion, cargoVersion, llvmCovVersion, metadata });
+
+// `cargo llvm-cov clean --workspace` only cleans current workspace members in
+// the active Cargo layout, leaving pre-1.100 debug/deps binaries or removed
+// packages/targets behind for `cargo llvm-cov report` to scan. Reset on
+// toolchain or target-removal drift; otherwise keep third-party dep builds.
+const cacheDecision = prepareCoverageCache(coverageDirectory, cacheStamp);
+if (cacheDecision.action === "reuse") {
+  requireSuccess(cargo(["clean", "--workspace"]));
+  if (cacheDecision.shouldUpdateStamp) {
+    commitCoverageCacheStamp(coverageDirectory, cacheStamp);
+  }
+}
+
+const testRun = cargo(["--workspace", "--locked", "--jobs", jobs, "--no-report"]);
+if (cacheDecision.action !== "reuse") {
+  commitCoverageCacheStamp(coverageDirectory, cacheStamp);
+}
+requireSuccess(testRun);
 const report = cargo(["report", "--json", "--summary-only"], true);
 
 // LLVM cannot export an entirely empty binary. Only accept that specific case
@@ -69,9 +91,6 @@ if (report.status !== 0 && report.stderr.includes("no coverage data found") && h
 }
 
 const coverage = JSON.parse(requireSuccess(report));
-const metadata = JSON.parse(requireSuccess(run("rustup", [
-  "run", "stable", "cargo", "metadata", "--no-deps", "--format-version", "1", "--locked",
-], true)));
 const summary = summarizeCoverage(coverage, metadata);
 
 function checkMinimum(label, counts, minimum) {
