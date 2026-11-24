@@ -387,9 +387,10 @@ func TestTerminalFanoutQueuedResponsePreservesLifetimeAcrossSiblingRetirement(t 
 						t.Fatal(encodeErr)
 					}
 					go func() {
-						responseDone <- outbound.SendControl(
+						_, sendErr := outbound.SendControl(
 							runtime.Lifetime(), op, protocolsession.MessageOperationComplete, completeBody,
 						)
+						responseDone <- sendErr
 					}()
 				} else {
 					fragments, fragErr := contentflow.FragmentRecord(opID, []byte("queued-fragment"))

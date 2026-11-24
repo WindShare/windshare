@@ -511,6 +511,69 @@ func stopWriterBeforeAdmission(t *testing.T, writer *laneWriter) {
 	}
 }
 
+type failingContinuationChannel struct {
+	protocolsession.FrameChannel
+	succeedFirst int32
+	calls        atomic.Int32
+	err          error
+}
+
+func (c *failingContinuationChannel) Send(ctx context.Context, frame framechannel.Frame) error {
+	if c.calls.Add(1) <= c.succeedFirst {
+		return c.FrameChannel.Send(ctx, frame)
+	}
+	return c.err
+}
+
+func (c *failingContinuationChannel) SendTerminal(ctx context.Context, frame framechannel.Frame) error {
+	return c.Send(ctx, frame)
+}
+
+func TestRPCContinuationMixedNotSentThenUncertainClearsNotSentEvidence(t *testing.T) {
+	fixture := newContinuationReplayFixture(t, 108)
+	pretransportErr := errors.New("preferred lane rejected before transport")
+	uncertainErr := errors.New("replacement lane acceptance unknown")
+
+	preferredCh := &failingContinuationChannel{
+		FrameChannel: fixture.preferred.channel,
+		err:          framechannel.RejectSend(pretransportErr),
+	}
+	preferredWriter, err := newLaneWriter(preferredCh, fixture.runtime.lanes.active[fixture.preferred.identity.ID].sealer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Let the replayed PeerOffer succeed on the replacement lane so the retried
+	// PeerCandidate itself reaches the transport and returns an uncertain error.
+	replacementCh := &failingContinuationChannel{
+		FrameChannel: fixture.replacement.channel,
+		succeedFirst: 1,
+		err:          uncertainErr,
+	}
+	replacementWriter, err := newLaneWriter(replacementCh, fixture.runtime.lanes.active[fixture.replacement.identity.ID].sealer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.runtime.lanes.mu.Lock()
+	fixture.runtime.lanes.active[fixture.preferred.identity.ID].writer = preferredWriter
+	fixture.runtime.lanes.active[fixture.replacement.identity.ID].writer = replacementWriter
+	fixture.runtime.lanes.mu.Unlock()
+	startContinuationReplayWriter(t, preferredWriter)
+	startContinuationReplayWriter(t, replacementWriter)
+
+	disposition, sendErr := fixture.rpc.SendContinuation(
+		context.Background(), fixture.call, protocolsession.MessagePeerCandidate, []byte{0xf6},
+	)
+	if disposition != protocolsession.OperationDeliver || sendErr == nil {
+		t.Fatalf("mixed continuation = (disposition=%d, err=%v), want (OperationDeliver, non-nil)", disposition, sendErr)
+	}
+	if protocolsession.IsNotSent(sendErr) || errors.Is(sendErr, protocolsession.ErrNotSent) {
+		t.Fatalf("mixed continuation leaked not-sent classification: %v", sendErr)
+	}
+	if !errors.Is(sendErr, pretransportErr) || !errors.Is(sendErr, uncertainErr) {
+		t.Fatalf("mixed continuation lost attempt causes: %v", sendErr)
+	}
+}
+
 func startContinuationReplayWriter(t *testing.T, writer *laneWriter) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())

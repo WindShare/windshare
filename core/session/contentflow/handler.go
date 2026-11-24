@@ -23,7 +23,7 @@ type OperationFailure = protocolsession.OperationFailure
 // SemanticOutbound keeps operation routing and authentication at the session
 // boundary. SendControl takes a canonical CBOR body.
 type SemanticOutbound interface {
-	SendControl(ctx context.Context, op protocolsession.Operation, kind protocolsession.MessageKind, body []byte) error
+	SendControl(ctx context.Context, op protocolsession.Operation, kind protocolsession.MessageKind, body []byte) (protocolsession.SendEvidence, error)
 	SendFragment(ctx context.Context, op protocolsession.Operation, message protocolsession.Message) error
 	SendOperationError(ctx context.Context, op protocolsession.Operation, failure OperationFailure) error
 }
@@ -234,8 +234,8 @@ func (h *SenderHandler) processOpen(ctx context.Context, op protocolsession.Oper
 	if err != nil {
 		return errors.Join(err, h.endOpenResults(operationID, results, content.LeaseUndelivered))
 	}
-	if err := h.outbound.SendControl(ctx, op, protocolsession.MessageOpenResults, encoded); err != nil {
-		if protocolsession.IsNotSent(err) {
+	if evidence, err := h.outbound.SendControl(ctx, op, protocolsession.MessageOpenResults, encoded); err != nil {
+		if evidence == protocolsession.SendNotSent {
 			return errors.Join(wrapOutboundError(err), h.endOpenResults(operationID, results, content.LeaseUndelivered))
 		}
 		return errors.Join(wrapOutboundError(err), h.endOpenResults(operationID, results, content.LeaseDetached))
@@ -259,7 +259,7 @@ func (h *SenderHandler) processRenew(ctx context.Context, op protocolsession.Ope
 		h.traceLeaseDecision(operationID, protocolsession.MessageRenewLease, leaseID, content.LeaseDetached)
 		return err
 	}
-	err = h.outbound.SendControl(ctx, op, protocolsession.MessageLeaseResult, encoded)
+	_, err = h.outbound.SendControl(ctx, op, protocolsession.MessageLeaseResult, encoded)
 	if err != nil {
 		h.service.detachLease(leaseID)
 		h.traceLeaseDecision(operationID, protocolsession.MessageRenewLease, leaseID, content.LeaseDetached)
@@ -277,7 +277,7 @@ func (h *SenderHandler) processRelease(ctx context.Context, op protocolsession.O
 	}
 	h.traceLeaseDecision(op.ID(), protocolsession.MessageReleaseLease, leaseID, content.LeaseRelinquished)
 	encoded, _ := EncodeOperationComplete(0)
-	err = h.outbound.SendControl(ctx, op, protocolsession.MessageOperationComplete, encoded)
+	_, err = h.outbound.SendControl(ctx, op, protocolsession.MessageOperationComplete, encoded)
 	return wrapOutboundError(err)
 }
 
@@ -298,7 +298,7 @@ func (h *SenderHandler) processBlocks(ctx context.Context, op protocolsession.Op
 		return wrapServiceError("serve blocks", err)
 	}
 	encoded, _ := EncodeOperationComplete(count)
-	err = h.outbound.SendControl(ctx, op, protocolsession.MessageOperationComplete, encoded)
+	_, err = h.outbound.SendControl(ctx, op, protocolsession.MessageOperationComplete, encoded)
 	return wrapOutboundError(err)
 }
 

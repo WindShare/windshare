@@ -11,7 +11,8 @@ import (
 )
 
 type fixedOutcomeOutbound struct {
-	err error
+	evidence protocolsession.SendEvidence
+	err      error
 }
 
 type fragmentFailureOutbound struct {
@@ -25,8 +26,8 @@ func (*fragmentFailureOutbound) SendControl(
 	protocolsession.Operation,
 	protocolsession.MessageKind,
 	[]byte,
-) error {
-	return protocolsession.MarkNotSent(errors.New("final control was not expected"))
+) (protocolsession.SendEvidence, error) {
+	return protocolsession.SendNotSent, protocolsession.MarkNotSent(errors.New("final control was not expected"))
 }
 
 func (outbound *fragmentFailureOutbound) SendFragment(
@@ -52,8 +53,8 @@ func (outbound fixedOutcomeOutbound) SendControl(
 	protocolsession.Operation,
 	protocolsession.MessageKind,
 	[]byte,
-) error {
-	return outbound.err
+) (protocolsession.SendEvidence, error) {
+	return outbound.evidence, outbound.err
 }
 
 func (fixedOutcomeOutbound) SendFragment(context.Context, protocolsession.Operation, protocolsession.Message) error {
@@ -76,15 +77,17 @@ func TestOpenResultDeliverySettlesLeaseWithExactEvidence(t *testing.T) {
 	transportErr := errors.New("transport result is uncertain")
 	tests := []struct {
 		name             string
+		evidence         protocolsession.SendEvidence
 		sendErr          error
 		wantEnd          content.LeaseEndKind
 		wantProcessError error
 	}{
-		{name: "cancel before send", sendErr: protocolsession.ErrOperationSuppressed, wantEnd: content.LeaseUndelivered, wantProcessError: protocolsession.ErrOperationSuppressed},
-		{name: "send wins cancel", sendErr: nil},
-		{name: "writer transport failure", sendErr: transportErr, wantEnd: content.LeaseDetached, wantProcessError: transportErr},
-		{name: "caller timeout", sendErr: context.DeadlineExceeded, wantEnd: content.LeaseDetached, wantProcessError: context.DeadlineExceeded},
-		{name: "session close before send", sendErr: protocolsession.MarkNotSent(protocolsession.ErrWriterStopped), wantEnd: content.LeaseUndelivered, wantProcessError: protocolsession.ErrWriterStopped},
+		{name: "cancel before send", evidence: protocolsession.SendNotSent, sendErr: protocolsession.ErrOperationSuppressed, wantEnd: content.LeaseUndelivered, wantProcessError: protocolsession.ErrOperationSuppressed},
+		{name: "send wins cancel", evidence: protocolsession.SendDelivered, sendErr: nil},
+		{name: "writer transport failure", evidence: protocolsession.SendUncertain, sendErr: transportErr, wantEnd: content.LeaseDetached, wantProcessError: transportErr},
+		{name: "caller timeout", evidence: protocolsession.SendUncertain, sendErr: context.DeadlineExceeded, wantEnd: content.LeaseDetached, wantProcessError: context.DeadlineExceeded},
+		{name: "session close before send", evidence: protocolsession.SendNotSent, sendErr: protocolsession.MarkNotSent(protocolsession.ErrWriterStopped), wantEnd: content.LeaseUndelivered, wantProcessError: protocolsession.ErrWriterStopped},
+		{name: "uncertain evidence ignores joined not-sent error", evidence: protocolsession.SendUncertain, sendErr: errors.Join(transportErr, protocolsession.MarkNotSent(protocolsession.ErrControlQueueFull)), wantEnd: content.LeaseDetached, wantProcessError: transportErr},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -93,7 +96,7 @@ func TestOpenResultDeliverySettlesLeaseWithExactEvidence(t *testing.T) {
 			defer cache.Close()
 			handler, err := NewSenderHandler(SenderHandlerConfig{
 				Service:  service,
-				Outbound: fixedOutcomeOutbound{err: test.sendErr},
+				Outbound: fixedOutcomeOutbound{evidence: test.evidence, err: test.sendErr},
 			})
 			if err != nil {
 				t.Fatal(err)

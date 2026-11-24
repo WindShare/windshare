@@ -182,11 +182,11 @@ func (peer senderPeerSession) SendPeerControl(
 		(kind != protocolsession.MessagePeerAnswer && kind != protocolsession.MessagePeerCandidate) {
 		return protocolsession.OperationDrop, session.ErrRuntimeConfig
 	}
-	err := peer.outbound.SendControl(ctx, op, kind, body)
+	evidence, err := peer.outbound.SendControl(ctx, op, kind, body)
 	if errors.Is(err, protocolsession.ErrOperationSuppressed) {
 		return protocolsession.OperationDrop, nil
 	}
-	if protocolsession.IsNotSent(err) {
+	if evidence == protocolsession.SendNotSent {
 		return protocolsession.OperationDrop, err
 	}
 	return protocolsession.OperationDeliver, err

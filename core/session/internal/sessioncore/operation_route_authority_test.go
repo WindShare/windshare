@@ -89,7 +89,7 @@ func TestConcurrentSameIDRequestsAdmitExactlyOneRouteAuthority(t *testing.T) {
 	writerDone := make(chan error, 1)
 	go func() { writerDone <- lane.writer.Run(writerContext) }()
 	outbound := &Responses{runtime: runtime}
-	if err := outbound.SendControl(
+	if _, err := outbound.SendControl(
 		context.Background(), op, protocolsession.MessageOpenResults, body,
 	); err != nil {
 		t.Fatalf("winning authority response = %v", err)
@@ -137,7 +137,7 @@ func TestHostileSameIDReplayRejectedEvenAfterTombstoneEviction(t *testing.T) {
 			t.Fatalf("request %d = %d, %v", id, disposition, err)
 		}
 		op := dispatchTestOperation(t, runtime, handlerOps)
-		if err := outbound.SendControl(context.Background(), op, protocolsession.MessageOpenResults, body); err != nil {
+		if _, err := outbound.SendControl(context.Background(), op, protocolsession.MessageOpenResults, body); err != nil {
 			t.Fatalf("final %d = %v", id, err)
 		}
 		return op
@@ -172,7 +172,7 @@ func TestHostileSameIDReplayRejectedEvenAfterTombstoneEviction(t *testing.T) {
 		t.Fatalf("old op affected active operation: active=%v count=%d",
 			newOp.IsActive(), runtime.operations.ActiveCount())
 	}
-	if err := outbound.SendControl(context.Background(), newOp, protocolsession.MessageOpenResults, body); err != nil {
+	if _, err := outbound.SendControl(context.Background(), newOp, protocolsession.MessageOpenResults, body); err != nil {
 		t.Fatalf("new operation final = %v", err)
 	}
 	if runtime.operations.ActiveCount() != 0 || runtime.operations.TombstoneCount() != 2 {

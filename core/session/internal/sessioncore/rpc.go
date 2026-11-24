@@ -377,9 +377,9 @@ func (client *Requests) deliverContinuation(
 		}
 		if !protocolsession.IsNotSent(sendErr) {
 			// Uncertain send: keep continuation recorded and let onDone release pin.
-			return protocolsession.OperationDeliver, rpcDeliveryError(
+			return protocolsession.OperationDeliver, protocolsession.MarkSendUncertain(rpcDeliveryError(
 				client.runtime, errContinuationNotDelivered, errors.Join(retryCause, sendErr),
-			)
+			))
 		}
 		if client.canRetryContinuation(ctx, attempt, sendErr) {
 			client.runtime.lanes.markSelectedClosing(selected)

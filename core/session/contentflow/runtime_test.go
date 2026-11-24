@@ -583,8 +583,11 @@ func (outbound *failingSemanticOutbound) SendControl(
 	protocolsession.Operation,
 	protocolsession.MessageKind,
 	[]byte,
-) error {
-	return outbound.err
+) (protocolsession.SendEvidence, error) {
+	if outbound.err == nil {
+		return protocolsession.SendDelivered, nil
+	}
+	return protocolsession.SendUncertain, outbound.err
 }
 
 func (outbound *failingSemanticOutbound) SendFragment(context.Context, protocolsession.Operation, protocolsession.Message) error {
@@ -603,9 +606,9 @@ func newRecordingOutbound() *recordingOutbound {
 	}
 }
 
-func (outbound *recordingOutbound) SendControl(_ context.Context, _ protocolsession.Operation, kind protocolsession.MessageKind, _ []byte) error {
+func (outbound *recordingOutbound) SendControl(_ context.Context, _ protocolsession.Operation, kind protocolsession.MessageKind, _ []byte) (protocolsession.SendEvidence, error) {
 	outbound.controls <- kind
-	return nil
+	return protocolsession.SendDelivered, nil
 }
 func (outbound *recordingOutbound) SendFragment(_ context.Context, _ protocolsession.Operation, message protocolsession.Message) error {
 	outbound.fragments <- message

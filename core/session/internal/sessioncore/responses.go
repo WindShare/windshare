@@ -33,7 +33,7 @@ func (outbound *Responses) SendControl(
 	op protocolsession.Operation,
 	kind protocolsession.MessageKind,
 	body []byte,
-) error {
+) (protocolsession.SendEvidence, error) {
 	id := op.ID()
 	message, err := protocolsession.NewMessage(kind, &id, body)
 	if err != nil {
@@ -49,9 +49,11 @@ func (outbound *Responses) SendFragment(
 ) error {
 	id, ok := message.OperationID()
 	if !ok || id != op.ID() {
-		return outbound.failPreparation(op, message.Kind(), sessionobs.ProtocolErrorContent{}, session.ErrOperationMissing)
+		_, err := outbound.failPreparation(op, message.Kind(), sessionobs.ProtocolErrorContent{}, session.ErrOperationMissing)
+		return err
 	}
-	return outbound.executeResponse(ctx, op, message, true, sessionobs.ProtocolErrorContent{})
+	_, err := outbound.executeResponse(ctx, op, message, true, sessionobs.ProtocolErrorContent{})
+	return err
 }
 
 func (outbound *Responses) SendOperationError(
@@ -61,9 +63,11 @@ func (outbound *Responses) SendOperationError(
 ) error {
 	body, err := protocolsession.EncodeOperationFailure(failure)
 	if err != nil {
-		return outbound.failPreparation(op, protocolsession.MessageOperationError, sessionobs.ProtocolErrorContent{}, err)
+		_, prepErr := outbound.failPreparation(op, protocolsession.MessageOperationError, sessionobs.ProtocolErrorContent{}, err)
+		return prepErr
 	}
-	return outbound.SendControl(ctx, op, protocolsession.MessageOperationError, body)
+	_, err = outbound.SendControl(ctx, op, protocolsession.MessageOperationError, body)
+	return err
 }
 
 func (outbound *Responses) SendTerminalAll(ctx context.Context, body []byte) error {
@@ -75,7 +79,7 @@ func (outbound *Responses) failPreparation(
 	kind protocolsession.MessageKind,
 	content sessionobs.ProtocolErrorContent,
 	cause error,
-) error {
+) (protocolsession.SendEvidence, error) {
 	runtime := outbound.runtime
 	sequence := outbound.sequence.Add(1)
 	requestKind, _ := op.RequestKind()
@@ -83,7 +87,7 @@ func (outbound *Responses) failPreparation(
 		_, _ = runtime.operations.CancelOperation(op.ID())
 	}
 	outbound.traceResponseSend(op.ID(), requestKind, kind, sequence, session.LaneIdentity{}, sessionobs.SendStatusNotSent, 0, content)
-	return protocolsession.MarkNotSent(cause)
+	return protocolsession.SendNotSent, protocolsession.MarkNotSent(cause)
 }
 
 func (outbound *Responses) executeResponse(
@@ -92,14 +96,14 @@ func (outbound *Responses) executeResponse(
 	message protocolsession.Message,
 	isData bool,
 	content sessionobs.ProtocolErrorContent,
-) error {
+) (protocolsession.SendEvidence, error) {
 	runtime := outbound.runtime
 	sequence := outbound.sequence.Add(1)
 	kind := message.Kind()
 	final := senderResponseFinal(kind)
 	if op.IsZero() {
 		outbound.traceResponseSend(0, 0, kind, sequence, session.LaneIdentity{}, sessionobs.SendStatusNotSent, 0, content)
-		return protocolsession.MarkNotSent(session.ErrOperationMissing)
+		return protocolsession.SendNotSent, protocolsession.MarkNotSent(session.ErrOperationMissing)
 	}
 	lease, err := runtime.operations.BeginOutboundResponse(op.ID(), message)
 	if err != nil {
@@ -108,7 +112,7 @@ func (outbound *Responses) executeResponse(
 			_, _ = runtime.operations.CancelOperation(op.ID())
 		}
 		outbound.traceResponseSend(op.ID(), requestKind, kind, sequence, session.LaneIdentity{}, sessionobs.SendStatusNotSent, 0, content)
-		return err
+		return protocolsession.SendNotSent, err
 	}
 
 	outcome := outbound.tryResponseLanes(ctx, lease, message, isData)
@@ -117,19 +121,22 @@ func (outbound *Responses) executeResponse(
 	runtime.operations.CompleteOutboundResponse(lease, message, final, deliveredOrUncertain, abandon)
 	lease.releaseInFlight(deliveredOrUncertain)
 
+	evidence := protocolsession.SendNotSent
 	status := sessionobs.SendStatusNotSent
 	var sendErr error
 	switch {
 	case outcome.delivered:
+		evidence = protocolsession.SendDelivered
 		status = sessionobs.SendStatusConfirmed
 	case outcome.uncertain:
+		evidence = protocolsession.SendUncertain
 		status = sessionobs.SendStatusUncertain
-		sendErr = outcome.err
+		sendErr = protocolsession.MarkSendUncertain(outcome.err)
 	default:
 		sendErr = protocolsession.MarkNotSent(outcome.err)
 	}
 	outbound.traceResponseSend(op.ID(), lease.requestKind, kind, sequence, outcome.lastLane, status, outcome.attempts, content)
-	return sendErr
+	return evidence, sendErr
 }
 
 type responseDeliveryOutcome struct {

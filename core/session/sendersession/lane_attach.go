@@ -132,10 +132,10 @@ func (handler *laneGrantHandler) process(
 	if err != nil {
 		return err
 	}
-	err = handler.outbound.SendControl(ctx, op, protocolsession.MessageLaneAttach, body)
+	evidence, err := handler.outbound.SendControl(ctx, op, protocolsession.MessageLaneAttach, body)
 	// Delivered and uncertain sends both permit peer ownership; only a proven
 	// pre-wire failure leaves the grant exclusively owned by this handler.
-	retainGrant = err == nil || !protocolsession.IsNotSent(err)
+	retainGrant = err == nil || evidence != protocolsession.SendNotSent
 	if errors.Is(err, protocolsession.ErrOperationSuppressed) {
 		return nil
 	}

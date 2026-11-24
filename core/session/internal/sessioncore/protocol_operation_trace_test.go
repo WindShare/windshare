@@ -128,7 +128,8 @@ func TestSenderProtocolOperationTraceCorrelatesRequestAndResponse(t *testing.T) 
 	if err := runtime.inbound.RegisterHandler(
 		protocolsession.MessageReleaseLease,
 		protocolsession.MessageHandlerFunc(func(ctx context.Context, op protocolsession.Operation, _ protocolsession.Message) error {
-			return outbound.SendControl(ctx, op, protocolsession.MessageOperationComplete, responseBody)
+			_, err := outbound.SendControl(ctx, op, protocolsession.MessageOperationComplete, responseBody)
+			return err
 		}),
 	); err != nil {
 		t.Fatal(err)
@@ -197,7 +198,8 @@ func TestSenderProtocolOperationTraceCapturesFailureSendSettlement(t *testing.T)
 	if err := runtime.inbound.RegisterHandler(
 		protocolsession.MessageOpenRevisions,
 		protocolsession.MessageHandlerFunc(func(ctx context.Context, op protocolsession.Operation, _ protocolsession.Message) error {
-			return outbound.SendControl(ctx, op, protocolsession.MessageOperationError, failureBody)
+			_, err := outbound.SendControl(ctx, op, protocolsession.MessageOperationError, failureBody)
+			return err
 		}),
 	); err != nil {
 		t.Fatal(err)

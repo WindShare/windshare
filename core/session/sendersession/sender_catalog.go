@@ -163,7 +163,7 @@ func (handler *catalogHandler) serve(
 	if err != nil {
 		return err
 	}
-	err = handler.outbound.SendControl(ctx, op, protocolsession.MessageCatalogResult, result)
+	_, err = handler.outbound.SendControl(ctx, op, protocolsession.MessageCatalogResult, result)
 	if errors.Is(err, protocolsession.ErrOperationSuppressed) {
 		return nil
 	}
@@ -181,7 +181,7 @@ func (handler *catalogHandler) progressObserver(op protocolsession.Operation) ca
 		if err != nil {
 			return err
 		}
-		err = handler.outbound.SendControl(ctx, op, protocolsession.MessageScanProgress, body)
+		_, err = handler.outbound.SendControl(ctx, op, protocolsession.MessageScanProgress, body)
 		if errors.Is(err, protocolsession.ErrOperationSuppressed) {
 			return context.Canceled
 		}

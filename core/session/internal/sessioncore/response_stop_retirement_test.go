@@ -61,7 +61,11 @@ func TestSenderStopDuringResponseRetirement(t *testing.T) {
 					if encodeErr != nil {
 						t.Fatal(encodeErr)
 					}
-					err = outbound.SendControl(context.Background(), admission.op, protocolsession.MessageOperationError, body)
+					var evidence protocolsession.SendEvidence
+					evidence, err = outbound.SendControl(context.Background(), admission.op, protocolsession.MessageOperationError, body)
+					if evidence != protocolsession.SendNotSent {
+						t.Fatalf("stopped control evidence=%d, want SendNotSent", evidence)
+					}
 				} else {
 					fragments, fragmentErr := contentflow.FragmentRecord(id, []byte("record"))
 					if fragmentErr != nil {

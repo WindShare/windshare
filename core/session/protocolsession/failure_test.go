@@ -159,3 +159,56 @@ func testPeerAttemptBinding() *PeerAttemptBinding {
 		AttemptSequence: 1,
 	}
 }
+
+func TestSendEvidenceAndUncertainErrorClosure(t *testing.T) {
+	var zero SendEvidence
+	if zero != SendUncertain {
+		t.Fatalf("zero SendEvidence = %d, want SendUncertain (%d)", zero, SendUncertain)
+	}
+
+	uncertainCause := errors.New("lane 1 transport ownership unknown")
+	notSentCause := errors.New("lane 2 queue full")
+	markedNotSent := MarkNotSent(notSentCause)
+	if !IsNotSent(markedNotSent) || !errors.Is(markedNotSent, ErrNotSent) || !errors.Is(markedNotSent, notSentCause) {
+		t.Fatalf("MarkNotSent(%v) failed contract", markedNotSent)
+	}
+
+	for _, test := range []struct {
+		name   string
+		joined error
+	}{
+		{name: "uncertain then not-sent", joined: errors.Join(uncertainCause, markedNotSent)},
+		{name: "not-sent then uncertain", joined: errors.Join(markedNotSent, uncertainCause)},
+		{name: "bare ErrNotSent and uncertain", joined: errors.Join(ErrNotSent, uncertainCause)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			uncertain := MarkSendUncertain(test.joined)
+			if uncertain == nil {
+				t.Fatal("MarkSendUncertain returned nil")
+			}
+			if IsNotSent(uncertain) {
+				t.Fatalf("IsNotSent(%v) = true, want false", uncertain)
+			}
+			if errors.Is(uncertain, ErrNotSent) {
+				t.Fatalf("errors.Is(%v, ErrNotSent) = true, want false", uncertain)
+			}
+			if !errors.Is(uncertain, uncertainCause) {
+				t.Fatalf("lost uncertain cause in %v", uncertain)
+			}
+			if errors.Is(test.joined, notSentCause) && !errors.Is(uncertain, notSentCause) {
+				t.Fatalf("lost pre-transport cause in %v", uncertain)
+			}
+			if laterJoined := errors.Join(uncertain, MarkNotSent(errors.New("later pretransport"))); IsNotSent(laterJoined) {
+				t.Fatalf("later join reversed uncertain evidence: %v", laterJoined)
+			}
+			if rewrapped := MarkNotSent(uncertain); IsNotSent(rewrapped) {
+				t.Fatalf("MarkNotSent reversed uncertain evidence: %v", rewrapped)
+			}
+		})
+	}
+
+	bare := MarkSendUncertain(ErrNotSent)
+	if bare == nil || IsNotSent(bare) {
+		t.Fatalf("MarkSendUncertain(ErrNotSent) = %v, IsNotSent=%v", bare, IsNotSent(bare))
+	}
+}

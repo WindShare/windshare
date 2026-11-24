@@ -278,14 +278,16 @@ func TestDelayedFirstRequestBelowReplayWindowRepliesRetryWithoutEndingSession(t 
 	completeBody, _ := protocolsession.EncodeBody(map[uint64]any{0: uint64(1), 1: uint64(0)})
 	if err := sender.inbound.RegisterHandler(protocolsession.MessageListChildren, protocolsession.MessageHandlerFunc(
 		func(ctx context.Context, op protocolsession.Operation, _ protocolsession.Message) error {
-			return responses.SendControl(ctx, op, protocolsession.MessageCatalogResult, catalogBody)
+			_, err := responses.SendControl(ctx, op, protocolsession.MessageCatalogResult, catalogBody)
+			return err
 		},
 	)); err != nil {
 		t.Fatal(err)
 	}
 	if err := sender.inbound.RegisterHandler(protocolsession.MessageRequestBlocks, protocolsession.MessageHandlerFunc(
 		func(ctx context.Context, op protocolsession.Operation, _ protocolsession.Message) error {
-			return responses.SendControl(ctx, op, protocolsession.MessageOperationComplete, completeBody)
+			_, err := responses.SendControl(ctx, op, protocolsession.MessageOperationComplete, completeBody)
+			return err
 		},
 	)); err != nil {
 		t.Fatal(err)
@@ -401,7 +403,8 @@ func TestBelowReplayWindowRetryFallbackSkipsFullLanesAndDropsWhenAllFull(t *test
 		completeBody, _ := protocolsession.EncodeBody(map[uint64]any{0: uint64(1), 1: uint64(0)})
 		if err := sender.inbound.RegisterHandler(protocolsession.MessageRequestBlocks, protocolsession.MessageHandlerFunc(
 			func(ctx context.Context, op protocolsession.Operation, _ protocolsession.Message) error {
-				return responses.SendControl(ctx, op, protocolsession.MessageOperationComplete, completeBody)
+				_, err := responses.SendControl(ctx, op, protocolsession.MessageOperationComplete, completeBody)
+				return err
 			},
 		)); err != nil {
 			t.Fatal(err)

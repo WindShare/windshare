@@ -103,6 +103,19 @@ func IsOperationCapacityError(err error) bool {
 	return errors.Is(err, ErrActiveOperationBudget)
 }
 
+// SendEvidence expresses cross-lane transport proof independently of error
+// aggregation so joined per-lane failures cannot conflate one pre-transport
+// refusal with another lane's uncertain acceptance.
+type SendEvidence uint8
+
+const (
+	// SendUncertain is the conservative zero value: transport ownership was not
+	// proved absent, so callers must retain peer-visible recovery state.
+	SendUncertain SendEvidence = iota
+	SendDelivered
+	SendNotSent
+)
+
 type notSentError struct{ cause error }
 
 func (err *notSentError) Error() string { return err.cause.Error() }
@@ -111,10 +124,18 @@ func (err *notSentError) Is(target error) bool {
 	return target == ErrNotSent
 }
 
+type uncertainSendError struct{ cause error }
+
+func (err *uncertainSendError) Error() string { return err.cause.Error() }
+func (err *uncertainSendError) Unwrap() error { return err.cause }
+
 // MarkNotSent tags an error proved to have failed before transport acquired the frame.
 func MarkNotSent(cause error) error {
 	if cause == nil {
 		return ErrNotSent
+	}
+	if _, uncertain := errors.AsType[*uncertainSendError](cause); uncertain {
+		return cause
 	}
 	if errors.Is(cause, ErrNotSent) {
 		return cause
@@ -122,8 +143,59 @@ func MarkNotSent(cause error) error {
 	return &notSentError{cause: cause}
 }
 
+// MarkSendUncertain marks an aggregated send error where at least one attempt
+// may have reached transport. It removes per-attempt ErrNotSent wrappers so
+// errors.Is(err, ErrNotSent) stays false and guards IsNotSent under later joins
+// while preserving every underlying cause.
+func MarkSendUncertain(cause error) error {
+	if cause == nil {
+		return nil
+	}
+	cleaned, _ := stripNotSent(cause)
+	if cleaned == nil {
+		cleaned = cause
+	}
+	if _, ok := errors.AsType[*uncertainSendError](cleaned); ok {
+		return cleaned
+	}
+	return &uncertainSendError{cause: cleaned}
+}
+
+func stripNotSent(err error) (error, bool) {
+	if err == nil {
+		return nil, false
+	}
+	switch node := err.(type) { //nolint:errorlint // Inspect one error-tree node at a time so non-notSent causes stay intact.
+	case *notSentError:
+		cleaned, _ := stripNotSent(node.cause)
+		return cleaned, true
+	case interface{ Unwrap() []error }:
+		children := node.Unwrap()
+		cleaned := make([]error, 0, len(children))
+		changed := false
+		for _, child := range children {
+			stripped, childChanged := stripNotSent(child)
+			changed = changed || childChanged
+			if stripped != nil {
+				cleaned = append(cleaned, stripped)
+			}
+		}
+		if !changed {
+			return err, false
+		}
+		return errors.Join(cleaned...), true
+	}
+	if err == ErrNotSent { //nolint:errorlint // Remove only bare ErrNotSent leaves; keep every wrapped transport cause.
+		return nil, true
+	}
+	return err, false
+}
+
 // IsNotSent reports whether the frame is proved never to have reached the transport.
 func IsNotSent(err error) bool {
+	if _, uncertain := errors.AsType[*uncertainSendError](err); uncertain {
+		return false
+	}
 	return errors.Is(err, ErrNotSent) || errors.Is(err, ErrOperationSuppressed)
 }
 
