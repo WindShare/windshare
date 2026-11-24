@@ -434,3 +434,65 @@ test('managed TURN authorizes read-only, pauses new grants and bounds issuance p
   assert.equal((await admin('turn/toggle', { enabled: false })).status, 200);
   await refusal(key, 403, 'access_denied');
 });
+
+test('AccessObject provisions partial indexes once per instance and runs zero DDL on online requests', { timeout: 30_000 }, async t => {
+  const mf = new Miniflare(options(password, origin, 'https://127.0.0.1', true));
+  t.after(() => mf.dispose());
+  const consoleWorker = await mf.getWorker('console');
+  const authority = (await mf.getBindings('relay')).ACCESS.getByName('authority');
+  const audit = async () => (await authority.fetch('https://internal/__test/schema-audit')).json();
+  const expectedIndexes = [
+    'access_active_credentials',
+    'access_entry_expiry',
+    'access_pending_enrollments',
+    'access_revoked_credentials',
+  ];
+
+  assert.deepEqual(await audit(), { indexes: [], ddlCount: 0 });
+  const uninitializedTurn = await authority.fetch('https://internal/internal/authorize-turn', {
+    method: 'POST', body: JSON.stringify({ digest: digest('unknown') }),
+  });
+  assert.equal(uninitializedTurn.status, 403);
+  assert.deepEqual(await audit(), { indexes: [], ddlCount: 0 });
+
+  const login = await consoleWorker.fetch(origin + '/api/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin },
+    body: JSON.stringify({ password }),
+  });
+  assert.equal(login.status, 200);
+  const cookie = login.headers.get('Set-Cookie').split(';')[0];
+  assert.deepEqual(await audit(), { indexes: expectedIndexes, ddlCount: 8 });
+
+  const admin = (path, body) => consoleWorker.fetch(origin + '/api/' + path, {
+    method: body === undefined ? 'GET' : 'POST',
+    headers: { Cookie: cookie, ...(body === undefined ? {} : { 'Content-Type': 'application/json', Origin: origin }) },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  assert.equal((await admin('credentials')).status, 200);
+  assert.equal((await admin('credentials/revoked')).status, 200);
+  assert.equal((await admin('enrollments')).status, 200);
+  const createdRes = await admin('credentials', { name: 'schema-audit-key' });
+  assert.equal(createdRes.status, 201);
+  const created = await createdRes.json();
+  const authorized = await authority.fetch('https://internal/internal/authorize', {
+    method: 'POST',
+    body: JSON.stringify({
+      digest: digest(created.access_key),
+      share_id: encode(randomBytes(12)),
+      operation_id: 'schema-audit',
+    }),
+  });
+  assert.equal(authorized.status, 200);
+  const turnAuthorized = await authority.fetch('https://internal/internal/authorize-turn', {
+    method: 'POST', body: JSON.stringify({ digest: digest(created.access_key) }),
+  });
+  assert.equal(turnAuthorized.status, 200);
+  assert.equal((await admin('credentials/revoke', {
+    credential_id: created.credential.credential_id,
+    terminate_shares: false,
+  })).status, 200);
+  assert.equal((await admin('credentials/revoked')).status, 200);
+  assert.equal((await authority.fetch('https://internal/__test/alarm')).status, 200);
+
+  assert.deepEqual(await audit(), { indexes: expectedIndexes, ddlCount: 8 });
+});

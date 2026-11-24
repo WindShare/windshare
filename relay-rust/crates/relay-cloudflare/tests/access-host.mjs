@@ -4,7 +4,41 @@ import { AccessObject as RustAccess, ShareRelayObject as RustShare } from '../bu
 export { default } from '../entry.mjs';
 
 export class AccessObject extends DurableObject {
-  constructor(ctx, env) { super(ctx, env); this.rust = new RustAccess(ctx, env); this.fetches = 0; }
+  constructor(ctx, env) {
+    super(ctx, env);
+    this.ddlCount = 0;
+    const self = this;
+    const wrapSql = sql => new Proxy(sql, {
+      get(target, prop) {
+        if (prop === 'exec') {
+          return (query, ...bindings) => {
+            if (/^\s*CREATE\s+(?:TABLE|INDEX)\b/i.test(String(query))) {
+              self.ddlCount += 1;
+            }
+            return target.exec(query, ...bindings);
+          };
+        }
+        const value = Reflect.get(target, prop, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const wrapStorage = storage => new Proxy(storage, {
+      get(target, prop) {
+        if (prop === 'sql') return wrapSql(target.sql);
+        const value = Reflect.get(target, prop, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const wrappedCtx = new Proxy(ctx, {
+      get(target, prop) {
+        if (prop === 'storage') return wrapStorage(target.storage);
+        const value = Reflect.get(target, prop, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    this.rust = new RustAccess(wrappedCtx, env);
+    this.fetches = 0;
+  }
   async fetch(request) {
     const path = new URL(request.url).pathname;
     if (path === '/__test/changes') {
@@ -12,6 +46,12 @@ export class AccessObject extends DurableObject {
     }
     if (path === '/__test/fetches') {
       return Response.json({ fetches: this.fetches });
+    }
+    if (path === '/__test/schema-audit' && request.method === 'GET') {
+      const indexes = [...this.ctx.storage.sql.exec(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'access_entries' AND name NOT LIKE 'sqlite_autoindex_%' ORDER BY name",
+      )].map(row => row.name);
+      return Response.json({ indexes, ddlCount: this.ddlCount });
     }
     if (path === '/__test/queue') {
       return Response.json([...this.ctx.storage.sql.exec(

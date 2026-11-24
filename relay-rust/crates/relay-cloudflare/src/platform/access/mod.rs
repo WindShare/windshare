@@ -7,6 +7,7 @@ mod turn;
 
 use super::io;
 use serde_json::{Value, json};
+use std::cell::{Cell, RefCell};
 use storage::Database;
 use windshare_relay_console::{
     MAX_BODY_BYTES, MAX_RECORDS,
@@ -31,7 +32,8 @@ const COOKIE_NAME: &str = "__Host-windshare_admin";
 pub struct AccessObject {
     state: State,
     env: Env,
-    turn_limits: std::cell::RefCell<turn::Limits>,
+    schema_ready: Cell<bool>,
+    turn_limits: RefCell<turn::Limits>,
 }
 
 pub fn failure(error: impl std::fmt::Display) -> worker::Error {
@@ -70,6 +72,18 @@ fn reply_error(error: ConsoleError) -> Result<Response> {
 }
 
 impl AccessObject {
+    fn database(&self) -> Result<Database> {
+        let db = Database::new(&self.state);
+        if !self.schema_ready.get() {
+            // Provision tables and partial indexes once per DO instance so
+            // online requests and read paths never run DDL.
+            db.ensure_schema()?;
+            self.schema_ready.set(true);
+            trace("access_schema_ready", &json!({}));
+        }
+        Ok(db)
+    }
+
     fn console_origin(&self) -> Result<String> {
         Ok(self.env.var("CONSOLE_ORIGIN")?.to_string())
     }
@@ -132,7 +146,8 @@ impl AccessObject {
         let path = req.path();
         if path == "/internal/authorize-turn" && req.method() == Method::Post {
             let digest = req.json().await?;
-            return self.authorize_turn(&Database::read_only(&self.state), &digest, io::now().0);
+            // Avoid provisioning schema on uninitialized objects for TURN probes.
+            return self.authorize_turn(&Database::new(&self.state), &digest, io::now().0);
         }
         if path != "/internal/authorize" {
             if req.url()?.origin().ascii_serialization() != self.console_origin()? {
@@ -142,7 +157,7 @@ impl AccessObject {
                 return reply_error(ConsoleError::not_found());
             }
         }
-        let db = Database::open(&self.state)?;
+        let db = self.database()?;
         let now = io::now().0;
         if path == "/internal/authorize" {
             return Self::authorize(&db, &req.json().await?, now);
@@ -173,14 +188,13 @@ impl AccessObject {
                 }),
             );
         }
-        self.schedule().await?;
+        self.schedule(&db).await?;
         Ok(response)
     }
 
-    async fn schedule(&self) -> Result<()> {
+    async fn schedule(&self, db: &Database) -> Result<()> {
         let now = io::now().0;
         let cleanup = now.saturating_add(CLEANUP_INTERVAL_MS);
-        let db = Database::open(&self.state)?;
         let deadline = db.next_termination()?.map_or(cleanup, |at| {
             at.max(now.saturating_add(MINIMUM_ALARM_DELAY_MS))
                 .min(cleanup)
@@ -201,7 +215,8 @@ impl DurableObject for AccessObject {
         Self {
             state,
             env,
-            turn_limits: std::cell::RefCell::default(),
+            schema_ready: Cell::new(false),
+            turn_limits: RefCell::default(),
         }
     }
 
@@ -223,11 +238,11 @@ impl DurableObject for AccessObject {
     }
 
     async fn alarm(&self) -> Result<Response> {
-        let db = Database::open(&self.state)?;
+        let db = self.database()?;
         db.cleanup(io::now().0)?;
         self.terminate_shares(&db).await?;
         if db.next_termination()?.is_some() || db.pending_enrollments()? > 0 {
-            self.schedule().await?;
+            self.schedule(&db).await?;
         }
         reply(&json!({"ok": true}), 200)
     }

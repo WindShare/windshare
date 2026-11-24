@@ -9,12 +9,28 @@ const ENROLLMENT_ROWS: &str = "key GLOB 'enrollment:*'";
 const ACTIVE_CREDENTIALS: &str = "json_extract(value, '$.state') = 'Active'";
 const PENDING_ENROLLMENTS: &str = "json_extract(value, '$.state') = 'Pending'";
 const REVOKED_AT: &str = "json_extract(value, '$.state.Revoked.at')";
+const ENTRY_EXPIRY_INDEX: &str = "access_entry_expiry";
+const ACTIVE_CREDENTIALS_INDEX: &str = "access_active_credentials";
+const PENDING_ENROLLMENTS_INDEX: &str = "access_pending_enrollments";
+const REVOKED_CREDENTIALS_INDEX: &str = "access_revoked_credentials";
 const TERMINATION_BATCH_SIZE: i64 = 32;
 pub const TERMINATION_RETRY_MS: u64 = 5_000;
 
+fn active_credential_predicate() -> String {
+    format!("{CREDENTIAL_ROWS} AND {ACTIVE_CREDENTIALS}")
+}
+
+fn pending_enrollment_predicate() -> String {
+    format!("{ENROLLMENT_ROWS} AND expires IS NOT NULL AND {PENDING_ENROLLMENTS}")
+}
+
+fn revoked_credential_predicate() -> String {
+    format!("{CREDENTIAL_ROWS} AND {REVOKED_AT} IS NOT NULL")
+}
+
 pub struct Database(SqlStorage);
 impl Database {
-    pub fn read_only(state: &State) -> Self {
+    pub fn new(state: &State) -> Self {
         Self(state.storage().sql())
     }
     pub fn initialized(&self) -> Result<bool> {
@@ -29,14 +45,45 @@ impl Database {
             .transpose()?
             .is_some())
     }
-    pub fn open(state: &State) -> Result<Self> {
-        let db = Self(state.storage().sql());
-        db.0.exec("CREATE TABLE IF NOT EXISTS access_entries (key TEXT PRIMARY KEY, value TEXT NOT NULL, expires INTEGER) STRICT", None)?;
-        db.0.exec("CREATE INDEX IF NOT EXISTS access_entry_expiry ON access_entries(expires) WHERE expires IS NOT NULL", None)?;
-        db.0.exec("CREATE TABLE IF NOT EXISTS access_credentials (digest TEXT PRIMARY KEY, id TEXT UNIQUE NOT NULL) STRICT", None)?;
-        db.0.exec("CREATE TABLE IF NOT EXISTS credential_shares (credential TEXT NOT NULL, share TEXT NOT NULL, PRIMARY KEY(credential,share)) STRICT", None)?;
-        db.0.exec("CREATE TABLE IF NOT EXISTS termination_queue (credential TEXT NOT NULL, share TEXT NOT NULL, next_attempt INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(credential,share)) STRICT", None)?;
-        Ok(db)
+    pub fn ensure_schema(&self) -> Result<()> {
+        self.0.exec("CREATE TABLE IF NOT EXISTS access_entries (key TEXT PRIMARY KEY, value TEXT NOT NULL, expires INTEGER) STRICT", None)?;
+        // Provision all partial indexes upfront so online requests and read paths
+        // never execute DDL or trigger full-table index builds.
+        self.0.exec(
+            &format!(
+                "CREATE INDEX IF NOT EXISTS {ENTRY_EXPIRY_INDEX}
+                 ON access_entries(expires) WHERE expires IS NOT NULL"
+            ),
+            None,
+        )?;
+        let active = active_credential_predicate();
+        self.0.exec(
+            &format!(
+                "CREATE INDEX IF NOT EXISTS {ACTIVE_CREDENTIALS_INDEX}
+                 ON access_entries(key) WHERE {active}"
+            ),
+            None,
+        )?;
+        let pending = pending_enrollment_predicate();
+        self.0.exec(
+            &format!(
+                "CREATE INDEX IF NOT EXISTS {PENDING_ENROLLMENTS_INDEX}
+                 ON access_entries(key) WHERE {pending}"
+            ),
+            None,
+        )?;
+        let revoked = revoked_credential_predicate();
+        self.0.exec(
+            &format!(
+                "CREATE INDEX IF NOT EXISTS {REVOKED_CREDENTIALS_INDEX}
+                 ON access_entries ({REVOKED_AT} DESC, key DESC) WHERE {revoked}"
+            ),
+            None,
+        )?;
+        self.0.exec("CREATE TABLE IF NOT EXISTS access_credentials (digest TEXT PRIMARY KEY, id TEXT UNIQUE NOT NULL) STRICT", None)?;
+        self.0.exec("CREATE TABLE IF NOT EXISTS credential_shares (credential TEXT NOT NULL, share TEXT NOT NULL, PRIMARY KEY(credential,share)) STRICT", None)?;
+        self.0.exec("CREATE TABLE IF NOT EXISTS termination_queue (credential TEXT NOT NULL, share TEXT NOT NULL, next_attempt INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(credential,share)) STRICT", None)?;
+        Ok(())
     }
     pub fn get<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {
         let rows = self.0.exec(
@@ -79,20 +126,12 @@ impl Database {
             })
             .collect()
     }
-    fn ensure_active_index(&self) -> Result<()> {
-        self.0.exec(
-            &format!(
-                "CREATE INDEX IF NOT EXISTS access_active_credentials
-                      ON access_entries(key) WHERE {CREDENTIAL_ROWS} AND {ACTIVE_CREDENTIALS}"
-            ),
-            None,
-        )?;
-        Ok(())
-    }
     pub fn active_credentials(&self) -> Result<usize> {
-        self.ensure_active_index()?;
+        let active = active_credential_predicate();
         let rows = self.0.exec(
-            &format!("SELECT count(*) FROM access_entries INDEXED BY access_active_credentials WHERE {CREDENTIAL_ROWS} AND {ACTIVE_CREDENTIALS}"),
+            &format!(
+                "SELECT count(*) FROM access_entries INDEXED BY {ACTIVE_CREDENTIALS_INDEX} WHERE {active}"
+            ),
             None,
         )?;
         match rows.raw().next().transpose()?.as_deref() {
@@ -101,29 +140,21 @@ impl Database {
         }
     }
     pub fn list_active_credentials(&self) -> Result<Vec<Credential>> {
-        self.ensure_active_index()?;
+        let active = active_credential_predicate();
         self.read_values(
             &format!(
-                "SELECT value FROM access_entries INDEXED BY access_active_credentials
-                WHERE {CREDENTIAL_ROWS} AND {ACTIVE_CREDENTIALS} ORDER BY key"
+                "SELECT value FROM access_entries INDEXED BY {ACTIVE_CREDENTIALS_INDEX}
+                WHERE {active} ORDER BY key"
             ),
             vec![],
             "invalid credential row",
         )
     }
     pub fn list_pending_enrollments(&self) -> Result<Vec<Enrollment>> {
-        let pending =
-            format!("{ENROLLMENT_ROWS} AND expires IS NOT NULL AND {PENDING_ENROLLMENTS}");
-        self.0.exec(
-            &format!(
-                "CREATE INDEX IF NOT EXISTS access_pending_enrollments
-                      ON access_entries(key) WHERE {pending}"
-            ),
-            None,
-        )?;
+        let pending = pending_enrollment_predicate();
         self.read_values(
             &format!(
-                "SELECT value FROM access_entries INDEXED BY access_pending_enrollments
+                "SELECT value FROM access_entries INDEXED BY {PENDING_ENROLLMENTS_INDEX}
                 WHERE {pending} ORDER BY key"
             ),
             vec![],
@@ -147,19 +178,12 @@ impl Database {
         after: Option<&RevokedCredentialPosition>,
         limit: usize,
     ) -> Result<Vec<Credential>> {
-        let revoked = format!("{CREDENTIAL_ROWS} AND {REVOKED_AT} IS NOT NULL");
-        self.0.exec(
-            &format!(
-                "CREATE INDEX IF NOT EXISTS access_revoked_credentials
-                ON access_entries ({REVOKED_AT} DESC, key DESC) WHERE {revoked}"
-            ),
-            None,
-        )?;
+        let revoked = revoked_credential_predicate();
         let read = |filter: &str, order: &str, mut args: Vec<SqlStorageValue>, take: usize| {
             args.push(i64::try_from(take).map_err(failure)?.into());
             self.read_values(
                 &format!(
-                    "SELECT value FROM access_entries INDEXED BY access_revoked_credentials
+                    "SELECT value FROM access_entries INDEXED BY {REVOKED_CREDENTIALS_INDEX}
                     WHERE {revoked} {filter} ORDER BY {order} LIMIT ?"
                 ),
                 args,
