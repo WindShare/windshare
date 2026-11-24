@@ -120,19 +120,8 @@ export interface ReceiveFileRecord {
   readonly zipEntry?: ZipEntryLayoutRecord
 }
 
-export interface ZipSpoolChunkRecord {
-  readonly id: string
-  readonly taskId: string
-  readonly index: number
-  readonly bytes: Uint8Array
-}
-
 export function fileRecordId(taskId: string, fileId: string): string {
   return `${taskId}:${fileId}`
-}
-
-export function spoolChunkId(taskId: string, index: number): string {
-  return `${taskId}:${index}`
 }
 
 export function toRangeTuples(ranges: readonly ByteRange[]): readonly CompletedRangeTuple[] {

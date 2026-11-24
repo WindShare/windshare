@@ -178,20 +178,20 @@ function createMockDownloadWindow(): {
 
 describe('ZIP writers (portable streaming & OPFS progressive)', () => {
   it('writes valid Store-mode ZIP archives via StreamingZipWriter and enforces size caps', async () => {
-    const zip = new StreamingZipWriter({ taskId: 'stream-1', maxBytes: 1024n * 1024n })
-    await zip.addDirectory(['album'])
+    const zip = new StreamingZipWriter({ maxBytes: 1024n * 1024n })
+    zip.addDirectory(['album'])
     const a = zip.beginFile(['album', 'hello.txt'], 5n)
     a.write(new TextEncoder().encode('hello'))
-    await a.close()
+    a.close()
     const b = zip.beginFile(['album', 'empty.txt'], 0n)
-    await b.close()
+    b.close()
 
-    const blob = await zip.finalize()
+    const blob = zip.finalize()
     const files = await readZipEntries(blob)
     expect(new TextDecoder().decode(files.get('album/hello.txt'))).toBe('hello')
     expect(files.get('album/empty.txt')).toEqual(new Uint8Array(0))
 
-    const capped = new StreamingZipWriter({ taskId: 'stream-2', maxBytes: 32n })
+    const capped = new StreamingZipWriter({ maxBytes: 32n })
     expect(() => capped.beginFile(['big.bin'], 100n)).toThrow(/limit/u)
   })
 
@@ -343,39 +343,39 @@ describe('ZIP writers (portable streaming & OPFS progressive)', () => {
   })
 
   it('defers directory entries until the active StreamingZipWriter file closes and rejects illegal concurrent states', async () => {
-    const zip = new StreamingZipWriter({ taskId: 'stream-interleave', maxBytes: 1024n * 1024n })
+    const zip = new StreamingZipWriter({ maxBytes: 1024n * 1024n })
     const fileA = zip.beginFile(['dirA', 'data.bin'], 4n)
 
     // Interleaved directory additions during an open file must not splice headers into fileA.
-    await zip.addDirectory(['dirB'])
-    await zip.addDirectory(['dirB', 'nested'])
+    zip.addDirectory(['dirB'])
+    zip.addDirectory(['dirB', 'nested'])
 
     expect(() => zip.beginFile(['dirA', 'overlap.bin'], 1n)).toThrow(/still open/u)
-    await expect(zip.finalize()).rejects.toThrow(/still open/u)
+    expect(() => zip.finalize()).toThrow(/still open/u)
 
     fileA.write(new Uint8Array([0x01, 0x02, 0x03, 0x04]))
-    await fileA.close()
+    fileA.close()
     expect(() => fileA.write(new Uint8Array([0x05]))).toThrow(/no longer open/u)
-    await expect(fileA.close()).rejects.toThrow(/no longer open/u)
+    expect(() => fileA.close()).toThrow(/no longer open/u)
 
     const fileB = zip.beginFile(['dirB', 'nested', 'ok.txt'], 2n)
     fileB.write(new TextEncoder().encode('ok'))
-    await fileB.close()
+    fileB.close()
 
-    const archive = await readZipArchive(await zip.finalize())
+    const archive = await readZipArchive(zip.finalize())
     expect([...archive.files.get('dirA/data.bin')!]).toEqual([0x01, 0x02, 0x03, 0x04])
     expect(new TextDecoder().decode(archive.files.get('dirB/nested/ok.txt'))).toBe('ok')
     expect(archive.directories).toEqual(new Set(['dirB/', 'dirB/nested/']))
 
     // Aborting an active file taints the sequential writer so no corrupted archive can be finalized.
-    const aborted = new StreamingZipWriter({ taskId: 'stream-abort', maxBytes: 1024n * 1024n })
+    const aborted = new StreamingZipWriter({ maxBytes: 1024n * 1024n })
     const open = aborted.beginFile(['partial.bin'], 8n)
     open.write(new Uint8Array([1, 2, 3, 4]))
     open.abort()
     expect(() => open.write(new Uint8Array([5]))).toThrow(/no longer open/u)
     expect(() => aborted.beginFile(['next.bin'], 1n)).toThrow(/aborted/u)
-    await expect(aborted.addDirectory(['after'])).rejects.toThrow(/aborted/u)
-    await expect(aborted.finalize()).rejects.toThrow(/aborted/u)
+    expect(() => aborted.addDirectory(['after'])).toThrow(/aborted/u)
+    expect(() => aborted.finalize()).toThrow(/aborted/u)
   })
 
   it('produces a valid portable ZIP through TransferJob when directories are discovered mid-file', async () => {
@@ -826,32 +826,32 @@ describe('ZIP result-root layout integration', () => {
     expect(opfsArchive.files.get('Photos/Trip/1.jpg')).toEqual(payloadB)
   })
 
-  it('rejects overflowing StreamingZipWriter entries before payload writes using exact finalized bounds', async () => {
+  it('rejects overflowing StreamingZipWriter entries before payload writes using exact finalized bounds', () => {
     const first = new Uint8Array(64).fill(0x41)
     const second = new Uint8Array(64).fill(0x42)
 
-    const baseline = new StreamingZipWriter({ taskId: 'stream-exact-base', maxBytes: 1024n * 1024n })
+    const baseline = new StreamingZipWriter({ maxBytes: 1024n * 1024n })
     const baseA = baseline.beginFile(['one.bin'], BigInt(first.byteLength))
     baseA.write(first)
-    await baseA.close()
+    baseA.close()
     const baseB = baseline.beginFile(['two.bin'], BigInt(second.byteLength))
     baseB.write(second)
-    await baseB.close()
-    const exactSize = BigInt((await baseline.finalize()).size)
+    baseB.close()
+    const exactSize = BigInt(baseline.finalize().size)
 
-    const exactFit = new StreamingZipWriter({ taskId: 'stream-exact-fit', maxBytes: exactSize })
+    const exactFit = new StreamingZipWriter({ maxBytes: exactSize })
     const fitA = exactFit.beginFile(['one.bin'], BigInt(first.byteLength))
     fitA.write(first)
-    await fitA.close()
+    fitA.close()
     const fitB = exactFit.beginFile(['two.bin'], BigInt(second.byteLength))
     fitB.write(second)
-    await fitB.close()
-    expect(BigInt((await exactFit.finalize()).size)).toBe(exactSize)
+    fitB.close()
+    expect(BigInt(exactFit.finalize().size)).toBe(exactSize)
 
-    const oneShort = new StreamingZipWriter({ taskId: 'stream-one-short', maxBytes: exactSize - 1n })
+    const oneShort = new StreamingZipWriter({ maxBytes: exactSize - 1n })
     const shortA = oneShort.beginFile(['one.bin'], BigInt(first.byteLength))
     shortA.write(first)
-    await shortA.close()
+    shortA.close()
     let thrown: unknown
     try {
       oneShort.beginFile(['two.bin'], BigInt(second.byteLength))

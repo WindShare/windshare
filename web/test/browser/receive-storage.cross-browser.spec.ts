@@ -32,7 +32,7 @@ async function readZip(bytes: Uint8Array): Promise<Record<string, string>> {
   }
 }
 
-test('unified ReceiveStore persists tasks, files, and zip-spool and cascades deletion cleanly', async ({ page }) => {
+test('unified ReceiveStore persists tasks and files and cascades deletion cleanly', async ({ page }) => {
   await page.goto(BROWSER_CONTRACT_HOST_PATH)
   const result = await page.evaluate(async ({ path, db }) => {
     const harness = await import(path) as typeof import('./receive-storage-harness')
@@ -42,10 +42,8 @@ test('unified ReceiveStore persists tasks, files, and zip-spool and cascades del
   expect(result).toEqual({
     tasksBefore: 1,
     filesBefore: 1,
-    chunksBefore: 1,
     tasksAfter: 0,
     filesAfter: 0,
-    chunksAfter: 0,
   })
 })
 

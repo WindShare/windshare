@@ -1,6 +1,4 @@
 import { portableLimitExceededError } from '../../transfer/fault'
-import type { ReceiveStore } from '../store/database'
-import { spoolChunkId } from '../store/types'
 import { completeZipMember } from './member'
 import {
   ZIP64_END_BYTES,
@@ -16,61 +14,37 @@ import {
   type ZipEntryPlanV1,
 } from './policy'
 
-const SPOOL_CHUNK_BYTES = 256 * 1024
+// Coalesce central-directory records into bounded slabs so archives with many small
+// entries avoid per-entry TypedArray overhead while staying purely in memory.
+const CENTRAL_DIRECTORY_SLAB_BYTES = 256 * 1024
 
-interface SpoolSink {
-  append(record: Uint8Array): Promise<void>
-  readAll(): AsyncGenerator<Uint8Array>
-  clear(): Promise<void>
-}
-
-class MemorySpool implements SpoolSink {
-  readonly #records: Uint8Array[] = []
-  async append(record: Uint8Array): Promise<void> { this.#records.push(record) }
-  async *readAll(): AsyncGenerator<Uint8Array> {
-    for (const record of this.#records) yield record
-  }
-  async clear(): Promise<void> { this.#records.length = 0 }
-}
-
-class StoreSpool implements SpoolSink {
-  readonly #store: ReceiveStore
-  readonly #taskId: string
+class CentralDirectoryBuffer {
+  readonly #slabs: Uint8Array<ArrayBuffer>[] = []
   readonly #pending: Uint8Array[] = []
   #pendingBytes = 0
-  #chunkCount = 0
 
-  constructor(store: ReceiveStore, taskId: string) {
-    this.#store = store
-    this.#taskId = taskId
-  }
-
-  async append(record: Uint8Array): Promise<void> {
+  append(record: Uint8Array): void {
     this.#pending.push(record)
     this.#pendingBytes += record.byteLength
-    if (this.#pendingBytes >= SPOOL_CHUNK_BYTES) {
-      await this.#flushChunk()
+    if (this.#pendingBytes >= CENTRAL_DIRECTORY_SLAB_BYTES) {
+      this.#coalescePending()
     }
   }
 
-  async *readAll(): AsyncGenerator<Uint8Array> {
-    await this.#flushChunk()
-    for (let index = 0; index < this.#chunkCount; index++) {
-      const chunk = await this.#store.getZipSpoolChunk(this.#taskId, index)
-      if (chunk !== undefined) yield chunk
-    }
+  drain(): readonly Uint8Array<ArrayBuffer>[] {
+    this.#coalescePending()
+    const slabs = this.#slabs.slice()
+    this.#slabs.length = 0
+    return slabs
   }
 
-  async clear(): Promise<void> {
+  clear(): void {
+    this.#slabs.length = 0
     this.#pending.length = 0
     this.#pendingBytes = 0
-    if (this.#chunkCount > 0) {
-      await this.#store.deleteZipSpool(this.#taskId).catch(() => undefined)
-      this.#chunkCount = 0
-    }
   }
 
-  async #flushChunk(): Promise<void> {
+  #coalescePending(): void {
     if (this.#pending.length === 0) return
     const merged = new Uint8Array(this.#pendingBytes)
     let offset = 0
@@ -80,19 +54,11 @@ class StoreSpool implements SpoolSink {
     }
     this.#pending.length = 0
     this.#pendingBytes = 0
-    const index = this.#chunkCount++
-    await this.#store.putZipSpoolChunk({
-      id: spoolChunkId(this.#taskId, index),
-      taskId: this.#taskId,
-      index,
-      bytes: merged,
-    })
+    this.#slabs.push(merged)
   }
 }
 
 export interface StreamingZipWriterOptions {
-  readonly taskId: string
-  readonly store?: ReceiveStore
   readonly maxBytes: bigint
 }
 
@@ -105,12 +71,13 @@ interface PendingZipDirectory {
 }
 
 /**
- * Simple Store-mode ZIP64 writer assembling into bounded Blob parts for portable downloads.
- * Spools central directory entries into the unified `zip-spool` IndexedDB store when available.
+ * In-memory Store-mode ZIP64 writer assembling bounded Blob parts for portable downloads.
+ * Keeps central-directory records in memory within the archive byte cap so abandoned
+ * portable downloads leave no persistent browser storage behind.
  */
 export class StreamingZipWriter {
   readonly #parts: Uint8Array<ArrayBuffer>[] = []
-  readonly #spool: SpoolSink
+  readonly #central = new CentralDirectoryBuffer()
   readonly #maxBytes: bigint
   readonly #pendingDirectories: PendingZipDirectory[] = []
   #offset = 0n
@@ -124,12 +91,9 @@ export class StreamingZipWriter {
 
   constructor(options: StreamingZipWriterOptions) {
     this.#maxBytes = options.maxBytes
-    this.#spool = options.store === undefined
-      ? new MemorySpool()
-      : new StoreSpool(options.store, options.taskId)
   }
 
-  async addDirectory(path: readonly string[], modifiedTimeMilliseconds?: bigint): Promise<void> {
+  addDirectory(path: readonly string[], modifiedTimeMilliseconds?: bigint): void {
     this.#requireWritable('add a directory')
     const normalized = normalizeZipEntry({
       kind: 'directory',
@@ -142,7 +106,7 @@ export class StreamingZipWriter {
       this.#queueDirectory(normalized)
       return
     }
-    await this.#writeDirectory(normalized)
+    this.#writeDirectory(normalized)
   }
 
   beginFile(
@@ -163,7 +127,7 @@ export class StreamingZipWriter {
     const plan = planZipEntry(normalized, this.#offset)
     // Reject before reading any payload when the full entry and ZIP end records cannot fit.
     this.#checkBudget(this.#projectedArchiveBytes(plan.entryStreamBytes, plan.centralRecordBytes, 1n))
-    this.#push(encodeZipLocalHeader(plan))
+    this.#pushOwned(encodeZipLocalHeader(plan))
     this.#state = 'file-open'
     this.#activePlan = plan
     const writer: StreamingZipFileWriter = new StreamingZipFileWriter(
@@ -176,7 +140,7 @@ export class StreamingZipWriter {
     return writer
   }
 
-  async finalize(): Promise<Blob> {
+  finalize(): Blob {
     this.#requireWritable('finalize the archive')
     if (this.#activeFile !== undefined) {
       throw new Error('Cannot finalize ZIP while a file entry is still open')
@@ -184,8 +148,8 @@ export class StreamingZipWriter {
     this.#state = 'finalized'
     try {
       const centralOffset = this.#offset
-      for await (const chunk of this.#spool.readAll()) {
-        this.#push(chunk)
+      for (const slab of this.#central.drain()) {
+        this.#pushOwned(slab)
       }
       const base = {
         entryCount: this.#entryCount,
@@ -193,18 +157,18 @@ export class StreamingZipWriter {
         centralDirectoryBytes: this.#centralBytes,
       }
       const ends = encodeZipEndRecords({ ...base, zip64EndRequired: requiresZip64End(base) })
-      if (ends.zip64End !== undefined) this.#push(ends.zip64End)
-      if (ends.zip64Locator !== undefined) this.#push(ends.zip64Locator)
-      this.#push(ends.classicEnd)
+      if (ends.zip64End !== undefined) this.#pushOwned(ends.zip64End)
+      if (ends.zip64Locator !== undefined) this.#pushOwned(ends.zip64Locator)
+      this.#pushOwned(ends.classicEnd)
       return new Blob(this.#parts, { type: 'application/zip' })
     } finally {
-      await this.#spool.clear()
+      this.#parts.length = 0
+      this.#central.clear()
     }
   }
 
-  async abort(): Promise<void> {
+  abort(): void {
     this.#markAborted()
-    await this.#spool.clear()
   }
 
   #requireWritable(action: string): void {
@@ -231,56 +195,50 @@ export class StreamingZipWriter {
     })
   }
 
-  async #writeDirectory(entry: NormalizedZipEntry): Promise<void> {
+  #writeDirectory(entry: NormalizedZipEntry): void {
     const plan = planZipEntry(entry, this.#offset)
     this.#checkBudget(this.#projectedArchiveBytes(plan.entryStreamBytes, plan.centralRecordBytes, 1n))
-    this.#push(encodeZipLocalHeader(plan))
+    this.#pushOwned(encodeZipLocalHeader(plan))
     const done = completeZipMember(plan, 0n, 0)
-    this.#push(done.descriptor)
-    await this.#recordCentral(done.centralRecord)
+    this.#pushOwned(done.descriptor)
+    this.#recordCentral(done.centralRecord)
   }
 
   #writeActiveChunk(writer: StreamingZipFileWriter, chunk: Uint8Array): void {
     if (this.#state !== 'file-open' || this.#activeFile !== writer) {
       throw new Error('ZIP entry is no longer active')
     }
-    this.#push(chunk)
+    this.#pushCopy(chunk)
   }
 
-  async #finishFile(
+  #finishFile(
     writer: StreamingZipFileWriter,
     plan: ZipEntryPlanV1,
     crc32: number,
-  ): Promise<void> {
+  ): void {
     if (this.#state !== 'file-open' || this.#activeFile !== writer) {
       throw new Error('ZIP entry is no longer active')
     }
     try {
       const done = completeZipMember(plan, plan.exactSize, crc32)
-      this.#push(done.descriptor)
-      // Stream bytes are now committed to `#offset`; `#recordCentral` commits central bytes
-      // before its first await, so clearing `#activePlan` here avoids double-counting across yields.
+      this.#pushOwned(done.descriptor)
       this.#activePlan = undefined
-      await this.#recordCentral(done.centralRecord)
-      await this.#flushPendingDirectories()
+      this.#recordCentral(done.centralRecord)
+      this.#flushPendingDirectories()
     } catch (error) {
       this.#markAborted()
       throw error
-    }
-    if (this.#state !== 'file-open' || this.#activeFile !== writer) {
-      throw new Error('ZIP writer was aborted before entry committed')
     }
     this.#activeFile = undefined
     this.#state = 'idle'
   }
 
-  async #flushPendingDirectories(): Promise<void> {
+  #flushPendingDirectories(): void {
     while (this.#pendingDirectories.length > 0) {
-      if (this.#state !== 'file-open') return
       const pending = this.#pendingDirectories.shift()!
       this.#pendingDirectoryStreamBytes -= pending.streamBytes
       this.#pendingDirectoryCentralBytes -= pending.centralBytes
-      await this.#writeDirectory(pending.entry)
+      this.#writeDirectory(pending.entry)
     }
   }
 
@@ -295,31 +253,43 @@ export class StreamingZipWriter {
     this.#activeFile = undefined
     this.#activePlan = undefined
     this.#parts.length = 0
+    this.#central.clear()
     this.#pendingDirectories.length = 0
     this.#pendingDirectoryStreamBytes = 0n
     this.#pendingDirectoryCentralBytes = 0n
   }
 
-  async #recordCentral(record: Uint8Array): Promise<void> {
+  #recordCentral(record: Uint8Array): void {
     const nextCentral = checkedZipAdd(this.#centralBytes, BigInt(record.byteLength))
     const pendingBytes = checkedZipAdd(this.#pendingDirectoryStreamBytes, this.#pendingDirectoryCentralBytes)
     this.#checkBudget(checkedZipAdd(this.#offset, nextCentral, pendingBytes))
     this.#centralBytes = nextCentral
     this.#entryCount += 1n
-    await this.#spool.append(record)
+    this.#central.append(record)
   }
 
-  #push(chunk: Uint8Array): void {
-    const next = checkedZipAdd(this.#offset, BigInt(chunk.byteLength))
+  #pushOwned(chunk: Uint8Array<ArrayBuffer>): void {
+    const next = this.#reservePush(chunk.byteLength)
+    this.#parts.push(chunk)
+    this.#offset = next
+  }
+
+  #pushCopy(chunk: Uint8Array): void {
+    const next = this.#reservePush(chunk.byteLength)
+    const copy = new Uint8Array(chunk.byteLength)
+    copy.set(chunk)
+    this.#parts.push(copy)
+    this.#offset = next
+  }
+
+  #reservePush(byteLength: number): bigint {
+    const next = checkedZipAdd(this.#offset, BigInt(byteLength))
     const pendingBytes = checkedZipAdd(this.#pendingDirectoryStreamBytes, this.#pendingDirectoryCentralBytes)
     const projected = this.#state === 'finalized'
       ? next
       : checkedZipAdd(next, this.#centralBytes, pendingBytes)
     this.#checkBudget(projected)
-    const copy = new Uint8Array(chunk.byteLength)
-    copy.set(chunk)
-    this.#parts.push(copy)
-    this.#offset = next
+    return next
   }
 
   #projectedArchiveBytes(addedStreamBytes: bigint, addedCentralBytes: bigint, addedEntries: bigint): bigint {
@@ -354,16 +324,16 @@ export class StreamingZipWriter {
 export class StreamingZipFileWriter {
   readonly #plan: ZipEntryPlanV1
   readonly #writeChunk: (chunk: Uint8Array) => void
-  readonly #commit: (crc32: number) => Promise<void>
+  readonly #commit: (crc32: number) => void
   readonly #onAbort: () => void
   readonly #crc = new ZipCrc32()
   #written = 0n
-  #state: 'open' | 'closing' | 'closed' | 'aborted' = 'open'
+  #state: 'open' | 'closed' | 'aborted' = 'open'
 
   constructor(
     plan: ZipEntryPlanV1,
     writeChunk: (chunk: Uint8Array) => void,
-    commit: (crc32: number) => Promise<void>,
+    commit: (crc32: number) => void,
     onAbort: () => void = () => undefined,
   ) {
     this.#plan = plan
@@ -384,14 +354,13 @@ export class StreamingZipFileWriter {
     this.#written = next
   }
 
-  async close(): Promise<void> {
+  close(): void {
     this.#requireOpen()
     if (this.#written !== this.#plan.exactSize) {
       throw new Error('ZIP entry closed before reaching its expected size')
     }
-    this.#state = 'closing'
     try {
-      await this.#commit(this.#crc.digest())
+      this.#commit(this.#crc.digest())
       this.#state = 'closed'
     } catch (error) {
       this.#state = 'aborted'

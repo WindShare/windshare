@@ -163,11 +163,7 @@ class PortableSessionHandle implements OutputSessionHandle {
     this.#store = store
     this.#diagnostics = diagnostics
     if (isZip) {
-      this.#zip = new StreamingZipWriter({
-        taskId: baseRecord.taskId,
-        maxBytes,
-        ...(store === undefined ? {} : { store }),
-      })
+      this.#zip = new StreamingZipWriter({ maxBytes })
     }
     this.transferOutput = Object.freeze({
       sessionId: baseRecord.taskId,
@@ -193,7 +189,7 @@ class PortableSessionHandle implements OutputSessionHandle {
       result.discoveryComplete,
     )
     if (result.status !== 'completed') {
-      await this.#zip?.abort()
+      this.#zip?.abort()
       this.#singleFileBuffer = undefined
       const reason = failedReasonFor(result)
       const failed = transitionReceiveState(this.#baseRecord.lifecycle, {
@@ -223,7 +219,7 @@ class PortableSessionHandle implements OutputSessionHandle {
     const mediaType = artifactDownloadMediaType(this.#baseRecord.artifact.kind)
     const parts = this.#singleFileBuffer === undefined ? [] : [this.#singleFileBuffer]
     const blob = this.#zip !== undefined
-      ? await this.#zip.finalize()
+      ? this.#zip.finalize()
       : new Blob(parts, { type: mediaType })
     this.#singleFileBuffer = undefined
 
@@ -253,7 +249,7 @@ class PortableSessionHandle implements OutputSessionHandle {
 
   async close(): Promise<void> {
     if (!this.#settled) {
-      await this.#zip?.abort()
+      this.#zip?.abort()
       this.#singleFileBuffer = undefined
     }
   }
@@ -261,7 +257,7 @@ class PortableSessionHandle implements OutputSessionHandle {
   async #ensureDir(request: TransferDirectoryRequest): Promise<void> {
     const zipPath = resolveZipEntryPath(this.#baseRecord.artifact, request.path)
     if (zipPath === undefined) return
-    await this.#zip?.addDirectory(zipPath, request.modifiedTimeMilliseconds)
+    this.#zip?.addDirectory(zipPath, request.modifiedTimeMilliseconds)
   }
 
   async #openFile(request: TransferFileRequest, signal: AbortSignal): Promise<TransferOutputFile> {
@@ -300,7 +296,7 @@ class PortableSessionHandle implements OutputSessionHandle {
         },
         checkpoint: () => Promise.resolve('skipped' as const),
         commit: async () => {
-          await zipFile.close()
+          zipFile.close()
         },
         pause: discard,
         abort: discard,

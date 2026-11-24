@@ -1,23 +1,21 @@
 import type {
   ReceiveFileRecord,
   ReceiveTaskRecord,
-  ZipSpoolChunkRecord,
 } from './types'
-import { fileRecordId, spoolChunkId } from './types'
+import { fileRecordId } from './types'
 
 export const RECEIVE_DATABASE_NAME = 'windshare-receive-v1'
 export const RECEIVE_DATABASE_VERSION = 1
 
 export const TASKS_STORE = 'tasks'
 export const FILES_STORE = 'files'
-export const ZIP_SPOOL_STORE = 'zip-spool'
 
 export const BY_SHARE_INDEX = 'by-share'
 export const BY_TASK_INDEX = 'by-task'
 
 /**
  * Single unified IndexedDB for all browser receive persistence:
- * 3 simple JSON stores (`tasks`, `files`, `zip-spool`) with 2 secondary indexes.
+ * 2 simple JSON stores (`tasks`, `files`) with 2 secondary indexes.
  * Relies directly on IndexedDB's native structured clone and transaction atomicity.
  */
 export class ReceiveStore {
@@ -108,30 +106,9 @@ export class ReceiveStore {
   }
 
   async deleteTask(taskId: string): Promise<void> {
-    await this.#run([TASKS_STORE, FILES_STORE, ZIP_SPOOL_STORE], 'readwrite', async tx => {
+    await this.#run([TASKS_STORE, FILES_STORE], 'readwrite', async tx => {
       tx.objectStore(TASKS_STORE).delete(taskId)
       await deleteByTaskIndex(tx.objectStore(FILES_STORE), taskId)
-      await deleteByTaskIndex(tx.objectStore(ZIP_SPOOL_STORE), taskId)
-    })
-  }
-
-  async putZipSpoolChunk(chunk: ZipSpoolChunkRecord): Promise<void> {
-    await this.#run(ZIP_SPOOL_STORE, 'readwrite', tx => {
-      tx.objectStore(ZIP_SPOOL_STORE).put(chunk)
-    })
-  }
-
-  async getZipSpoolChunk(taskId: string, index: number): Promise<Uint8Array | undefined> {
-    const row = await this.#run(ZIP_SPOOL_STORE, 'readonly', tx =>
-      requestResult<ZipSpoolChunkRecord | undefined>(
-        tx.objectStore(ZIP_SPOOL_STORE).get(spoolChunkId(taskId, index)),
-      ))
-    return row?.bytes
-  }
-
-  async deleteZipSpool(taskId: string): Promise<void> {
-    await this.#run(ZIP_SPOOL_STORE, 'readwrite', async tx => {
-      await deleteByTaskIndex(tx.objectStore(ZIP_SPOOL_STORE), taskId)
     })
   }
 
@@ -164,9 +141,6 @@ export function installReceiveSchema(database: IDBDatabase): void {
 
   const files = database.createObjectStore(FILES_STORE, { keyPath: 'id' })
   files.createIndex(BY_TASK_INDEX, 'taskId', { unique: false })
-
-  const spool = database.createObjectStore(ZIP_SPOOL_STORE, { keyPath: 'id' })
-  spool.createIndex(BY_TASK_INDEX, 'taskId', { unique: false })
 }
 
 function openReceiveDatabase(factory: IDBFactory, name: string): Promise<IDBDatabase> {

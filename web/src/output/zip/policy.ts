@@ -2,8 +2,6 @@ import { snapshotCatalogPath } from '../../catalog/path-policy'
 
 export const ZIP_ENCODING_POLICY_VERSION = 1 as const
 export const ZIP_ENCODING_POLICY = 'windshare/zip-encoding/v1-store-data-descriptor' as const
-export const MAX_ZIP_SPOOL_ENTRIES = 1_000_000
-export const MAX_ZIP_SPOOL_BYTES = 268_435_456n
 
 export const ZIP_UINT16_SENTINEL = 0xffffn
 export const ZIP_UINT32_SENTINEL = 0xffff_ffffn
@@ -445,17 +443,6 @@ export function requiresZip64End(layout: Omit<ZipEndLayout, 'zip64EndRequired'>)
     layout.centralDirectoryOffset >= ZIP_UINT32_SENTINEL
 }
 
-export function requireZipSpoolBudget(entryCount: bigint, centralBytes: bigint): void {
-  requireZipUint64(entryCount, 'ZIP entry count')
-  requireZipUint64(centralBytes, 'ZIP central-directory size')
-  if (entryCount > BigInt(MAX_ZIP_SPOOL_ENTRIES)) {
-    throw new RangeError('ZIP central-directory entry budget exceeded')
-  }
-  if (centralBytes > MAX_ZIP_SPOOL_BYTES) {
-    throw new RangeError('ZIP central-directory byte budget exceeded')
-  }
-}
-
 export function checkedZipAdd(...values: readonly bigint[]): bigint {
   let total = 0n
   for (const value of values) {
@@ -519,7 +506,6 @@ export interface ZipEncodingPolicyV1 {
   readonly encodeCentralRecord: typeof encodeZipCentralDirectoryRecord
   readonly encodeEndRecords: typeof encodeZipEndRecords
   readonly requiresZip64End: typeof requiresZip64End
-  readonly requireSpoolBudget: typeof requireZipSpoolBudget
 }
 
 export const ZIP_ENCODING_POLICY_V1: ZipEncodingPolicyV1 = Object.freeze({
@@ -535,7 +521,6 @@ export const ZIP_ENCODING_POLICY_V1: ZipEncodingPolicyV1 = Object.freeze({
   encodeCentralRecord: encodeZipCentralDirectoryRecord,
   encodeEndRecords: encodeZipEndRecords,
   requiresZip64End,
-  requireSpoolBudget: requireZipSpoolBudget,
 })
 
 // MS-DOS fields carry no zone, and by convention extractors read them as the extracting

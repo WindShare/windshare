@@ -7,6 +7,8 @@ import {
 } from '@zip.js/zip.js'
 import { describe, expect, it, vi } from 'vitest'
 import { byteRange } from '../../src/content/geometry'
+import type { BrowserDownloadWindow } from '../../src/output/backends/browser-handoff'
+import { openPortableSession } from '../../src/output/backends/portable'
 import { NATIVE_WRITE_CHUNK_BYTES } from '../../src/output/native-object/client'
 import type { NativeObjectIO } from '../../src/output/native-object/contracts'
 import { ObjectCheckpointCoordinator } from '../../src/output/native-object/coordinator'
@@ -14,7 +16,7 @@ import type { ReceiveStore } from '../../src/output/store/database'
 import {
   fileRecordId,
   type ReceiveFileRecord,
-  type ZipSpoolChunkRecord,
+  type ReceiveTaskRecord,
 } from '../../src/output/store/types'
 import { zipMemberCoordinates } from '../../src/output/zip/member'
 import {
@@ -30,6 +32,7 @@ import {
 } from '../../src/output/zip/policy'
 import { buildPartialZipBlob, ProgressiveZipWriter } from '../../src/output/zip/progressive-zip'
 import { StreamingZipWriter } from '../../src/output/zip/streaming-zip'
+import { initialReceiveState } from '../../src/transfer/state'
 
 interface SparseSegment {
   readonly offset: bigint
@@ -111,8 +114,12 @@ class SparseZipReader extends Reader<SparseNativeObjectIO> {
 }
 
 class MemoryZipStore {
+  readonly tasks = new Map<string, ReceiveTaskRecord>()
   readonly files = new Map<string, ReceiveFileRecord>()
-  readonly spool = new Map<string, Uint8Array>()
+
+  async putTask(record: ReceiveTaskRecord): Promise<void> {
+    this.tasks.set(record.taskId, record)
+  }
 
   async putFile(record: ReceiveFileRecord): Promise<void> {
     this.files.set(record.id, record)
@@ -124,21 +131,6 @@ class MemoryZipStore {
 
   async listTaskFiles(taskId: string): Promise<readonly ReceiveFileRecord[]> {
     return [...this.files.values()].filter(row => row.taskId === taskId)
-  }
-
-  async putZipSpoolChunk(chunk: ZipSpoolChunkRecord): Promise<void> {
-    this.spool.set(`${chunk.taskId}:${chunk.index}`, chunk.bytes.slice())
-  }
-
-  async getZipSpoolChunk(taskId: string, index: number): Promise<Uint8Array | undefined> {
-    return this.spool.get(`${taskId}:${index}`)
-  }
-
-  async deleteZipSpool(taskId: string): Promise<void> {
-    const prefix = `${taskId}:`
-    for (const key of [...this.spool.keys()]) {
-      if (key.startsWith(prefix)) this.spool.delete(key)
-    }
   }
 }
 
@@ -371,16 +363,10 @@ describe('ZIP64 encoding boundaries and scale invariants', () => {
     }
   })
 
-  it('spools StreamingZipWriter central directory across multiple zip-spool chunks and cleans up on finalize and abort', async () => {
-    const store = new MemoryZipStore()
-    const putSpy = vi.spyOn(store, 'putZipSpoolChunk')
-    const writer = new StreamingZipWriter({
-      taskId: 'stream-spool-ok',
-      store: store as unknown as ReceiveStore,
-      maxBytes: 4n * 1024n * 1024n,
-    })
+  it('buffers multi-slab StreamingZipWriter central directories purely in memory without touching ReceiveStore', async () => {
+    const writer = new StreamingZipWriter({ maxBytes: 4n * 1024n * 1024n })
 
-    // ~300 entries with 900-byte names produce >256 KiB of central directory records (>1 spool chunk).
+    // ~300 entries with 900-byte names produce >256 KiB of central directory records (>1 memory slab).
     const prefix = 'p'.repeat(900)
     const entryCount = 300
     for (let index = 0; index < entryCount; index += 1) {
@@ -389,14 +375,10 @@ describe('ZIP64 encoding boundaries and scale invariants', () => {
         : new Uint8Array(0)
       const file = writer.beginFile([`${prefix}-${String(index).padStart(4, '0')}.txt`], BigInt(payload.byteLength))
       if (payload.byteLength > 0) file.write(payload)
-      await file.close()
+      file.close()
     }
-    expect(putSpy.mock.calls.length).toBeGreaterThanOrEqual(1)
 
-    const blob = await writer.finalize()
-    expect(putSpy.mock.calls.length).toBeGreaterThanOrEqual(2)
-    expect(store.spool.size).toBe(0)
-
+    const blob = writer.finalize()
     const reader = new ZipReader(new BlobReader(blob), { checkSignature: true, useWebWorkers: false })
     try {
       const entries = await reader.getEntries()
@@ -409,18 +391,47 @@ describe('ZIP64 encoding boundaries and scale invariants', () => {
       await reader.close()
     }
 
-    // Aborting after spilling chunks must also purge the zip-spool store.
-    const aborted = new StreamingZipWriter({
-      taskId: 'stream-spool-abort',
+    // Portable ZIP downloads write nothing to ReceiveStore before settlement, so an
+    // abrupt crash mid-transfer leaves zero persistent rows behind.
+    const store = new MemoryZipStore()
+    const putTaskSpy = vi.spyOn(store, 'putTask')
+    const putFileSpy = vi.spyOn(store, 'putFile')
+    const session = openPortableSession({
+      task: {
+        taskId: 'portable-in-memory-cd',
+        selection: { shareInstance: 's', syntheticRoot: 'r', defaultSelected: true, rules: [] },
+        selectionKey: 'sel',
+        artifact: Object.freeze({ kind: 'zip-archive', name: 'bundle.zip' }),
+        lifecycle: initialReceiveState('portable-in-memory-cd'),
+      },
+      windowPort: {} as BrowserDownloadWindow,
       store: store as unknown as ReceiveStore,
       maxBytes: 4n * 1024n * 1024n,
     })
+    const signal = new AbortController().signal
+    for (let index = 0; index < entryCount; index += 1) {
+      const name = `${prefix}-${String(index).padStart(4, '0')}.txt`
+      const handle = await session.transferOutput.openFile({
+        fileId: `f-${index}`,
+        path: [name],
+        sourcePath: [name],
+        revision: 'r1',
+        exactSize: 0n,
+      }, signal)
+      await handle.commit([])
+    }
+    expect(putTaskSpy).not.toHaveBeenCalled()
+    expect(putFileSpy).not.toHaveBeenCalled()
+    expect(store.tasks.size).toBe(0)
+    expect(store.files.size).toBe(0)
+
+    // Aborting after accumulating multiple slabs invalidates the writer cleanly.
+    const aborted = new StreamingZipWriter({ maxBytes: 4n * 1024n * 1024n })
     for (let index = 0; index < entryCount; index += 1) {
       const file = aborted.beginFile([`${prefix}-${String(index).padStart(4, '0')}.txt`], 0n)
-      await file.close()
+      file.close()
     }
-    expect(store.spool.size).toBeGreaterThanOrEqual(1)
-    await aborted.abort()
-    expect(store.spool.size).toBe(0)
+    aborted.abort()
+    expect(() => aborted.finalize()).toThrow(/aborted/u)
   })
 })

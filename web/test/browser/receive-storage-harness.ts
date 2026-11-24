@@ -45,27 +45,17 @@ export async function verifyUnifiedStore(databaseName: string) {
       completedRanges: [[0n, 5n]],
       status: 'completed',
     })
-    await store.putZipSpoolChunk({
-      id: `${taskId}:0`,
-      taskId,
-      index: 0,
-      bytes: new Uint8Array([1, 2, 3]),
-    })
 
     const tasksBefore = await store.listTasks()
     const filesBefore = await store.listTaskFiles(taskId)
-    const chunkBefore = await store.getZipSpoolChunk(taskId, 0)
     await store.deleteTask(taskId)
     const tasksAfter = await store.listTasks()
     const filesAfter = await store.listTaskFiles(taskId)
-    const chunkAfter = await store.getZipSpoolChunk(taskId, 0)
     return {
       tasksBefore: tasksBefore.length,
       filesBefore: filesBefore.length,
-      chunksBefore: chunkBefore === undefined ? 0 : 1,
       tasksAfter: tasksAfter.length,
       filesAfter: filesAfter.length,
-      chunksAfter: chunkAfter === undefined ? 0 : 1,
     }
   } finally {
     store.close()

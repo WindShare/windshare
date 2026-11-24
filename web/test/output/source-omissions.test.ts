@@ -19,7 +19,6 @@ import { openNewFSASession, reopenFSASession } from '../../src/output/backends/f
 import { openNewOPFSSession } from '../../src/output/backends/opfs'
 import { openPortableSession } from '../../src/output/backends/portable'
 import type { ReceiveStore } from '../../src/output/store/database'
-import type { ZipSpoolChunkRecord } from '../../src/output/store/types'
 import { TransferJob } from '../../src/transfer/job'
 import { selectionKey, selectionSpecFromPolicy } from '../../src/transfer/selection'
 import { initialReceiveState } from '../../src/transfer/state'
@@ -31,24 +30,6 @@ import { createMemoryOPFSEnv, createMockDownloadWindow, MemoryReceiveStore as OP
 
 function fixedId(seed: number): Uint8Array<ArrayBuffer> {
   return new Uint8Array(16).fill(seed)
-}
-
-class SpoolMemoryStore extends OPFSMemoryStore {
-  readonly #spool = new Map<string, Uint8Array>()
-
-  async putZipSpoolChunk(chunk: ZipSpoolChunkRecord): Promise<void> {
-    this.#spool.set(chunk.id, chunk.bytes)
-  }
-
-  async getZipSpoolChunk(taskId: string, index: number): Promise<Uint8Array | undefined> {
-    return this.#spool.get(`${taskId}:${index}`)
-  }
-
-  async deleteZipSpool(taskId: string): Promise<void> {
-    for (const key of this.#spool.keys()) {
-      if (key.startsWith(`${taskId}:`)) this.#spool.delete(key)
-    }
-  }
 }
 
 async function readZipFiles(blob: Blob): Promise<Map<string, Uint8Array>> {
@@ -256,7 +237,7 @@ describe('source omission propagation across transfer, backends, and retained hi
     const key = selectionKey(spec)
 
     // 1. Portable ZIP still hands off a valid archive and persists sourceOmittedEntries in history.
-    const portableStore = new SpoolMemoryStore()
+    const portableStore = new OPFSMemoryStore()
     const { windowPort: portableWin, downloads: portableDownloads } = createMockDownloadWindow()
     const portableSession = openPortableSession({
       task: {
