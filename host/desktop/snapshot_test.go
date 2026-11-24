@@ -228,10 +228,12 @@ func TestHostFailuresOmitEngineClassificationWhileEngineBoundariesPreserveIt(t *
 
 	// Setup and setup-cancellation failures stay pure host failures.
 	setupApp := newApplication("setup-test", dependencies{
-		load:        func() (relayconfig.Config, error) { return configured(), nil },
-		log:         func(string, any) {},
-		close:       func(context.Context) error { return nil },
-		setup:       func(context.Context, SetupInput, func(relaysetup.Progress)) (SetupResult, error) { return SetupResult{RelayURL: "https://relay.example"}, netErr },
+		load:  func() (relayconfig.Config, error) { return configured(), nil },
+		log:   func(string, any) {},
+		close: func(context.Context) error { return nil },
+		setup: func(context.Context, SetupInput, func(relaysetup.Progress)) (SetupResult, error) {
+			return SetupResult{RelayURL: "https://relay.example"}, netErr
+		},
 		cancelSetup: func(context.Context, string) error { return netErr },
 	})
 	t.Cleanup(func() { _ = setupApp.close() })

@@ -92,7 +92,9 @@ func TestShareSnapshotTerminalPreservesStartupFailureAndRelayStatus(t *testing.T
 	for range terminalSnapshotRaceIterations {
 		relays := newFailingStatusRelays(deniedErr)
 		application := newTestEngine(t, Config{Share: ShareDependencies{
-			Prepare:     func(context.Context, liveshare.SenderConfig) (PreparedShare, error) { return &preparedFacadeShare{}, nil },
+			Prepare: func(context.Context, liveshare.SenderConfig) (PreparedShare, error) {
+				return &preparedFacadeShare{}, nil
+			},
 			Relays:      func(context.Context, []ShareRelayCandidate) (ShareRelays, error) { return relays, nil },
 			PollNetwork: func(ctx context.Context, _ func()) { <-ctx.Done() },
 		}})

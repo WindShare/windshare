@@ -18,25 +18,25 @@ import (
 )
 
 type fakeWindowsRevisionMetadata struct {
-	identity         windowsRevisionFileIDInfo
-	identityErr      error
-	information      windows.ByHandleFileInformation
-	informationErr   error
-	basic            windowsFileBasicInfo
-	basicErr         error
-	attributeTag     windowsAttributeTagInfo
-	attributeTagErr  error
+	identity             windowsRevisionFileIDInfo
+	identityErr          error
+	information          windows.ByHandleFileInformation
+	informationErr       error
+	basic                windowsFileBasicInfo
+	basicErr             error
+	attributeTag         windowsAttributeTagInfo
+	attributeTagErr      error
 	fileType             uint32
 	fileTypeErr          error
 	placeholderState     uint32
 	lastPlaceholderAttrs uint32
 	filesystem           string
-	filesystemErr    error
-	path             string
-	pathErr          error
-	volumeCalls      int
-	attrTagCalls     int
-	fileTypeCalls    int
+	filesystemErr        error
+	path                 string
+	pathErr              error
+	volumeCalls          int
+	attrTagCalls         int
+	fileTypeCalls        int
 }
 
 func (api *fakeWindowsRevisionMetadata) FileIdentity(windows.Handle) (windowsRevisionFileIDInfo, error) {
