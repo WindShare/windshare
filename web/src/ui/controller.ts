@@ -12,6 +12,12 @@ import type {
   SingleFileDownloadOutcome,
 } from '../application/receive/contracts'
 import { ReceiveCoordinator, type ReceiveCoordinatorOptions } from '../application/receive/coordinator'
+import type {
+  RestorePlatform,
+  SafeNameRestoreExportResult,
+  SafeNameRestorePlan,
+  SafeNameRestorePrepared,
+} from '../output/model'
 import { InitialJoinControl } from '../receiver/initial-join'
 import type { SourceRevisionFailure } from '../transfer/state'
 import type { CapturedLocation } from './capability/location'
@@ -413,6 +419,24 @@ export class ReceiverController {
   }
 
   startNewReceiveOperation(): void { this.#operationTransitions.startNewReceiveOperation() }
+
+  detectRestorePlatform(): RestorePlatform { return this.#receive.detectRestorePlatform() }
+
+  prepareSafeNameRestore(taskId: string, platform: RestorePlatform): Promise<SafeNameRestorePrepared> {
+    return this.#receive.prepareSafeNameRestore(taskId, platform)
+  }
+
+  exportSafeNameRestoreArtifact(taskId: string, platform: RestorePlatform): Promise<SafeNameRestoreExportResult> {
+    return this.#receive.exportSafeNameRestoreArtifact(taskId, platform)
+  }
+
+  downloadSafeNameRestoreManifest(plan: SafeNameRestorePlan): boolean {
+    return this.#receive.downloadSafeNameRestoreManifest(plan)
+  }
+
+  mapTaskFailure(error: unknown) {
+    return mapReceiverFailure(error, err => this.#publicError(err))
+  }
 
   async dispose(): Promise<void> {
     if (this.#disposed) return

@@ -2,13 +2,14 @@ import { receiverCopy } from '../locales/receiver'
 import { useCopy } from '../preferences/use-preferences'
 import { useRef, useState, useSyncExternalStore } from 'react'
 import type { ChooseArtifactIntent, ReceiverController } from '../controller'
-import { taskActions } from '../experience/task-actions'
+import { safeNameRestoreActions, taskActions } from '../experience/task-actions'
 import { downloadScopeLabel } from '../experience/share-presentation'
 import { dismissedTaskKey, isDismissibleWorkspaceTask, resolveWorkspaceTaskLayout } from '../experience/retained-match'
 import { presentSavingActions } from '../saving'
 import { SavingControls } from '../saving/SavingControls'
 import { InAppBrowserHint } from '../saving/InAppBrowserHint'
 import { DetailSheet } from '../controls/DetailSheet'
+import type { TaskDetailSection } from '../tasks'
 import { TaskCard, TaskDetails, type TaskViewActions } from '../tasks/TaskView'
 import { TaskDownloads, TaskSourceDetails } from '../experience/TaskDownloads'
 
@@ -96,15 +97,16 @@ export function ReceiverActivity({ controller, openDownloads, dismissedTaskKeys,
   const source = controller.presentation.task
   const snapshot = useSyncExternalStore(source.subscribe, source.getSnapshot, source.getSnapshot)
   const { current, share, hasContent } = snapshot
-  const [detailsOperationId, setDetailsOperationId] = useState<string | null>(null)
+  const [detailsTarget, setDetailsTarget] = useState<{ readonly operationId: string; readonly section: TaskDetailSection } | null>(null)
   const [handoffHelpOpenId, setHandoffHelpOpenId] = useState<string | null>(null)
   const invoker = useRef<HTMLButtonElement>(null)
   const copy = useCopy(receiverCopy)
   const t = copy.saving
   const { primaryTask, collapseRemoteSaving, repeatRemoteLabel, banner } = resolveWorkspaceTaskLayout(snapshot, dismissedTaskKeys)
-  const details = primaryTask !== null && detailsOperationId === primaryTask.operationId
+  const details = primaryTask !== null && detailsTarget?.operationId === primaryTask.operationId
   const handoffHelpOpen = primaryTask !== null && handoffHelpOpenId === primaryTask.operationId
   const baseActions = taskActions(controller)
+  const restoreActions = safeNameRestoreActions(controller)
   const actions: TaskViewActions = {
     ...baseActions,
     perform: (action, callbacks) => {
@@ -119,7 +121,7 @@ export function ReceiverActivity({ controller, openDownloads, dismissedTaskKeys,
       baseActions.perform(action, callbacks)
     },
   }
-  const closeDetails = () => { controller.recordExperienceIntent('close-details'); setDetailsOperationId(null) }
+  const closeDetails = () => { controller.recordExperienceIntent('close-details'); setDetailsTarget(null) }
   const actionLabel = repeatRemoteLabel ? t.downloadAgain : downloadScopeLabel(share, snapshot.draft, t)
   const bannerLabel = banner === null ? null : retainedBannerLabel(banner, t)
   return <>
@@ -135,10 +137,10 @@ export function ReceiverActivity({ controller, openDownloads, dismissedTaskKeys,
       {...(onDismissTask !== undefined && isDismissibleWorkspaceTask(primaryTask)
         ? { onDismiss: () => onDismissTask(dismissedTaskKey(primaryTask.operationId, primaryTask.generation)) }
         : {})}
-      onDetails={element => {
+      onDetails={(element, section) => {
         invoker.current = element
         controller.recordExperienceIntent('open-task-details')
-        setDetailsOperationId(primaryTask.operationId)
+        setDetailsTarget({ operationId: primaryTask.operationId, section: section ?? 'overview' })
       }}
     />}
     {primaryTask?.stage === 'handed-to-browser' && <details
@@ -157,7 +159,13 @@ export function ReceiverActivity({ controller, openDownloads, dismissedTaskKeys,
       <button type="button" onClick={() => controller.startNewReceiveOperation()}>{t.startAnother}</button>
     </p>}
     {details && primaryTask !== null && <DetailSheet title={primaryTask.objectLabel} onClose={closeDetails} returnFocus={invoker}>
-      <TaskDetails task={primaryTask} actions={actions} busy={snapshot.retained.pending !== null}>
+      <TaskDetails
+        task={primaryTask}
+        actions={actions}
+        safeNameRestore={restoreActions}
+        initialSection={detailsTarget?.section ?? 'overview'}
+        busy={snapshot.retained.pending !== null}
+      >
         <TaskSourceDetails operationId={primaryTask.operationId} snapshot={snapshot} controller={controller} />
         {current !== null && primaryTask.operationId === current.operationId && controller.canRetainCurrentOperation && <div className="retained-handoff">
           <p>{t.keepHint}</p>

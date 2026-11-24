@@ -38,6 +38,8 @@ export interface OutputSessionHandle {
   readonly taskId: string
   readonly backend: SaveBackendKind
   readonly transferOutput: TransferOutputSession
+  /** Optional live subscription for incremental safe-name adjustments during an active session. */
+  subscribeSafeRenamed?(listener: (summary: SafeRenamedSummary) => void): () => void
   /** Settles the backend after `TransferJob.run()` finishes and persists the final task record. */
   settle(result: SettledTransferJobResult): Promise<ReceiveTaskRecord>
   /** Closes live handles and releases the cross-tab Web Lock without deleting retained data. */

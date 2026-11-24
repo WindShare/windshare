@@ -37,13 +37,13 @@ export class ReceiveStorage {
     }
   }
 
-  run(operation: (access: ReceiveStoreAccess) => Promise<void>): Promise<void> {
-    if (this.#closing !== undefined) return Promise.resolve()
-    const pending = Promise.resolve().then(() => {
-      if (this.#closing === undefined) return operation(this.#access)
-    })
-    this.#operations.add(pending)
-    return pending.finally(() => this.#operations.delete(pending))
+  run<T = void>(operation: (access: ReceiveStoreAccess) => Promise<T>): Promise<T | undefined> {
+    if (this.#closing !== undefined) return Promise.resolve(undefined)
+    const pending = Promise.resolve().then(() =>
+      this.#closing === undefined ? operation(this.#access) : undefined)
+    const tracked = pending.then(() => undefined, () => undefined)
+    this.#operations.add(tracked)
+    return pending.finally(() => this.#operations.delete(tracked))
   }
 
   /**

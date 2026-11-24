@@ -61,6 +61,11 @@ export interface PortableTargetRecord {
 
 export type TaskTargetRecord = FSATargetRecord | OPFSTargetRecord | PortableTargetRecord
 
+export interface SafeRenamedDirectoryRecord {
+  readonly logicalPath: readonly string[]
+  readonly physicalPath: readonly string[]
+}
+
 /** Plain JSON task row stored in the `tasks` IndexedDB object store. */
 export interface ReceiveTaskRecord {
   readonly taskId: string
@@ -73,6 +78,7 @@ export interface ReceiveTaskRecord {
   readonly target: TaskTargetRecord
   readonly display?: ReceiveOperationDisplay
   readonly safeRenamed?: SafeRenamedSummary
+  readonly safeRenamedDirectories?: readonly SafeRenamedDirectoryRecord[]
   readonly sourceOmittedEntries?: bigint
   readonly sourceRevisionFailures?: SourceRevisionFailures
   readonly discoveryComplete: boolean

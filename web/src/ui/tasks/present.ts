@@ -3,7 +3,14 @@ import type { Language } from '../preferences/model'
 import { receiverCopy } from '../locales/receiver'
 import { destinationLabel } from './display'
 import { objectLabel } from '../draft/presentation'
-import type { TaskAction, TaskFacts, TaskPresentation, TaskPresentationTransition, TaskStage } from './model'
+import type {
+  TaskAction,
+  TaskFacts,
+  TaskPresentation,
+  TaskPresentationTransition,
+  TaskSafeNameRestoreState,
+  TaskStage,
+} from './model'
 import { presentTaskProgress } from './progress'
 import { receiveElapsedMilliseconds, type ReceiveContentWarning } from '../../transfer/state'
 import { resolveTaskStage, type StageCopy } from './stage'
@@ -66,11 +73,25 @@ function collectTaskDetails(
     details.push(receiverCopy[language].downloads.sourceOmittedCount(facts.sourceOmittedEntries))
     details.push(t.sourceOmittedHint)
   }
-  if (facts.safeRenamed !== null && facts.safeRenamed.count > 0) {
-    details.push(receiverCopy[language].downloads.adjustedCount(facts.safeRenamed.count))
-    details.push(t.adjustedHint)
-  }
   return Object.freeze(details)
+}
+
+function resolveSafeNameRestore(facts: TaskFacts): TaskSafeNameRestoreState {
+  if (facts.backend !== 'fsa' || facts.safeRenamed === null || facts.safeRenamed.count <= 0) {
+    return 'none'
+  }
+  switch (facts.lifecycle.kind) {
+    case 'preparing':
+    case 'downloading':
+      return 'active'
+    case 'paused':
+      return 'paused'
+    case 'saved':
+    case 'partial':
+      return 'available'
+    default:
+      return 'none'
+  }
 }
 
 export function presentTask(facts: TaskFacts, language: Language = 'en'): TaskPresentation {
@@ -85,7 +106,8 @@ export function presentTask(facts: TaskFacts, language: Language = 'en'): TaskPr
   const progress = presentTaskProgress(facts, language)
   const showProgress = ['preparing', 'downloading', 'waiting', 'paused', 'finishing'].includes(copy.stage)
   const details = collectTaskDetails(facts, progress, showProgress, language)
-  const transition = transitionFor(facts, copy, attention)
+  const safeNameRestore = resolveSafeNameRestore(facts)
+  const transition = transitionFor(facts, copy, attention, safeNameRestore)
   return Object.freeze({
     operationId: facts.lifecycle.taskId,
     generation: facts.lifecycle.generation,
@@ -109,6 +131,7 @@ export function presentTask(facts: TaskFacts, language: Language = 'en'): TaskPr
     removal,
     details,
     safeRenamed: facts.safeRenamed,
+    safeNameRestore,
     sourceOmittedEntries: facts.sourceOmittedEntries,
     completeness: facts.completeness,
     publication: facts.publication,
@@ -160,7 +183,12 @@ function preferredAction(actions: readonly TaskAction[], taskStage: TaskStage): 
     actions.find(action => action.id !== 'forget') ?? null
 }
 
-function transitionFor(facts: TaskFacts, copy: StageCopy, attention: boolean): TaskPresentationTransition {
+function transitionFor(
+  facts: TaskFacts,
+  copy: StageCopy,
+  attention: boolean,
+  safeNameRestore: TaskSafeNameRestoreState,
+): TaskPresentationTransition {
   const actionFacts = facts.actions.map(action => `${action.id}:${action.disabledReason ?? ''}`).join('|')
   return Object.freeze({
     name: 'receiver.task.presentation',
@@ -173,7 +201,7 @@ function transitionFor(facts: TaskFacts, copy: StageCopy, attention: boolean): T
     attention,
     fingerprint: [
       facts.lifecycle.taskId, copy.stage, copy.reason, facts.completeness,
-      facts.publication, attention, (facts.safeRenamed?.count ?? 0) > 0, facts.sourceOmittedEntries, actionFacts,
+      facts.publication, attention, safeNameRestore, facts.safeRenamed?.count ?? 0, facts.sourceOmittedEntries, actionFacts,
       receiveElapsedMilliseconds(facts.lifecycle.timing),
     ].join(':'),
   })

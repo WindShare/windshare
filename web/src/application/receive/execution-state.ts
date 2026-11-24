@@ -19,7 +19,8 @@ import type {
   ReceiveBlockReason,
 } from './contracts'
 
-export type LocalRetainedActionKind = 'save' | 'save-partial' | 'discard' | 'forget'
+export type RetainedLocalCommand = 'save' | 'save-partial' | 'discard' | 'forget'
+export type LocalSlotActionKind = RetainedLocalCommand | 'export-restore'
 
 export type TransferSlot =
   | Readonly<{ kind: 'idle' }>
@@ -31,7 +32,7 @@ export type TransferSlot =
 export type LocalActionSlot = Readonly<{
   token: symbol
   taskId: string
-  action: LocalRetainedActionKind
+  action: LocalSlotActionKind
 }>
 
 const IDLE_TRANSFER_SLOT: TransferSlot = Object.freeze({ kind: 'idle' })
@@ -230,7 +231,7 @@ export class ExecutionState {
 
   claimLocalAction(
     taskId: string,
-    action: LocalRetainedActionKind,
+    action: LocalSlotActionKind,
   ): symbol | null {
     if (this.#localAction !== null || this.activeTransferTaskId === taskId) return null
     const token = Symbol('receive-local-action')
@@ -341,6 +342,15 @@ export class WorkspaceTask {
 
   observeProgress(progress: TransferProgress): void {
     this.#progress = progress
+  }
+
+  observeSafeRenamed(summary: SafeRenamedSummary | null): boolean {
+    const next = summary !== null && summary.count > 0 ? summary : null
+    if (this.#safeRenamed?.count === next?.count && (this.#safeRenamed === null) === (next === null)) {
+      return false
+    }
+    this.#safeRenamed = next
+    return true
   }
 
   markInterruption(action: 'pause' | 'stop'): void {

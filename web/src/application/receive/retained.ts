@@ -1,5 +1,6 @@
 import type { BrowserOutputWindow, OutputSessionHandle } from '../../output/backends/contract'
 import { discardFSATask, reopenFSASession } from '../../output/backends/fsa'
+import { applySafeRenamedFields, collectSafeRenamedFromRecords } from '../../output/backends/safe-name'
 import {
   browserOPFSEnvironment,
   deleteOPFSTask,
@@ -321,7 +322,7 @@ export async function reopenRetainedTask(
   const current = currentShare()
   if (current?.descriptor.shareInstanceId !== task.shareInstance) {
     try {
-      const counts = await readCheckpointCounts(task, env.store)
+      const { counts } = await readCheckpointCounts(task, env.store)
       const { completedFiles, completedBytes, retainedBytes } = counts
       const lifecycle = task.lifecycle.kind === 'paused'
         ? { ...task.lifecycle, completedFiles, completedBytes, retainedBytes }
@@ -410,14 +411,20 @@ async function readCheckpointCounts(record: ReceiveTaskRecord, store: ReceiveSto
       completedBytes += file.size
     }
   }
-  return { completedFiles, completedBytes, retainedBytes, discoveredFiles, discoveredBytes, discoveryComplete: record.discoveryComplete }
+  return {
+    files,
+    counts: { completedFiles, completedBytes, retainedBytes, discoveredFiles, discoveredBytes, discoveryComplete: record.discoveryComplete },
+  }
 }
 
 async function pauseFromCheckpoints(record: ReceiveTaskRecord, env: RetainedTaskEnvironment): Promise<ReceiveTaskRecord> {
-  const checkpoint = await readCheckpointCounts(record, env.store)
+  const { files, counts } = await readCheckpointCounts(record, env.store)
   const updatedAt = Date.now()
+  const base = record.backend === 'fsa'
+    ? applySafeRenamedFields(record, collectSafeRenamedFromRecords(record, files, record.safeRenamedDirectories))
+    : record
   const pause = (reason: 'interrupted' | 'storage-full' | 'permission-needed'): ReceiveTaskRecord => ({
-    ...record, updatedAt, lifecycle: transitionReceiveState(record.lifecycle, { kind: 'paused', reason, ...checkpoint }, updatedAt),
+    ...base, updatedAt, lifecycle: transitionReceiveState(record.lifecycle, { kind: 'paused', reason, ...counts }, updatedAt),
   })
   const updated = pause('interrupted')
   env.signal?.throwIfAborted()

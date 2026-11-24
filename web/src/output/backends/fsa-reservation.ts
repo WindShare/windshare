@@ -76,7 +76,7 @@ export async function reserveFSATarget(
     if (entry === 'invalid-name') {
       reservedName = await deterministicSafeComponent({ logicalPath: [requestedName], entryKind: kind, collisionIndex })
       entry = await reserveRootEntry(parentHandle, reservedName, singleFile)
-      if (typeof entry !== 'string') safeNames.record([requestedName], kind, reservedName)
+      if (typeof entry !== 'string') safeNames.recordRoot([requestedName], kind, reservedName)
     }
     if (typeof entry !== 'string') return { reservedName, collisionIndex, entry }
   }
@@ -125,7 +125,7 @@ async function reserveRootEntry(
   }
 }
 
-async function entryExists(
+export async function entryExists(
   parent: FileSystemDirectoryHandle,
   name: string,
 ): Promise<'missing' | 'exists' | 'invalid-name'> {

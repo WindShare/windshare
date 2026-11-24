@@ -5,7 +5,7 @@ import { emitOutputTrace, type OutputTraceSource } from '../../output/diagnostic
 import type { ReceiveTaskRecord } from '../../output/store/types'
 import type { TransferJobResult } from '../../transfer/job'
 import type { TransferProgress } from '../../transfer/progress'
-import type { ReceiveLifecycleState } from '../../transfer/state'
+import type { ReceiveLifecycleState, SafeRenamedSummary } from '../../transfer/state'
 import type { JoinedBrowserShare } from '../browser-share/gateway'
 import { DisconnectCheckpointGuard } from './disconnect-checkpoint-guard'
 import type { ExecutionState, WorkspaceTask } from './execution-state'
@@ -122,6 +122,7 @@ export class ReceiveSessionRunner {
     }
 
     let connectivity: ReturnType<JoinedBrowserShare['beginDownloadConnectivity']> | undefined
+    let unsubscribeSafeRenamed: (() => void) | undefined
     let activated = false
     let failure: PendingFailure | undefined
     try {
@@ -153,18 +154,23 @@ export class ReceiveSessionRunner {
         display,
         initialLifecycle,
       })
+      this.#workspace.observeSafeRenamed(session.transferOutput.safeRenamedSummary?.() ?? null)
+      unsubscribeSafeRenamed = session.subscribeSafeRenamed?.(summary => this.#observeSafeRenamed(summary))
       this.#unloadGuard.setArmed(true)
       this.#wakeLockGuard.setArmed(true)
       this.#publish()
       activated = true
       try { callbacks?.onActivated?.() } catch { /* Callback failure cannot break transfer execution. */ }
       const result = await job.run()
+      unsubscribeSafeRenamed?.()
+      unsubscribeSafeRenamed = undefined
       this.#closeDisconnectGuard()
       await this.#settle(session, result)
     } catch (error) {
       failure = { error, preActivation: !activated }
       if (activated) this.#workspace.markFailed(error)
     } finally {
+      unsubscribeSafeRenamed?.()
       this.#closeDisconnectGuard()
       this.#unloadGuard.setArmed(false)
       this.#wakeLockGuard.setArmed(false)
@@ -202,6 +208,16 @@ export class ReceiveSessionRunner {
 
   #observeProgress(progress: TransferProgress): void {
     this.#workspace.observeProgress(progress)
+    this.#scheduleThrottledPublish()
+  }
+
+  #observeSafeRenamed(summary: SafeRenamedSummary): void {
+    if (this.#workspace.observeSafeRenamed(summary)) {
+      this.#scheduleThrottledPublish()
+    }
+  }
+
+  #scheduleThrottledPublish(): void {
     if (this.#progressTimer !== undefined) return
     this.#progressTimer = setTimeout(() => {
       this.#progressTimer = undefined

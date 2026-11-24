@@ -3,15 +3,16 @@ import { receiverCopy } from '../locales/receiver'
 import { useCopy } from '../preferences/use-preferences'
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import type { ReceiverFailure } from '../model'
-import type { TaskPresentation } from '../tasks'
-import { TaskCard, TaskDetails, type TaskViewActions } from '../tasks/TaskView'
+import type { TaskDetailSection, TaskPresentation } from '../tasks'
+import { TaskCard, TaskDetails, type SafeNameRestoreActions, type TaskViewActions } from '../tasks/TaskView'
 import { DetailSheet } from '../controls/DetailSheet'
 import { FailureNotice } from '../controls/FailureNotice'
 import { ReceiverIcon } from '../receiver-presentation/ReceiverIcon'
 
-export function Downloads({ tasks, actions, inventory, busy, details, entryLabel, entryDescription, onIntent, onRetry, open, onOpenChange }: {
+export function Downloads({ tasks, actions, safeNameRestore, inventory, busy, details, entryLabel, entryDescription, onIntent, onRetry, open, onOpenChange }: {
   readonly tasks: readonly TaskPresentation[]
   readonly actions: TaskViewActions
+  readonly safeNameRestore?: SafeNameRestoreActions
   readonly inventory: RetainedInventorySnapshot['kind']
   readonly busy: boolean
   readonly details?: (operationId: string) => ReactNode
@@ -23,7 +24,7 @@ export function Downloads({ tasks, actions, inventory, busy, details, entryLabel
   readonly onOpenChange: (open: boolean) => void
 }) {
   const { downloads: t, failures } = useCopy(receiverCopy)
-  const [expanded, setExpanded] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState<{ readonly operationId: string; readonly section: TaskDetailSection } | null>(null)
   const [listFailure, setListFailure] = useState<ReceiverFailure | null>(null)
   const descriptionId = useId()
   const entryButton = useRef<HTMLButtonElement>(null)
@@ -32,7 +33,7 @@ export function Downloads({ tasks, actions, inventory, busy, details, entryLabel
   const index = useRef<HTMLDivElement>(null)
   const previousSelection = useRef<string | undefined>(undefined)
   const attention = tasks.filter(task => task.attention).length
-  const selected = tasks.find(task => task.operationId === expanded)
+  const selected = expanded === null ? undefined : tasks.find(task => task.operationId === expanded.operationId)
   const selectedId = selected?.operationId
   const listVisible = open && selectedId === undefined
   const listVisibleRef = useRef(listVisible)
@@ -62,6 +63,7 @@ export function Downloads({ tasks, actions, inventory, busy, details, entryLabel
       })
     },
   }
+  const restoreProp = safeNameRestore === undefined ? {} : { safeNameRestore }
   return <>
     <button ref={entryButton} className="downloads-entry" type="button" aria-describedby={entryDescription === undefined ? undefined : descriptionId}
       onClick={() => { onIntent('open-downloads'); onOpenChange(true) }}>
@@ -73,7 +75,13 @@ export function Downloads({ tasks, actions, inventory, busy, details, entryLabel
       navigation={selected === undefined ? undefined : <button ref={backButton} className="quiet-action downloads-back" type="button"
         onClick={() => { onIntent('close-download-task-details'); setExpanded(null) }}><ReceiverIcon name="chevron-left" />{t.allDownloads}</button>}>
       {selected !== undefined ?
-        <TaskDetails task={selected} actions={actions} busy={busy}>{details?.(selected.operationId)}</TaskDetails>
+        <TaskDetails
+          task={selected}
+          actions={actions}
+          {...restoreProp}
+          initialSection={expanded?.section ?? 'overview'}
+          busy={busy}
+        >{details?.(selected.operationId)}</TaskDetails>
         : <div ref={index} tabIndex={-1} className="downloads-index">
           {(inventory === 'unloaded' || inventory === 'loading') && <p role="status">{t.loading}</p>}
           {inventory === 'failed' && <div className="downloads-error" role="alert"><p>{failures.history}</p>
@@ -90,7 +98,11 @@ export function Downloads({ tasks, actions, inventory, busy, details, entryLabel
                 if (element === null) detailsButtons.current.delete(task.operationId)
                 else detailsButtons.current.set(task.operationId, element)
               }}
-              onDetails={() => { onIntent('open-download-task-details'); setListFailure(null); setExpanded(task.operationId) }} />)}</div>
+              onDetails={(_invoker, section) => {
+                onIntent('open-download-task-details')
+                setListFailure(null)
+                setExpanded({ operationId: task.operationId, section: section ?? 'overview' })
+              }} />)}</div>
           {tasks.length > 0 && <details className="storage-details"><summary>{t.storage}</summary>
             <p>{t.storageHint}</p>
           </details>}

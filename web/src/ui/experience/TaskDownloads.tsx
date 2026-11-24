@@ -3,7 +3,7 @@ import type { ReceiverController } from '../controller'
 import type { ReceiverSnapshot } from '../model'
 import { Downloads } from '../downloads/Downloads'
 import type { TaskPresentation } from '../tasks'
-import { taskActions } from './task-actions'
+import { safeNameRestoreActions, taskActions } from './task-actions'
 import { SourceRevisionFailuresPanel } from '../source-replacement/SourceRevisionFailuresPanel'
 
 export function TaskSourceDetails({ operationId, snapshot, controller }: {
@@ -39,6 +39,7 @@ export function TaskDownloads({ tasks, snapshot, controller, entryLabel, entryDe
     }}
     tasks={tasks}
     actions={taskActions(controller)}
+    safeNameRestore={safeNameRestoreActions(controller)}
     inventory={snapshot.retained.kind}
     onRetry={() => { void controller.ensureDownloads() }}
     busy={snapshot.retained.pending !== null}

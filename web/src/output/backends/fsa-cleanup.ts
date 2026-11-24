@@ -1,6 +1,11 @@
 import { emitOutputTrace, type OutputDiagnosticsPorts } from '../diagnostics'
 import type { ReceiveStore } from '../store/database'
-import type { FSADiskFingerprint, FSATargetRecord, ReceiveFileRecord } from '../store/types'
+import type {
+  FSADiskFingerprint,
+  FSATargetRecord,
+  ReceiveFileRecord,
+  SafeRenamedDirectoryRecord,
+} from '../store/types'
 
 // FAT32 truncates file timestamps downward to 2-second boundaries.
 const PLACEHOLDER_MTIME_SKEW_MS = 2_000
@@ -219,6 +224,18 @@ export async function removeDirectoryIfEmpty(parent: FileSystemDirectoryHandle, 
     entryFailure(error)
     return false
   }
+}
+
+export async function filterExistingFSADirectories(
+  root: FileSystemDirectoryHandle,
+  directories: readonly SafeRenamedDirectoryRecord[],
+): Promise<readonly SafeRenamedDirectoryRecord[]> {
+  const surviving: SafeRenamedDirectoryRecord[] = []
+  for (const dir of directories) {
+    const resolved = await resolveDirectoryChain(root, dir.physicalPath)
+    if (typeof resolved !== 'string') surviving.push(dir)
+  }
+  return Object.freeze(surviving)
 }
 
 async function resolveDirectoryChain(

@@ -68,7 +68,7 @@ export interface RetainedTaskSnapshot {
 
 export interface PendingRetainedAction {
   readonly taskId: string
-  readonly action: ReceiveAction
+  readonly action: ReceiveAction | 'export-restore'
 }
 
 export interface RetainedInventorySnapshot {

@@ -334,6 +334,41 @@
   font-size: .8125rem;
   line-height: 1.5;
 }
+:where(.receiver-shell, .detail-sheet) .task-notice-neutral {
+  background: var(--receiver-surface-subtle);
+  border: 1px solid var(--receiver-rule-soft);
+  color: var(--receiver-muted);
+}
+:where(.receiver-shell, .detail-sheet) .task-notice-inline {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+:where(.receiver-shell, .detail-sheet) .task-notice-sep {
+  color: var(--receiver-subtle);
+  opacity: .65;
+  user-select: none;
+}
+:where(.receiver-shell, .detail-sheet) .task-notice-link {
+  min-height: 0;
+  padding: 1px 6px;
+  margin: -1px -4px;
+  border: 0;
+  border-radius: var(--receiver-radius-tag);
+  background: transparent;
+  color: var(--receiver-accent);
+  font-size: .8125rem;
+  font-weight: 500;
+  line-height: 1.45;
+  box-shadow: none;
+  cursor: pointer;
+}
+:where(.receiver-shell, .detail-sheet) .task-notice-link:hover:not(:disabled) {
+  background: var(--receiver-wash);
+  color: var(--receiver-accent-hover);
+}
 :where(.receiver-shell, .detail-sheet) .task-tone-critical .task-stage { background: var(--receiver-error-wash); color: var(--receiver-error); }
 :where(.receiver-shell, .detail-sheet) .task-tone-warning .task-stage { background: var(--receiver-warning-wash); color: var(--receiver-warning); }
 :where(.receiver-shell, .detail-sheet) .task-tone-positive .task-stage { background: var(--receiver-success-wash); color: var(--receiver-success); }

@@ -2,8 +2,21 @@ import { useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { flushSync } from 'react-dom'
 import type { ReceiveAction, RetainedTaskSnapshot } from '../../../src/application/receive/contracts'
-import type { SaveBackendKind } from '../../../src/output/model'
-import type { ReceiveLifecycleState } from '../../../src/transfer/state'
+import type {
+  RestorePlatform,
+  SafeNameRestoreExportResult,
+  SafeNameRestorePlan,
+  SafeNameRestorePrepared,
+  SaveBackendKind,
+} from '../../../src/output/model'
+import {
+  buildSafeNameRestorePlan,
+  detectRestorePlatform,
+  formatInlineRestoreCommand,
+  renderRestoreArtifact,
+} from '../../../src/output/names/restore-plan'
+import type { ReceiveFileRecord } from '../../../src/output/store/types'
+import { initialReceiveState, transitionReceiveState, type ReceiveLifecycleState } from '../../../src/transfer/state'
 import { ReceiverApp } from '../../../src/ui/ReceiverApp'
 import type { ReceiverController } from '../../../src/ui/controller'
 import { ReceiverProjections } from '../../../src/ui/controller/projections'
@@ -272,6 +285,54 @@ class GalleryController {
 
   startNewReceiveOperation = () => undefined
   prepareReplacementDownload = () => undefined
+
+  detectRestorePlatform = (): RestorePlatform => detectRestorePlatform()
+
+  prepareSafeNameRestore = async (_taskId: string, platform: RestorePlatform): Promise<SafeNameRestorePrepared> => {
+    const sample = this.#output.safeRenamed?.sample ?? []
+    const files: Pick<ReceiveFileRecord, 'path' | 'fsaPath' | 'status'>[] = sample.map(entry => ({
+      path: entry.logicalPath,
+      fsaPath: [...entry.logicalPath.slice(0, -1), entry.physicalName],
+      status: 'completed' as const,
+    }))
+    const plan = buildSafeNameRestorePlan({
+      task: {
+        artifact: { kind: 'directory-tree', name: 'Summer photos' },
+        target: {
+          kind: 'fsa',
+          parentHandle: { name: 'Downloads' } as FileSystemDirectoryHandle,
+          reservedName: 'Summer photos',
+          collisionIndex: 0,
+          singleFile: false,
+          reservedAtMs: 0,
+        },
+        lifecycle: this.#output.lifecycle ?? transitionReceiveState(initialReceiveState('gallery'), {
+          kind: 'saved', savedFiles: 1n, savedBytes: 1n,
+        }),
+      },
+      files,
+      platform,
+    })
+    return Object.freeze({ plan, inlineCommand: formatInlineRestoreCommand(plan, platform) })
+  }
+
+  exportSafeNameRestoreArtifact = async (taskId: string, platform: RestorePlatform): Promise<SafeNameRestoreExportResult> => {
+    this.intents.push(`export-restore:${taskId}:${platform}`)
+    const { plan } = await this.prepareSafeNameRestore(taskId, platform)
+    const artifact = renderRestoreArtifact(plan, platform)
+    return Object.freeze({
+      fileName: artifact.suggestedName,
+      runCommand: artifact.runCommand(artifact.suggestedName),
+      directoryLabel: plan.targetFolderLabel,
+    })
+  }
+
+  downloadSafeNameRestoreManifest = (plan: SafeNameRestorePlan): boolean => {
+    this.intents.push(`download-restore-manifest:${plan.targetFolderLabel}`)
+    return true
+  }
+
+  mapTaskFailure = (error: unknown) => error instanceof Error ? error.message : String(error)
 }
 
 export async function mountGallery(scenario: Scenario = 'folder'): Promise<void> {

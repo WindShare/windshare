@@ -1,6 +1,13 @@
 import type { CatalogEntry } from '../../catalog/records'
 import type { FrozenSelectionPolicy } from '../../catalog/selection'
-import type { ArtifactOffers, ReceiveOperationDisplay } from '../../output/model'
+import type {
+  ArtifactOffers,
+  ReceiveOperationDisplay,
+  RestorePlatform,
+  SafeNameRestoreExportResult,
+  SafeNameRestorePlan,
+  SafeNameRestorePrepared,
+} from '../../output/model'
 import { ORIGINAL_FILE_MEDIA_TYPE, triggerBrowserDownload } from '../../output/backends/browser-handoff'
 import {
   planArtifactOffers,
@@ -13,6 +20,12 @@ import { startFSADirectoryPicker } from '../../output/backends/fsa'
 import type { OPFSEnvironment } from '../../output/backends/opfs'
 import { handoffLocalPortableBlob, persistPortableHistory } from '../../output/backends/portable'
 import { emitOutputTrace, type OutputTraceSource } from '../../output/diagnostics'
+import {
+  RESTORE_MANIFEST_FILENAME,
+  detectRestorePlatform,
+  serializeRestoreManifestJson,
+  type RestorePlatformNavigator,
+} from '../../output/names/restore-plan'
 import type { SelectionShape } from '../../transfer/discovery'
 import { classifyNativeError, isAbortError } from '../../transfer/fault'
 import {
@@ -35,7 +48,7 @@ import type {
   RetainedTaskSnapshot,
   SingleFileDownloadOutcome,
 } from './contracts'
-import { ExecutionState, WorkspaceTask, type LocalRetainedActionKind } from './execution-state'
+import { ExecutionState, WorkspaceTask, type RetainedLocalCommand } from './execution-state'
 import { ReceiveStorage, type ReceiveStoreAccess } from './receive-storage'
 import { RetainedTaskActions, type RetainedActionCallbacks } from './retained-actions'
 import { RetainedTaskInventory } from './retained-inventory'
@@ -289,15 +302,33 @@ export class ReceiveCoordinator {
     return this.#inventory.ensureAll()
   }
 
-  saveLocalBlob(blob: Blob, suggestedName: string): boolean {
+  saveLocalBlob(blob: Blob, suggestedName: string, mediaType = ORIGINAL_FILE_MEDIA_TYPE): boolean {
     if (this.#disposed) return false
     try {
-      triggerBrowserDownload(this.#options.windowPort, blob, suggestedName, ORIGINAL_FILE_MEDIA_TYPE)
+      triggerBrowserDownload(this.#options.windowPort, blob, suggestedName, mediaType)
       return true
     } catch (error) {
       this.#traceLocalBlobFailure(error)
       return false
     }
+  }
+
+  detectRestorePlatform(): RestorePlatform {
+    return detectRestorePlatform(this.#options.windowPort.navigator as RestorePlatformNavigator | undefined)
+  }
+
+  prepareSafeNameRestore(taskId: string, platform: RestorePlatform): Promise<SafeNameRestorePrepared> {
+    return this.#retainedActions.prepareSafeNameRestore(taskId, platform)
+  }
+
+  exportSafeNameRestoreArtifact(taskId: string, platform: RestorePlatform): Promise<SafeNameRestoreExportResult> {
+    return this.#retainedActions.exportSafeNameRestoreArtifact(taskId, platform)
+  }
+
+  downloadSafeNameRestoreManifest(plan: SafeNameRestorePlan): boolean {
+    const json = serializeRestoreManifestJson(plan)
+    const blob = new Blob([json], { type: 'application/json;charset=utf-8' })
+    return this.saveLocalBlob(blob, RESTORE_MANIFEST_FILENAME, 'application/json;charset=utf-8')
   }
 
   completeLocalBlobDownload(
@@ -673,7 +704,7 @@ export class ReceiveCoordinator {
   }
 }
 
-function isLocalRetainedAction(action: ReceiveAction): action is LocalRetainedActionKind {
+function isLocalRetainedAction(action: ReceiveAction): action is RetainedLocalCommand {
   return action === 'save' || action === 'save-partial' || action === 'discard' || action === 'forget'
 }
 

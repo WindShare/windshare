@@ -15,6 +15,9 @@ export function FailureNotice({ failure, context }: {
     return <div><p>{description}</p>{desktopGuidance !== null && <p>{desktopGuidance}</p>}</div>
   }
   if (typeof failure !== 'string' && failure.kind === 'source-changed') return <p>{t.sourceChangedHint}</p>
+  if (typeof failure !== 'string' && failure.kind === 'restore-target-missing') {
+    return <p>{t.restoreTargetMissing(failure.directoryLabel)}</p>
+  }
   const message = t[typeof failure === 'string' ? context : failure.kind]
   const detail = typeof failure === 'string' ? failure : failure.detail
   return <div><p>{message}</p><details><summary>{t.technical}</summary>{detail}</details></div>

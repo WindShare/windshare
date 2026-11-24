@@ -30,6 +30,8 @@ export interface TaskAction<Reason extends string = string> {
 
 export type TaskCompleteness = 'unknown' | 'incomplete' | 'partial' | 'complete'
 export type TaskPublication = 'unpublished' | 'browser-handoff' | 'saved'
+export type TaskSafeNameRestoreState = 'none' | 'active' | 'paused' | 'available'
+export type TaskDetailSection = 'overview' | 'adjusted-names'
 export type TaskStage =
   | 'preparing'
   | 'downloading'
@@ -110,6 +112,7 @@ export interface TaskPresentation {
   readonly removal: TaskRemovalPresentation | null
   readonly details: readonly string[]
   readonly safeRenamed: SafeRenamedSummary | null
+  readonly safeNameRestore: TaskSafeNameRestoreState
   readonly sourceOmittedEntries: bigint
   readonly completeness: TaskCompleteness
   readonly publication: TaskPublication

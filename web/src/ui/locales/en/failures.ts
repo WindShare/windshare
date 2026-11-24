@@ -11,5 +11,6 @@ export const failures = {
   frame: 'Could not load the requested video frame.',
   history: 'Saved downloads could not be loaded.',
   sourceChangedHint: 'The shared file changed, so this download cannot continue. Ask the sender to share it again and open the new link. You can discard this download to clear its saved progress.',
+  restoreTargetMissing: (folder: string) => `The folder “${folder}” could not be found. It may have been moved, renamed, or deleted.`,
   technical: 'Technical details',
 }

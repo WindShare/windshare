@@ -1,6 +1,7 @@
 import type { SingleFileDownloadOutcome } from '../../application/receive/contracts'
 import { ReceiveBlockedError, SaveUnavailableError } from '../../application/receive/single-file'
 import { CryptoError } from '../../crypto/errors'
+import { FSARestoreTargetMissingError } from '../../output/model'
 import { catalogCapacityReason, isPermissionDeniedError, isSourceInvalidatedError } from '../../transfer/fault'
 import type { ReceiverFailure } from '../model'
 
@@ -41,6 +42,9 @@ export function mapReceiverFailure(
   }
   if (error instanceof ReceiveBlockedError) {
     return Object.freeze({ kind: 'blocked', reason: error.reason })
+  }
+  if (error instanceof FSARestoreTargetMissingError) {
+    return Object.freeze({ kind: 'restore-target-missing', directoryLabel: error.directoryLabel })
   }
   if (isSourceInvalidatedError(error)) {
     return Object.freeze({ kind: 'source-changed' })

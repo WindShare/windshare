@@ -44,6 +44,18 @@ function trimTrailingSpaces(value: string): string {
   return value.slice(0, end)
 }
 
+export function decideCollisionName(
+  requestedName: string,
+  kind: 'file' | 'directory',
+  collisionIndex: number,
+): string {
+  if (collisionIndex <= 0) return requestedName
+  if (kind === 'directory') return `${requestedName} (${collisionIndex})`
+  const dot = requestedName.lastIndexOf('.')
+  if (dot <= 0 || dot === requestedName.length - 1) return `${requestedName} (${collisionIndex})`
+  return `${requestedName.slice(0, dot)} (${collisionIndex})${requestedName.slice(dot)}`
+}
+
 function asciiLower(value: string): string {
   let lowered = ''
   for (const character of value) {

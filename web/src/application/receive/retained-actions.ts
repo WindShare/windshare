@@ -1,11 +1,18 @@
 import type { BrowserOutputWindow, OutputSessionHandle } from '../../output/backends/contract'
+import { loadFSARestorePlan, writeFSARestoreArtifact } from '../../output/backends/fsa-restore'
 import type { OPFSEnvironment } from '../../output/backends/opfs'
-import type { OutputTraceSource } from '../../output/diagnostics'
+import { emitOutputTrace, type OutputTraceSource } from '../../output/diagnostics'
+import type {
+  RestorePlatform,
+  SafeNameRestoreExportResult,
+  SafeNameRestorePrepared,
+} from '../../output/model'
+import { formatInlineRestoreCommand } from '../../output/names/restore-plan'
 import { TaskBusyError } from '../../output/store/tab-lock'
 import { isPermissionDeniedError } from '../../transfer/fault'
 import { artifactRootPath, policyFromSelectionSpec } from '../../transfer/selection'
 import type { JoinedBrowserShare } from '../browser-share/gateway'
-import type { ExecutionState, LocalRetainedActionKind, WorkspaceTask } from './execution-state'
+import type { ExecutionState, RetainedLocalCommand, WorkspaceTask } from './execution-state'
 import type { ReceiveStorage, ReceiveStoreAccess } from './receive-storage'
 import { executeRetainedTaskAction, reopenRetainedTask, retainedTaskEnvironment } from './retained'
 import type { RetainedTaskInventory } from './retained-inventory'
@@ -58,19 +65,70 @@ export class RetainedTaskActions {
     const token = this.#options.execution.claimResuming(taskId)
     if (token === null) return Promise.resolve()
     this.#options.publish()
-    return this.#options.storage.run(access => this.#executeContinue(access, token, taskId, callbacks))
+    return this.#options.storage.run(access => this.#executeContinue(access, token, taskId, callbacks)).then(() => undefined)
   }
 
   runLocalAction(
     taskId: string,
-    action: LocalRetainedActionKind,
+    action: RetainedLocalCommand,
     callbacks?: RetainedActionCallbacks,
   ): Promise<void> {
     if (this.#options.isDisposed()) return Promise.resolve()
     const token = this.#options.execution.claimLocalAction(taskId, action)
     if (token === null) return Promise.resolve()
     this.#options.publish()
-    return this.#options.storage.run(access => this.#executeLocal(access, token, taskId, action, callbacks))
+    return this.#options.storage.run(access => this.#executeLocal(access, token, taskId, action, callbacks)).then(() => undefined)
+  }
+
+  async prepareSafeNameRestore(
+    taskId: string,
+    platform: RestorePlatform,
+  ): Promise<SafeNameRestorePrepared> {
+    if (this.#options.isDisposed()) throw new DOMException('Receiver closed', 'AbortError')
+    const result = await this.#options.storage.run(async access => {
+      await access.waitForTaskWrites(taskId)
+      const store = await access.requireStore()
+      const plan = await loadFSARestorePlan(store, taskId, platform)
+      return Object.freeze({ plan, inlineCommand: formatInlineRestoreCommand(plan, platform) })
+    })
+    if (result === undefined) throw new DOMException('Receiver closed', 'AbortError')
+    return result
+  }
+
+  async exportSafeNameRestoreArtifact(
+    taskId: string,
+    platform: RestorePlatform,
+  ): Promise<SafeNameRestoreExportResult> {
+    if (this.#options.isDisposed()) throw new DOMException('Receiver closed', 'AbortError')
+    const token = this.#options.execution.claimLocalAction(taskId, 'export-restore')
+    if (token === null) throw new ReceiveBlockedError('busy')
+    this.#options.publish()
+    try {
+      const result = await this.#options.storage.run(async access => {
+        await access.waitForTaskWrites(taskId)
+        const store = await access.requireStore()
+        const diagnostics = {
+          backend: 'file_system_access' as const,
+          ...(this.#options.outputTrace === undefined ? {} : { trace: this.#options.outputTrace }),
+        }
+        return writeFSARestoreArtifact(
+          store, taskId, platform, this.#options.windowPort.navigator?.locks, diagnostics, this.#options.signal,
+        )
+      })
+      if (result === undefined) throw new DOMException('Receiver closed', 'AbortError')
+      return result
+    } catch (error) {
+      if (error instanceof TaskBusyError) {
+        emitOutputTrace(this.#options.outputTrace, 'publication', {
+          backend: 'file_system_access', task_id: taskId, operation: 'safe_name_restore_export', transition: 'busy',
+        })
+        throw new ReceiveBlockedError('activeInAnotherTab')
+      }
+      throw error
+    } finally {
+      this.#options.execution.releaseLocalIfOwned(token)
+      if (!this.#options.isDisposed()) this.#options.publish()
+    }
   }
 
   async #executeContinue(
@@ -119,7 +177,7 @@ export class RetainedTaskActions {
     access: ReceiveStoreAccess,
     token: symbol,
     taskId: string,
-    action: LocalRetainedActionKind,
+    action: RetainedLocalCommand,
     callbacks: RetainedActionCallbacks | undefined,
   ): Promise<void> {
     try {
@@ -149,7 +207,7 @@ export class RetainedTaskActions {
   #applyLocalOutcome(
     token: symbol,
     taskId: string,
-    action: LocalRetainedActionKind,
+    action: RetainedLocalCommand,
     updated: Awaited<ReturnType<typeof executeRetainedTaskAction>>['updated'],
     callbacks: RetainedActionCallbacks | undefined,
   ): void {
@@ -195,7 +253,7 @@ export class RetainedTaskActions {
   async #handleLocalError(
     token: symbol,
     taskId: string,
-    action: LocalRetainedActionKind,
+    action: RetainedLocalCommand,
     error: unknown,
     callbacks: RetainedActionCallbacks | undefined,
   ): Promise<void> {
@@ -215,7 +273,7 @@ export class RetainedTaskActions {
     this.#options.dispatchAsyncError(mapped, callbacks?.onError)
   }
 
-  #isEphemeralPortableForgetTarget(taskId: string, action: LocalRetainedActionKind): boolean {
+  #isEphemeralPortableForgetTarget(taskId: string, action: RetainedLocalCommand): boolean {
     if (action !== 'forget') return false
     if (this.#options.workspace.taskId === taskId && this.#options.workspace.backend === 'portable') {
       return true

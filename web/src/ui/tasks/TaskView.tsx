@@ -3,12 +3,20 @@ import { useCopy, usePreferences } from '../preferences/use-preferences'
 import { useEffect, useRef, useState, type ReactNode, type Ref } from 'react'
 import type { TaskActionCallbacks } from '../controller/failures'
 import type { ReceiverFailure } from '../model'
-import type { TaskAction, TaskPresentation, TaskRemovalPresentation } from './index'
+import type {
+  TaskAction,
+  TaskDetailSection,
+  TaskPresentation,
+  TaskRemovalPresentation,
+} from './index'
 import { DetailSheet } from '../controls/DetailSheet'
 import { FailureNotice } from '../controls/FailureNotice'
 import { ReceiverIcon, type ReceiverIconName } from '../receiver-presentation/ReceiverIcon'
+import { SafeNameRestorePanel, type SafeNameRestoreActions } from './SafeNameRestorePanel'
 import { useReceiveRate } from './use-receive-rate'
 import { formatElapsedTime } from './elapsed'
+
+export type { SafeNameRestoreActions } from './SafeNameRestorePanel'
 
 const STAGE_ICONS: Readonly<Record<TaskPresentation['stage'], ReceiverIconName>> = {
   preparing: 'clock', downloading: 'download', waiting: 'clock', paused: 'pause',
@@ -63,7 +71,7 @@ export function TaskActionButton({ action, perform, primary = false, busy = fals
 export function TaskCard({ task, actions, onDetails, onDismiss, detailsRef, busy = false, showTimestamp = false }: {
   readonly task: TaskPresentation
   readonly actions: TaskViewActions
-  readonly onDetails: (invoker: HTMLButtonElement) => void
+  readonly onDetails: (invoker: HTMLButtonElement, section?: TaskDetailSection) => void
   readonly onDismiss?: () => void
   readonly detailsRef?: Ref<HTMLButtonElement>
   readonly busy?: boolean
@@ -111,8 +119,20 @@ export function TaskCard({ task, actions, onDetails, onDismiss, detailsRef, busy
     {task.completeness === 'partial' && <p className="task-notice">{t.partial}</p>}
     {task.sourceOmittedEntries > 0n &&
       <p className="task-notice">{t.sourceOmittedCount(task.sourceOmittedEntries)}</p>}
-    {task.safeRenamed !== null && task.safeRenamed.count > 0 &&
-      <p className="task-notice">{t.adjustedCount(task.safeRenamed.count)}</p>}
+    {task.safeNameRestore === 'active' && task.safeRenamed !== null &&
+      <p className="task-notice task-notice-neutral">{t.adjustedCountActive(task.safeRenamed.count)}</p>}
+    {task.safeNameRestore === 'paused' && task.safeRenamed !== null &&
+      <p className="task-notice task-notice-neutral">{t.adjustedCount(task.safeRenamed.count)}</p>}
+    {task.safeNameRestore === 'available' && task.safeRenamed !== null &&
+      <div className="task-notice task-notice-neutral task-notice-inline">
+        <span>{t.adjustedCount(task.safeRenamed.count)}</span>
+        <span className="task-notice-sep" aria-hidden="true">·</span>
+        <button
+          type="button"
+          className="task-notice-link"
+          onClick={event => onDetails(event.currentTarget, 'adjusted-names')}
+        >{t.restoreAction}</button>
+      </div>}
   </section>
 }
 
@@ -201,9 +221,11 @@ function TaskRemovalSection({ removal, actions, permissionDenied, perform, busy 
   </details>
 }
 
-export function TaskDetails({ task, actions, busy = false, children }: {
+export function TaskDetails({ task, actions, safeNameRestore, initialSection = 'overview', busy = false, children }: {
   readonly task: TaskPresentation
   readonly actions: TaskViewActions
+  readonly safeNameRestore?: SafeNameRestoreActions
+  readonly initialSection?: TaskDetailSection
   readonly busy?: boolean
   readonly children?: ReactNode
 }) {
@@ -230,9 +252,8 @@ export function TaskDetails({ task, actions, busy = false, children }: {
   const discardPermissionDenied = isDiscardPermissionFallback(activeFailure, task.removal)
   const hasActions = task.primaryAction !== null || task.secondaryActions.length > 0
   const technicalLines = task.progress?.details ?? []
-  const safeRenamed = task.safeRenamed !== null && task.safeRenamed.sample.length > 0 ? task.safeRenamed : null
-  const remainingAdjusted = safeRenamed === null ? 0 : Math.max(0, safeRenamed.count - safeRenamed.sample.length)
-  const hasDisclosures = task.stage === 'handed-to-browser' || safeRenamed !== null ||
+  const hasSafeNameRestore = task.safeNameRestore !== 'none' && task.safeRenamed !== null
+  const hasDisclosures = task.stage === 'handed-to-browser' || hasSafeNameRestore ||
     technicalLines.length > 0 || task.removal !== null
   return <div className={`task-details task-tone-${task.tone}`} data-task-stage={task.stage}>
     <TaskDetailHero task={task} rate={rate} />
@@ -253,15 +274,13 @@ export function TaskDetails({ task, actions, busy = false, children }: {
         <summary>{t.handoffHelp}</summary>
         <p>{t.handoffHelpHint}</p>
       </details>}
-      {safeRenamed !== null && <details className="detail-disclosure">
-        <summary>{t.adjustedNames}</summary>
-        <ul className="task-detail-list">
-          {safeRenamed.sample.map((entry, index) => <li key={`${index}-${entry.physicalName}`}>
-            {entry.logicalPath.join('/')} → {entry.physicalName}
-          </li>)}
-          {remainingAdjusted > 0 && <li>{t.moreAdjusted(remainingAdjusted)}</li>}
-        </ul>
-      </details>}
+      {hasSafeNameRestore && <SafeNameRestorePanel
+        key={`${task.operationId}:${initialSection}`}
+        task={task}
+        initialOpen={initialSection === 'adjusted-names'}
+        {...(safeNameRestore === undefined ? {} : { actions: safeNameRestore })}
+        busy={busy}
+      />}
       {technicalLines.length > 0 && <details className="detail-disclosure">
         <summary>{t.transferDetails}</summary>
         <ul className="task-detail-list">{technicalLines.map((line, index) => <li key={`${index}-${line}`}>{line}</li>)}</ul>

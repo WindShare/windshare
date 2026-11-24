@@ -13,7 +13,7 @@ import type {
   TransferOutputFile,
   TransferOutputSession,
 } from '../../transfer/output-port'
-import { transitionReceiveState } from '../../transfer/state'
+import { transitionReceiveState, type SafeRenamedSummary } from '../../transfer/state'
 import { emitOutputTrace, type OutputDiagnosticsPorts } from '../diagnostics'
 import type { ReceiveStore } from '../store/database'
 import { acquireTaskLock, withFSAReservationLock, type TaskLock } from '../store/tab-lock'
@@ -27,7 +27,7 @@ import {
 } from '../store/types'
 import { mergeSourceOmittedEntries, type BrowserOutputWindow, type OutputSessionHandle, type StartBackendTaskInput } from './contract'
 import {
-  cleanupFSATaskEntries, isMissingFSAEntry, isUncommittedEmptyPlaceholder,
+  cleanupFSATaskEntries, filterExistingFSADirectories, isMissingFSAEntry, isUncommittedEmptyPlaceholder,
   matchesFSADiskFingerprint, readFSADiskFingerprint, sameFSAEntry,
 } from './fsa-cleanup'
 import { destinationChanged, FSAOutputFile, verifyExistingFSAFile } from './fsa-file'
@@ -35,7 +35,10 @@ import {
   openDirectory, openFSAFile, requiresSafeComponent, reserveFSATarget, rollbackReservedTarget,
   type FSADirectory, type ReservedFSATarget,
 } from './fsa-reservation'
-import { SafeNameRegistry, deterministicSafeComponent } from './safe-name'
+import {
+  SafeNameRegistry, applySafeRenamedFields, collectSafeRenamedFromRecords,
+  deterministicSafeComponent, mergeRenamedDirectories, sameSafeRenamedState,
+} from './safe-name'
 
 type FSATaskRecord = ReceiveTaskRecord & { readonly target: FSATargetRecord }
 
@@ -196,6 +199,8 @@ export async function reopenFSASession(input: Readonly<{
     const priorFiles = await input.store.listTaskFiles(updated.taskId)
     input.signal?.throwIfAborted()
     await input.store.putTask(updated)
+    const safeNames = new SafeNameRegistry()
+    safeNames.seedFromPrior(updated, priorFiles, updated.safeRenamedDirectories)
     emitOutputTrace(input.diagnostics?.trace, 'reopen', {
       backend: 'file_system_access',
       transition: 'authorized',
@@ -205,7 +210,7 @@ export async function reopenFSASession(input: Readonly<{
       rootHandle,
       input.store,
       lock,
-      new SafeNameRegistry(),
+      safeNames,
       input.locks,
       input.diagnostics,
       priorFiles,
@@ -361,30 +366,36 @@ class FSASessionHandle implements OutputSessionHandle {
     })
   }
 
+  subscribeSafeRenamed(listener: (summary: SafeRenamedSummary) => void): () => void {
+    return this.#safeNames.subscribe(listener)
+  }
+
   async settle(result: SettledTransferJobResult): Promise<ReceiveTaskRecord> {
     const files = await this.#store.listTaskFiles(this.taskId)
     let retainedBytes = 0n
     for (const file of files) retainedBytes += completedTuplesBytes(file.completedRanges)
 
     const nextLifecycle = nextFSALifecycle(this.#record.lifecycle, result, retainedBytes)
-    const safeRenamed = this.#safeNames.summary() ?? this.#record.safeRenamed
+    const candidateDirs = mergeRenamedDirectories(this.#record.safeRenamedDirectories, this.#safeNames.renamedDirectories())
+    const initialSafe = nextLifecycle.kind === 'failed'
+      ? { summary: undefined, directories: undefined }
+      : collectSafeRenamedFromRecords(this.#record, files, candidateDirs)
     const { sourceOmittedEntries: previousOmitted, ...baseRecord } = this.#record
     const sourceOmittedEntries = mergeSourceOmittedEntries(
       result.sourceOmittedEntries,
       previousOmitted,
       result.discoveryComplete,
     )
-    const nextRecord: FSATaskRecord = Object.freeze({
+    let nextRecord = applySafeRenamedFields(Object.freeze({
       ...baseRecord,
       lifecycle: nextLifecycle,
       discoveryComplete: result.discoveryComplete || this.#record.discoveryComplete,
-      ...(safeRenamed === undefined ? {} : { safeRenamed }),
       ...(sourceOmittedEntries === undefined ? {} : { sourceOmittedEntries }),
       ...(result.sourceRevisionFailures === undefined
         ? {}
         : { sourceRevisionFailures: result.sourceRevisionFailures }),
       updatedAt: Date.now(),
-    })
+    }), initialSafe)
     await this.#store.putTask(nextRecord)
     this.#record = nextRecord
     if (nextLifecycle.kind === 'failed' || nextLifecycle.kind === 'partial') {
@@ -395,6 +406,16 @@ class FSASessionHandle implements OutputSessionHandle {
       }).catch(() => emitOutputTrace(this.#diagnostics?.trace, 'cleanup', {
         backend: 'file_system_access', task_id: this.taskId, transition: 'deferred',
       }))
+      if (nextLifecycle.kind === 'partial' && initialSafe.directories !== undefined) {
+        const surviving = await filterExistingFSADirectories(this.#rootHandle, initialSafe.directories)
+          .catch(() => initialSafe.directories!)
+        const reconciled = collectSafeRenamedFromRecords(nextRecord, files, surviving)
+        if (!sameSafeRenamedState(initialSafe, reconciled)) {
+          nextRecord = applySafeRenamedFields({ ...nextRecord, updatedAt: Date.now() }, reconciled)
+          await this.#store.putTask(nextRecord)
+          this.#record = nextRecord
+        }
+      }
     }
     return nextRecord
   }
@@ -647,7 +668,7 @@ class FSASessionHandle implements OutputSessionHandle {
       if (!requiresSafeComponent(error)) throw error
       const safe = await deterministicSafeComponent({ logicalPath: prefix, entryKind: 'directory' })
       next = await openDirectory(parent, safe)
-      this.#safeNames.record(prefix, 'directory', safe)
+      this.#safeNames.recordDirectory(prefix, next.physicalPath)
     }
     if (next.created) this.#createdDirectories.add(next.handle)
     return next
