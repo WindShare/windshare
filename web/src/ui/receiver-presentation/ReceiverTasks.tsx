@@ -37,12 +37,13 @@ function renderSavingControls(
     offers: output.offers,
     actionLabel,
     blockedBy: draft.empty ? 'emptySelection' : startAdmission.reason,
+    localChoice: intent === 'default' && !draft.empty ? startAdmission.localChoice : null,
   }, language)
   return <SavingControls
     model={saving}
     activation={output.activationPresentation}
-    currentTaskContext={current !== null && !draft.empty && !startAdmission.allowed && saving.disabledReason !== null
-      ? { operationId: current.operationId, reason: saving.disabledReason }
+    currentTaskContext={current !== null && !draft.empty && saving.primary !== null && saving.primary.disabledReason !== null
+      ? { operationId: current.operationId, reason: saving.primary.disabledReason }
       : null}
     actionLabel={actionLabel}
     choose={choice => controller.chooseArtifact(choice.choice.choiceId, intent)}

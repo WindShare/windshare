@@ -1,7 +1,6 @@
 import type { SingleFileDownloadOutcome } from '../../application/receive/contracts'
 import { ReceiveBlockedError, SaveUnavailableError } from '../../application/receive/single-file'
 import { CryptoError } from '../../crypto/errors'
-import type { ArtifactChoice, ArtifactOffers } from '../../output/model'
 import { isPermissionDeniedError, isSourceInvalidatedError } from '../../transfer/fault'
 import type { ReceiverFailure } from '../model'
 
@@ -22,12 +21,6 @@ export interface TaskActionCallbacks {
    * can fall back to the share-level error banner.
    */
   readonly onAsyncFailure?: (failure: ReceiverFailure) => boolean | void
-}
-
-export function findReadyOfferChoice(offers: ArtifactOffers | null, choiceId: string): ArtifactChoice | undefined {
-  if (offers?.kind !== 'ready') return undefined
-  const allChoices = [offers.primary, ...offers.alternatives, ...(offers.zip === null ? [] : [offers.zip])]
-  return allChoices.find(candidate => candidate.choiceId === choiceId)
 }
 
 export function previewDownloadResultFromOutcome(

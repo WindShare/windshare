@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { BrowseDirectory, JoinedBrowserShare } from '../../src/application/browser-share/gateway'
 import { ReceiveCoordinator } from '../../src/application/receive/coordinator'
 import { retainedSnapshot } from '../../src/application/receive/retained'
+import { ReceiveBlockedError } from '../../src/application/receive/single-file'
 import type { CatalogEntry } from '../../src/catalog/records'
 import { SelectionPolicy } from '../../src/catalog/selection'
 import * as outputContract from '../../src/output/backends/contract'
@@ -10,6 +11,7 @@ import { ReceiveStore } from '../../src/output/store/database'
 import { taskLockName } from '../../src/output/store/tab-lock'
 import type { ReceiveTaskRecord } from '../../src/output/store/types'
 import { initialReceiveState, transitionReceiveState } from '../../src/transfer/state'
+import { FakeDirectoryHandle } from '../output/fsa-fixture'
 import { createMemoryOPFSEnv, createMockDownloadWindow, MemoryReceiveStore } from '../output/opfs-fixture'
 import {
   deferred,
@@ -804,6 +806,84 @@ describe('receive capability cache, pre-activation errors, and stale record clea
     coordinator.refreshOffers(joined)
     await waitForSnapshot(coordinator, s => s.offers?.selectionKey === singleFileSpec('share-1', 'root-1', fileB, dir).key)
     expect(coordinator.getSnapshot().lifecycle).toBeNull()
+
+    await coordinator.dispose()
+  })
+
+  it('blocks remote starts and FSA pickers on terminal connection states while keeping reconnecting and local saves available', async () => {
+    const file = makeFileEntry(41, 'photo.png', 16n)
+    const dir = makeDir('root-1', 42, 'Album')
+    const store = new MemoryReceiveStore()
+    const retainedReady = makeOpfsRecord('ready-copy', 'share-1', file, dir, 'ready-to-save', 1_000)
+    await store.putTask(retainedReady)
+    const { env } = createMemoryOPFSEnv()
+
+    vi.spyOn(ReceiveStore, 'open').mockResolvedValue(Object.assign(store, { close: vi.fn() }) as unknown as ReceiveStore)
+    vi.spyOn(outputContract, 'probeBrowserOutputCapabilities').mockResolvedValue(Object.freeze({
+      indexedDb: true, fsa: true, opfs: true, portable: true, availableStorageBytes: 64n * 1024n * 1024n,
+    }))
+    const pickerGate = deferred<FileSystemDirectoryHandle>()
+    const picker = vi.fn(() => pickerGate.promise)
+    const { windowPort: baseWin, downloads } = createMockDownloadWindow()
+    const windowPort: BrowserOutputWindow = {
+      ...baseWin,
+      indexedDB: { open: vi.fn() } as unknown as IDBFactory,
+      showDirectoryPicker: picker,
+    }
+    const onActionError = vi.fn()
+    const joined = makeJoinedShare('share-1', file)
+    const coordinator = new ReceiveCoordinator({
+      windowPort,
+      opfsEnv: env,
+      currentJoinedShare: () => joined,
+      onActionError,
+    })
+
+    coordinator.refreshOffers(joined)
+    await coordinator.loadRetained()
+    await waitForSnapshot(coordinator, s => s.offers?.kind === 'ready' && s.retained.tasks.length === 1)
+
+    // Reconnecting is transient and must stay admitted for new downloads.
+    coordinator.observeConnection('reconnecting')
+    expect(coordinator.startBlockedReason()).toBeNull()
+
+    // Terminal share-ended and connection-unavailable states block remote starts without opening a picker.
+    for (const [kind, expectedReason] of [
+      ['ended', 'shareEnded'],
+      ['unavailable', 'connectionUnavailable'],
+    ] as const) {
+      coordinator.observeConnection(kind)
+      expect(coordinator.startBlockedReason()).toBe(expectedReason)
+      expect(coordinator.localStartBlockedReason()).toBeNull()
+      expect(coordinator.startDownload('fsa:file')).toBe(false)
+      expect(coordinator.startSingleFileDownload(file, dir)).toEqual({ kind: 'blocked', reason: expectedReason })
+      expect(picker).not.toHaveBeenCalled()
+    }
+
+    // Retained browser copies and local photo blobs remain saveable after the share ends.
+    coordinator.observeConnection('ended')
+    const readyTask = coordinator.getSnapshot().retained.tasks.find(t => t.taskId === 'ready-copy')!
+    expect(coordinator.retainedActionAdmission(readyTask, 'save')).toEqual({ allowed: true, reason: null })
+    const blob = new Blob([Uint8Array.of(137, 80, 78, 71)], { type: 'image/png' })
+    expect(coordinator.saveLocalBlob(blob, 'photo.png')).toBe(true)
+    expect(coordinator.completeLocalBlobDownload('portable:file', blob)).toBe(true)
+    expect(downloads).toHaveLength(2)
+
+    // If the share ends while the FSA directory picker is open, settling the picker fails cleanly
+    // without reserving entries on disk or writing a failed IndexedDB task.
+    coordinator.observeConnection('connected')
+    expect(coordinator.startDownload('fsa:file')).toBe(true)
+    expect(picker).toHaveBeenCalledTimes(1)
+    coordinator.observeConnection('ended')
+
+    const pickedDir = new FakeDirectoryHandle('Downloads', [])
+    pickerGate.resolve(pickedDir as unknown as FileSystemDirectoryHandle)
+    await waitForSnapshot(coordinator, s => s.activation === null)
+    expect(onActionError).toHaveBeenCalledTimes(1)
+    expect(onActionError.mock.calls[0]?.[0]).toBeInstanceOf(ReceiveBlockedError)
+    expect((onActionError.mock.calls[0]?.[0] as ReceiveBlockedError).reason).toBe('shareEnded')
+    expect([...pickedDir.children.keys()]).toEqual([])
+    expect([...store.tasks.values()].filter(t => t.backend === 'fsa')).toEqual([])
 
     await coordinator.dispose()
   })

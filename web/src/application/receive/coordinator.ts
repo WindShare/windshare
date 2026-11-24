@@ -42,6 +42,7 @@ import { RetainedTaskInventory } from './retained-inventory'
 import { openNewOutputSession } from './session-opener'
 import { ReceiveSessionRunner, type SessionRunCallbacks } from './session-runner'
 import {
+  ReceiveBlockedError,
   startSingleFileDownloadFlow,
   type SingleFileDownloadOptions,
   type SingleFileLaunchContext,
@@ -199,11 +200,20 @@ export class ReceiveCoordinator {
     }
   }
 
-  startBlockedReason(): ReceiveBlockReason | null {
+  /** Checks local execution-slot readiness only, for local handoffs that do not contact the sender. */
+  localStartBlockedReason(): ReceiveBlockReason | null {
     return this.#execution.startBlockedReason(
       this.#options.currentJoinedShare() !== undefined,
       this.#workspace.canStartNew,
     )
+  }
+
+  /** Checks remote download admission, letting terminal share/connection states preempt local busyness. */
+  startBlockedReason(): ReceiveBlockReason | null {
+    if (this.#options.currentJoinedShare() === undefined) return 'connectFirst'
+    const terminal = this.#terminalConnectionReason()
+    if (terminal !== null) return terminal
+    return this.localStartBlockedReason()
   }
 
   shareNavigationBlockedReason(): ReceiveBlockReason | null {
@@ -225,8 +235,8 @@ export class ReceiveCoordinator {
         canForgetState(this.#workspace.lifecycle, this.#workspace.backend))
     if (!supported) return blockedAdmission('actionUnavailable')
     if (action === 'continue') {
-      if (this.#shareEnded) return blockedAdmission('shareEnded')
-      if (this.#connectionUnavailable) return blockedAdmission('connectionUnavailable')
+      const terminal = this.#terminalConnectionReason()
+      if (terminal !== null) return blockedAdmission(terminal)
     }
     return ALLOWED_ADMISSION
   }
@@ -295,7 +305,7 @@ export class ReceiveCoordinator {
     blob: Blob,
     display?: ReceiveOperationDisplay,
   ): boolean {
-    const resolved = this.#resolveReadyChoice(choiceId)
+    const resolved = this.#resolveReadyChoice(choiceId, 'local')
     if (
       resolved === undefined ||
       resolved.choice.backend !== 'portable' ||
@@ -337,7 +347,7 @@ export class ReceiveCoordinator {
   }
 
   startDownload(choiceId: string, display?: ReceiveOperationDisplay): boolean {
-    const resolved = this.#resolveReadyChoice(choiceId)
+    const resolved = this.#resolveReadyChoice(choiceId, 'remote')
     if (resolved === undefined) return false
     const selection = this.#selectionPolicy ?? policyFromSelectionSpec(resolved.spec)
     const launched = this.#launchChoice(
@@ -348,8 +358,9 @@ export class ReceiveCoordinator {
     return launched.kind === 'started' || launched.kind === 'waiting-picker'
   }
 
-  #resolveReadyChoice(choiceId: string) {
-    if (this.#disposed || this.startBlockedReason() !== null) return undefined
+  #resolveReadyChoice(choiceId: string, mode: 'local' | 'remote') {
+    const blocked = mode === 'local' ? this.localStartBlockedReason() : this.startBlockedReason()
+    if (this.#disposed || blocked !== null) return undefined
     const joined = this.#options.currentJoinedShare()
     const offers = this.#offers
     const spec = this.#selectionSpec
@@ -358,6 +369,12 @@ export class ReceiveCoordinator {
     const choice = allChoices.find(candidate => candidate.choiceId === choiceId)
     if (choice === undefined) return undefined
     return { joined, choice, spec, key: offers.selectionKey }
+  }
+
+  #terminalConnectionReason(): 'shareEnded' | 'connectionUnavailable' | null {
+    if (this.#shareEnded) return 'shareEnded'
+    if (this.#connectionUnavailable) return 'connectionUnavailable'
+    return null
   }
 
   startSingleFileDownload(
@@ -552,6 +569,15 @@ export class ReceiveCoordinator {
     callbacks: SessionRunCallbacks | undefined,
   ): Promise<void> {
     if (!this.#execution.ownsTransfer(token)) return
+    // Re-check terminal connection state after async picker resolution so we never
+    // reserve empty disk placeholders or failed IDB records for a dead session.
+    const terminal = this.#terminalConnectionReason()
+    if (terminal !== null) {
+      if (!this.#execution.releaseTransferIfOwned(token)) return
+      this.#publish()
+      this.#dispatchAsyncError(new ReceiveBlockedError(terminal), callbacks?.onAsyncError)
+      return
+    }
     const { joined, choice, spec, selection, key, display } = request
     const taskId = createTaskId()
     const initial = initialReceiveState(taskId)

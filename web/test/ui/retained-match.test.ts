@@ -185,7 +185,7 @@ function workspaceSnapshot(overrides: Readonly<{
     share,
     retained,
     activeReceiveOperationId,
-    startAdmission: Object.freeze({ allowed: true, reason: null, canReleaseCurrent: false }),
+    startAdmission: Object.freeze({ allowed: true, reason: null, canReleaseCurrent: false, localChoice: null }),
   }
   const composed = composeTasks(
     taskInputs,

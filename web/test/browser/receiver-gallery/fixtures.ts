@@ -205,7 +205,7 @@ export async function gallerySnapshot(scenario: Scenario): Promise<GallerySnapsh
     browse: { kind: 'ready', error: null },
     draft: { mode: 'scope', scope: 'current-folder', label: 'Summer photos', excludedItems: 2, empty: false },
     activeReceiveOperationId: output.activeTaskId,
-    startAdmission: { allowed: single, reason: single ? null : 'downloading', canReleaseCurrent: false },
+    startAdmission: { allowed: single, reason: single ? null : 'downloading', canReleaseCurrent: false, localChoice: null },
     taskDisplay: single ? null : facts.display,
     connection: scenario === 'reconnecting'
       ? { kind: 'reconnecting', activity: { kind: 'connecting' } }

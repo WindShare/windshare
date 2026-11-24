@@ -101,13 +101,26 @@ export type ReceiverFailure =
   | Readonly<{ kind: 'source-changed' }>
   | Readonly<{ kind: 'invalidLink' | 'secureContext' | 'permissionDenied'; detail: string }>
 
+export interface LocalChoiceAdmission {
+  readonly choiceId: string
+  readonly allowed: boolean
+  readonly reason: ReceiveBlockReason | null
+}
+
+export interface StartAdmission {
+  readonly allowed: boolean
+  readonly reason: ReceiveBlockReason | null
+  readonly canReleaseCurrent: boolean
+  readonly localChoice: LocalChoiceAdmission | null
+}
+
 export interface ReceiverSnapshot {
   readonly connection: import('../receiver/connection-state').ReceiverConnectionSnapshot |
     Readonly<{ kind: 'idle'; join?: import('../receiver/initial-join').InitialJoinState }>
   readonly share: ShareIdentity | null
   readonly browse: BrowseState
   readonly draft: SelectionDraft
-  readonly startAdmission: Readonly<{ allowed: boolean; reason: ReceiveBlockReason | null; canReleaseCurrent: boolean }>
+  readonly startAdmission: StartAdmission
   readonly activeReceiveOperationId: string | null
   readonly taskDisplay: import('../output/model/operation-display').ReceiveOperationDisplay | null
   readonly pathActivity: import('../receiver/path-activity').ReceiverPathActivitySnapshot

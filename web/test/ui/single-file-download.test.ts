@@ -4,7 +4,9 @@ import type { ReceiveWindowPort } from '../../src/application/receive/coordinato
 import type { CatalogEntry } from '../../src/catalog/records'
 import { SelectionPolicy } from '../../src/catalog/selection'
 import * as outputContract from '../../src/output/backends/contract'
+import type { ReceiverConnectionSnapshot } from '../../src/receiver/connection-state'
 import { ReceiverController } from '../../src/ui/controller'
+import { presentSavingActions } from '../../src/ui/saving'
 import {
   singleFileDownloadState,
   type SingleFileDownloadReadiness,
@@ -18,7 +20,7 @@ function makeReadiness(
   overrides: Partial<SingleFileDownloadReadiness> = {},
 ): SingleFileDownloadReadiness {
   return {
-    startAdmission: { allowed: true, reason: null, canReleaseCurrent: false },
+    startAdmission: { allowed: true, reason: null, canReleaseCurrent: false, localChoice: null },
     capabilitiesState: 'ready',
     activeSingleFileId: null,
     language: 'en',
@@ -73,7 +75,7 @@ describe('singleFileDownloadState', () => {
   it('marks the active file as downloading with highest precedence over admission and probing gates', () => {
     const state = singleFileDownloadState('file-a', makeReadiness({
       activeSingleFileId: 'file-a',
-      startAdmission: { allowed: false, reason: 'downloading', canReleaseCurrent: false },
+      startAdmission: { allowed: false, reason: 'downloading', canReleaseCurrent: false, localChoice: null },
       capabilitiesState: 'probing',
     }))
     expect(state.downloading).toBe(true)
@@ -83,7 +85,7 @@ describe('singleFileDownloadState', () => {
   it('disables non-active files when startAdmission blocks new downloads', () => {
     const state = singleFileDownloadState('file-b', makeReadiness({
       activeSingleFileId: 'file-a',
-      startAdmission: { allowed: false, reason: 'downloading', canReleaseCurrent: false },
+      startAdmission: { allowed: false, reason: 'downloading', canReleaseCurrent: false, localChoice: null },
       capabilitiesState: 'failed',
     }))
     expect(state.downloading).toBe(false)
@@ -181,5 +183,136 @@ describe('ReceiverController.downloadFile', () => {
     expect(downloads).toHaveLength(1)
 
     await controller.dispose()
+  })
+
+  it('blocks folder/file pickers on ended or unavailable connections while keeping local photo and preview image saves', async () => {
+    vi.spyOn(outputContract, 'probeBrowserOutputCapabilities').mockResolvedValue(Object.freeze({
+      indexedDb: true, fsa: true, opfs: true, portable: true, availableStorageBytes: 64n * 1024n * 1024n,
+    }))
+    const picker = vi.fn(() => new Promise<FileSystemDirectoryHandle>(() => undefined))
+    const { windowPort: baseWin, downloads } = createMockDownloadWindow()
+    const windowPort = {
+      ...baseWin,
+      indexedDB: { open: vi.fn() } as unknown as IDBFactory,
+      showDirectoryPicker: picker,
+    }
+    const photoBlob = new Blob([Uint8Array.of(1, 2, 3, 4)], { type: 'image/png' })
+    let emitConnection: ((snapshot: ReceiverConnectionSnapshot) => void) | undefined
+    let transferStarts = 0
+
+    // 1. Folder share: ended/unavailable blocks tree picker & row downloads, while loaded preview image still saves locally.
+    const fileA: Extract<CatalogEntry, { kind: 'file' }> = { ...entry, id: identity(11), idText: identityText(11), name: 'pic.png', expectedSize: 16n }
+    const fileB: Extract<CatalogEntry, { kind: 'file' }> = { ...entry, id: identity(12), idText: identityText(12), name: 'doc.pdf', expectedSize: 16n }
+    const folderShare = {
+      ...makeBrowseShare([fileA, fileB]),
+      subscribeConnection: (listener: (value: ReceiverConnectionSnapshot) => void) => {
+        emitConnection = listener
+        listener({ kind: 'connected' })
+        return () => undefined
+      },
+      preview: async () => ({
+        current: { kind: 'image' as const, name: fileA.name, url: 'blob:img', mimeType: 'image/png', width: 10, height: 10 },
+        imageBlob: photoBlob,
+        seek: async () => { throw new Error('unused') },
+        close: async () => undefined,
+      }),
+      beginDownloadConnectivity: () => { transferStarts += 1; return { routes: [], close: vi.fn() } },
+    } as unknown as JoinedBrowserShare
+
+    const folderController = new ReceiverController(
+      { join: async () => folderShare } as unknown as BrowserReceiverGateway,
+      { windowPort: windowPort as unknown as ReceiveWindowPort },
+    )
+    folderController.initialize({ capabilityInput: 'key', pageUrl: 'https://receiver.invalid/s/folder' })
+    await waitForController(folderController, s => s.output.offers?.kind === 'ready' && s.rows.length === 2)
+    folderController.previewFile(fileA.idText)
+    await waitForController(folderController, s => s.preview.state === 'image')
+
+    emitConnection?.({ kind: 'unavailable', reason: 'protocol-failed' })
+    expect(folderController.getSnapshot().startAdmission).toEqual({
+      allowed: false, reason: 'connectionUnavailable', canReleaseCurrent: false, localChoice: null,
+    })
+    folderController.chooseArtifact('fsa:tree', 'default')
+    expect(folderController.downloadFile(fileB.idText)).toEqual({ kind: 'blocked', reason: 'connectionUnavailable' })
+    expect(picker).not.toHaveBeenCalled()
+    expect(transferStarts).toBe(0)
+    expect(folderController.downloadPreviewedFile()).toEqual({ kind: 'saved-image' })
+    expect(downloads).toHaveLength(1)
+    await folderController.dispose()
+
+    // 2. Single-photo share: local portable choice stays enabled after share ends, while FSA/OPFS/redownload stay blocked.
+    const photoShare = {
+      ...makeBrowseShare([entry]),
+      automaticPhotoPreview: async () => ({
+        current: { kind: 'image' as const, name: entry.name, url: 'blob:photo', mimeType: 'image/png', width: 20, height: 10 },
+        imageBlob: photoBlob,
+        seek: async () => { throw new Error('unused') },
+        close: async () => undefined,
+      }),
+      inspectSelection: async () => ({
+        kind: 'single-file' as const, file: entry, sourcePath: [entry.name], exactBytes: entry.expectedSize,
+      }),
+      subscribeConnection: (listener: (value: ReceiverConnectionSnapshot) => void) => {
+        emitConnection = listener
+        listener({ kind: 'connected' })
+        return () => undefined
+      },
+      beginDownloadConnectivity: () => { transferStarts += 1; return { routes: [], close: vi.fn() } },
+    } as unknown as JoinedBrowserShare
+
+    const photoController = new ReceiverController(
+      { join: async () => photoShare } as unknown as BrowserReceiverGateway,
+      { windowPort: windowPort as unknown as ReceiveWindowPort },
+    )
+    photoController.initialize({ capabilityInput: 'key', pageUrl: 'https://receiver.invalid/s/photo' })
+    await waitForController(photoController, s => s.preview.state === 'image' && s.output.offers?.kind === 'ready')
+
+    emitConnection?.({ kind: 'ended', reason: 'share-stopped' })
+    const photoSnap = photoController.getSnapshot()
+    expect(photoSnap.startAdmission).toEqual({
+      allowed: false,
+      reason: 'shareEnded',
+      canReleaseCurrent: false,
+      localChoice: { choiceId: 'portable:file', allowed: true, reason: null },
+    })
+
+    const saving = presentSavingActions({
+      offers: photoSnap.output.offers,
+      blockedBy: photoSnap.startAdmission.reason,
+      localChoice: photoSnap.startAdmission.localChoice,
+    })
+    expect(saving.disabledReason).toBeNull()
+    expect(saving.primary?.choice.choiceId).toBe('portable:file')
+    expect(saving.primary?.disabledReason).toBeNull()
+    const allChoices = saving.alternatives.flatMap(group => [group.primary, ...group.alternatives])
+    expect(allChoices.find(c => c.choice.choiceId === 'opfs:file')?.disabledReason).not.toBeNull()
+    expect(allChoices.find(c => c.choice.choiceId === 'fsa:file')?.disabledReason).not.toBeNull()
+
+    // Retry confirmation is suppressed when the connection is already terminal.
+    expect(presentSavingActions({
+      offers: { kind: 'retry-required', epoch: 1n, selectionKey: 'k' },
+      blockedBy: 'shareEnded',
+    }).retry).toBe(false)
+
+    // Remote options and explicit redownload stay blocked without opening pickers or transfers.
+    photoController.chooseArtifact('fsa:file', 'default')
+    photoController.chooseArtifact('opfs:file', 'default')
+    photoController.chooseArtifact('portable:file', 'redownload')
+    expect(picker).not.toHaveBeenCalled()
+    expect(transferStarts).toBe(0)
+
+    // Default portable save still delivers the in-memory photo blob locally.
+    photoController.chooseArtifact('portable:file', 'default')
+    expect(downloads).toHaveLength(2)
+    expect(transferStarts).toBe(0)
+
+    // Closing the preview drops the in-memory blob, so portable default save is now blocked too.
+    photoController.cancelPreview()
+    expect(photoController.getSnapshot().startAdmission.localChoice).toBeNull()
+    photoController.chooseArtifact('portable:file', 'default')
+    expect(downloads).toHaveLength(2)
+    expect(transferStarts).toBe(0)
+
+    await photoController.dispose()
   })
 })

@@ -245,7 +245,7 @@ class GalleryController {
     }
     this.#publish({
       activeReceiveOperationId: null,
-      startAdmission: { allowed: true, reason: null, canReleaseCurrent: false },
+      startAdmission: { allowed: true, reason: null, canReleaseCurrent: false, localChoice: null },
       taskDisplay: display,
       output: this.#presentOutput(),
       retained: {

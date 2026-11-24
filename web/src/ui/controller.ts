@@ -17,7 +17,6 @@ import type { SourceRevisionFailure } from '../transfer/state'
 import type { CapturedLocation } from './capability/location'
 import type { ReceiverControllerOptions } from './controller/contracts'
 import {
-  findReadyOfferChoice,
   joinFailure,
   mapReceiverFailure,
   outcomeFailure,
@@ -208,6 +207,7 @@ export class ReceiverController {
       this.#joined = undefined
       joined.close().catch(() => undefined)
     }
+    this.#receive.observeConnection('idle')
     this.#publish({
       ...this.#snapshot,
       phase: 'awaiting-key',
@@ -311,13 +311,13 @@ export class ReceiverController {
 
   chooseArtifact(choiceId: string, intent: ChooseArtifactIntent = 'default'): void {
     this.recordExperienceIntent('choose-saving-outcome')
+    if (intent === 'default' && this.#tryCompleteSinglePhotoBlob(choiceId)) return
     if (this.#receive.startBlockedReason() !== null) return
     if (this.#snapshot.error !== null) this.#publish({ ...this.#snapshot, error: null })
     const display = Object.freeze({
       objectLabel: this.#snapshot.draft.label,
       createdAtMilliseconds: Date.now(),
     })
-    if (intent === 'default' && this.#tryCompleteSinglePhotoBlob(choiceId, display)) return
     this.#previews.yieldToReceiving()
     this.#receive.startDownload(choiceId, display)
   }
@@ -330,7 +330,7 @@ export class ReceiverController {
     if (this.#disposed || page === undefined || entry?.kind !== 'file') {
       return Object.freeze({ kind: 'blocked', reason: 'actionUnavailable' })
     }
-    this.#previews.yieldToReceiving()
+    if (this.#receive.startBlockedReason() === null) this.#previews.yieldToReceiving()
     const outcome = this.#receive.startSingleFileDownload(entry, page.directory, {
       display: Object.freeze({ objectLabel: entry.name, createdAtMilliseconds: Date.now() }),
     })
@@ -594,16 +594,27 @@ export class ReceiverController {
     this.#beginSelectionProjection(joined)
   }
 
-  #tryCompleteSinglePhotoBlob(
-    choiceId: string,
-    display: NonNullable<ReceiverSnapshot['taskDisplay']>,
-  ): boolean {
-    const share = this.#snapshot.share
-    if (share?.kind !== 'photo') return false
-    const choice = findReadyOfferChoice(this.#snapshot.output.offers, choiceId)
-    if (choice?.backend !== 'portable' || choice.artifactKind !== 'original-file') return false
+  #singlePhotoLocalChoiceId(snapshot: ReceiverSnapshot): string | null {
+    const share = snapshot.share
+    if (share?.kind !== 'photo') return null
     const target = this.#previews.activeTarget()
-    if (target?.imageBlob === undefined || target.entry.idText !== share.file.id) return false
+    if (target?.imageBlob === undefined || target.entry.idText !== share.file.id) return null
+    const offers = snapshot.output.offers
+    if (offers?.kind !== 'ready') return null
+    const choices = [offers.primary, ...offers.alternatives, ...(offers.zip === null ? [] : [offers.zip])]
+    return choices.find(choice => choice.backend === 'portable' && choice.artifactKind === 'original-file')?.choiceId ?? null
+  }
+
+  #tryCompleteSinglePhotoBlob(choiceId: string): boolean {
+    if (this.#singlePhotoLocalChoiceId(this.#snapshot) !== choiceId) return false
+    if (this.#receive.localStartBlockedReason() !== null) return true
+    const target = this.#previews.activeTarget()
+    if (target?.imageBlob === undefined) return false
+    if (this.#snapshot.error !== null) this.#publish({ ...this.#snapshot, error: null })
+    const display = Object.freeze({
+      objectLabel: this.#snapshot.draft.label,
+      createdAtMilliseconds: Date.now(),
+    })
     this.#receive.completeLocalBlobDownload(choiceId, target.imageBlob, display)
     return true
   }
@@ -644,10 +655,26 @@ export class ReceiverController {
   #publish(snapshot: ReceiverSnapshot): void {
     const reason = this.#receive.startBlockedReason()
     const canReleaseCurrent = this.#receive.canReleaseCurrent
+    const localChoiceId = this.#singlePhotoLocalChoiceId(snapshot)
+    const localReason = localChoiceId === null ? null : this.#receive.localStartBlockedReason()
     const previousAdmission = this.#snapshot.startAdmission
-    const startAdmission = previousAdmission.reason === reason && previousAdmission.canReleaseCurrent === canReleaseCurrent
-      ? previousAdmission
-      : Object.freeze({ allowed: reason === null, reason, canReleaseCurrent })
+    const sameLocalChoice = localChoiceId === null
+      ? previousAdmission.localChoice === null
+      : previousAdmission.localChoice?.choiceId === localChoiceId &&
+        previousAdmission.localChoice.reason === localReason
+    const startAdmission =
+      previousAdmission.reason === reason &&
+      previousAdmission.canReleaseCurrent === canReleaseCurrent &&
+      sameLocalChoice
+        ? previousAdmission
+        : Object.freeze({
+            allowed: reason === null,
+            reason,
+            canReleaseCurrent,
+            localChoice: localChoiceId === null
+              ? null
+              : Object.freeze({ choiceId: localChoiceId, allowed: localReason === null, reason: localReason }),
+          })
     this.#snapshot = Object.freeze({
       ...snapshot,
       activeReceiveOperationId: this.#receive.getSnapshot().activeTaskId,

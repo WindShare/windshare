@@ -15,6 +15,14 @@ interface SavingRequest {
   readonly offers: ArtifactOffers | null
   readonly actionLabel?: string
   readonly blockedBy?: ReceiveBlockReason | null
+  readonly localChoice?: Readonly<{ choiceId: string; reason: ReceiveBlockReason | null }> | null
+}
+
+function choiceBlockedReason(choice: ArtifactChoice, input: SavingRequest): ReceiveBlockReason | null {
+  if (input.localChoice != null && choice.choiceId === input.localChoice.choiceId) {
+    return input.localChoice.reason
+  }
+  return input.blockedBy ?? null
 }
 
 export function presentSavingActions(input: SavingRequest, language: Language = 'en'): SavingActionPresentation {
@@ -26,9 +34,10 @@ export function presentSavingActions(input: SavingRequest, language: Language = 
     ...offers.alternatives,
     ...(offers.zip === null ? [] : [offers.zip]),
   ])
-  const disabledReason = presentReceiveReason(input.blockedBy ?? null, language)
+  const primaryBlockedBy = choiceBlockedReason(offers.primary, input)
+  const disabledReason = presentReceiveReason(primaryBlockedBy, language)
   const primary = savingChoice(offers.primary, disabledReason, language, input.actionLabel)
-  const alternatives = groupOutcomes(choices, offers, disabledReason, language)
+  const alternatives = groupOutcomes(choices, offers, input, language)
   const totalChoiceCount = alternatives.reduce((count, group) => count + 1 + group.alternatives.length, 0)
   let reason = 'eligible-route'
   if (primary.outcome === 'original-file') reason = 'original-file-default'
@@ -42,14 +51,14 @@ export function presentSavingActions(input: SavingRequest, language: Language = 
     retry: false,
     desktopGuidance: null,
     recommendation: null,
-    transition: transition(offers, primary, reason, input.blockedBy),
+    transition: transition(offers, primary, reason, primaryBlockedBy),
   })
 }
 
 function groupOutcomes(
   choices: readonly ArtifactChoice[],
   offers: Extract<ArtifactOffers, { kind: 'ready' }>,
-  disabledReason: string | null,
+  input: SavingRequest,
   language: Language,
 ): readonly SavingOutcome[] {
   const result: SavingOutcome[] = []
@@ -59,11 +68,11 @@ function groupOutcomes(
     const primary = kind === 'zip' ? offers.zip ?? candidates[0]! : candidates[0]!
     const alternatives = candidates
       .filter(candidate => candidate.choiceId !== primary.choiceId)
-      .map(choice => savingChoice(choice, disabledReason, language))
+      .map(choice => savingChoice(choice, presentReceiveReason(choiceBlockedReason(choice, input), language), language))
     result.push(Object.freeze({
       kind,
       label: outcomeLabel(kind, language),
-      primary: savingChoice(primary, disabledReason, language),
+      primary: savingChoice(primary, presentReceiveReason(choiceBlockedReason(primary, input), language), language),
       alternatives: Object.freeze(alternatives),
     }))
   }
@@ -202,12 +211,13 @@ function unavailable(input: SavingRequest, language: Language): SavingActionPres
   const reason = offers === null ? 'confirming' : offers.kind
   const unavailableOffer = offers?.kind === 'unavailable' ? presentSaveUnavailable(offers.reason, t) : null
   const copy = unavailableOffer?.description ?? unavailableDescription(offers, language)
+  const terminalConnection = input.blockedBy === 'shareEnded' || input.blockedBy === 'connectionUnavailable'
   return Object.freeze({
     primary: null,
     alternatives: Object.freeze([]),
     hasAlternatives: false,
     disabledReason: presentReceiveReason(input.blockedBy ?? null, language) ?? copy,
-    retry: reason === 'retry-required',
+    retry: reason === 'retry-required' && !terminalConnection,
     desktopGuidance: unavailableOffer?.desktopGuidance ?? null,
     recommendation: null,
     transition: transition(offers, null, reason, input.blockedBy),

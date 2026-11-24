@@ -38,6 +38,7 @@ export class ReceiverExperienceObservability {
       const current = presentSavingActions({
         offers: snapshot.output.offers,
         blockedBy: snapshot.startAdmission.reason,
+        localChoice: snapshot.startAdmission.localChoice,
       }).transition
       if (compareSavingTransition(this.#saving, current) !== null) {
         observer(Object.freeze({

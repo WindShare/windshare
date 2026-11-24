@@ -153,7 +153,7 @@ export function initialReceiverSnapshot(): ReceiverSnapshot {
     share: null,
     browse: { kind: 'idle' as const, error: null },
     draft: EMPTY_SELECTION_DRAFT,
-    startAdmission: { allowed: false, reason: 'connectFirst' as const, canReleaseCurrent: false },
+    startAdmission: { allowed: false, reason: 'connectFirst' as const, canReleaseCurrent: false, localChoice: null },
     activeReceiveOperationId: null,
     taskDisplay: null,
     phase: 'awaiting-key',
