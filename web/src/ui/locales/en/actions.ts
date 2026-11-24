@@ -3,7 +3,6 @@ export const actions = {
   pauseHint: 'Saves your current progress so you can continue later.',
   stop: 'Stop download',
   stopFolder: 'Stops this download and clears resume progress. Completed files already in your folder stay saved.',
-  stopWorkspace: 'Stops this download and saves completed files in browser storage.',
   stopPortable: 'Stops this download. Interrupted direct browser downloads cannot resume.',
   resume: 'Continue',
   save: 'Save',

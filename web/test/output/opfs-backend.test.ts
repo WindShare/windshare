@@ -231,15 +231,15 @@ describe('OPFS partial settlement and export', () => {
     expect(root.dirs.get('windshare-tasks')?.files.has('opfs-partial-missing.part')).toBe(false)
   })
 
-  it('preserves completed OPFS ZIP members on stop and on resumed source-change without slot bloat', async () => {
+  it('preserves completed OPFS ZIP members on terminal partial settlement, reclaims trailing dead bytes, and avoids slot bloat', async () => {
     const store = new MemoryReceiveStore()
-    const { env } = createMemoryOPFSEnv()
+    const { env, root } = createMemoryOPFSEnv()
     const { windowPort } = createMockDownloadWindow()
     const payloadA = new TextEncoder().encode('keep-me')
     const largeReservedSize = 64n * 1024n
     const spec = { shareInstance: 's1', syntheticRoot: 'r1', defaultSelected: true, rules: [] }
 
-    // 1) Stopped task with one completed file and one large pre-allocated unfinished slot.
+    // 1) Terminal partial task with one completed file followed by a large unfinished slot.
     const stoppedSession = await openNewOPFSSession({
       task: {
         taskId: 'opfs-partial-stop',
@@ -261,8 +261,10 @@ describe('OPFS partial settlement and export', () => {
     const fileB = await stoppedSession.transferOutput.openFile({
       fileId: 'fb', path: ['huge.bin'], sourcePath: ['huge.bin'], revision: 'r2', exactSize: largeReservedSize,
     }, new AbortController().signal)
-    await fileB.writeAt(0n, new Uint8Array([1, 2, 3, 4]))
+    await fileB.writeAt(0n, new Uint8Array(Number(largeReservedSize / 2n)).fill(7))
     await fileB.abort()
+    const sizeBeforeSettle = root.dirs.get('windshare-tasks')!.files.get('opfs-partial-stop.part')!.bytes.byteLength
+    expect(sizeBeforeSettle).toBeGreaterThan(32_000)
 
     const stoppedTask = await stoppedSession.settle({
       status: 'partial',
@@ -280,12 +282,54 @@ describe('OPFS partial settlement and export', () => {
     if (stoppedTask.lifecycle.kind !== 'partial') throw new Error('expected partial lifecycle')
     expect(stoppedTask.lifecycle.reason).toBe('stopped')
     expect(stoppedTask.lifecycle.savedFiles).toBe(1n)
+    // Trailing unfinished bytes past the last completed member are truncated before closing.
+    const sizeAfterSettle = root.dirs.get('windshare-tasks')!.files.get('opfs-partial-stop.part')!.bytes.byteLength
+    expect(sizeAfterSettle).toBeLessThan(256)
+    expect(stoppedTask.target.kind === 'opfs' && stoppedTask.target.allocatedLength).toBe(BigInt(sizeAfterSettle))
 
     const partialBlob = await exportPartialOPFSZip(stoppedTask, store as unknown as ReceiveStore, env, windowPort)
     // Exporting via buildPartialZipBlob must exclude the 64 KiB failed slot rather than padding the ZIP.
     expect(partialBlob.size).toBeLessThan(1024)
     const stoppedEntries = await readZipFiles(partialBlob)
     expect(stoppedEntries.get('a.txt')).toEqual(payloadA)
+
+    // 1b) Concurrent slot ordering: unfinished large slot BEFORE completed small member keeps the small member intact.
+    const interleavedSession = await openNewOPFSSession({
+      task: {
+        taskId: 'opfs-partial-interleaved',
+        selection: spec,
+        selectionKey: 'sel-interleaved',
+        artifact: Object.freeze({ kind: 'zip-archive', name: 'Interleaved.zip' }),
+        lifecycle: initialReceiveState('opfs-partial-interleaved'),
+      },
+      store: store as unknown as ReceiveStore,
+      env,
+      windowPort,
+    })
+    const bigFirst = await interleavedSession.transferOutput.openFile({
+      fileId: 'fb', path: ['big.bin'], sourcePath: ['big.bin'], revision: 'r1', exactSize: largeReservedSize,
+    }, new AbortController().signal)
+    const smallSecond = await interleavedSession.transferOutput.openFile({
+      fileId: 'fa', path: ['z.txt'], sourcePath: ['z.txt'], revision: 'r2', exactSize: BigInt(payloadA.byteLength),
+    }, new AbortController().signal)
+    await bigFirst.writeAt(0n, new Uint8Array(1024).fill(3))
+    await smallSecond.writeAt(0n, payloadA)
+    await smallSecond.commit([byteRange(0n, BigInt(payloadA.byteLength))])
+    await bigFirst.abort()
+    const interleavedTask = await interleavedSession.settle({
+      status: 'partial',
+      completedFiles: 1n,
+      completedBytes: BigInt(payloadA.byteLength),
+      discoveredFiles: 2n,
+      discoveredBytes: BigInt(payloadA.byteLength) + largeReservedSize,
+      discoveryComplete: true,
+      failedFiles: 1n,
+      failedDirectories: 0n,
+    })
+    await interleavedSession.close()
+    const interleavedBlob = await exportPartialOPFSZip(interleavedTask, store as unknown as ReceiveStore, env, windowPort)
+    expect(interleavedBlob.size).toBeLessThan(1024)
+    expect((await readZipFiles(interleavedBlob)).get('z.txt')).toEqual(payloadA)
 
     // 2) Resumed task whose second run fails with `source-changed` before re-discovering `a.txt`.
     const pausedSession = await openNewOPFSSession({

@@ -108,8 +108,7 @@ function actionConsequence(
   switch (action) {
     case 'pause': return t.pauseHint
     case 'stop':
-      if (backend === 'fsa') return t.stopFolder
-      return backend === 'opfs' ? t.stopWorkspace : t.stopPortable
+      return backend === 'fsa' ? t.stopFolder : t.stopPortable
     case 'save': return lifecycleKind === 'download-started' ? t.saveAgainHint : null
     // Only paused tasks remain resumable after a partial export.
     case 'save-partial': return lifecycleKind === 'paused' ? t.savePartialHint : null

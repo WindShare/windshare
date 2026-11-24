@@ -65,7 +65,16 @@ export function actionsForState(
 
 function interruptionActions(phase: 'receiving' | 'finalizing', backend: SaveBackendKind): readonly ReceiveAction[] {
   if (phase === 'finalizing') return Object.freeze([])
-  return backend === 'portable' ? Object.freeze(['stop']) : Object.freeze(['pause', 'stop'])
+  switch (backend) {
+    case 'portable':
+      return Object.freeze(['stop'])
+    case 'opfs':
+      // Stopping cannot reclaim unfinished slots inside a shared OPFS archive; pausing keeps
+      // progress resumable and exposes explicit Save partial ZIP and Discard controls.
+      return Object.freeze(['pause'])
+    case 'fsa':
+      return Object.freeze(['pause', 'stop'])
+  }
 }
 
 export function isLocalOnlyAction(action: ReceiveAction): boolean {

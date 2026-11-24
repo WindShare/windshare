@@ -315,21 +315,10 @@ class OPFSSessionHandle implements OutputSessionHandle {
 
   async settle(result: SettledTransferJobResult): Promise<ReceiveTaskRecord> {
     if (result.status === 'completed' && this.#zip !== undefined) {
-      let size: bigint
-      try {
-        size = await this.#zip.finalize()
-      } catch (error) {
-        await this.#closeIO()
-        const pauseReason = storagePauseReason(error)
-        if (pauseReason !== undefined) return this.#settleIncomplete('paused', { ...result, pauseReason, error })
-        return this.#settleIncomplete('failed', { ...result, error })
-      }
-      await this.#closeIO()
-      return this.#publishCompleted(size, result)
+      return this.#settleCompletedZip(result)
     }
 
-    await this.#closeIO()
-    const files = await this.#store.listTaskFiles(this.taskId)
+    const { files, truncatedLength } = await this.#closeIncompleteSession(result.status)
     if (this.#zip === undefined && result.status !== 'paused') {
       // The file commit already truncated and flushed. Its durable row also survives a late stop.
       const committed = files.find(file => file.status === 'completed')
@@ -338,7 +327,37 @@ class OPFSSessionHandle implements OutputSessionHandle {
     if (result.status === 'completed') {
       return this.#settleIncomplete('failed', { ...result, error: new Error('Missing committed browser file') }, files)
     }
-    return this.#settleIncomplete(result.status, result, files)
+    return this.#settleIncomplete(result.status, result, files, truncatedLength)
+  }
+
+  async #settleCompletedZip(result: SettledTransferJobResult): Promise<ReceiveTaskRecord> {
+    let size: bigint
+    try {
+      size = await this.#zip!.finalize()
+    } catch (error) {
+      await this.#closeIO()
+      const pauseReason = storagePauseReason(error)
+      if (pauseReason !== undefined) return this.#settleIncomplete('paused', { ...result, pauseReason, error })
+      return this.#settleIncomplete('failed', { ...result, error })
+    }
+    await this.#closeIO()
+    return this.#publishCompleted(size, result)
+  }
+
+  async #closeIncompleteSession(
+    status: SettledTransferJobResult['status'],
+  ): Promise<Readonly<{ files: readonly ReceiveFileRecord[]; truncatedLength?: bigint }>> {
+    if (this.#zip === undefined || status === 'paused' || status === 'completed') {
+      await this.#closeIO()
+      return { files: await this.#store.listTaskFiles(this.taskId) }
+    }
+    try {
+      const files = await this.#store.listTaskFiles(this.taskId)
+      const truncatedLength = hasCompletedZipFile(files) ? await this.#truncateUnusedZipTail(files) : undefined
+      return truncatedLength === undefined ? { files } : { files, truncatedLength }
+    } finally {
+      await this.#closeIO()
+    }
   }
 
   async close(): Promise<void> {
@@ -421,6 +440,7 @@ class OPFSSessionHandle implements OutputSessionHandle {
     status: IncompleteOPFSJobStatus,
     result: SettledTransferJobResult,
     knownFiles?: readonly ReceiveFileRecord[],
+    truncatedLength?: bigint,
   ): Promise<ReceiveTaskRecord> {
     const files = knownFiles ?? await this.#store.listTaskFiles(this.taskId)
     let retainedBytes = 0n
@@ -442,7 +462,7 @@ class OPFSSessionHandle implements OutputSessionHandle {
 
     const target: OPFSTargetRecord = Object.freeze({
       ...(this.#record.target as OPFSTargetRecord),
-      allocatedLength: this.#zip?.allocatedLength ?? (this.#record.target as OPFSTargetRecord).allocatedLength,
+      allocatedLength: truncatedLength ?? this.#zip?.allocatedLength ?? (this.#record.target as OPFSTargetRecord).allocatedLength,
     })
     const { sourceOmittedEntries: previousOmitted, ...baseRecord } = this.#record
     const sourceOmittedEntries = mergeSourceOmittedEntries(
@@ -575,10 +595,52 @@ class OPFSSessionHandle implements OutputSessionHandle {
     })
   }
 
+  async #truncateUnusedZipTail(files: readonly ReceiveFileRecord[]): Promise<bigint | undefined> {
+    if (this.#zip === undefined || this.#io.failed) return undefined
+    const retainedEnd = completedZipTailOffset(files)
+    try {
+      const physicalSize = await this.#io.size()
+      if (retainedEnd >= physicalSize) return undefined
+      await this.#io.truncate(retainedEnd)
+      await this.#io.flush()
+      emitOutputTrace(this.#diagnostics?.trace, 'cleanup', {
+        backend: 'origin_private',
+        task_id: this.taskId,
+        transition: 'tail_truncated',
+        reclaimed_bytes: String(physicalSize - retainedEnd),
+        retained_bytes: String(retainedEnd),
+      })
+      return retainedEnd
+    } catch (error) {
+      emitOutputTrace(this.#diagnostics?.trace, 'cleanup', {
+        backend: 'origin_private',
+        task_id: this.taskId,
+        transition: 'tail_truncate_failed',
+        error_class: classifyNativeError(error),
+      })
+      return undefined
+    }
+  }
+
   #closeIO(): Promise<void> {
     this.#closingIO ??= this.#io.close().catch(() => undefined)
     return this.#closingIO
   }
+}
+
+function hasCompletedZipFile(files: readonly ReceiveFileRecord[]): boolean {
+  return files.some(file => file.status === 'completed' && file.zipEntry?.kind !== 'directory')
+}
+
+function completedZipTailOffset(files: readonly ReceiveFileRecord[]): bigint {
+  let tail = 0n
+  for (const file of files) {
+    if (file.status !== 'completed' || !hasZipLayout(file)) continue
+    // Empty files and directories regenerate headers without reading bytes from the OPFS object.
+    if (file.zipEntry.kind !== 'file' || file.size === 0n) continue
+    if (file.zipEntry.endOffset > tail) tail = file.zipEntry.endOffset
+  }
+  return tail
 }
 
 function survivingFileCoverage(row: ReceiveFileRecord, physicalSize: bigint): ReceiveFileRecord {

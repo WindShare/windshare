@@ -5,7 +5,6 @@ export const actions: typeof English = {
   pauseHint: '会先完成当前写入并保存进度，稍后可继续下载。',
   stop: '停止下载',
   stopFolder: '停止下载并清除续传进度。已保存到文件夹的完整文件会保留。',
-  stopWorkspace: '停止下载，并整理已保存在浏览器中的文件。',
   stopPortable: '停止下载。直接浏览器下载中断后无法续传。',
   resume: '继续',
   save: '保存',
