@@ -86,7 +86,7 @@ func classifyFailure(err error, operation bool) *Failure {
 		if operation {
 			failure.Reason = reasonOperationRunning
 		}
-	case operation && errors.Is(err, fs.ErrNotExist):
+	case operation && (errors.Is(err, fs.ErrNotExist) || errors.Is(err, output.ErrOperationChanged)):
 		failure.Kind, failure.Reason = FailureChanged, reasonOperationChanged
 	default:
 		failure.Reason, failure.Detail = failureDiagnostic(err, failure.Reason)

@@ -135,6 +135,9 @@ func sealOutputError(cause error) error {
 	if errors.Is(cause, osfs.ErrOutputBusy) && !errors.Is(cause, output.ErrBusy) {
 		cause = errors.Join(output.ErrBusy, cause)
 	}
+	if errors.Is(cause, osfs.ErrOutputOperationChanged) && !errors.Is(cause, output.ErrOperationChanged) {
+		cause = errors.Join(output.ErrOperationChanged, cause)
+	}
 	diagnostic, ok := osfs.OutputDiagnosticFor(cause)
 	if !ok {
 		return cause

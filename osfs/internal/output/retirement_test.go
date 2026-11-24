@@ -324,6 +324,59 @@ func TestDiscardOperationRemovesCorruptJournalUnderDirLock(t *testing.T) {
 	}
 }
 
+func TestDiscardOperationRejectsReplacedOperationIdentityUnderDirLock(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	_, originalIntent, _ := createPausedSingleFileOp(t, root, 0xc2)
+	_, replacementIntent, _ := createPausedSingleFileOp(t, root, 0xc6)
+	originalID := originalIntent.OperationID()
+	replacementID := replacementIntent.OperationID()
+
+	originalDir := filepath.Join(root, ControlDirName, hex.EncodeToString(originalID.Bytes()))
+	replacementDir := filepath.Join(root, ControlDirName, hex.EncodeToString(replacementID.Bytes()))
+	if err := os.RemoveAll(originalDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacementDir, originalDir); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(originalDir, taskLockFileName)
+	if err := os.Remove(lockPath); err != nil {
+		t.Fatal(err)
+	}
+	journalPath := filepath.Join(originalDir, journalFileName)
+	wantJournal, err := os.ReadFile(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	summary, err := DiscardOperation(ctx, root, originalID)
+	if !errors.Is(err, ErrOperationChanged) || summary.Valid() {
+		t.Fatalf("DiscardOperation on replaced operation = (%+v, %v), want ErrOperationChanged", summary, err)
+	}
+	gotJournal, err := os.ReadFile(journalPath)
+	if err != nil || string(gotJournal) != string(wantJournal) {
+		t.Fatalf("replaced journal changed after refused discard: len=%d err=%v", len(gotJournal), err)
+	}
+	if _, err := os.Lstat(lockPath); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("refused discard created task.lock in replaced dir: %v", err)
+	}
+	entries, err := os.ReadDir(originalDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hasPart := false
+	for _, entry := range entries {
+		if filepath.Ext(entry.Name()) == ".part" {
+			hasPart = true
+			break
+		}
+	}
+	if !hasPart {
+		t.Fatalf("replaced operation .part file was lost: entries=%v", entries)
+	}
+}
+
 func TestOperationRetirementRemovesPrivateScratchAndPreservesExternalEntries(t *testing.T) {
 	ctx := context.Background()
 	for _, mode := range []string{"discard", "complete"} {

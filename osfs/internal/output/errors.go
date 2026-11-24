@@ -18,6 +18,7 @@ var (
 	ErrBusy               = errors.New("retained output operation is currently active")
 	ErrAlreadyRunning     = errors.New("matching output operation is already running")
 	ErrAmbiguous          = errors.New("matching output operation ownership is ambiguous")
+	ErrOperationChanged   = errors.New("retained output operation no longer matches")
 	ErrInvalidContract    = errors.New("native recovery contract is invalid")
 	ErrUnsafeNamespace    = errors.New("osfs: output namespace is unsafe")
 	ErrNamespaceCollision = errors.New("osfs: output namespace entry already exists")

@@ -99,6 +99,7 @@ func TestDiscardRecheckClassifiesLeaseRaceDisappearanceAndCancellation(t *testin
 	}{
 		{"busy", output.ErrBusy, FailureBusy},
 		{"disappeared", fs.ErrNotExist, FailureChanged},
+		{"changed-identity", output.ErrOperationChanged, FailureChanged},
 		{"cancelled", context.Canceled, FailureCancelled},
 		{"deadline", context.DeadlineExceeded, FailureCancelled},
 		{"unverified", errors.New("ownership changed"), FailureNeedsAttention},

@@ -338,17 +338,27 @@ func DiscardOperation(
 		return RecoverySummary{}, DiagnoseFailure(FailureLookup, err)
 	}
 
-	taskLock, _, lockErr := acquireLockFile(opDir, taskLockFileName, false)
+	// Probe an existing task lock without creating one under dirLock: every active
+	// receiver acquires task.lock while holding dirLock, so a missing lock file
+	// proves no active owner and avoids mutating a replaced directory on refusal.
+	taskLock, _, lockErr := acquireLockFile(opDir, taskLockFileName, true)
 	if errors.Is(lockErr, ErrNamespaceLockBusy) {
 		_ = errors.Join(opDir.Close(), ctrlDir.Close(), dirLock.Close())
 		return RecoverySummary{}, DiagnoseFailure(FailureOpen, ErrBusy)
 	}
-	if lockErr != nil {
+	if lockErr != nil && !errors.Is(lockErr, fs.ErrNotExist) {
 		_ = errors.Join(opDir.Close(), ctrlDir.Close(), dirLock.Close())
 		return RecoverySummary{}, DiagnoseFailure(FailureOpen, lockErr)
 	}
 
 	state, _, readErr := readJournalState(opDir)
+	// Confirm the locked directory still belongs to opID before deleting it;
+	// confirmation prompts run unlocked, while corrupt headers without a verified
+	// identity remain discardable inside WindShare's private scratch area.
+	if state.hasMeta && state.meta.Intent.OperationID() != opID {
+		closeErr := errors.Join(taskLock.Close(), opDir.Close(), ctrlDir.Close(), dirLock.Close())
+		return RecoverySummary{}, freezeFailure(DiagnoseFailure(FailureLookup, ErrOperationChanged), closeErr)
+	}
 	releaseErr := errors.Join(taskLock.Close(), opDir.Close())
 	if releaseErr != nil {
 		releaseErr = errors.Join(releaseErr, ctrlDir.Close(), dirLock.Close())

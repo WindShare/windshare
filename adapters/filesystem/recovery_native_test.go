@@ -5,6 +5,7 @@ package filesystem
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -231,5 +232,58 @@ func TestFilesystemRecoveryStaleSelectionCannotDiscardReplacementOperation(t *te
 	snapshot, err := current.Snapshot()
 	if err != nil || len(snapshot.Operations) != 1 || snapshot.Operations[0].ID != replacementIntent.OperationID() {
 		t.Fatalf("replacement operation changed: snapshot=%+v err=%v", snapshot, err)
+	}
+}
+
+func TestFilesystemRecoveryDiscardRejectsReplacedOperationIdentityAndPreservesData(t *testing.T) {
+	ctx := context.Background()
+	root := newResumeCertifiedOutputTestRoot(t)
+	original, originalIntent := createNativeResumeOperation(t, ctx, root, 30)
+	if err := original.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Inspect captures the listed identity before releasing all locks, matching
+	// the interactive confirmation gap before Discard reacquires them.
+	inventory, err := recovery.Inspect(ctx, Recovery(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	replacement, replacementIntent := createNativeResumeOperation(t, ctx, root, 40)
+	if err := replacement.Close(); err != nil {
+		t.Fatal(err)
+	}
+	originalDir := filepath.Join(root, nativeResumeControlDirectoryName, hex.EncodeToString(originalIntent.OperationID().Bytes()))
+	replacementDir := filepath.Join(root, nativeResumeControlDirectoryName, hex.EncodeToString(replacementIntent.OperationID().Bytes()))
+	if err := os.RemoveAll(originalDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacementDir, originalDir); err != nil {
+		t.Fatal(err)
+	}
+	payloadPath := filepath.Join(originalDir, "retained.part")
+	payloadContent := []byte("replacement operation data must survive")
+	if err := os.WriteFile(payloadPath, payloadContent, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(originalDir, "task.lock")
+	if err := os.Remove(lockPath); err != nil {
+		t.Fatal(err)
+	}
+
+	result := inventory.Discard(ctx, originalIntent.OperationID())
+	if result.Successful() || result.Failure == nil ||
+		result.Failure.Kind != recovery.FailureChanged ||
+		result.Failure.Reason != "operation-no-longer-matches" ||
+		!errors.Is(result.Err, output.ErrOperationChanged) {
+		t.Fatalf("replaced-identity discard=%+v", result)
+	}
+	gotPayload, err := os.ReadFile(payloadPath)
+	if err != nil || !bytes.Equal(gotPayload, payloadContent) {
+		t.Fatalf("replacement payload changed: content=%q err=%v", gotPayload, err)
+	}
+	if _, err := os.Lstat(lockPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("refused discard created task.lock in replaced dir: %v", err)
 	}
 }

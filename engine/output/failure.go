@@ -8,6 +8,7 @@ import (
 )
 
 var ErrBusy = errors.New("output destination or operation is already in use")
+var ErrOperationChanged = errors.New("output operation identity no longer matches")
 
 // FailureStage describes the application operation that failed, independently
 // of the provider's persistence primitives or native error vocabulary.
