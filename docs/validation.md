@@ -97,12 +97,16 @@ Coverage is gated on the core and non-core totals and on each package, with no p
 | FAT/exFAT (Linux) | Disposable image remounts verify partial reuse, publication, and owned cleanup after native IDs change. |
 | macOS (arm64 and amd64) | Each runner builds its native CLI and relay, runs the output/recovery suites, and captures APFS evidence for CLI file/folder downloads and SIGKILL recovery. |
 
-The [Cloudflare deployment workflow](deploy/cloudflare-relay.md) verifies deployment contracts
-and local Miniflare access/managed-TURN tests (`npm run test:access` in
-`relay-rust/crates/relay-cloudflare`, requiring no Cloudflare account) on pull requests and
-pushes; deployment itself remains opt-in on `main` or manual dispatch. `make hygiene` also
-covers its offline first-deploy/update/failure-recovery contracts. To run its opt-in live
-check, install `worker-build`, Go, pnpm, Web dependencies and the pinned Wrangler, set
+**Private relay verification** checks the embedded console, deployment scripts and local Miniflare
+access and managed TURN contracts on relay-related pull requests. On `main`, it runs standalone
+when automatic deployment is off. Forks with automatic updates enabled run the checks inside
+**Deploy private relay** before publishing a relay. Manual deployment is available on the default
+branch. Frontend-only deployments skip relay verification and Rust builds. See the
+[Cloudflare deployment guide](deploy/cloudflare-relay.md).
+
+Run the local Worker contracts with `npm run test:access` in `relay-rust/crates/relay-cloudflare`.
+`make hygiene` covers offline deployment lifecycle tests. For the opt-in live check,
+install `worker-build`, Go, pnpm, Web dependencies and the pinned Wrangler, set
 `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID`, then run
 `node scripts/deploy/cloudflare/smoke.mjs`. It creates an isolated relay and companion console,
 imports a per-device credential, verifies separate origins, registration and permanent

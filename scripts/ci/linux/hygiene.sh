@@ -51,6 +51,9 @@ bash scripts/deploy/network/install-wsrelay.tests.sh
 echo "-- Official web release installer"
 python3 -B -m unittest scripts/deploy/network/install_web_test.py
 
+echo "-- Network authority deployment helper"
+python3 -B -m unittest scripts/deploy/network_authority_test.py
+
 echo "-- Browser dependency installation recovery"
 bash .github/actions/setup-browser/install-dependencies.tests.sh
 

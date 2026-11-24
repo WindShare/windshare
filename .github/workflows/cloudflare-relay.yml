@@ -1,51 +1,28 @@
+# Forks use repository Actions settings so credentials and mode switches share one scope.
+# Manual dispatch deploys from the default branch. CLOUDFLARE_RELAY_ENABLED opts into
+# automatic updates. Upstream leaves it unset to verify Go-only pushes to main.
 name: Deploy private relay
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - .github/workflows/console-bundle.yml
-      - .github/workflows/cloudflare-relay.yml
-      - consoles/relay/**
-      - consoles/ui/**
-      - consoles/build/**
-      - consoles/vite.config.mjs
-      - consoles/tsconfig.json
-      - consoles/package.json
-      - consoles/pnpm-lock.yaml
-      - scripts/deploy/cloudflare/**
-      - relay-rust/Cargo.*
-      - relay-rust/rust-toolchain.toml
-      - relay-rust/.cargo/**
-      - relay-rust/console/**
-      - relay-rust/crates/relay-core/**
-      - relay-rust/crates/relay-access/**
-      - relay-rust/crates/relay-cloudflare/**
-      - relay-rust/tests/_goclient/**
-      # Go wire-contract inputs exercised by _goclient against the local Worker;
-      # excluded from push.paths so Go-only syncs never trigger fork deployments.
-      - core/networkendpoint/**
-      - core/session/protocolsession/turn_control.go
-      - core/session/turngrant/**
-      - engine/relayconfig/turn.go
-      - engine/relayprofile/**
-      - engine/relaysetup/**
-      - engine/turnissuer/**
-      - relay/protocol/v2/**
   push:
     branches:
       - main
+    # Go contract and CI tooling changes have their own verification workflow.
     paths:
       - .github/workflows/cloudflare-relay.yml
       - scripts/deploy/cloudflare/**
+      - '!scripts/deploy/cloudflare/**/*.test.mjs'
+      - '!scripts/deploy/cloudflare/smoke.mjs'
       - deploy/network/**
+      - '!deploy/network/**/*.md'
       - relay-rust/Cargo.*
       - relay-rust/rust-toolchain.toml
       - relay-rust/.cargo/**
-      - .github/workflows/console-bundle.yml
       - consoles/relay/**
       - consoles/ui/**
       - consoles/build/**
+      - '!consoles/build/**/*.test.mjs'
       - consoles/vite.config.mjs
       - consoles/tsconfig.json
       - consoles/package.json
@@ -54,6 +31,10 @@ on:
       - relay-rust/crates/relay-core/**
       - relay-rust/crates/relay-access/**
       - relay-rust/crates/relay-cloudflare/**
+      - '!relay-rust/**/tests/**'
+      - '!relay-rust/**/*_tests.rs'
+      - '!relay-rust/**/*.md'
+      - web/build/**
       - web/src/**
       - web/public/**
       - web/index.html
@@ -65,59 +46,35 @@ on:
 permissions:
   contents: read
 
-# Do not interrupt an upload between publishing code and verifying retained state.
-# Manual and default-branch deployments share one queue.
+# Keep manual and automatic uploads serialized through post-deploy verification.
 concurrency:
-  group: ${{ github.event.pull_request.number && format('cloudflare-relay-pr-{0}', github.event.pull_request.number) || 'cloudflare-relay' }}
+  group: cloudflare-relay
   cancel-in-progress: false
 
 jobs:
-  console:
-    uses: ./.github/workflows/console-bundle.yml
-    with:
-      app: relay
   verify:
-    name: Verify private relay Worker
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@v7
-        with:
-          node-version: lts/*
-          cache: npm
-          cache-dependency-path: relay-rust/crates/relay-cloudflare/package-lock.json
-      - name: Check deployment lifecycle
-        run: node --test scripts/deploy/cloudflare/*.test.mjs
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
-      - name: Install Rust Wasm toolchain
-        run: rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: relay-rust -> .target
-          cache-bin: false
-          cmd-format: rustup run stable {0}
-      - name: Install Worker builder
-        run: cargo +stable install worker-build --version 0.8.7 --locked
-      - name: Install pinned Wrangler
-        working-directory: relay-rust/crates/relay-cloudflare
-        run: npm ci
-      - name: Check local access and managed TURN lifecycle
-        working-directory: relay-rust/crates/relay-cloudflare
-        run: npm run test:access
-  deploy:
-    needs: [console, verify]
     if: >-
-      vars.CLOUDFLARE_RELAY_ENABLED == 'true' &&
-      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      (github.event_name == 'workflow_dispatch' || vars.CLOUDFLARE_RELAY_ENABLED == 'true') &&
+      vars.CLOUDFLARE_DEPLOYMENT_MODE != 'frontend'
+    uses: ./.github/workflows/cloudflare-relay-verify.yml
+    with:
+      caller_managed: true
+
+  deploy:
+    needs: verify
+    if: >-
+      !cancelled() &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      (github.event_name == 'workflow_dispatch' || vars.CLOUDFLARE_RELAY_ENABLED == 'true') &&
+      (
+        (vars.CLOUDFLARE_DEPLOYMENT_MODE == 'frontend' && needs.verify.result == 'skipped') ||
+        (vars.CLOUDFLARE_DEPLOYMENT_MODE != 'frontend' && needs.verify.result == 'success')
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
+      RUSTUP_TOOLCHAIN: stable
       CLOUDFLARE_TURN_ENABLED: ${{ vars.CLOUDFLARE_TURN_ENABLED }}
       CLOUDFLARE_DEPLOYMENT_MODE: ${{ vars.CLOUDFLARE_DEPLOYMENT_MODE || 'full' }}
     steps:
@@ -126,7 +83,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
-          node-version: lts/*
+          node-version: 24
           cache: npm
           cache-dependency-path: relay-rust/crates/relay-cloudflare/package-lock.json
       - name: Validate deployment inputs
@@ -157,10 +114,16 @@ jobs:
       - name: Install Rust Wasm toolchain
         if: env.CLOUDFLARE_DEPLOYMENT_MODE != 'frontend'
         run: rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown
-      - name: Install Worker builder
+      - uses: Swatinem/rust-cache@v2
         if: env.CLOUDFLARE_DEPLOYMENT_MODE != 'frontend'
-        run: |
-          cargo +stable install worker-build --version 0.8.7 --locked
+        with:
+          workspaces: relay-rust -> .target
+          cache-bin: false
+          shared-key: relay-cloudflare-wasm
+          save-if: false
+          cmd-format: rustup run stable {0}
+      - uses: ./.github/actions/setup-worker-build
+        if: env.CLOUDFLARE_DEPLOYMENT_MODE != 'frontend'
       - name: Install pinned Wrangler
         working-directory: relay-rust/crates/relay-cloudflare
         run: npm ci
@@ -175,5 +138,4 @@ jobs:
           CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
           WINDSHARE_OWNER_PASSWORD: ${{ secrets.WINDSHARE_OWNER_PASSWORD }}
           CLOUDFLARE_CONSOLE_DOMAIN: ${{ secrets.CLOUDFLARE_CONSOLE_DOMAIN }}
-          RUSTUP_TOOLCHAIN: stable
         run: node scripts/deploy/cloudflare/run.mjs

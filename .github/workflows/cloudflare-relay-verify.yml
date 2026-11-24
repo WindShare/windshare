@@ -1,0 +1,101 @@
+name: Private relay verification
+
+on:
+  workflow_call:
+    inputs:
+      caller_managed:
+        description: The deployment workflow owns verification for this run.
+        type: boolean
+        required: false
+        default: false
+  workflow_dispatch:
+  pull_request:
+    paths: &relay-inputs
+      - .github/workflows/console-bundle.yml
+      - .github/workflows/cloudflare-relay-verify.yml
+      - .github/actions/setup-worker-build/**
+      - consoles/relay/**
+      - consoles/ui/**
+      - consoles/build/**
+      - consoles/vite.config.mjs
+      - consoles/tsconfig.json
+      - consoles/package.json
+      - consoles/pnpm-lock.yaml
+      - scripts/deploy/cloudflare/**
+      - relay-rust/Cargo.*
+      - relay-rust/rust-toolchain.toml
+      - relay-rust/.cargo/**
+      - relay-rust/console/**
+      - relay-rust/crates/relay-core/**
+      - relay-rust/crates/relay-access/**
+      - relay-rust/crates/relay-cloudflare/**
+      - relay-rust/tests/_goclient/**
+      # _goclient exercises these Go wire contracts against the local Worker.
+      - core/networkendpoint/**
+      - core/session/protocolsession/turn_control.go
+      - core/session/turngrant/**
+      - engine/relayconfig/turn.go
+      - engine/relayprofile/**
+      - engine/relaysetup/**
+      - engine/turnissuer/**
+      - relay/protocol/v2/**
+  push:
+    branches: [main]
+    paths: *relay-inputs
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-relay-verify-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  console:
+    # Enabled forks delegate push verification to the deployment workflow.
+    if: &verify-relay >-
+      inputs.caller_managed == true ||
+      github.event_name != 'push' ||
+      vars.CLOUDFLARE_RELAY_ENABLED != 'true'
+    uses: ./.github/workflows/console-bundle.yml
+    with:
+      app: relay
+  verify:
+    name: Verify private relay Worker
+    if: *verify-relay
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RUSTUP_TOOLCHAIN: stable
+      GOTOOLCHAIN: local
+      GOWORK: "off"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: relay-rust/crates/relay-cloudflare/package-lock.json
+      - name: Check deployment lifecycle
+        run: node --test scripts/deploy/cloudflare/*.test.mjs
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Install Rust Wasm toolchain
+        run: rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: relay-rust -> .target
+          cache-bin: false
+          shared-key: relay-cloudflare-wasm
+          cmd-format: rustup run stable {0}
+      - uses: ./.github/actions/setup-worker-build
+      - name: Install pinned Wrangler
+        working-directory: relay-rust/crates/relay-cloudflare
+        run: npm ci
+      - name: Check local access and managed TURN lifecycle
+        working-directory: relay-rust/crates/relay-cloudflare
+        run: npm run test:access
