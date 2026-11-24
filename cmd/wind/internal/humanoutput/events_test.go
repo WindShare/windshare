@@ -96,7 +96,7 @@ func TestPeerAdmissionReportsRejectionAndDeliveryWithoutClaimingConnection(t *te
 }
 
 func TestPeerAttemptNamesOnlyAnAdmittedRoute(t *testing.T) {
-	for _, test := range []struct{ route, want string }{{"", "Connection ["}, {"direct", "Direct connection ["}} {
+	for _, test := range []struct{ route, want string }{{"", "Connection ["}, {"direct", "Direct connection ["}, {"turn", "TURN relay connection ["}} {
 		record := diagnostics.New("peer_attempt", diagnostics.Fields{"stage": diagnostics.Text("admitted"), "route": diagnostics.Text(test.route)})
 		line := lineText(formatPeerAttempt(record, SelectSymbols(false)))
 		if !strings.Contains(line, test.want) {
