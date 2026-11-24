@@ -1,6 +1,4 @@
 import { byteRange } from '../../src/content/geometry'
-import type { BrowserOutputWindow } from '../../src/output/backends/contract'
-import { discardFSATask, openNewFSASession, reopenFSASession } from '../../src/output/backends/fsa'
 import {
   browserOPFSEnvironment,
   deleteOPFSTask,
@@ -14,6 +12,10 @@ import { ReceiveStore } from '../../src/output/store/database'
 import { acquireTaskLock, isTaskLockedElsewhere, type TaskLock } from '../../src/output/store/tab-lock'
 import { fileRecordId } from '../../src/output/store/types'
 import { initialReceiveState } from '../../src/transfer/state'
+
+const OPFS_PAYLOAD_A = new TextEncoder().encode('first-file-payload')
+const OPFS_PAYLOAD_B = new TextEncoder().encode('second-file-payload!')
+const OPFS_TASKS_DIR = 'windshare-tasks'
 
 let heldLock: TaskLock | undefined
 
@@ -93,15 +95,9 @@ export async function checkCrossTabLock(taskId: string): Promise<{ lockedElsewhe
   return { lockedElsewhere, acquireError }
 }
 
-export async function verifyOPFSProgressiveZipLifecycle(databaseName: string) {
+export async function preparePausedOPFSZip(databaseName: string, taskId: string): Promise<void> {
   const store = await ReceiveStore.open(databaseName)
   const env = browserOPFSEnvironment()
-  const taskId = `opfs-${crypto.randomUUID()}`
-  const downloads: Array<{ name: string; blob: Blob }> = []
-  const captureWindow = createCaptureDownloadWindow(downloads)
-  const payloadA = new TextEncoder().encode('first-file-payload')
-  const payloadB = new TextEncoder().encode('second-file-payload!')
-
   try {
     const session = await openNewOPFSSession({
       task: {
@@ -113,457 +109,146 @@ export async function verifyOPFSProgressiveZipLifecycle(databaseName: string) {
       },
       store,
       env,
-      windowPort: captureWindow,
+      windowPort: window,
     })
+    try {
+      await session.transferOutput.ensureDirectory?.({ directoryId: 'd1', path: ['folder'] }, new AbortController().signal)
+      const f1 = await session.transferOutput.openFile({
+        fileId: 'f1', path: ['folder', 'a.txt'], sourcePath: ['folder', 'a.txt'], revision: 'r1',
+        exactSize: BigInt(OPFS_PAYLOAD_A.byteLength),
+      }, new AbortController().signal)
+      await f1.writeAt(0n, OPFS_PAYLOAD_A)
+      await f1.commit([byteRange(0n, BigInt(OPFS_PAYLOAD_A.byteLength))])
 
-    await session.transferOutput.ensureDirectory?.({ directoryId: 'd1', path: ['folder'] }, new AbortController().signal)
-    const f1 = await session.transferOutput.openFile({
-      fileId: 'f1', path: ['folder', 'a.txt'], sourcePath: ['folder', 'a.txt'], revision: 'r1', exactSize: BigInt(payloadA.byteLength),
-    }, new AbortController().signal)
-    await f1.writeAt(0n, payloadA)
-    await f1.commit([byteRange(0n, BigInt(payloadA.byteLength))])
+      const f2 = await session.transferOutput.openFile({
+        fileId: 'f2', path: ['folder', 'b.txt'], sourcePath: ['folder', 'b.txt'], revision: 'r2',
+        exactSize: BigInt(OPFS_PAYLOAD_B.byteLength),
+      }, new AbortController().signal)
+      await f2.writeAt(0n, OPFS_PAYLOAD_B.subarray(0, 6))
+      await f2.pause([byteRange(0n, 6n)])
 
-    const f2 = await session.transferOutput.openFile({
-      fileId: 'f2', path: ['folder', 'b.txt'], sourcePath: ['folder', 'b.txt'], revision: 'r2', exactSize: BigInt(payloadB.byteLength),
-    }, new AbortController().signal)
-    await f2.writeAt(0n, payloadB.subarray(0, 6))
-    await f2.pause([byteRange(0n, 6n)])
+      await session.settle({
+        status: 'paused',
+        pauseReason: 'user',
+        completedFiles: 1n,
+        completedBytes: BigInt(OPFS_PAYLOAD_A.byteLength),
+        discoveredFiles: 2n,
+        discoveredBytes: BigInt(OPFS_PAYLOAD_A.byteLength + OPFS_PAYLOAD_B.byteLength),
+        discoveryComplete: true,
+        failedFiles: 0n,
+        failedDirectories: 0n,
+      })
+    } finally {
+      await session.close()
+    }
+  } finally {
+    store.close()
+  }
+}
 
-    const paused = await session.settle({
-      status: 'paused',
-      pauseReason: 'user',
-      completedFiles: 1n,
-      completedBytes: BigInt(payloadA.byteLength),
-      discoveredFiles: 2n,
-      discoveredBytes: BigInt(payloadA.byteLength + payloadB.byteLength),
-      discoveryComplete: true,
-      failedFiles: 0n,
-      failedDirectories: 0n,
-    })
-    await session.close()
+export async function exportPausedOPFSZip(databaseName: string, taskId: string): Promise<void> {
+  const store = await ReceiveStore.open(databaseName)
+  const env = browserOPFSEnvironment()
+  try {
+    const task = await store.getTask(taskId)
+    if (task === undefined) throw new Error('missing paused OPFS task')
+    await exportPartialOPFSZip(task, store, env, window)
+  } finally {
+    store.close()
+  }
+}
 
-    const partialBlob = await exportPartialOPFSZip(paused, store, env, captureWindow)
-    const partialBytes = [...new Uint8Array(await partialBlob.arrayBuffer())]
-
+export async function resumeAndCompleteOPFSZip(databaseName: string, taskId: string) {
+  const store = await ReceiveStore.open(databaseName)
+  const env = browserOPFSEnvironment()
+  try {
+    const paused = await store.getTask(taskId)
+    if (paused === undefined) throw new Error('missing paused OPFS task')
     const reopened = await reopenOPFSSession({
       task: paused,
       store,
       env,
-      windowPort: captureWindow,
+      windowPort: window,
     })
-    const f1Completed = await reopened.transferOutput.checkCompleted?.('f1', new AbortController().signal)
-    const f2Again = await reopened.transferOutput.openFile({
-      fileId: 'f2', path: ['folder', 'b.txt'], sourcePath: ['folder', 'b.txt'], revision: 'r2', exactSize: BigInt(payloadB.byteLength),
-    }, new AbortController().signal)
-    await f2Again.writeAt(6n, payloadB.subarray(6))
-    await f2Again.commit([byteRange(0n, BigInt(payloadB.byteLength))])
-
-    const finished = await reopened.settle({
-      status: 'completed',
-      completedFiles: 2n,
-      completedBytes: BigInt(payloadA.byteLength + payloadB.byteLength),
-      discoveredFiles: 2n,
-      discoveredBytes: BigInt(payloadA.byteLength + payloadB.byteLength),
-      discoveryComplete: true,
-      failedFiles: 0n,
-      failedDirectories: 0n,
-    })
-    await reopened.close()
-
-    // Export retained artifact a second time (Save again) and read the OPFS File before deleting it.
-    const savedAgain = await saveRetainedOPFSTask(finished, store, env, captureWindow)
-    const lastDownload = downloads.at(-1)
-    const finalArchiveBytes = lastDownload === undefined
-      ? []
-      : [...new Uint8Array(await lastDownload.blob.arrayBuffer())]
-    await deleteOPFSTask(savedAgain, store, env)
-    const remaining = await store.getTask(taskId)
-
-    return {
-      reopenedF1AlreadyCompleted: f1Completed?.size === BigInt(payloadA.byteLength),
-      reopenedF2StartEnd: f2Again.completedRanges.map(r => `${r.start}:${r.end}`),
-      finishedKind: finished.lifecycle.kind,
-      savedAgainKind: savedAgain.lifecycle.kind,
-      downloadCount: downloads.length,
-      finalArchiveName: lastDownload?.name ?? null,
-      finalArchiveBytes,
-      partialBytes,
-      deletedCleanly: remaining === undefined,
-    }
-  } finally {
-    store.close()
-    await deleteDatabase(databaseName)
-  }
-}
-
-export async function verifyFSABackendOverNativeHandles(databaseName: string) {
-  const store = await ReceiveStore.open(databaseName)
-  const root = await navigator.storage.getDirectory()
-  const sandboxName = `fsa-sandbox-${crypto.randomUUID()}`
-  const parent = await root.getDirectoryHandle(sandboxName, { create: true })
-  const taskId = `fsa-${crypto.randomUUID()}`
-
-  try {
-    await parent.getDirectoryHandle('Album', { create: true })
-    const session = await openNewFSASession({
-      task: {
-        taskId,
-        selection: { shareInstance: 'share-fsa', syntheticRoot: 'root', defaultSelected: true, rules: [] },
-        selectionKey: 'sel-fsa',
-        artifact: { kind: 'directory-tree', name: 'Album' },
-        lifecycle: initialReceiveState(taskId),
-      },
-      parentHandle: parent,
-      store,
-    })
-
-    const f1 = await session.transferOutput.openFile({
-      fileId: 'f1', path: ['pic.bin'], sourcePath: ['Album', 'pic.bin'], revision: 'r1', exactSize: 4n,
-    }, new AbortController().signal)
-    await f1.writeAt(0n, new Uint8Array([11, 22, 33, 44]))
-    await f1.commit([byteRange(0n, 4n)])
-
-    const f2 = await session.transferOutput.openFile({
-      fileId: 'f2', path: ['clip.bin'], sourcePath: ['Album', 'clip.bin'], revision: 'r2', exactSize: 8n,
-    }, new AbortController().signal)
-    await f2.writeAt(0n, new Uint8Array([1, 2, 3, 4]))
-    await f2.pause([byteRange(0n, 4n)])
-
-    const paused = await session.settle({
-      status: 'paused',
-      pauseReason: 'user',
-      completedFiles: 1n,
-      completedBytes: 4n,
-      discoveredFiles: 2n,
-      discoveredBytes: 12n,
-      discoveryComplete: true,
-      failedFiles: 0n,
-      failedDirectories: 0n,
-    })
-    await session.close()
-
-    const reopened = await reopenFSASession({ task: paused, store, allowPermissionPrompt: false })
-    const resumedF1 = await reopened.transferOutput.checkCompleted?.('f1', new AbortController().signal)
-    const resumedF2 = await reopened.transferOutput.openFile({
-      fileId: 'f2', path: ['clip.bin'], sourcePath: ['Album', 'clip.bin'], revision: 'r2', exactSize: 8n,
-    }, new AbortController().signal)
-    await reopened.close()
-
-    await discardFSATask(paused, store)
-    const reservedDir = await parent.getDirectoryHandle('Album (1)')
-    const survivingNames: string[] = []
-    for await (const name of (reservedDir as FileSystemDirectoryHandle & { keys(): AsyncIterableIterator<string> }).keys()) {
-      survivingNames.push(name)
-    }
-
-    return {
-      resumedF1AlreadyCompleted: resumedF1?.size === 4n,
-      resumedF2Ranges: resumedF2.completedRanges.map(r => `${r.start}:${r.end}`),
-      survivingNames,
-      taskDeleted: (await store.getTask(taskId)) === undefined,
-    }
-  } finally {
-    store.close()
-    await root.removeEntry(sandboxName, { recursive: true }).catch(() => undefined)
-    await deleteDatabase(databaseName)
-  }
-}
-
-export async function startUncommittedFSAFirstWrite(databaseName: string, sandboxName: string, taskId: string) {
-  const store = await ReceiveStore.open(databaseName)
-  const root = await navigator.storage.getDirectory()
-  const parent = await root.getDirectoryHandle(sandboxName, { create: true })
-  const session = await openNewFSASession({
-    task: {
-      taskId,
-      selection: { shareInstance: 'share-fsa', syntheticRoot: 'root', defaultSelected: true, rules: [] },
-      selectionKey: 'sel-placeholder',
-      artifact: { kind: 'directory-tree', name: 'Drafts' },
-      lifecycle: initialReceiveState(taskId),
-    },
-    parentHandle: parent,
-    store,
-  })
-  const file = await session.transferOutput.openFile({
-    fileId: 'f1', path: ['report.bin'], sourcePath: ['Drafts', 'report.bin'], revision: 'r1', exactSize: 8n,
-  }, new AbortController().signal)
-  await file.writeAt(0n, new Uint8Array([1, 2, 3, 4]))
-  // Intentionally leave the session, writable stream, and Web Lock open for the page close to sever.
-  return { taskId }
-}
-
-export async function resumeFSAPlaceholderAfterPageClose(databaseName: string, sandboxName: string, taskId: string) {
-  const store = await ReceiveStore.open(databaseName)
-  const root = await navigator.storage.getDirectory()
-  try {
-    const parent = await root.getDirectoryHandle(sandboxName)
-    const dir = await parent.getDirectoryHandle('Drafts')
-    const beforeSize = (await (await dir.getFileHandle('report.bin')).getFile()).size
-    const beforeRecord = await store.getFile(taskId, 'f1')
-    const task = await store.getTask(taskId)
-    if (task === undefined) throw new Error('missing persisted task')
-    const reopened = await reopenFSASession({ task, store, allowPermissionPrompt: false })
     try {
-      const resumed = await reopened.transferOutput.openFile({
-        fileId: 'f1', path: ['report.bin'], sourcePath: ['Drafts', 'report.bin'], revision: 'r1', exactSize: 8n,
+      const f1Completed = await reopened.transferOutput.checkCompleted?.('f1', new AbortController().signal)
+      const f2Again = await reopened.transferOutput.openFile({
+        fileId: 'f2', path: ['folder', 'b.txt'], sourcePath: ['folder', 'b.txt'], revision: 'r2',
+        exactSize: BigInt(OPFS_PAYLOAD_B.byteLength),
       }, new AbortController().signal)
-      const payload = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8])
-      await resumed.writeAt(0n, payload)
-      await resumed.commit([byteRange(0n, 8n)])
+      await f2Again.writeAt(6n, OPFS_PAYLOAD_B.subarray(6))
+      await f2Again.commit([byteRange(0n, BigInt(OPFS_PAYLOAD_B.byteLength))])
+
+      const finished = await reopened.settle({
+        status: 'completed',
+        completedFiles: 2n,
+        completedBytes: BigInt(OPFS_PAYLOAD_A.byteLength + OPFS_PAYLOAD_B.byteLength),
+        discoveredFiles: 2n,
+        discoveredBytes: BigInt(OPFS_PAYLOAD_A.byteLength + OPFS_PAYLOAD_B.byteLength),
+        discoveryComplete: true,
+        failedFiles: 0n,
+        failedDirectories: 0n,
+      })
+      return {
+        reopenedF1AlreadyCompleted: f1Completed?.size === BigInt(OPFS_PAYLOAD_A.byteLength),
+        reopenedF2StartEnd: f2Again.completedRanges.map(r => `${r.start}:${r.end}`),
+        finishedKind: finished.lifecycle.kind,
+      }
     } finally {
       await reopened.close()
     }
-    const finalBytes = [...new Uint8Array(await (await (await dir.getFileHandle('report.bin')).getFile()).arrayBuffer())]
-    return {
-      beforeSize,
-      hadRecordBeforeResume: beforeRecord !== undefined,
-      finalBytes,
-      completedAfterResume: (await store.getFile(taskId, 'f1'))?.status === 'completed',
-    }
   } finally {
     store.close()
-    await root.removeEntry(sandboxName, { recursive: true }).catch(() => undefined)
-    await deleteDatabase(databaseName)
   }
 }
 
-export async function verifyFSADiscardSafetyOverNativeHandles(databaseName: string) {
+export async function saveRetainedOPFSZip(databaseName: string, taskId: string): Promise<string> {
   const store = await ReceiveStore.open(databaseName)
-  const root = await navigator.storage.getDirectory()
-  const sandboxName = `fsa-discard-safety-${crypto.randomUUID()}`
-  const parent = await root.getDirectoryHandle(sandboxName, { create: true })
-
+  const env = browserOPFSEnvironment()
   try {
-    // Case 1: 0 completed files + foreign user file placed in result directory -> preserve user file & directory.
-    const foreignTaskId = `fsa-foreign-${crypto.randomUUID()}`
-    const foreignSession = await openNewFSASession({
-      task: {
-        taskId: foreignTaskId,
-        selection: { shareInstance: 'share-fsa', syntheticRoot: 'root', defaultSelected: true, rules: [] },
-        selectionKey: 'sel-foreign',
-        artifact: { kind: 'directory-tree', name: 'Trip' },
-        lifecycle: initialReceiveState(foreignTaskId),
-      },
-      parentHandle: parent,
-      store,
-    })
-    const draft = await foreignSession.transferOutput.openFile({
-      fileId: 'f1', path: ['sub', 'draft.bin'], sourcePath: ['Trip', 'sub', 'draft.bin'], revision: 'r1', exactSize: 16n,
-    }, new AbortController().signal)
-    await draft.writeAt(0n, new Uint8Array([1, 2, 3, 4]))
-    await draft.pause([byteRange(0n, 4n)])
-    const foreignPaused = await foreignSession.settle({
-      status: 'paused', pauseReason: 'user',
-      completedFiles: 0n, completedBytes: 0n, discoveredFiles: 1n, discoveredBytes: 16n,
-      discoveryComplete: true, failedFiles: 0n, failedDirectories: 0n,
-    })
-    await foreignSession.close()
-
-    const tripDir = await parent.getDirectoryHandle('Trip')
-    const userHandle = await tripDir.getFileHandle('user-note.txt', { create: true })
-    const userWriter = await userHandle.createWritable()
-    await userWriter.write('do-not-delete')
-    await userWriter.close()
-
-    await discardFSATask(foreignPaused, store)
-    const tripNames = await listDirectoryKeys(tripDir)
-    const preservedText = await (await (await tripDir.getFileHandle('user-note.txt')).getFile()).text()
-
-    // Case 2: 0 completed files + no foreign files -> unfinished file, empty subdir, and empty root removed.
-    const cleanTaskId = `fsa-clean-${crypto.randomUUID()}`
-    const cleanSession = await openNewFSASession({
-      task: {
-        taskId: cleanTaskId,
-        selection: { shareInstance: 'share-fsa', syntheticRoot: 'root', defaultSelected: true, rules: [] },
-        selectionKey: 'sel-clean',
-        artifact: { kind: 'directory-tree', name: 'EmptyAfterDiscard' },
-        lifecycle: initialReceiveState(cleanTaskId),
-      },
-      parentHandle: parent,
-      store,
-    })
-    const part = await cleanSession.transferOutput.openFile({
-      fileId: 'f1', path: ['nested', 'part.bin'], sourcePath: ['EmptyAfterDiscard', 'nested', 'part.bin'], revision: 'r1', exactSize: 16n,
-    }, new AbortController().signal)
-    await part.writeAt(0n, new Uint8Array([9, 8, 7, 6]))
-    await part.pause([byteRange(0n, 4n)])
-    const cleanPaused = await cleanSession.settle({
-      status: 'paused', pauseReason: 'user',
-      completedFiles: 0n, completedBytes: 0n, discoveredFiles: 1n, discoveredBytes: 16n,
-      discoveryComplete: true, failedFiles: 0n, failedDirectories: 0n,
-    })
-    await cleanSession.close()
-
-    await discardFSATask(cleanPaused, store)
-    const cleanRootRemoved = await parent.getDirectoryHandle('EmptyAfterDiscard').then(() => false, () => true)
-
-    // Case 3: Unfinished file externally overwritten at the same path -> preserved on discard.
-    const replacedTaskId = `fsa-replaced-${crypto.randomUUID()}`
-    const replacedSession = await openNewFSASession({
-      task: {
-        taskId: replacedTaskId,
-        selection: { shareInstance: 'share-fsa', syntheticRoot: 'root', defaultSelected: true, rules: [] },
-        selectionKey: 'sel-replaced',
-        artifact: { kind: 'directory-tree', name: 'Replaced' },
-        lifecycle: initialReceiveState(replacedTaskId),
-      },
-      parentHandle: parent,
-      store,
-    })
-    const clip = await replacedSession.transferOutput.openFile({
-      fileId: 'f1', path: ['clip.bin'], sourcePath: ['Replaced', 'clip.bin'], revision: 'r1', exactSize: 16n,
-    }, new AbortController().signal)
-    await clip.writeAt(0n, new Uint8Array([1, 2, 3, 4]))
-    await clip.pause([byteRange(0n, 4n)])
-    const replacedPaused = await replacedSession.settle({
-      status: 'paused', pauseReason: 'user',
-      completedFiles: 0n, completedBytes: 0n, discoveredFiles: 1n, discoveredBytes: 16n,
-      discoveryComplete: true, failedFiles: 0n, failedDirectories: 0n,
-    })
-    await replacedSession.close()
-
-    const replacedDir = await parent.getDirectoryHandle('Replaced')
-    const replacedHandle = await replacedDir.getFileHandle('clip.bin')
-    const replaceWriter = await replacedHandle.createWritable()
-    await replaceWriter.write('user-owned-replacement')
-    await replaceWriter.close()
-
-    await discardFSATask(replacedPaused, store)
-    const replacedText = await (await (await replacedDir.getFileHandle('clip.bin')).getFile()).text()
-
-    // Case 4: Reserved directory removed and replaced by a same-name regular file -> user file preserved.
-    const dirToFileTaskId = `fsa-dir-to-file-${crypto.randomUUID()}`
-    const dirToFileSession = await openNewFSASession({
-      task: {
-        taskId: dirToFileTaskId,
-        selection: { shareInstance: 'share-fsa', syntheticRoot: 'root', defaultSelected: true, rules: [] },
-        selectionKey: 'sel-dir-to-file',
-        artifact: { kind: 'directory-tree', name: 'Backup' },
-        lifecycle: initialReceiveState(dirToFileTaskId),
-      },
-      parentHandle: parent,
-      store,
-    })
-    const dirToFilePaused = await dirToFileSession.settle({
-      status: 'paused', pauseReason: 'user',
-      completedFiles: 0n, completedBytes: 0n, discoveredFiles: 0n, discoveredBytes: 0n,
-      discoveryComplete: false, failedFiles: 0n, failedDirectories: 0n,
-    })
-    await dirToFileSession.close()
-
-    await parent.removeEntry('Backup')
-    const userBackupFile = await parent.getFileHandle('Backup', { create: true })
-    const backupWriter = await userBackupFile.createWritable()
-    await backupWriter.write('user-backup-file')
-    await backupWriter.close()
-
-    await discardFSATask(dirToFilePaused, store)
-    const dirToFileText = await (await (await parent.getFileHandle('Backup')).getFile()).text()
-
-    return {
-      tripNames,
-      preservedText,
-      cleanRootRemoved,
-      replacedText,
-      dirToFileText,
-      allTasksDeleted: (await store.listTasks()).length === 0,
-    }
+    const task = await store.getTask(taskId)
+    if (task === undefined) throw new Error('missing completed OPFS task')
+    const savedAgain = await saveRetainedOPFSTask(task, store, env, window)
+    return savedAgain.lifecycle.kind
   } finally {
     store.close()
-    await root.removeEntry(sandboxName, { recursive: true }).catch(() => undefined)
-    await deleteDatabase(databaseName)
   }
 }
 
-export async function verifyFSAConcurrentSingleFileAllocationOverNativeHandles(databaseName: string) {
+export async function deleteOPFSZipTask(databaseName: string, taskId: string) {
   const store = await ReceiveStore.open(databaseName)
-  const root = await navigator.storage.getDirectory()
-  const sandboxName = `fsa-concurrent-${crypto.randomUUID()}`
-  const parent = await root.getDirectoryHandle(sandboxName, { create: true })
-  const taskA = `fsa-a-${crypto.randomUUID()}`
-  const taskB = `fsa-b-${crypto.randomUUID()}`
-  const payloadA = new TextEncoder().encode('report-from-task-a')
-  const payloadB = new TextEncoder().encode('report-from-task-b-longer')
-
+  const env = browserOPFSEnvironment()
   try {
-    const [sessionA, sessionB] = await Promise.all([
-      openNewFSASession({
-        task: {
-          taskId: taskA,
-          selection: { shareInstance: 'share-a', syntheticRoot: 'root', defaultSelected: true, rules: [] },
-          selectionKey: 'sel-a',
-          artifact: { kind: 'directory-tree', name: 'report.bin', singleFileId: 'f-a' },
-          lifecycle: initialReceiveState(taskA),
-        },
-        parentHandle: parent,
-        store,
-      }),
-      openNewFSASession({
-        task: {
-          taskId: taskB,
-          selection: { shareInstance: 'share-b', syntheticRoot: 'root', defaultSelected: true, rules: [] },
-          selectionKey: 'sel-b',
-          artifact: { kind: 'directory-tree', name: 'report.bin', singleFileId: 'f-b' },
-          lifecycle: initialReceiveState(taskB),
-        },
-        parentHandle: parent,
-        store,
-      }),
-    ])
-
-    const [writerA, writerB] = await Promise.all([
-      sessionA.transferOutput.openFile({
-        fileId: 'f-a', path: ['report.bin'], sourcePath: ['report.bin'], revision: 'r-a', exactSize: BigInt(payloadA.byteLength),
-      }, new AbortController().signal),
-      sessionB.transferOutput.openFile({
-        fileId: 'f-b', path: ['report.bin'], sourcePath: ['report.bin'], revision: 'r-b', exactSize: BigInt(payloadB.byteLength),
-      }, new AbortController().signal),
-    ])
-
-    await Promise.all([
-      writerA.writeAt(0n, payloadA).then(() => writerA.commit([byteRange(0n, BigInt(payloadA.byteLength))])),
-      writerB.writeAt(0n, payloadB).then(() => writerB.commit([byteRange(0n, BigInt(payloadB.byteLength))])),
-    ])
-
-    const [settledA, settledB] = await Promise.all([
-      sessionA.settle({
-        status: 'completed', completedFiles: 1n, completedBytes: BigInt(payloadA.byteLength),
-        discoveredFiles: 1n, discoveredBytes: BigInt(payloadA.byteLength), discoveryComplete: true, failedFiles: 0n, failedDirectories: 0n,
-      }),
-      sessionB.settle({
-        status: 'completed', completedFiles: 1n, completedBytes: BigInt(payloadB.byteLength),
-        discoveredFiles: 1n, discoveredBytes: BigInt(payloadB.byteLength), discoveryComplete: true, failedFiles: 0n, failedDirectories: 0n,
-      }),
-    ])
-    await Promise.all([sessionA.close(), sessionB.close()])
-
-    const names = await listDirectoryKeys(parent)
-    const contents = await Promise.all(names.map(async name =>
-      await (await (await parent.getFileHandle(name)).getFile()).text()))
-
+    const task = await store.getTask(taskId)
+    if (task === undefined || task.target.kind !== 'opfs') throw new Error('missing OPFS task to delete')
+    const objectName = task.target.objectName
+    await deleteOPFSTask(task, store, env)
+    const remaining = await store.getTask(taskId)
+    const root = await navigator.storage.getDirectory()
+    const tasksDir = await root.getDirectoryHandle(OPFS_TASKS_DIR)
+    const objectRemoved = await tasksDir.getFileHandle(objectName).then(
+      () => false,
+      (error: unknown) => error instanceof DOMException && error.name === 'NotFoundError',
+    )
     return {
-      lifecycleKinds: [settledA.lifecycle.kind, settledB.lifecycle.kind],
-      names,
-      contents: contents.sort(),
+      taskRemoved: remaining === undefined,
+      objectRemoved,
     }
   } finally {
     store.close()
-    await root.removeEntry(sandboxName, { recursive: true }).catch(() => undefined)
-    await deleteDatabase(databaseName)
   }
 }
 
-async function listDirectoryKeys(dir: FileSystemDirectoryHandle): Promise<string[]> {
-  const names: string[] = []
-  for await (const name of (dir as FileSystemDirectoryHandle & { keys(): AsyncIterableIterator<string> }).keys()) {
-    names.push(name)
-  }
-  return names.sort()
+export async function cleanupOPFSZipTest(databaseName: string, taskId: string): Promise<void> {
+  try {
+    const root = await navigator.storage.getDirectory()
+    const tasksDir = await root.getDirectoryHandle(OPFS_TASKS_DIR)
+    await tasksDir.removeEntry(`${taskId}.part`)
+  } catch { /* Object was already deleted or never created. */ }
+  await deleteDatabase(databaseName)
 }
 
-export async function verifyPortableStreamingZip() {
-  const downloads: Array<{ name: string; blob: Blob }> = []
-  const captureWindow = createCaptureDownloadWindow(downloads)
+export async function verifyPortableStreamingZip(): Promise<string> {
   const taskId = `portable-${crypto.randomUUID()}`
   const session = openPortableSession({
     task: {
@@ -573,67 +258,31 @@ export async function verifyPortableStreamingZip() {
       artifact: { kind: 'zip-archive', name: 'quick.zip' },
       lifecycle: initialReceiveState(taskId),
     },
-    windowPort: captureWindow,
+    windowPort: window,
   })
-  const file = await session.transferOutput.openFile({
-    fileId: 'f1', path: ['note.txt'], sourcePath: ['note.txt'], revision: 'r1', exactSize: 5n,
-  }, new AbortController().signal)
-  await file.writeAt(0n, new TextEncoder().encode('hello'))
-  await file.commit([byteRange(0n, 5n)])
-  const settled = await session.settle({
-    status: 'completed',
-    completedFiles: 1n,
-    completedBytes: 5n,
-    discoveredFiles: 1n,
-    discoveredBytes: 5n,
-    discoveryComplete: true,
-    failedFiles: 0n,
-    failedDirectories: 0n,
-  })
-  await session.close()
-  const firstDownload = downloads[0]
-  return {
-    lifecycleKind: settled.lifecycle.kind,
-    downloadName: firstDownload?.name ?? null,
-    archiveBytes: firstDownload === undefined ? [] : [...new Uint8Array(await firstDownload.blob.arrayBuffer())],
+  try {
+    const file = await session.transferOutput.openFile({
+      fileId: 'f1', path: ['note.txt'], sourcePath: ['note.txt'], revision: 'r1', exactSize: 5n,
+    }, new AbortController().signal)
+    await file.writeAt(0n, new TextEncoder().encode('hello'))
+    await file.commit([byteRange(0n, 5n)])
+    const settled = await session.settle({
+      status: 'completed',
+      completedFiles: 1n,
+      completedBytes: 5n,
+      discoveredFiles: 1n,
+      discoveredBytes: 5n,
+      discoveryComplete: true,
+      failedFiles: 0n,
+      failedDirectories: 0n,
+    })
+    return settled.lifecycle.kind
+  } finally {
+    await session.close()
   }
 }
 
-function createCaptureDownloadWindow(
-  downloads: Array<{ name: string; blob: Blob }>,
-): BrowserOutputWindow {
-  const blobs = new Map<string, Blob>()
-  let counter = 0
-  return {
-    URL: {
-      createObjectURL: (blob: Blob) => {
-        const url = `blob:capture-${++counter}`
-        blobs.set(url, blob)
-        return url
-      },
-      revokeObjectURL: () => undefined,
-    },
-    document: {
-      createElement: () => {
-        const anchor = {
-          href: '',
-          download: '',
-          rel: '',
-          style: { display: '' },
-          click: () => {
-            const blob = blobs.get(anchor.href)
-            if (blob !== undefined) downloads.push({ name: anchor.download, blob })
-          },
-          remove: () => undefined,
-        }
-        return anchor as unknown as HTMLAnchorElement
-      },
-      body: { append: () => undefined } as unknown as HTMLElement,
-    } as unknown as Document,
-  }
-}
-
-function deleteDatabase(name: string): Promise<void> {
+export function deleteDatabase(name: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.deleteDatabase(name)
     request.onsuccess = () => resolve()
