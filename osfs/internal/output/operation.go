@@ -475,6 +475,20 @@ func (op *Operation) Discard(ctx context.Context) error {
 	// Acquire the directory lock before closing op so task.lock is never
 	// released ahead of directory removal.
 	retireErr := retireControlDir(root, opDirName, op.closeResources)
+	if retireErr != nil {
+		nativeClass, _ := ClassifyNativeError(retireErr)
+		emitTrace(a.diagnostics, traceEvent{
+			component:    "session",
+			operation:    "discard_operation",
+			decision:     "cleanup_pending",
+			failed:       true,
+			failureStage: FailureClose,
+			nativeClass:  nativeClass,
+			bindingID:    a.bindingID,
+			operationID:  op.intent.OperationID(),
+			intentDigest: op.intent.Digest(),
+		})
+	}
 	rootErr := root.Close()
 	if err := errors.Join(retireErr, rootErr); err != nil {
 		return DiagnoseFailure(FailureClose, err)
@@ -555,6 +569,13 @@ func retireControlDir(root *Dir, opDirName string, beforeRemove func() error) er
 // remain, and always closes ctrlDir before releasing dirLock.
 func removeOperationLocked(root, ctrlDir *Dir, dirLock *DirLock, opDirName string) (removeErr, closeErr error) {
 	removeErr = removeOperationDirectory(ctrlDir, opDirName)
+	if removeErr != nil {
+		// Record cleanup-pending only on the failure path so normal completion
+		// and discard pay zero extra journal writes or fsyncs, while subsequent
+		// list/reopen calls see that retirement already started.
+		markOperationCleanupPending(ctrlDir, opDirName)
+		return removeErr, errors.Join(ctrlDir.Close(), dirLock.Close())
+	}
 	names, listErr := readDirNames(ctrlDir)
 	empty := listErr == nil
 	for _, name := range names {
@@ -563,7 +584,7 @@ func removeOperationLocked(root, ctrlDir *Dir, dirLock *DirLock, opDirName strin
 			break
 		}
 	}
-	if empty && removeErr == nil {
+	if empty {
 		// Close ctrlDir before unlinking .windshare-tmp (required on Windows)
 		// while keeping dirLock held across removal so concurrent receivers
 		// never observe a half-removed control directory.
@@ -572,7 +593,23 @@ func removeOperationLocked(root, ctrlDir *Dir, dirLock *DirLock, opDirName strin
 		_ = removeChild(root, ControlDirName, true)
 		return nil, errors.Join(ctrlCloseErr, dirLock.Close())
 	}
-	return removeErr, errors.Join(ctrlDir.Close(), dirLock.Close())
+	return nil, errors.Join(ctrlDir.Close(), dirLock.Close())
+}
+
+func markOperationCleanupPending(ctrlDir *Dir, opDirName string) {
+	opDir, err := openChildDir(ctrlDir, opDirName)
+	if err != nil {
+		return
+	}
+	defer opDir.Close()
+	journal, err := openTaskJournal(opDir, nil)
+	if err != nil {
+		return
+	}
+	if journal.meta().Lifecycle != journalLifecycleCleanupPending {
+		_ = journal.recordLifecycle(journalLifecycleCleanupPending, AttentionCleanup)
+	}
+	_ = journal.close()
 }
 
 func ensureControlDir(root *Dir) (*Dir, error) {

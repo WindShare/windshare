@@ -483,6 +483,19 @@ func (s *Session) FinalizeTree(
 			cleanupErr = op.closeResources()
 		}
 		if cleanupErr != nil {
+			nativeClass, _ := ClassifyNativeError(cleanupErr)
+			emitTrace(s.authority.diagnostics, traceEvent{
+				component:    "session",
+				operation:    "finalize_tree",
+				decision:     "cleanup_pending",
+				failed:       true,
+				failureStage: FailureClose,
+				nativeClass:  nativeClass,
+				bindingID:    s.authority.bindingID,
+				operationID:  s.intent.OperationID(),
+				intentDigest: s.intent.Digest(),
+				sessionID:    s.sessionID,
+			})
 			return transfer.DirectTreeSettlement{}, DiagnoseFailure(FailureClose, cleanupErr)
 		}
 		return settlement, nil

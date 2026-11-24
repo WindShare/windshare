@@ -374,6 +374,19 @@ func (a *Authority) reopenLocked(
 		a.stage = stageStopped
 		return ActiveLookup{}, ErrShareStopped
 	}
+	if meta.Lifecycle == journalLifecycleCleanupPending {
+		_ = errors.Join(journal.close(), taskLock.Close(), opDir.Close())
+		a.stage = stageStopped
+		emitTrace(a.diagnostics, traceEvent{
+			component:    "session",
+			operation:    "select_operation",
+			decision:     "cleanup_pending",
+			bindingID:    a.bindingID,
+			operationID:  meta.Intent.OperationID(),
+			intentDigest: meta.Intent.Digest(),
+		})
+		return ActiveLookup{authority: a, kind: LookupNeedsAttention, attention: AttentionCleanup}, nil
+	}
 	if meta.Lifecycle == journalLifecycleAttn {
 		_ = errors.Join(journal.close(), taskLock.Close(), opDir.Close())
 		a.stage = stageStopped

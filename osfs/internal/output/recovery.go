@@ -195,6 +195,24 @@ func inspectOperationDir(opID receivecontract.OperationID, opDir *Dir) (Recovery
 		return RecoverySummary{}, false
 	}
 
+	if meta.Lifecycle == journalLifecycleCleanupPending {
+		// Once retirement has started, partial files may already have been
+		// removed; omit stale per-item projections and surface cleanup-pending.
+		attention := meta.Attention
+		if attention != AttentionNone && attention != AttentionCleanup {
+			attention = AttentionCleanup
+		}
+		return RecoverySummary{
+			valid:           true,
+			operationID:     opID,
+			intentDigest:    meta.Intent.Digest(),
+			stateGeneration: meta.StateGen,
+			state:           RecoveryOperationCleanupPending,
+			attention:       attention,
+			busy:            busy,
+		}, true
+	}
+
 	items := make([]RecoveryItem, 0, len(state.partials)+len(state.publishing)+len(state.delivered))
 	hasResumable := len(state.delivered) > 0 || len(state.publishing) > 0
 	for _, p := range state.partials {
@@ -351,7 +369,9 @@ func DiscardOperation(
 	if removeErr != nil {
 		summary.state = RecoveryOperationCleanupPending
 		summary.attention = AttentionCleanup
-		return summary, DiagnoseFailure(FailureClose, errors.Join(removeErr, closeErr))
+		// Keep scratch removal failure separate from FailureClose so clean
+		// lease release is not misclassified as an unclosed destination handle.
+		return summary, freezeFailure(DiagnoseFailure(FailureDurability, removeErr), closeErr)
 	}
 	if closeErr != nil {
 		return summary, DiagnoseFailure(FailureClose, closeErr)

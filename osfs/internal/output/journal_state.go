@@ -20,13 +20,14 @@ import (
 )
 
 const (
-	journalHeaderReadBufferBytes = 4 * 1024
-	journalStateReadBufferBytes  = 32 * 1024
-	journalMaxLineBytes          = 4 << 20
-	stageFingerprintBytes        = sha256.Size
-	journalLifecycleActive       = "active"
-	journalLifecycleStopped      = "share_stopped"
-	journalLifecycleAttn         = "attention"
+	journalHeaderReadBufferBytes   = 4 * 1024
+	journalStateReadBufferBytes    = 32 * 1024
+	journalMaxLineBytes            = 4 << 20
+	stageFingerprintBytes          = sha256.Size
+	journalLifecycleActive         = "active"
+	journalLifecycleStopped        = "share_stopped"
+	journalLifecycleCleanupPending = "cleanup_pending"
+	journalLifecycleAttn           = "attention"
 )
 
 var errJournalCorrupt = errors.New("osfs: task journal is corrupt")

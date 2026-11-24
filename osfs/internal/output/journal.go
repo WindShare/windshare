@@ -439,11 +439,19 @@ func partFileName(fileID catalog.FileID, locatorDigest transfer.MaterializationL
 	return hex.EncodeToString(fileID.Bytes()) + "-" + hex.EncodeToString(locatorDigest[:8]) + ".part"
 }
 
+// removeOperationDirectory deletes an operation's scratch directory while
+// keeping state.log until every other entry is removed. Deleting the journal
+// last ensures a transient lock on a .part file leaves the operation
+// identifiable for CLI retry instead of turning it into registry_unknown.
 func removeOperationDirectory(ctrlDir *Dir, opDirName string) error {
-	return removeChildTree(ctrlDir, opDirName)
+	return removeChildTreeDeferred(ctrlDir, opDirName, journalFileName)
 }
 
 func removeChildTree(parent *Dir, name string) error {
+	return removeChildTreeDeferred(parent, name, "")
+}
+
+func removeChildTreeDeferred(parent *Dir, name, deferChild string) error {
 	dir, err := openChildDir(parent, name)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
@@ -456,29 +464,16 @@ func removeChildTree(parent *Dir, name string) error {
 		return errors.Join(err, dir.Close())
 	}
 	var removeErr error
+	deferredPresent := false
 	for _, child := range names {
-		kind, _, statErr := lstatChild(dir, child)
-		if statErr != nil {
-			removeErr = errors.Join(removeErr, statErr)
+		if deferChild != "" && child == deferChild {
+			deferredPresent = true
 			continue
 		}
-		switch kind {
-		case EntryAbsent:
-		case EntryDirectory:
-			removeErr = errors.Join(removeErr, removeChildTree(dir, child))
-		case EntryOther:
-			// On Windows a directory junction reports EntryOther but requires
-			// FILE_DIRECTORY_FILE deletion; try non-directory first, then directory.
-			if err := removeChild(dir, child, false); err != nil {
-				if errors.Is(err, ErrUnsafeNamespace) {
-					removeErr = errors.Join(removeErr, removeChild(dir, child, true))
-				} else {
-					removeErr = errors.Join(removeErr, err)
-				}
-			}
-		default:
-			removeErr = errors.Join(removeErr, removeChild(dir, child, false))
-		}
+		removeErr = errors.Join(removeErr, removeChildEntry(dir, child))
+	}
+	if removeErr == nil && deferredPresent {
+		removeErr = errors.Join(removeErr, removeChildEntry(dir, deferChild))
 	}
 	if closeErr := dir.Close(); closeErr != nil {
 		removeErr = errors.Join(removeErr, closeErr)
@@ -487,4 +482,29 @@ func removeChildTree(parent *Dir, name string) error {
 		return removeErr
 	}
 	return removeChild(parent, name, true)
+}
+
+func removeChildEntry(dir *Dir, child string) error {
+	kind, _, statErr := lstatChild(dir, child)
+	if statErr != nil {
+		return statErr
+	}
+	switch kind {
+	case EntryAbsent:
+		return nil
+	case EntryDirectory:
+		return removeChildTree(dir, child)
+	case EntryOther:
+		// On Windows a directory junction reports EntryOther but requires
+		// FILE_DIRECTORY_FILE deletion; try non-directory first, then directory.
+		if err := removeChild(dir, child, false); err != nil {
+			if errors.Is(err, ErrUnsafeNamespace) {
+				return removeChild(dir, child, true)
+			}
+			return err
+		}
+		return nil
+	default:
+		return removeChild(dir, child, false)
+	}
 }
