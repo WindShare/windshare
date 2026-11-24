@@ -101,3 +101,107 @@ func TestLaneSetBoundsOneDemandAcrossEpochChurnAndFinalHedgeBatch(t *testing.T) 
 		}
 	}
 }
+
+func TestSameLaneWindowRetryRecoversSoleHealthyLaneAndCapsLoop(t *testing.T) {
+	retryCause := errors.New("operation fell behind replay window")
+
+	t.Run("recovers_sole_healthy_lane_without_failure_penalty", func(t *testing.T) {
+		descriptor := transferDescriptor(t, 1)
+		demand := validDemand(t, descriptor, 0)
+		set, err := New(Config{
+			ProtocolSessionID:             transferID[protocolsession.ProtocolSessionID](63),
+			SettlementObservationCapacity: DefaultSettlementObservationCapacity,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var calls int
+		if err := set.Add(Identity{ID: 1, Epoch: 1}, RouteRelay, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
+			calls++
+			if calls <= 2 {
+				return records.BlockRecord{}, NewDemandRetryableAfterRetirement(retryCause)
+			}
+			return transferRecord(t, descriptor, 0), nil
+		})); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := set.Fetch(t.Context(), Request{Demand: demand, Validate: validateTransferRecord(demand)}); err != nil {
+			t.Fatalf("sole healthy lane window retry failed: %v", err)
+		}
+		if calls != 3 {
+			t.Fatalf("calls = %d, want 3", calls)
+		}
+		set.attempts.Wait()
+		set.mu.Lock()
+		laneFailures := set.lanes[1].failures
+		set.mu.Unlock()
+		if laneFailures != 0 {
+			t.Fatalf("window retry incremented lane failures: %d", laneFailures)
+		}
+		set.CompleteObservations()
+		summary, ok := <-set.SettlementObservations()
+		if !ok {
+			t.Fatal("missing settlement summary")
+		}
+		if summary.FailedBlockAttempts != 0 || summary.DeliveredBlocks != 1 {
+			t.Fatalf("settlement = %+v, want FailedBlockAttempts=0 DeliveredBlocks=1", summary)
+		}
+	})
+
+	t.Run("caps_repeated_window_retries_on_sole_lane", func(t *testing.T) {
+		descriptor := transferDescriptor(t, 1)
+		demand := validDemand(t, descriptor, 0)
+		set, err := New(Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](64)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer set.Close()
+		var calls int
+		if err := set.Add(Identity{ID: 1, Epoch: 1}, RouteRelay, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
+			calls++
+			return records.BlockRecord{}, NewDemandRetryableAfterRetirement(retryCause)
+		})); err != nil {
+			t.Fatal(err)
+		}
+		_, fetchErr := set.Fetch(t.Context(), Request{Demand: demand, Validate: validateTransferRecord(demand)})
+		if !errors.Is(fetchErr, retryCause) {
+			t.Fatalf("capped retry err = %v, want %v", fetchErr, retryCause)
+		}
+		if calls != maxSameLaneRetries+1 {
+			t.Fatalf("calls = %d, want %d", calls, maxSameLaneRetries+1)
+		}
+	})
+
+	t.Run("prefers_faster_lane_and_falls_back_to_healthy_origin_lane", func(t *testing.T) {
+		descriptor := transferDescriptor(t, 1)
+		demand := validDemand(t, descriptor, 0)
+		set, err := New(Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](65)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer set.Close()
+		var order []uint32
+		if err := set.Add(Identity{ID: 1, Epoch: 1}, RouteRelay, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
+			order = append(order, 1)
+			if len(order) == 1 {
+				// Attach a faster direct lane before returning the replay-window retry hint.
+				if addErr := set.Add(Identity{ID: 2, Epoch: 1}, RouteDirect, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
+					order = append(order, 2)
+					return records.BlockRecord{}, NewDemandReassignableAfterRetirement(errors.New("direct stalled"))
+				})); addErr != nil {
+					return records.BlockRecord{}, addErr
+				}
+				return records.BlockRecord{}, NewDemandRetryableAfterRetirement(retryCause)
+			}
+			return transferRecord(t, descriptor, 0), nil
+		})); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := set.Fetch(t.Context(), Request{Demand: demand, Validate: validateTransferRecord(demand)}); err != nil {
+			t.Fatalf("fallback after direct failure = %v", err)
+		}
+		if len(order) != 3 || order[0] != 1 || order[1] != 2 || order[2] != 1 {
+			t.Fatalf("attempt order = %v, want [1 2 1]", order)
+		}
+	})
+}

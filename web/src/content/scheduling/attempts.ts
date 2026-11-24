@@ -3,6 +3,7 @@ import type { ContentLane } from './selection'
 // One immutable read has a finite physical-attempt budget, including rescue and
 // replacement generations. Other blocks' progress never replenishes it.
 export const MAXIMUM_BLOCK_ATTEMPTS = 16
+export const MAXIMUM_OPERATION_WINDOW_RETRIES = 3
 
 export type BlockRetryDecision = Readonly<{
   firstDispatchSequence: number
@@ -19,6 +20,7 @@ export type BlockRetryDecision = Readonly<{
     }> & (
       | Readonly<{ reason: 'untried_lane' }>
       | Readonly<{ reason: 'recovered_lane'; successfulBlocksAtFailure: number }>
+      | Readonly<{ reason: 'operation_retry' }>
     )
   | Readonly<{
       transition: 'exhausted'
@@ -28,6 +30,7 @@ export type BlockRetryDecision = Readonly<{
 
 type AttemptState =
   | { readonly kind: 'active' }
+  | { readonly kind: 'retryable' }
   | { readonly kind: 'failed'; readonly successfulBlocks: number }
 
 /** Attempt exclusion expires only on authenticated delivery after that failure. */
@@ -35,6 +38,7 @@ export class BlockAttempts {
   readonly #lanes = new Map<ContentLane, AttemptState>()
   readonly #observe: ((decision: BlockRetryDecision) => void) | undefined
   #count = 0
+  #windowRetries = 0
   #firstDispatchSequence = 0
 
   constructor(observe?: (decision: BlockRetryDecision) => void) {
@@ -46,7 +50,7 @@ export class BlockAttempts {
   allows(lane: ContentLane): boolean {
     if (this.exhausted) return false
     const previous = this.#lanes.get(lane)
-    return previous === undefined || (previous.kind === 'failed' &&
+    return previous === undefined || previous.kind === 'retryable' || (previous.kind === 'failed' &&
       lane.performance.successfulBlocks > previous.successfulBlocks)
   }
 
@@ -60,9 +64,7 @@ export class BlockAttempts {
       ...this.#context(), transition: 'retrying', dispatchSequence,
       laneId: lane.lane.id, laneEpoch: lane.laneEpoch, route: lane.route,
       successfulBlocks: lane.performance.successfulBlocks,
-      ...(previous?.kind === 'failed'
-        ? { reason: 'recovered_lane', successfulBlocksAtFailure: previous.successfulBlocks }
-        : { reason: 'untried_lane' }),
+      ...retryReason(previous),
     })
   }
 
@@ -72,6 +74,19 @@ export class BlockAttempts {
     if (this.#lanes.get(lane)?.kind !== 'active') throw new Error('Capacity wait has no active attempt')
     this.#lanes.delete(lane)
     this.#count--
+  }
+
+  retryableWindow(lane: ContentLane): void {
+    // The sender declined a delayed operation ID without failing the lane.
+    // Keep this attempt charged against MAXIMUM_BLOCK_ATTEMPTS and bound
+    // fresh-ID retries so a broken peer cannot spin without backoff.
+    if (this.#lanes.get(lane)?.kind !== 'active') throw new Error('Window retry has no active attempt')
+    if (this.#windowRetries < MAXIMUM_OPERATION_WINDOW_RETRIES) {
+      this.#windowRetries++
+      this.#lanes.set(lane, { kind: 'retryable' })
+      return
+    }
+    this.failed(lane)
   }
 
   failed(lane: ContentLane): void {
@@ -93,4 +108,19 @@ export class BlockAttempts {
   #emit(decision: BlockRetryDecision): void {
     try { this.#observe?.(decision) } catch { /* Retry evidence cannot become transfer authority. */ }
   }
+}
+
+function retryReason(
+  previous: AttemptState | undefined,
+):
+  | Readonly<{ reason: 'untried_lane' }>
+  | Readonly<{ reason: 'recovered_lane'; successfulBlocksAtFailure: number }>
+  | Readonly<{ reason: 'operation_retry' }> {
+  if (previous?.kind === 'failed') {
+    return { reason: 'recovered_lane', successfulBlocksAtFailure: previous.successfulBlocks }
+  }
+  if (previous?.kind === 'retryable') {
+    return { reason: 'operation_retry' }
+  }
+  return { reason: 'untried_lane' }
 }

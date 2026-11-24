@@ -59,6 +59,31 @@ func isDemandReassignableAfterRetirement(err error) bool {
 	return errors.As(err, &retired) && retired != nil
 }
 
+// demandRetryableAfterRetirementError is an opaque proof that the peer declined
+// to admit an immutable block read (for example because a delayed request fell
+// behind its replay window) and the old operation is retired. The lane itself
+// remains healthy, permitting a bounded fresh-operation retry even on the same
+// live lane while still letting a faster lane take over when available.
+type demandRetryableAfterRetirementError struct{ cause error }
+
+func NewDemandRetryableAfterRetirement(cause error) error {
+	if cause == nil {
+		cause = ErrInvalid
+	}
+	return &demandRetryableAfterRetirementError{cause: cause}
+}
+
+func (e *demandRetryableAfterRetirementError) Error() string {
+	return fmt.Sprintf("demand is retryable with a fresh operation after retirement: %v", e.cause)
+}
+
+func (e *demandRetryableAfterRetirementError) Unwrap() error { return e.cause }
+
+func isDemandRetryableAfterRetirement(err error) bool {
+	var retryable *demandRetryableAfterRetirementError
+	return errors.As(err, &retryable) && retryable != nil
+}
+
 type laneFailureSet struct {
 	failure    *fault.BoundaryError
 	diagnostic error

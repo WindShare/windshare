@@ -18,15 +18,17 @@ const (
 	rescuePollInterval   = 100 * time.Millisecond
 	minimumCapacityRetry = 2 * time.Second
 	maximumCapacityRetry = time.Minute
+	maxSameLaneRetries   = 3
 )
 
 type laneResult struct {
-	state        *laneState
-	record       records.BlockRecord
-	err          error
-	normalized   *fault.BoundaryError
-	notAdmitted  bool
-	reassignable bool
+	state         *laneState
+	record        records.BlockRecord
+	err           error
+	normalized    *fault.BoundaryError
+	notAdmitted   bool
+	reassignable  bool
+	sameLaneRetry bool
 }
 
 type laneRoundKind uint8
@@ -70,10 +72,12 @@ func (s *Set) Fetch(
 	failures := laneFailureSet{}
 	var pendingReassignments []laneResult
 	supplemented := false
+	totalAttempts := 0
+	sameLaneRetries := 0
 	defer func() {
 		s.resolveLaneReassignments(pendingReassignments, false)
 	}()
-	for len(attempted) < MaxDemandAttempts {
+	for totalAttempts < MaxDemandAttempts && len(attempted) < MaxDemandAttempts {
 		candidates, exhausted, err := s.candidates(ctx, attempted, request)
 		if err != nil {
 			normalized := fault.Require(normalizeSourceBoundary(ctx, err))
@@ -92,7 +96,7 @@ func (s *Set) Fetch(
 		for _, state := range candidates {
 			attempted[state.identity] = struct{}{}
 		}
-		round := s.runLaneRound(ctx, request, candidates, attempted, &supplemented)
+		round := s.runLaneRound(ctx, request, candidates, attempted, MaxDemandAttempts-totalAttempts, &supplemented)
 		switch round.kind {
 		case laneRoundSucceeded:
 			return round.record, nil
@@ -105,16 +109,32 @@ func (s *Set) Fetch(
 				return Block{}, failures.failure.Project(failures.diagnostic)
 			}
 			// A completed cancellation boundary permits retrying this same live
-			// lane after its cooldown. Congestion consumes no failure budget.
-			for _, failure := range round.failures {
-				if _, waiting := errors.AsType[*framechannel.BandwidthWaitError](failure.err); waiting && failure.reassignable {
-					delete(attempted, failure.state.identity)
-				}
-			}
+			// lane after its cooldown (congestion consumes no failure budget) or
+			// up to maxSameLaneRetries times when the peer declined a stale ID.
+			settleRoundFailures(attempted, round.failures, &totalAttempts, &sameLaneRetries)
 			pendingReassignments = round.failures
 		}
 	}
 	return Block{}, failures.failure.Project(failures.diagnostic)
+}
+
+func settleRoundFailures(
+	attempted map[Identity]struct{},
+	failures []laneResult,
+	totalAttempts *int,
+	sameLaneRetries *int,
+) {
+	for _, failure := range failures {
+		if _, waiting := errors.AsType[*framechannel.BandwidthWaitError](failure.err); waiting && failure.reassignable {
+			delete(attempted, failure.state.identity)
+			continue
+		}
+		*totalAttempts++
+		if failure.sameLaneRetry && *sameLaneRetries < maxSameLaneRetries {
+			*sameLaneRetries++
+			delete(attempted, failure.state.identity)
+		}
+	}
 }
 
 func (s *Set) beginFetch() bool {
@@ -134,6 +154,7 @@ func (s *Set) runLaneRound(
 	request Request,
 	candidates []*laneAdmission,
 	attempted map[Identity]struct{},
+	remainingAttempts int,
 	supplemented *bool,
 ) laneRoundResult {
 	demand, validate := request.Demand, request.Validate
@@ -158,7 +179,7 @@ func (s *Set) runLaneRound(
 	active := len(candidates)
 	var rescueChanged <-chan struct{}
 	startRescue := func() {
-		if *supplemented || len(candidates) != 1 || raceContext.Err() != nil {
+		if *supplemented || len(candidates) != 1 || active >= remainingAttempts || raceContext.Err() != nil {
 			return
 		}
 		if pendingRescue == nil {
@@ -278,9 +299,10 @@ func (s *Set) fetchLane(
 		fetchErr = validate(record)
 	}
 	notAdmitted := isDemandNotAdmitted(fetchErr)
+	sameLaneRetry := isDemandRetryableAfterRetirement(fetchErr)
 	normalized := fault.Require(normalizeSourceBoundary(ctx, fetchErr))
 	canceled := normalized != nil && normalized.Canceled()
-	reassignable := !canceled && (notAdmitted || isDemandReassignableAfterRetirement(fetchErr))
+	reassignable := !canceled && (notAdmitted || sameLaneRetry || isDemandReassignableAfterRetirement(fetchErr))
 	elapsed := s.now().Sub(started)
 	s.mu.Lock()
 	if fetchErr == nil {
@@ -310,6 +332,7 @@ func (s *Set) fetchLane(
 	results <- laneResult{
 		state: state, record: record, err: fetchErr,
 		normalized: normalized, notAdmitted: notAdmitted, reassignable: reassignable,
+		sameLaneRetry: !canceled && sameLaneRetry,
 	}
 	<-decision.done
 	if canceled && decision.winner != nil && decision.winner != state {
@@ -323,7 +346,7 @@ func (s *Set) fetchLane(
 		switch {
 		case canceled && decision.winner != nil && decision.winner != state:
 			outcome = lanescheduling.SampleSuperseded
-		case canceled || notAdmitted || capacityWaiting:
+		case canceled || notAdmitted || capacityWaiting || sameLaneRetry:
 			outcome = lanescheduling.SampleCancelled
 		case fetchErr != nil:
 			outcome = lanescheduling.SampleFailed
@@ -354,7 +377,7 @@ func (s *Set) finish(
 	}
 	if err != nil {
 		_, waiting := errors.AsType[*framechannel.BandwidthWaitError](err)
-		state.recordFailure(canceled || waiting)
+		state.recordFailure(canceled || waiting || isDemandRetryableAfterRetirement(err))
 	} else {
 		state.failures = 0
 	}

@@ -9,9 +9,12 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/content/records"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	"github.com/windshare/windshare/core/session/protocolsession"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 func TestControlTransactionsSettleConfirmedFramesLostWithCarrier(t *testing.T) {
@@ -149,6 +152,46 @@ func TestControlTransactionsRecoverFromReplayWindowRetryAndCapAttempts(t *testin
 	grant, err := runtimeWithRetry.RequestLane(t.Context(), 0)
 	if err != nil || grant.LaneID == 0 {
 		t.Fatalf("RequestLane after replay-window retry = (%+v, %v)", grant, err)
+	}
+
+	// Verify block reads on the sole healthy lane also recover from ErrOperationRetry with a fresh OperationID.
+	opened, err := receiver.OpenRevision(t.Context(), fixture.fileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests := trackedRequests(receiver.rpc)
+	requests.mu.Lock()
+	issuedBefore := len(requests.issued)
+	requests.mu.Unlock()
+	remainingRetries.Store(1)
+	laneID, laneEpoch := receiver.core.LaneIdentity()
+	blockLane := &receiverBlockLane{
+		identity:  session.LaneIdentity{ID: laneID, Epoch: laneEpoch},
+		rpc:       wrapped,
+		assembler: receiver.assembler,
+		decoder:   fixture.receiverFactory.decoder,
+		revisions: receiver.revisions,
+	}
+	contentLanes, err := transferlanes.New(transferlanes.Config{ProtocolSessionID: receiver.ProtocolSessionID()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer contentLanes.Close()
+	if err := contentLanes.Add(transferlanes.Identity{ID: laneID, Epoch: laneEpoch}, transferlanes.RouteRelay, blockLane); err != nil {
+		t.Fatal(err)
+	}
+	block, err := contentLanes.Fetch(t.Context(), transferlanes.Request{
+		Demand:   transferlanes.Demand{LeaseID: opened.LeaseID, Descriptor: opened.Descriptor, Index: 0},
+		Validate: func(records.BlockRecord) error { return nil },
+	})
+	if err != nil || len(block.Data()) == 0 {
+		t.Fatalf("sole-lane block fetch after ErrOperationRetry = (bytes=%d, err=%v)", len(block.Data()), err)
+	}
+	requests.mu.Lock()
+	issued := append([]protocolsession.OperationID(nil), requests.issued[issuedBefore:]...)
+	requests.mu.Unlock()
+	if len(issued) != 2 || issued[0] == issued[1] {
+		t.Fatalf("block retry issued operation IDs = %v, want 2 distinct IDs", issued)
 	}
 }
 

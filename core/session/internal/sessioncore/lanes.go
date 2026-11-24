@@ -347,13 +347,13 @@ func (lanes *runtimeLanes) acceptFrame(lane *RuntimeLane, frame framechannel.Fra
 		return protocolsession.NewPeerSessionTerminalError(message)
 	}
 	if disposition == protocolsession.OperationBelowReplayWindow {
-		lanes.respondBelowReplayWindow(lane, message)
+		lanes.respondBelowReplayWindow(lane.identity, message)
 		return nil
 	}
 	return nil
 }
 
-func (lanes *runtimeLanes) respondBelowReplayWindow(lane *RuntimeLane, request protocolsession.Message) {
+func (lanes *runtimeLanes) respondBelowReplayWindow(preferred session.LaneIdentity, request protocolsession.Message) {
 	id, ok := request.OperationID()
 	if !ok {
 		return
@@ -367,17 +367,18 @@ func (lanes *runtimeLanes) respondBelowReplayWindow(lane *RuntimeLane, request p
 		return
 	}
 	status := sessionobs.SendStatusNotSent
-	target := lane.identity
+	target := preferred
 	// Use non-blocking control enqueue so replying to a delayed request can
-	// never stall this lane's inbound pump behind outbound backpressure.
-	// When the inbound lane's control queue is saturated or stopped, scan
-	// remaining usable lanes without re-selecting it; if every control queue
-	// is full, drop the best-effort hint and record SendStatusNotSent.
-	if lane.writer != nil && lane.writer.EnqueueControl(reply, nil) == nil {
+	// never stall inbound pumps or deferred promotion behind outbound backpressure.
+	// Try the originating lane when still usable; otherwise scan remaining usable
+	// lanes without re-selecting it, and drop best-effort when all queues are full.
+	if selected, selectErr := lanes.selectLane(&preferred); selectErr == nil &&
+		selected.writer != nil && selected.writer.EnqueueControl(reply, nil) == nil {
+		target = selected.identity
 		status = sessionobs.SendStatusConfirmed
 	} else if lanes.runtime.ctx.Err() == nil {
 		for _, fallback := range lanes.snapshot() {
-			if fallback.identity == lane.identity || fallback.writer == nil {
+			if fallback.identity == preferred || fallback.writer == nil {
 				continue
 			}
 			if fallback.writer.EnqueueControl(reply, nil) == nil {

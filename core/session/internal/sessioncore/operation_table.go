@@ -591,6 +591,15 @@ func (table *operationTable) beginOperationLocked(
 		table.addTombstoneLocked(id, direction, message, true, rec)
 		return protocolsession.OperationDeliver, rec, nil
 	}
+	if direction == protocolsession.DirectionReceiverToSender &&
+		message.Kind() == protocolsession.MessagePeerCandidate &&
+		table.seen.classify(id) == operationReplayBelowWindow {
+		// Trickled ICE candidates can follow a delayed PeerOffer that fell behind
+		// the replay window before the receiver observes OperationRetry. Validate
+		// the continuation contract when configured, then drop without killing
+		// the healthy session or advancing peerSlots for an unadmitted offer.
+		return protocolsession.OperationDrop, nil, table.validateBelowWindowPeerCandidateLocked(message)
+	}
 	if direction != protocolsession.DirectionReceiverToSender ||
 		(!message.Kind().IsRequest() && message.Kind() != protocolsession.MessageLaneAttach) {
 		return protocolsession.OperationDrop, nil, protocolsession.ErrUnknownOperation
@@ -618,6 +627,20 @@ func (table *operationTable) beginOperationLocked(
 	table.seen.mark(id)
 	table.active[id] = rec
 	return protocolsession.OperationDeliver, rec, nil
+}
+
+func (table *operationTable) validateBelowWindowPeerCandidateLocked(message protocolsession.Message) error {
+	if table.continuations == nil {
+		return nil
+	}
+	scope, tracked, err := table.continuations.ClassifyUnboundOperationContinuation(message.Kind(), message.Body())
+	if err != nil {
+		return err
+	}
+	if tracked && scope == (protocolsession.OperationContinuationScope{}) {
+		return protocolsession.ErrContinuationContract
+	}
+	return nil
 }
 
 func (table *operationTable) newOperationRecordLocked(

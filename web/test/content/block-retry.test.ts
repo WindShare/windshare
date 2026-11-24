@@ -3,8 +3,9 @@ import { FileGeometry } from '../../src/content/geometry'
 import { BlockLaneAttemptsError, LaneSet, type BlockDemand, type BlockLane, type BlockRetryObservation } from '../../src/content/lane-set'
 import type { BlockRecord, FileRevisionDescriptor } from '../../src/content/records'
 import type { BlockRouteEligibility, BlockTransportRoute } from '../../src/content/route-policy'
-import { MAXIMUM_BLOCK_ATTEMPTS } from '../../src/content/scheduling/attempts'
+import { MAXIMUM_BLOCK_ATTEMPTS, MAXIMUM_OPERATION_WINDOW_RETRIES } from '../../src/content/scheduling/attempts'
 import { BlockInactivityTimeoutError } from '../../src/content/scheduling/block-response-wait'
+import { OperationRetryError } from '../../src/session/runtime-types'
 
 const BLOCK_BYTES = 1024
 const descriptor: FileRevisionDescriptor = {
@@ -51,7 +52,7 @@ class ControlledLane implements BlockLane {
     if (pending === undefined) throw new Error('No admitted block to complete')
     pending.succeed()
   }
-  fail(index: bigint, error = timeout()): void {
+  fail(index: bigint, error: unknown = timeout()): void {
     const pending = this.#pending.get(index)
     if (pending === undefined) throw new Error('No admitted block to fail')
     pending.fail(error)
@@ -244,6 +245,54 @@ describe('authenticated block retry authority', () => {
     direct.fail(27n)
     await checked
     expect(relay.calls).toEqual([27n, 28n])
+    lanes.close()
+  })
+
+  it('retries OperationRetryError with a fresh attempt on a sole healthy lane and caps repeated retries', async () => {
+    const observations: BlockRetryObservation[] = []
+    const lanes = new LaneSet({ now: () => 0, onBlockRetry: event => observations.push(event) })
+    const relay = new ControlledLane(1)
+    lanes.add(relay, 'application-relay')
+    const recovered = read(lanes, 27n)
+    const checked = expect(recovered).resolves.toMatchObject({ localBlockIndex: 27n })
+    await flush()
+    relay.fail(27n, new OperationRetryError())
+    await flush()
+    relay.fail(27n, new OperationRetryError())
+    await flush()
+    relay.succeed(27n)
+    await checked
+    expect(relay.calls).toEqual([27n, 27n, 27n])
+    expect(observations).toMatchObject([
+      { transition: 'retrying', reason: 'operation_retry', attempts: 2, laneId: 1 },
+      { transition: 'retrying', reason: 'operation_retry', attempts: 3, laneId: 1 },
+    ])
+
+    let attempts = 0
+    const looping = new LaneSet({ now: () => 0 })
+    looping.add({ id: 1, fetchBlock: async () => { attempts++; throw new OperationRetryError() } }, 'application-relay')
+    await expect(read(looping, 29n)).rejects.toBeInstanceOf(BlockLaneAttemptsError)
+    expect(attempts).toBe(MAXIMUM_OPERATION_WINDOW_RETRIES + 1)
+    looping.close()
+    lanes.close()
+  })
+
+  it('prefers a faster lane after OperationRetryError and falls back to the healthy origin lane', async () => {
+    const lanes = new LaneSet({ now: () => 0 })
+    const relay = new ControlledLane(1), direct = new ControlledLane(2)
+    lanes.add(relay, 'application-relay')
+    const result = read(lanes, 27n)
+    const checked = expect(result).resolves.toMatchObject({ localBlockIndex: 27n })
+    await flush()
+    lanes.add(direct, 'direct')
+    relay.fail(27n, new OperationRetryError())
+    await flush()
+    expect(direct.calls).toEqual([27n])
+    direct.fail(27n)
+    await flush()
+    expect(relay.calls).toEqual([27n, 27n])
+    relay.succeed(27n)
+    await checked
     lanes.close()
   })
 })

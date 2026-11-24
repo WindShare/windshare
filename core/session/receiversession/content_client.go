@@ -567,7 +567,7 @@ func (operation *receiverBlockOperation) receive(
 
 func (operation *receiverBlockOperation) receiveFailure(cause error) (records.BlockRecord, error) {
 	if errors.Is(cause, sessioncore.ErrOperationRetry) {
-		return operation.reassignAfterRetirement(cause, contentflow.CancelReasonLaneRace)
+		return operation.rescheduleAfterRetirement(cause, contentflow.CancelReasonLaneRace, transferlanes.NewDemandRetryableAfterRetirement)
 	}
 	if !errors.Is(cause, contentflow.ErrFragmentInactivity) && !errors.Is(cause, contentflow.ErrBlockResponseInactivity) {
 		return records.BlockRecord{}, cause
@@ -577,11 +577,19 @@ func (operation *receiverBlockOperation) receiveFailure(cause error) (records.Bl
 }
 
 func (operation *receiverBlockOperation) reassignAfterRetirement(cause error, reason contentflow.CancelReason) (records.BlockRecord, error) {
+	return operation.rescheduleAfterRetirement(cause, reason, transferlanes.NewDemandReassignableAfterRetirement)
+}
+
+func (operation *receiverBlockOperation) rescheduleAfterRetirement(
+	cause error,
+	reason contentflow.CancelReason,
+	wrap func(error) error,
+) (records.BlockRecord, error) {
 	boundaryErr := blockTransportBoundary(cause)
 	if retireErr := operation.retire(reason); retireErr != nil {
 		return records.BlockRecord{}, errors.Join(boundaryErr, retireErr)
 	}
-	return records.BlockRecord{}, transferlanes.NewDemandReassignableAfterRetirement(boundaryErr)
+	return records.BlockRecord{}, wrap(boundaryErr)
 }
 
 func (operation *receiverBlockOperation) acceptBlockFragment(

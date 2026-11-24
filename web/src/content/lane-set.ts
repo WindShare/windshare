@@ -10,7 +10,7 @@ import { LaneRequests, type RequestSchedulingObservation } from './scheduling/re
 import { orderedContentLanes, demandBytes, type ContentLane, type ContentWork } from './scheduling/selection'
 import { LaneRescues, rescueDecision, type RescueReason, type DispatchPurpose } from './scheduling/exploration'
 import { ContentRaceWon, ContentRaceFailures, raceContent } from './scheduling/race'
-import { SessionRuntimeError } from '../session/runtime-types'
+import { OperationRetryError, SessionRuntimeError } from '../session/runtime-types'
 import type { BlockRecord, FileRevisionDescriptor } from './records'
 import type {
   BlockRouteEligibility,
@@ -479,6 +479,9 @@ export class LaneSet {
       if (!signal.aborted && error instanceof BandwidthWaitError) {
         attempts.waiting(state)
         outcome = error
+      } else if (!signal.aborted && error instanceof OperationRetryError) {
+        attempts.retryableWindow(state)
+        outcome = 'cancelled'
       } else if (!signal.aborted && isRetryableLaneFailure(error)) {
         state.failed = true
         attempts.failed(state)

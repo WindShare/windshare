@@ -579,6 +579,71 @@ func TestRetiredPeerContinuationSurvivesOperationGC(t *testing.T) {
 	}
 }
 
+func TestBelowReplayWindowPeerCandidateDropsValidAndPreservesContracts(t *testing.T) {
+	table, err := newOperationTable(
+		protocolsession.OperationLimits{MaxActive: 4, MaxRecentTombstones: 4},
+		peerSlotTestClassifier{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lane := session.LaneIdentity{ID: 1, Epoch: 0}
+	activeOldBinding := protocolsession.PeerAttemptBinding{
+		PeerSlot: 1, PeerPathID: [16]byte{1}, AttemptID: [16]byte{1}, AttemptSequence: 1,
+	}
+	delayedBinding := protocolsession.PeerAttemptBinding{
+		PeerSlot: 2, PeerPathID: [16]byte{2}, AttemptID: [16]byte{2}, AttemptSequence: 1,
+	}
+	offerMsg := func(id protocolsession.OperationID, b protocolsession.PeerAttemptBinding) protocolsession.Message {
+		return operationMessageForTest(t, protocolsession.MessagePeerOffer, id, encodeTestPeerBindingBody(t, b))
+	}
+	candMsg := func(id protocolsession.OperationID, b protocolsession.PeerAttemptBinding) protocolsession.Message {
+		return operationMessageForTest(t, protocolsession.MessagePeerCandidate, id, encodeTestPeerBindingBody(t, b))
+	}
+
+	// Keep an older active PeerOffer (id=2) alive across window advancement.
+	if adm, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, offerMsg(2, activeOldBinding)); err != nil || adm.disposition != protocolsession.OperationDeliver {
+		t.Fatalf("admit active old offer: disp=%d err=%v", adm.disposition, err)
+	}
+
+	// Advance highWater past (2 + OperationReplayWindow) so both id=1 and id=2 are below the window.
+	highID := protocolsession.OperationID(2 + protocolsession.OperationReplayWindow)
+	req := operationMessageForTest(t, protocolsession.MessageListChildren, highID, []byte{0xa0})
+	if adm, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, req); err != nil || adm.disposition != protocolsession.OperationDeliver {
+		t.Fatalf("admit highID: disp=%d err=%v", adm.disposition, err)
+	}
+	if _, err := table.CancelOperation(highID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Delayed PeerOffer(id=1) is declined below window without mutating peerSlots.
+	if adm, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, offerMsg(1, delayedBinding)); err != nil || adm.disposition != protocolsession.OperationBelowReplayWindow {
+		t.Fatalf("below-window offer: disp=%d err=%v, want OperationBelowReplayWindow", adm.disposition, err)
+	}
+	// Trickled valid PeerCandidate(id=1) arriving before receiver observes OperationRetry drops cleanly.
+	if adm, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, candMsg(1, delayedBinding)); err != nil || adm.disposition != protocolsession.OperationDrop {
+		t.Fatalf("below-window candidate: disp=%d err=%v, want (OperationDrop, nil)", adm.disposition, err)
+	}
+	// Malformed PeerCandidate(id=1) must still be rejected by continuation validation.
+	malformed := operationMessageForTest(t, protocolsession.MessagePeerCandidate, 1, []byte{0xa0})
+	if _, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, malformed); err == nil {
+		t.Fatal("malformed below-window candidate was silently dropped")
+	}
+	// Unknown in-window/future PeerCandidate must still fail with ErrUnknownOperation.
+	if _, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, candMsg(highID+5, delayedBinding)); !errors.Is(err, protocolsession.ErrUnknownOperation) {
+		t.Fatalf("unknown future candidate err=%v, want ErrUnknownOperation", err)
+	}
+	// Active old PeerOffer(id=2) still accepts its trickled candidate even after id=2 fell below window.
+	if adm, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, candMsg(2, activeOldBinding)); err != nil || adm.disposition != protocolsession.OperationDeliver {
+		t.Fatalf("active old offer candidate: disp=%d err=%v, want OperationDeliver", adm.disposition, err)
+	}
+	// Because below-window offer(1) was never admitted into peerSlots, retrying the same
+	// PeerAttemptBinding with a fresh OperationID succeeds cleanly.
+	if adm, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, offerMsg(highID+1, delayedBinding)); err != nil || adm.disposition != protocolsession.OperationDeliver {
+		t.Fatalf("fresh-ID retry of unadmitted peer binding: disp=%d err=%v, want OperationDeliver", adm.disposition, err)
+	}
+}
+
 func assertTombstoneOrder(t *testing.T, table *operationTable, want []protocolsession.OperationID) {
 	t.Helper()
 	table.mu.Lock()

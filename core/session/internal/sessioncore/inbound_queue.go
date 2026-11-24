@@ -560,14 +560,32 @@ func (q *inboundQueue) deferInboundLocked(
 	return protocolsession.OperationDeliver, nil
 }
 
+type belowWindowNotification struct {
+	lane    session.LaneIdentity
+	message protocolsession.Message
+}
+
 func (q *inboundQueue) promoteDeferred() (operationCapacity, error) {
+	capacity, belowWindow, err := q.promoteDeferredLocked()
+	// Emit advisory retry replies after releasing queue locks so outbound lane
+	// lookups and non-blocking enqueues never nest under ingressMu.
+	if q.runtime != nil && q.runtime.lanes != nil {
+		for _, item := range belowWindow {
+			q.runtime.lanes.respondBelowReplayWindow(item.lane, item.message)
+		}
+	}
+	return capacity, err
+}
+
+func (q *inboundQueue) promoteDeferredLocked() (operationCapacity, []belowWindowNotification, error) {
 	q.lifecycleMu.RLock()
 	defer q.lifecycleMu.RUnlock()
 	if q.closed {
-		return operationCapacity{}, protocolsession.ErrSessionTerminated
+		return operationCapacity{}, nil, protocolsession.ErrSessionTerminated
 	}
 	q.ingressMu.Lock()
 	defer q.ingressMu.Unlock()
+	var belowWindow []belowWindowNotification
 	for len(q.deferredOrder) != 0 {
 		id := q.deferredOrder[0]
 		pending := q.deferred[id]
@@ -577,39 +595,53 @@ func (q *inboundQueue) promoteDeferred() (operationCapacity, error) {
 			dispatchFrames = 1
 		}
 		if dispatchFrames > cap(q.control)-len(q.control) {
-			return operationCapacity{}, nil
+			return operationCapacity{}, belowWindow, nil
 		}
 		capacity, err := q.operations.capacity()
 		if err != nil || !capacity.available {
-			return capacity, err
+			return capacity, belowWindow, err
 		}
-		promoted, err := q.promoteDeferredHistory(pending, cancelled)
+		promoted, itemBelowWindow, err := q.promoteDeferredHistory(pending, cancelled)
 		if err != nil {
-			return operationCapacity{}, err
+			return operationCapacity{}, belowWindow, err
 		}
 		if promoted {
+			belowWindow = append(belowWindow, itemBelowWindow...)
 			q.retireDeferred(id, pending)
 		}
 	}
-	return operationCapacity{}, nil
+	return operationCapacity{}, belowWindow, nil
 }
 
-func (q *inboundQueue) promoteDeferredHistory(pending []routeEvent, cancelled bool) (bool, error) {
+func (q *inboundQueue) promoteDeferredHistory(
+	pending []routeEvent,
+	cancelled bool,
+) (bool, []belowWindowNotification, error) {
+	var belowWindow []belowWindowNotification
 	for index, event := range pending {
+		var disposition protocolsession.OperationDisposition
 		var err error
 		if !cancelled || event.message.Kind() == protocolsession.MessageCancel {
-			_, err = q.routeAdmittedLocked(event.lane, event.observedAt, event.message)
+			disposition, err = q.routeAdmittedLocked(event.lane, event.observedAt, event.message)
 		} else {
-			_, err = q.operations.ObserveInbound(q.inboundDirection(), event.lane, event.message)
+			var admission inboundAdmission
+			admission, err = q.operations.ObserveInbound(q.inboundDirection(), event.lane, event.message)
+			disposition = admission.disposition
 		}
 		if index == 0 && protocolsession.IsOperationCapacityError(err) {
-			return false, nil
+			return false, nil, nil
 		}
 		if err != nil {
-			return false, err
+			return false, nil, err
+		}
+		if !cancelled && disposition == protocolsession.OperationBelowReplayWindow {
+			belowWindow = append(belowWindow, belowWindowNotification{
+				lane:    event.lane,
+				message: event.message,
+			})
 		}
 	}
-	return true, nil
+	return true, belowWindow, nil
 }
 
 func (q *inboundQueue) retireDeferred(id protocolsession.OperationID, pending []routeEvent) {

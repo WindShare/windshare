@@ -567,3 +567,181 @@ func TestBelowReplayWindowRetryFallbackSkipsFullLanesAndDropsWhenAllFull(t *test
 		}
 	})
 }
+
+func TestDeferredPromotionBelowReplayWindowRepliesRetryAndDropsTrickledCandidate(t *testing.T) {
+	share, keys := newTestSenderSessionKeys(t, 151)
+	lane1SenderCh, lane1Peer := newMemoryChannelPair()
+	lane2SenderCh, lane2Peer := newMemoryChannelPair()
+	t.Cleanup(func() {
+		_ = lane1SenderCh.Close()
+		_ = lane1Peer.Close()
+		_ = lane2SenderCh.Close()
+		_ = lane2Peer.Close()
+	})
+	sender, err := New(Config{
+		Share:           share,
+		Role:            protocolsession.RoleSender,
+		Keys:            keys,
+		LaneID:          1,
+		Channel:         lane1SenderCh,
+		Random:          &deterministicReader{next: 159},
+		Validator:       permissiveInboundAuthenticator(),
+		Continuations:   peerSlotTestClassifier{},
+		OperationLimits: protocolsession.OperationLimits{MaxActive: 1, MaxRecentTombstones: 16},
+	})
+	if err != nil {
+		keys.Destroy()
+		t.Fatal(err)
+	}
+	keys.Destroy()
+	recorder := newProtocolTraceRecorder(sender)
+	responses := NewResponses(sender, ResponseConfig{})
+	completeBody, _ := protocolsession.EncodeBody(map[uint64]any{0: uint64(1), 1: uint64(0)})
+
+	gateStarted := make(chan struct{})
+	releaseGate := make(chan struct{})
+	highAdmitted := make(chan struct{})
+	freshAdmitted := make(chan protocolsession.OperationID, 1)
+	highID := protocolsession.OperationID(1 + protocolsession.OperationReplayWindow)
+	if err := sender.inbound.RegisterHandler(protocolsession.MessageRequestBlocks, protocolsession.MessageHandlerFunc(
+		func(ctx context.Context, op protocolsession.Operation, _ protocolsession.Message) error {
+			switch op.ID() {
+			case 500:
+				close(gateStarted)
+				<-releaseGate
+			case highID:
+				close(highAdmitted)
+			default:
+				freshAdmitted <- op.ID()
+			}
+			_, sendErr := responses.SendControl(ctx, op, protocolsession.MessageOperationComplete, completeBody)
+			return sendErr
+		},
+	)); err != nil {
+		t.Fatal(err)
+	}
+	if err := sender.inbound.RegisterHandler(protocolsession.MessagePeerOffer, protocolsession.MessageHandlerFunc(
+		func(context.Context, protocolsession.Operation, protocolsession.Message) error {
+			return errors.New("unexpected delivery of below-window deferred peer offer")
+		},
+	)); err != nil {
+		t.Fatal(err)
+	}
+	if err := sender.inbound.RegisterHandler(protocolsession.MessagePeerCandidate, protocolsession.MessageHandlerFunc(
+		func(context.Context, protocolsession.Operation, protocolsession.Message) error {
+			return errors.New("unexpected delivery of below-window deferred peer candidate")
+		},
+	)); err != nil {
+		t.Fatal(err)
+	}
+
+	lane2ID := session.LaneIdentity{ID: 2, Epoch: 1}
+	if _, err := sender.lanes.add(lane2ID, lane2SenderCh, permissiveInboundAuthenticator(), false); err != nil {
+		t.Fatal(err)
+	}
+	sender.Start()
+	defer sender.Close()
+
+	lane1Sealer, lane1Opener := makePeerLaneCrypto(t, sender, sender.initial)
+	lane2Sealer, lane2Opener := makePeerLaneCrypto(t, sender, lane2ID)
+
+	// Occupy the single active operation slot (MaxActive=1) with id=500.
+	sendSealedPeerMessage(t, lane2Peer, lane2Sealer, protocolsession.MessageRequestBlocks, 500, []byte{0xa0})
+	select {
+	case <-gateStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for active gating request")
+	}
+
+	// Queue highID ahead of delayed op 1 in deferredOrder while highWater is still 500,
+	// so op 1 (PeerOffer + trickled PeerCandidate) is Fresh on arrival and deferred behind highID.
+	sendSealedPeerMessage(t, lane2Peer, lane2Sealer, protocolsession.MessageRequestBlocks, highID, []byte{0xa0})
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		sender.inbound.ingressMu.Lock()
+		queuedHigh := len(sender.inbound.deferred[highID]) > 0
+		sender.inbound.ingressMu.Unlock()
+		if queuedHigh {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for highID to enter deferred queue")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	binding := protocolsession.PeerAttemptBinding{
+		PeerSlot: 1, PeerPathID: [16]byte{7}, AttemptID: [16]byte{8}, AttemptSequence: 1,
+	}
+	bindingBody := encodeTestPeerBindingBody(t, binding)
+	sendSealedPeerMessage(t, lane1Peer, lane1Sealer, protocolsession.MessagePeerOffer, 1, bindingBody)
+	sendSealedPeerMessage(t, lane1Peer, lane1Sealer, protocolsession.MessagePeerCandidate, 1, bindingBody)
+
+	deadline = time.Now().Add(2 * time.Second)
+	for {
+		sender.inbound.ingressMu.Lock()
+		queuedDelayed := len(sender.inbound.deferred[1]) == 2
+		sender.inbound.ingressMu.Unlock()
+		if queuedDelayed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for delayed offer + candidate to enter deferred queue")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	// Release id=500 so promotion advances highWater via highID and then promotes op 1 below window.
+	close(releaseGate)
+	if got := recvSealedPeerMessage(t, lane2Peer, lane2Opener); got.Kind() != protocolsession.MessageOperationComplete {
+		t.Fatalf("gate op 500 reply kind = %d", got.Kind())
+	}
+	select {
+	case <-highAdmitted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for promoted highID")
+	}
+	if got := recvSealedPeerMessage(t, lane2Peer, lane2Opener); got.Kind() != protocolsession.MessageOperationComplete {
+		t.Fatalf("highID reply kind = %d", got.Kind())
+	}
+
+	// Deferred promotion must emit MessageOperationRetry for op 1 and drop its trickled candidate.
+	retryReply := recvSealedPeerMessage(t, lane1Peer, lane1Opener)
+	replyID, _ := retryReply.OperationID()
+	if retryReply.Kind() != protocolsession.MessageOperationRetry || replyID != 1 {
+		t.Fatalf("deferred below-window reply = (kind=%d, id=%d), want (MessageOperationRetry, 1)", retryReply.Kind(), replyID)
+	}
+
+	// A follow-up candidate arriving after promotion must also drop without killing the session.
+	sendSealedPeerMessage(t, lane1Peer, lane1Sealer, protocolsession.MessagePeerCandidate, 1, bindingBody)
+	freshID := highID + 1
+	sendSealedPeerMessage(t, lane1Peer, lane1Sealer, protocolsession.MessageRequestBlocks, freshID, []byte{0xa0})
+	select {
+	case gotID := <-freshAdmitted:
+		if gotID != freshID {
+			t.Fatalf("admitted freshID = %d, want %d", gotID, freshID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("session failed to serve fresh request after deferred below-window promotion")
+	}
+	if got := recvSealedPeerMessage(t, lane1Peer, lane1Opener); got.Kind() != protocolsession.MessageOperationComplete {
+		t.Fatalf("freshID reply kind = %d", got.Kind())
+	}
+
+	foundTrace := false
+	for _, obs := range recorder.snapshot() {
+		if obs.Stage == sessionobs.ProtocolOperationSenderRequestBelowWindow &&
+			obs.OperationID == 1 &&
+			obs.SendStatus == sessionobs.SendStatusConfirmed &&
+			obs.Cause == sessionobs.ProtocolOperationCauseReplayWindow {
+			foundTrace = true
+			break
+		}
+	}
+	if !foundTrace {
+		t.Fatalf("missing ProtocolOperationSenderRequestBelowWindow trace after deferred promotion; events=%+v", recorder.snapshot())
+	}
+	if sender.Err() != nil {
+		t.Fatalf("session ended unexpectedly: %v", sender.Err())
+	}
+}
