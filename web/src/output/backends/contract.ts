@@ -7,7 +7,8 @@ import type { TransferOutputSession } from '../../transfer/output-port'
 import type { ResolvedArtifactSpec, SelectionSpec } from '../../transfer/selection'
 import type { ReceiveLifecycleState, SafeRenamedSummary } from '../../transfer/state'
 import type { SettledTransferJobResult } from '../../transfer/job'
-import type { ReceiveTaskRecord } from '../store/types'
+import type { ReceiveStore } from '../store/database'
+import type { ReceiveTaskRecord, TaskTargetRecord } from '../store/types'
 import { supportsBrowserDownload, type BrowserDownloadWindow } from './browser-handoff'
 
 const MEBIBYTE = 1024n * 1024n
@@ -38,6 +39,10 @@ export interface OutputSessionHandle {
   readonly taskId: string
   readonly backend: SaveBackendKind
   readonly transferOutput: TransferOutputSession
+  /** Authoritative persisted task record currently owned by this open session. */
+  readonly record?: ReceiveTaskRecord
+  /** Authoritative record read under the task lock immediately before reopening transitioned it to `downloading`. */
+  readonly reopenedFrom?: ReceiveTaskRecord
   /** Optional live subscription for incremental safe-name adjustments during an active session. */
   subscribeSafeRenamed?(listener: (summary: SafeRenamedSummary) => void): () => void
   /** Settles the backend after `TransferJob.run()` finishes and persists the final task record. */
@@ -325,4 +330,40 @@ export function mergeSourceOmittedEntries(
   const maxObserved = current > prior ? current : prior
   const total = discoveryComplete ? current : maxObserved
   return total > 0n ? total : undefined
+}
+
+/**
+ * Persisted lifecycle states eligible to reopen once the caller holds the task Web Lock.
+ * Includes `downloading` and `preparing` because a crashed tab releases its Web Lock
+ * before inventory normalization converts the abandoned row to `paused (interrupted)`.
+ */
+export function canReopenPersistedState(state: ReceiveLifecycleState): boolean {
+  return state.kind === 'paused' || state.kind === 'downloading' || state.kind === 'preparing'
+}
+
+/**
+ * Reloads the authoritative persisted task row after acquiring its exclusive task lock,
+ * preventing a stale pre-lock snapshot from resurrecting a deleted task or reopening one
+ * that already settled in another tab.
+ */
+export async function loadLockedReopenableTask<Kind extends 'opfs' | 'fsa'>(
+  store: Pick<ReceiveStore, 'getTask'>,
+  taskId: string,
+  expectedTargetKind: Kind,
+  signal?: AbortSignal,
+): Promise<ReceiveTaskRecord & { readonly target: Extract<TaskTargetRecord, { readonly kind: Kind }> }> {
+  signal?.throwIfAborted()
+  const current = await store.getTask(taskId)
+  signal?.throwIfAborted()
+  if (current === undefined) {
+    throw new DOMException('This download record no longer exists', 'NotFoundError')
+  }
+  if (current.target.kind !== expectedTargetKind) {
+    const label = expectedTargetKind === 'opfs' ? 'OPFS' : 'FSA'
+    throw new TypeError(`Cannot reopen a non-${label} task with the ${label} backend`)
+  }
+  if (!canReopenPersistedState(current.lifecycle)) {
+    throw new DOMException('This download is no longer resumable', 'InvalidStateError')
+  }
+  return current as ReceiveTaskRecord & { readonly target: Extract<TaskTargetRecord, { readonly kind: Kind }> }
 }

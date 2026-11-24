@@ -1,4 +1,8 @@
-import type { BrowserOutputWindow, OutputSessionHandle } from '../../output/backends/contract'
+import {
+  canReopenPersistedState,
+  type BrowserOutputWindow,
+  type OutputSessionHandle,
+} from '../../output/backends/contract'
 import { discardFSATask, reopenFSASession } from '../../output/backends/fsa'
 import { applySafeRenamedFields, collectSafeRenamedFromRecords } from '../../output/backends/safe-name'
 import {
@@ -313,27 +317,29 @@ export async function reopenRetainedTask(
   const task = await readRetainedTask(env, taskId)
   const joined = currentShare()
   if (joined === undefined || joined.descriptor.shareInstanceId !== task.shareInstance) throw matchingShareRequired()
-  if (task.lifecycle.kind !== 'paused' && task.lifecycle.kind !== 'downloading' && task.lifecycle.kind !== 'preparing') {
+  if (!canReopenPersistedState(task.lifecycle)) {
     throw new DOMException('This download is no longer resumable', 'InvalidStateError')
   }
   const session = await reopenOutput(env, task)
+  const prior = session.reopenedFrom ?? task
+  const authoritative = session.record ?? prior
   // The session owns the Web Lock. Restore the previous intent before releasing it if the share changed mid-open.
-  if (env.signal?.aborted) return { joined, task, session }
+  if (env.signal?.aborted) return { joined, task: authoritative, session }
   const current = currentShare()
-  if (current?.descriptor.shareInstanceId !== task.shareInstance) {
+  if (current?.descriptor.shareInstanceId !== authoritative.shareInstance) {
     try {
-      const { counts } = await readCheckpointCounts(task, env.store)
+      const { counts } = await readCheckpointCounts(prior, env.store)
       const { completedFiles, completedBytes, retainedBytes } = counts
-      const lifecycle = task.lifecycle.kind === 'paused'
-        ? { ...task.lifecycle, completedFiles, completedBytes, retainedBytes }
-        : transitionReceiveState(task.lifecycle, { kind: 'paused', reason: 'interrupted', ...counts })
-      await env.store.putTask({ ...task, lifecycle })
+      const lifecycle = prior.lifecycle.kind === 'paused'
+        ? { ...prior.lifecycle, completedFiles, completedBytes, retainedBytes }
+        : transitionReceiveState(prior.lifecycle, { kind: 'paused', reason: 'interrupted', ...counts })
+      await env.store.putTask({ ...prior, lifecycle })
     } finally {
       await closeOutputSession(session, env.outputTrace)
     }
     throw matchingShareRequired()
   }
-  return { joined: current, task, session }
+  return { joined: current, task: authoritative, session }
 }
 
 function matchingShareRequired(): DOMException {
@@ -357,6 +363,7 @@ async function reopenOutput(env: RetainedTaskEnvironment, record: ReceiveTaskRec
       store: env.store,
       env: resolveOPFSEnv(env),
       windowPort: env.windowPort,
+      ...(env.signal === undefined ? {} : { signal: env.signal }),
       diagnostics: retainedDiagnostics(env, record),
     })
   }

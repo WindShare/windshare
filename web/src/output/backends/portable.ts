@@ -181,6 +181,10 @@ class PortableSessionHandle implements OutputSessionHandle {
     })
   }
 
+  get record(): ReceiveTaskRecord {
+    return this.#baseRecord
+  }
+
   async settle(result: SettledTransferJobResult): Promise<ReceiveTaskRecord> {
     this.#settled = true
     const sourceOmittedEntries = mergeSourceOmittedEntries(

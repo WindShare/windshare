@@ -1,7 +1,8 @@
 import { BlobReader, Uint8ArrayWriter, ZipReader, type FileEntry } from '@zip.js/zip.js'
 import { describe, expect, it, vi } from 'vitest'
 import { admitRetainedAction, retainedTaskReadiness } from '../../src/application/receive/admission'
-import { executeRetainedTaskAction, loadRetainedTasks } from '../../src/application/receive/retained'
+import type { JoinedBrowserShare } from '../../src/application/browser-share/gateway'
+import { executeRetainedTaskAction, loadRetainedTasks, reopenRetainedTask } from '../../src/application/receive/retained'
 import { DirectoryFailureError } from '../../src/catalog/client'
 import { CatalogPageStoreError } from '../../src/catalog/page-store'
 import { DIRECTORY_FAILURE_CODE_RESOURCE_LIMIT } from '../../src/catalog/records'
@@ -400,5 +401,121 @@ describe('OPFS object ownership and recovery', () => {
     await Promise.all([marking2, committing2])
     await session2.close()
     expect((await f2.store.getTask(taskId))?.lifecycle.kind).toBe('ready-to-save')
+  })
+})
+
+describe('OPFS cross-tab reopen and export authority', () => {
+  it('prevents cross-tab reopen or export from resurrecting a deleted or settled OPFS task', async () => {
+    const f = fixture(zip)
+    const session = await f.open()
+    const file = await session.transferOutput.openFile(fileRequest, new AbortController().signal)
+    await file.writeAt(0n, bytes)
+    await file.commit([byteRange(0n, 4n)])
+    const stalePaused = await session.settle({ ...completion, status: 'paused', pauseReason: 'user' })
+    await session.close()
+
+    // Race 1: Tab A reads the paused task via reopenRetainedTask; Tab B deletes it before Tab A takes the lock.
+    const joined = { descriptor: { shareInstanceId: 's' } } as unknown as JoinedBrowserShare
+    const retainedEnv = {
+      store: f.store,
+      windowPort: f.windowPort as unknown as BrowserOutputWindow,
+      opfsEnv: f.env,
+      locks: f.env.locks,
+    }
+    const originalGetTask = f.memory.getTask.bind(f.memory)
+    let deletedInterleaved = false
+    vi.spyOn(f.memory, 'getTask').mockImplementation(async id => {
+      const record = await originalGetTask(id)
+      if (!deletedInterleaved) {
+        deletedInterleaved = true
+        await deleteOPFSTask(stalePaused, f.store, f.env)
+      }
+      return record
+    })
+    f.events.length = 0
+    await expect(reopenRetainedTask(retainedEnv, taskId, () => joined)).rejects.toMatchObject({ name: 'NotFoundError' })
+    expect(f.part()).toBeUndefined()
+    expect(await originalGetTask(taskId)).toBeUndefined()
+    expect(f.events).toEqual(['lock.release', 'lock.release'])
+    vi.mocked(f.memory.getTask).mockRestore()
+
+    // Race 2: Tab B settles the task to ready-to-save/download-started before Tab A acquires the lock.
+    const f2 = fixture(single)
+    const s2 = await f2.open()
+    const w2 = await s2.transferOutput.openFile(fileRequest, new AbortController().signal)
+    await w2.writeAt(0n, bytes.slice(0, 2))
+    await w2.pause([byteRange(0n, 2n)])
+    const staleSingle = await s2.settle({ ...completion, status: 'paused', pauseReason: 'user', completedFiles: 0n, completedBytes: 0n })
+    await s2.close()
+
+    const tabB = await reopenOPFSSession({ ...f2, task: staleSingle })
+    const wb = await tabB.transferOutput.openFile(fileRequest, new AbortController().signal)
+    await wb.writeAt(2n, bytes.slice(2))
+    await wb.commit([byteRange(0n, 4n)])
+    const settled = await tabB.settle(completion)
+    await tabB.close()
+    expect(settled.lifecycle.kind).toBe('download-started')
+
+    await expect(reopenOPFSSession({ ...f2, task: staleSingle })).rejects.toMatchObject({ name: 'InvalidStateError' })
+    expect(await f2.store.getTask(taskId)).toEqual(settled)
+
+    // Race 3: Tab B deletes a sealed task before saveRetainedOPFSTask acquires the lock.
+    await deleteOPFSTask(settled, f2.store, f2.env)
+    const downloadsBefore = f2.downloads.length
+    await expect(saveRetainedOPFSTask(settled, f2.store, f2.env, f2.windowPort)).rejects.toMatchObject({ name: 'NotFoundError' })
+    expect(f2.downloads).toHaveLength(downloadsBefore)
+    expect(await f2.store.getTask(taskId)).toBeUndefined()
+  })
+
+  it('reuses the authoritative locked record on cross-tab update and still recovers when OPFS storage was evicted', async () => {
+    const f = fixture(single)
+    const session = await f.open()
+    const file = await session.transferOutput.openFile(fileRequest, new AbortController().signal)
+    await file.writeAt(0n, bytes.slice(0, 2))
+    await file.pause([byteRange(0n, 2n)])
+    const olderPaused = await session.settle({
+      ...completion, status: 'paused', pauseReason: 'user',
+      completedFiles: 0n, completedBytes: 0n, discoveryComplete: false,
+    })
+    await session.close()
+
+    const newerPaused = Object.freeze({
+      ...olderPaused,
+      discoveryComplete: true,
+      lifecycle: Object.freeze({ ...olderPaused.lifecycle, generation: olderPaused.lifecycle.generation + 2n }),
+    })
+    const joined = { descriptor: { shareInstanceId: 's' } } as unknown as JoinedBrowserShare
+    const retainedEnv = {
+      store: f.store,
+      windowPort: f.windowPort as unknown as BrowserOutputWindow,
+      opfsEnv: f.env,
+      locks: f.env.locks,
+    }
+    const originalGetTask = f.memory.getTask.bind(f.memory)
+    let updatedInterleaved = false
+    vi.spyOn(f.memory, 'getTask').mockImplementation(async id => {
+      const record = await originalGetTask(id)
+      if (!updatedInterleaved) {
+        updatedInterleaved = true
+        await f.store.putTask(newerPaused)
+      }
+      return record
+    })
+    const reopened = await reopenRetainedTask(retainedEnv, taskId, () => joined)
+    expect(reopened.task.discoveryComplete).toBe(true)
+    expect(reopened.task.lifecycle.generation).toBe(newerPaused.lifecycle.generation + 1n)
+    expect((await originalGetTask(taskId))?.discoveryComplete).toBe(true)
+    await reopened.session.close()
+    vi.mocked(f.memory.getTask).mockRestore()
+
+    // Browser storage eviction removes the .part object while the IDB task row remains paused; reopen must still recover.
+    const pausedAfter = await f.store.getTask(taskId)
+    await f.directory().removeEntry(`${taskId}.part`)
+    expect(f.part()).toBeUndefined()
+    const recovered = await reopenOPFSSession({ ...f, task: pausedAfter! })
+    const recoveredFile = await recovered.transferOutput.openFile(fileRequest, new AbortController().signal)
+    expect(recoveredFile.completedRanges).toEqual([])
+    expect(f.part()).toBeDefined()
+    await recovered.close()
   })
 })

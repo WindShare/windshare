@@ -31,7 +31,13 @@ import {
   triggerBrowserDownload,
   type BrowserDownloadWindow,
 } from './browser-handoff'
-import { mergeSourceOmittedEntries, resolveZipEntryPath, type OutputSessionHandle, type StartBackendTaskInput } from './contract'
+import {
+  loadLockedReopenableTask,
+  mergeSourceOmittedEntries,
+  resolveZipEntryPath,
+  type OutputSessionHandle,
+  type StartBackendTaskInput,
+} from './contract'
 import {
   completedZipTailOffset,
   hasCompletedZipFile,
@@ -95,27 +101,31 @@ export function openNewOPFSSession(
     }),
     discoveryComplete: false, updatedAt: Date.now(),
   }
-  return openOPFSSession(input, record, target, false)
+  return openOPFSSession(input, record, false)
 }
 
 export function reopenOPFSSession(
-  input: OPFSSessionPorts & { readonly task: ReceiveTaskRecord },
+  input: OPFSSessionPorts & { readonly task: ReceiveTaskRecord; readonly signal?: AbortSignal },
 ): Promise<OutputSessionHandle> {
   if (input.task.target.kind !== 'opfs') {
     return Promise.reject(new TypeError('Cannot reopen a non-OPFS task with the OPFS backend'))
   }
-  return openOPFSSession(input, input.task, input.task.target, true)
+  return openOPFSSession(input, input.task, true, input.signal)
 }
 
 async function openOPFSSession(
-  ports: OPFSSessionPorts, task: ReceiveTaskRecord, target: OPFSTargetRecord, reopened: boolean,
+  ports: OPFSSessionPorts, initialTask: ReceiveTaskRecord, reopened: boolean, signal?: AbortSignal,
 ): Promise<OutputSessionHandle> {
   let lock: TaskLock | undefined
   let io: ObjectCheckpointCoordinator | undefined
   let directory: FileSystemDirectoryHandle | undefined
   let fileHandle: FileSystemFileHandle | undefined
   try {
-    lock = await acquireTaskLock(task.taskId, ports.env.locks)
+    lock = await acquireTaskLock(initialTask.taskId, ports.env.locks)
+    const task = reopened
+      ? await loadLockedReopenableTask(ports.store, initialTask.taskId, 'opfs', signal)
+      : initialTask
+    const target = task.target as OPFSTargetRecord
     directory = await openTasksDirectory(ports.env, true)
     fileHandle = await directory.getFileHandle(target.objectName, { create: true })
     const nativeFactory = ports.env.openNativeObject ?? openNativeObject
@@ -130,6 +140,7 @@ async function openOPFSSession(
     })
     const session = new OPFSSessionHandle({
       ...ports, record, fileHandle, directory, io, zip, reopened, lock,
+      ...(reopened ? { reopenedFrom: task } : {}),
     })
     await ports.store.putTask(record)
     emitOutputTrace(ports.diagnostics?.trace, reopened ? 'reopen' : 'output_reservation', {
@@ -140,16 +151,26 @@ async function openOPFSSession(
     // A successor holding the Web Lock must be able to acquire the exclusive SyncAccessHandle.
     await io?.close().catch(() => undefined)
     if (!reopened && directory !== undefined && fileHandle !== undefined) {
-      try {
-        if (await ports.store.getTask(task.taskId) === undefined) await removePrivateObject(directory, target.objectName)
-      } catch { /* Preserve the opening error if storage itself is unavailable. */ }
+      await cleanupUncommittedOPFSObject(ports.store, directory, initialTask)
     }
     await lock?.release()
     emitOutputTrace(ports.diagnostics?.trace, reopened ? 'reopen' : 'output_reservation', {
-      backend: 'origin_private', task_id: task.taskId, transition: 'failed', error_class: classifyNativeError(error),
+      backend: 'origin_private', task_id: initialTask.taskId, transition: 'failed', error_class: classifyNativeError(error),
     })
     throw error
   }
+}
+
+async function cleanupUncommittedOPFSObject(
+  store: ReceiveStore,
+  directory: FileSystemDirectoryHandle,
+  task: ReceiveTaskRecord,
+): Promise<void> {
+  try {
+    if (await store.getTask(task.taskId) === undefined) {
+      await removePrivateObject(directory, (task.target as OPFSTargetRecord).objectName)
+    }
+  } catch { /* Preserve the opening error if storage itself is unavailable. */ }
 }
 
 /** Exports a completed retained OPFS task to the user's browser Downloads folder (works offline). */
@@ -165,22 +186,27 @@ export async function saveRetainedOPFSTask(
   }
   const lock = await acquireTaskLock(task.taskId, env.locks)
   try {
+    signal?.throwIfAborted()
+    const current = await store.getTask(task.taskId)
+    signal?.throwIfAborted()
+    if (current === undefined) throw new DOMException('This download record no longer exists', 'NotFoundError')
+    if (current.target.kind !== 'opfs') throw new TypeError('Only OPFS tasks can be exported from browser storage')
     const dir = await openTasksDirectory(env)
-    const handle = await dir.getFileHandle(task.target.objectName)
+    const handle = await dir.getFileHandle(current.target.objectName)
     const file = await handle.getFile()
-    if (BigInt(file.size) !== task.target.sealedSize) {
+    if (BigInt(file.size) !== current.target.sealedSize) {
       throw new DOMException('Retained browser file is missing or incomplete', 'NotFoundError')
     }
-    const mediaType = artifactDownloadMediaType(task.artifact.kind)
+    const mediaType = artifactDownloadMediaType(current.artifact.kind)
     signal?.throwIfAborted()
-    triggerBrowserDownload(windowPort, file, task.target.fileName, mediaType)
-    const nextLifecycle = transitionReceiveState(task.lifecycle, {
+    triggerBrowserDownload(windowPort, file, current.target.fileName, mediaType)
+    const nextLifecycle = transitionReceiveState(current.lifecycle, {
       kind: 'download-started',
       retained: true,
-      fileName: task.target.fileName,
+      fileName: current.target.fileName,
     })
     const updated: ReceiveTaskRecord = Object.freeze({
-      ...task,
+      ...current,
       lifecycle: nextLifecycle,
       updatedAt: Date.now(),
     })
@@ -259,6 +285,7 @@ class OPFSSessionHandle implements OutputSessionHandle {
   readonly taskId: string
   readonly backend = 'opfs' as const
   readonly transferOutput: TransferOutputSession
+  readonly reopenedFrom?: ReceiveTaskRecord
   #record: ReceiveTaskRecord
   readonly #directory: FileSystemDirectoryHandle
   readonly #fileHandle: FileSystemFileHandle
@@ -273,6 +300,7 @@ class OPFSSessionHandle implements OutputSessionHandle {
 
   constructor(input: Readonly<{
     record: ReceiveTaskRecord
+    reopenedFrom?: ReceiveTaskRecord
     directory: FileSystemDirectoryHandle
     fileHandle: FileSystemFileHandle
     io: ObjectCheckpointCoordinator
@@ -284,6 +312,7 @@ class OPFSSessionHandle implements OutputSessionHandle {
     diagnostics?: OutputDiagnosticsPorts
   }>) {
     this.taskId = input.record.taskId
+    if (input.reopenedFrom !== undefined) this.reopenedFrom = input.reopenedFrom
     this.#record = input.record
     this.#directory = input.directory
     this.#fileHandle = input.fileHandle
@@ -322,6 +351,10 @@ class OPFSSessionHandle implements OutputSessionHandle {
         this.#record = updated
       }),
     })
+  }
+
+  get record(): ReceiveTaskRecord {
+    return this.#record
   }
 
   async settle(result: SettledTransferJobResult): Promise<ReceiveTaskRecord> {

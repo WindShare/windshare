@@ -3,6 +3,7 @@ import {
   OutputFaultCode,
   TransferFaultError,
   catalogCapacityReason,
+  classifyNativeError,
   outputFault,
 } from '../../transfer/fault'
 import type { SettledTransferJobResult } from '../../transfer/job'
@@ -25,7 +26,13 @@ import {
   type ReceiveFileRecord,
   type ReceiveTaskRecord,
 } from '../store/types'
-import { mergeSourceOmittedEntries, type BrowserOutputWindow, type OutputSessionHandle, type StartBackendTaskInput } from './contract'
+import {
+  loadLockedReopenableTask,
+  mergeSourceOmittedEntries,
+  type BrowserOutputWindow,
+  type OutputSessionHandle,
+  type StartBackendTaskInput,
+} from './contract'
 import {
   cleanupFSATaskEntries, isMissingFSAEntry, isUncommittedEmptyPlaceholder,
   matchesFSADiskFingerprint, readFSADiskFingerprint, sameFSAEntry, settleFSATerminalCleanup,
@@ -162,20 +169,21 @@ export async function reopenFSASession(input: Readonly<{
   if (input.task.target.kind !== 'fsa') {
     throw new TypeError('Cannot reopen a non-FSA task with the FSA backend')
   }
+  const traceReopenFailed = (error: unknown) => emitOutputTrace(input.diagnostics?.trace, 'reopen', {
+    backend: 'file_system_access', task_id: input.task.taskId, transition: 'failed', error_class: classifyNativeError(error),
+  })
   let lock: TaskLock
   try {
     lock = await acquireTaskLock(input.task.taskId, input.locks)
   } catch (error) {
-    emitOutputTrace(input.diagnostics?.trace, 'reopen', {
-      backend: 'file_system_access',
-      transition: 'failed',
-    })
+    traceReopenFailed(error)
     throw error
   }
   try {
     // Capture the upper bound once the task lock proves no previous session is still allocating placeholders.
     const reopenedAtMs = Date.now()
-    const perm = await ensureFSAPermission(input.task.target.parentHandle, input.allowPermissionPrompt, input.signal)
+    const current = await loadLockedReopenableTask(input.store, input.task.taskId, 'fsa', input.signal)
+    const perm = await ensureFSAPermission(current.target.parentHandle, input.allowPermissionPrompt, input.signal)
     input.signal?.throwIfAborted()
     if (perm !== 'granted') {
       throw new TransferFaultError(
@@ -183,44 +191,25 @@ export async function reopenFSASession(input: Readonly<{
         'Folder permission is required to continue saving',
       )
     }
-    const target = input.task.target
+    const target = current.target
     const rootHandle = target.singleFile
       ? target.parentHandle
       : await target.parentHandle.getDirectoryHandle(target.reservedName, { create: true })
-    const downloading = transitionReceiveState(input.task.lifecycle, {
-      kind: 'downloading',
-      phase: 'receiving',
-    })
-    const updated: FSATaskRecord = Object.freeze({
-      ...input.task, target,
-      lifecycle: downloading,
-      updatedAt: Date.now(),
-    })
+    const downloading = transitionReceiveState(current.lifecycle, { kind: 'downloading', phase: 'receiving' })
+    const updated: FSATaskRecord = Object.freeze({ ...current, target, lifecycle: downloading, updatedAt: Date.now() })
     const priorFiles = await input.store.listTaskFiles(updated.taskId)
     input.signal?.throwIfAborted()
     await input.store.putTask(updated)
     const safeNames = new SafeNameRegistry()
     safeNames.seedFromPrior(updated, priorFiles, updated.safeRenamedDirectories)
     emitOutputTrace(input.diagnostics?.trace, 'reopen', {
-      backend: 'file_system_access',
-      transition: 'authorized',
+      backend: 'file_system_access', task_id: updated.taskId, transition: 'authorized',
     })
     return new FSASessionHandle(
-      updated,
-      rootHandle,
-      input.store,
-      lock,
-      safeNames,
-      input.locks,
-      input.diagnostics,
-      priorFiles,
-      reopenedAtMs,
+      updated, rootHandle, input.store, lock, safeNames, input.locks, input.diagnostics, priorFiles, reopenedAtMs, current,
     )
   } catch (error) {
-    emitOutputTrace(input.diagnostics?.trace, 'reopen', {
-      backend: 'file_system_access',
-      transition: 'failed',
-    })
+    traceReopenFailed(error)
     await lock.release()
     throw error
   }
@@ -306,6 +295,7 @@ class FSASessionHandle implements OutputSessionHandle {
   readonly taskId: string
   readonly backend = 'fsa' as const
   readonly transferOutput: TransferOutputSession
+  readonly reopenedFrom?: ReceiveTaskRecord
   #record: FSATaskRecord
   readonly #rootHandle: FileSystemDirectoryHandle
   readonly #store: ReceiveStore
@@ -332,8 +322,10 @@ class FSASessionHandle implements OutputSessionHandle {
     diagnostics?: OutputDiagnosticsPorts,
     priorFiles: readonly ReceiveFileRecord[] = [],
     reopenedAtMs?: number,
+    reopenedFrom?: ReceiveTaskRecord,
   ) {
     this.taskId = record.taskId
+    if (reopenedFrom !== undefined) this.reopenedFrom = reopenedFrom
     this.#record = record
     this.#rootHandle = rootHandle
     this.#store = store
@@ -364,6 +356,10 @@ class FSASessionHandle implements OutputSessionHandle {
       },
       safeRenamedSummary: () => this.#safeNames.summary(),
     })
+  }
+
+  get record(): ReceiveTaskRecord {
+    return this.#record
   }
 
   subscribeSafeRenamed(listener: (summary: SafeRenamedSummary) => void): () => void {

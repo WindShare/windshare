@@ -487,6 +487,60 @@ describe('FSA terminal cleanup', () => {
   })
 })
 
+describe('FSA cross-tab reopen authority', () => {
+  it('rejects reopening an FSA task deleted or settled in another tab before prompting or recreating directories', async () => {
+    const { session, open, parent, store, memory } = await openFolderFixture()
+    const file = await open('large')
+    await file.writeAt(0n, Uint8Array.of(1, 2))
+    await file.pause(prefix)
+    const stalePaused = await session.settle(paused)
+    await session.close()
+
+    await discardFSATask(stalePaused, store)
+    expect(parent.children.has('Folder')).toBe(false)
+    expect(await memory.getTask(session.taskId)).toBeUndefined()
+
+    const querySpy = vi.spyOn(parent, 'queryPermission')
+    const requestSpy = vi.spyOn(parent, 'requestPermission')
+    let held = false
+    const locks = {
+      request: async (_name: string, _options: unknown, fn: (lock: object | null) => Promise<void>) => {
+        if (held) return fn(null)
+        held = true
+        try { await fn({}) } finally { held = false }
+      },
+    } as unknown as LockManager
+    await expect(reopenFSASession({
+      task: stalePaused, store, locks, allowPermissionPrompt: true,
+    })).rejects.toMatchObject({ name: 'NotFoundError' })
+    expect(held).toBe(false)
+    expect(querySpy).not.toHaveBeenCalled()
+    expect(requestSpy).not.toHaveBeenCalled()
+    expect(parent.children.has('Folder')).toBe(false)
+    expect(await memory.getTask(session.taskId)).toBeUndefined()
+
+    // A task settled to `saved` in another tab must also refuse reopening with a stale paused snapshot.
+    const f2 = await openFolderFixture()
+    const w2 = await f2.open('large')
+    await w2.writeAt(0n, Uint8Array.of(1, 2))
+    await w2.pause(prefix)
+    const stalePaused2 = await f2.session.settle(paused)
+    await f2.session.close()
+    const tabB = await reopenFSASession({ task: stalePaused2, store: f2.store, allowPermissionPrompt: false })
+    const wb = await tabB.transferOutput.openFile(request, signal)
+    await wb.writeAt(2n, Uint8Array.of(3, 4, 5, 6, 7, 8))
+    await wb.commit([byteRange(0n, 8n)])
+    const saved = await tabB.settle({ ...paused, status: 'completed', completedFiles: 1n, completedBytes: 8n })
+    await tabB.close()
+    expect(saved.lifecycle.kind).toBe('saved')
+
+    await expect(reopenFSASession({
+      task: stalePaused2, store: f2.store, allowPermissionPrompt: true,
+    })).rejects.toMatchObject({ name: 'InvalidStateError' })
+    expect(await f2.memory.getTask(f2.session.taskId)).toEqual(saved)
+  })
+})
+
 describe('FSA native close recovery', () => {
   const limit = 128 * 1024
   const cases = [
