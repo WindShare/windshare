@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
@@ -241,4 +242,281 @@ func mustEncodeJournalLine(t *testing.T, rec journalRecord) []byte {
 		t.Fatal(err)
 	}
 	return line
+}
+
+func TestReopenReleasesDirLockBeforeJournalReplay(t *testing.T) {
+	ctx := context.Background()
+	const waitTimeout = 5 * time.Second
+
+	cases := []struct {
+		name string
+		seed byte
+		run  func(t *testing.T, root string, hook func(*Dir, func() time.Time) (*taskJournal, error)) (
+			opID receivecontract.OperationID,
+			selector receivecontract.OperationSelection,
+			reopen func() (receivecontract.OperationID, error),
+			cleanup func() error,
+		)
+	}{
+		{
+			name: "automatic select",
+			seed: 0xf1,
+			run: func(t *testing.T, root string, hook func(*Dir, func() time.Time) (*taskJournal, error)) (
+				receivecontract.OperationID, receivecontract.OperationSelection, func() (receivecontract.OperationID, error), func() error,
+			) {
+				sel, intent, _ := createPausedSingleFileOp(t, root, 0xf1)
+				auth := newBoundAuthority(t, root)
+				auth.openJournal = hook
+				selector := receivecontract.AutomaticOperation()
+				return intent.OperationID(), selector, func() (receivecontract.OperationID, error) {
+					lookup, err := auth.SelectOperation(ctx, sel, selector)
+					if err != nil {
+						return receivecontract.OperationID{}, err
+					}
+					if lookup.Kind() != LookupReopened || lookup.Operation() == nil {
+						return receivecontract.OperationID{}, errors.New("expected LookupReopened")
+					}
+					gotIntent, _ := lookup.Operation().ReceiveIntent()
+					return gotIntent.OperationID(), nil
+				}, auth.Close
+			},
+		},
+		{
+			name: "explicit by id",
+			seed: 0xf4,
+			run: func(t *testing.T, root string, hook func(*Dir, func() time.Time) (*taskJournal, error)) (
+				receivecontract.OperationID, receivecontract.OperationSelection, func() (receivecontract.OperationID, error), func() error,
+			) {
+				sel, intent, _ := createPausedSingleFileOp(t, root, 0xf4)
+				auth := newBoundAuthority(t, root)
+				auth.openJournal = hook
+				selector, err := receivecontract.SelectOperationID(intent.OperationID())
+				if err != nil {
+					_ = auth.Close()
+					t.Fatal(err)
+				}
+				return intent.OperationID(), selector, func() (receivecontract.OperationID, error) {
+					lookup, err := auth.SelectOperation(ctx, sel, selector)
+					if err != nil {
+						return receivecontract.OperationID{}, err
+					}
+					if lookup.Kind() != LookupReopened || lookup.Operation() == nil {
+						return receivecontract.OperationID{}, errors.New("expected LookupReopened")
+					}
+					gotIntent, _ := lookup.Operation().ReceiveIntent()
+					return gotIntent.OperationID(), nil
+				}, auth.Close
+			},
+		},
+		{
+			name: "create recheck",
+			seed: 0xf7,
+			run: func(t *testing.T, root string, hook func(*Dir, func() time.Time) (*taskJournal, error)) (
+				receivecontract.OperationID, receivecontract.OperationSelection, func() (receivecontract.OperationID, error), func() error,
+			) {
+				sel := testSelectionSpec(t, 0xf7)
+				auth, lookup := prepareCreateReadyAuthority(t, root, sel, receivecontract.AutomaticOperation())
+				auth.openJournal = hook
+
+				// Another instance creates and pauses the matching operation before
+				// auth reaches CreateOperation's automatic uniqueness re-check.
+				_, intent, fileID := createPausedSingleFileOp(t, root, 0xf7)
+				art, err := receivecontract.NewSingleFileDirectoryTree(fileID, retirementFileName, retirementFileName)
+				if err != nil {
+					_ = auth.Close()
+					t.Fatal(err)
+				}
+				return intent.OperationID(), receivecontract.AutomaticOperation(), func() (receivecontract.OperationID, error) {
+					op, err := auth.CreateOperation(ctx, lookup, art)
+					if err != nil {
+						return receivecontract.OperationID{}, err
+					}
+					gotIntent, _ := op.ReceiveIntent()
+					return gotIntent.OperationID(), nil
+				}, auth.Close
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			hook := func(opDir *Dir, now func() time.Time) (*taskJournal, error) {
+				close(entered)
+				<-release
+				return openTaskJournal(opDir, now)
+			}
+
+			wantOpID, selector, runReopen, cleanup := tc.run(t, root, hook)
+			defer func() {
+				if err := cleanup(); err != nil {
+					t.Fatalf("close reopen authority: %v", err)
+				}
+			}()
+
+			type reopenOutcome struct {
+				opID receivecontract.OperationID
+				err  error
+			}
+			done := make(chan reopenOutcome, 1)
+			go func() {
+				gotID, err := runReopen()
+				done <- reopenOutcome{opID: gotID, err: err}
+			}()
+
+			select {
+			case <-entered:
+			case out := <-done:
+				t.Fatalf("reopen finished before entering journal replay: (%x, %v)", out.opID, out.err)
+			case <-time.After(waitTimeout):
+				t.Fatal("timed out waiting for journal replay hook")
+			}
+
+			// While journal replay is paused, dirLock must be free so an unrelated
+			// operation in the same destination can select and create without blocking.
+			unrelatedDone := make(chan error, 1)
+			go func() {
+				otherAuth := newBoundAuthority(t, root)
+				defer otherAuth.Close()
+				otherSel := testSelectionSpec(t, tc.seed+0x20)
+				otherLookup, err := otherAuth.SelectOperation(ctx, otherSel, receivecontract.AutomaticOperation())
+				if err != nil || otherLookup.Kind() != LookupCreateReady {
+					unrelatedDone <- errors.Join(err, errors.New("unrelated select failed"))
+					return
+				}
+				otherArt, err := receivecontract.NewSingleFileDirectoryTree(
+					testID16[catalog.FileID](tc.seed+0x22), "unrelated.bin", "unrelated.bin",
+				)
+				if err != nil {
+					unrelatedDone <- err
+					return
+				}
+				if _, err := otherAuth.CreateOperation(ctx, otherLookup, otherArt); err != nil {
+					unrelatedDone <- err
+					return
+				}
+				unrelatedDone <- nil
+			}()
+
+			select {
+			case err := <-unrelatedDone:
+				if err != nil {
+					close(release)
+					<-done
+					t.Fatalf("unrelated operation blocked or failed during journal replay: %v", err)
+				}
+			case <-time.After(waitTimeout):
+				close(release)
+				<-done
+				t.Fatal("unrelated operation blocked on dirLock while reopen replayed state.log")
+			}
+
+			// The claimed task itself must stay protected by task.lock: concurrent
+			// discard sees ErrBusy and a second reopen sees LookupAlreadyRunning.
+			if _, err := DiscardOperation(ctx, root, wantOpID); !errors.Is(err, ErrBusy) {
+				close(release)
+				<-done
+				t.Fatalf("DiscardOperation during journal replay = %v, want ErrBusy", err)
+			}
+			contender := newBoundAuthority(t, root)
+			contendLookup, contendErr := contender.SelectOperation(ctx, testSelectionSpec(t, tc.seed), selector)
+			_ = contender.Close()
+			if contendErr != nil || contendLookup.Kind() != LookupAlreadyRunning {
+				close(release)
+				<-done
+				t.Fatalf("concurrent select during journal replay = (kind=%v, err=%v), want LookupAlreadyRunning",
+					contendLookup.Kind(), contendErr)
+			}
+
+			close(release)
+			select {
+			case out := <-done:
+				if out.err != nil || out.opID != wantOpID {
+					t.Fatalf("reopen outcome = (%x, %v), want %x", out.opID, out.err, wantOpID)
+				}
+			case <-time.After(waitTimeout):
+				t.Fatal("timed out waiting for reopen completion")
+			}
+		})
+	}
+
+	t.Run("rejected journal releases task lock for subsequent discard", func(t *testing.T) {
+		root := t.TempDir()
+		sel, intent, _ := createPausedSingleFileOp(t, root, 0xfa)
+		opID := intent.OperationID()
+
+		journalPath := filepath.Join(root, ControlDirName, hex.EncodeToString(opID.Bytes()), journalFileName)
+		f, err := os.OpenFile(journalPath, os.O_WRONLY|os.O_APPEND, privateFileMode)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.WriteString("deadbeef {\"k\":\"partial\",\"bad\":true}\nsecond-corrupt\n"); err != nil {
+			_ = f.Close()
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		auth := newBoundAuthority(t, root)
+		defer auth.Close()
+		auth.openJournal = func(opDir *Dir, now func() time.Time) (*taskJournal, error) {
+			close(entered)
+			<-release
+			return openTaskJournal(opDir, now)
+		}
+
+		type selectOutcome struct {
+			lookup ActiveLookup
+			err    error
+		}
+		done := make(chan selectOutcome, 1)
+		go func() {
+			lookup, err := auth.SelectOperation(ctx, sel, receivecontract.AutomaticOperation())
+			done <- selectOutcome{lookup: lookup, err: err}
+		}()
+
+		select {
+		case <-entered:
+		case <-time.After(waitTimeout):
+			t.Fatal("timed out waiting for corrupt journal replay")
+		}
+		if _, err := DiscardOperation(ctx, root, opID); !errors.Is(err, ErrBusy) {
+			close(release)
+			<-done
+			t.Fatalf("DiscardOperation while reading corrupt journal = %v, want ErrBusy", err)
+		}
+		close(release)
+		select {
+		case out := <-done:
+			if out.err != nil || out.lookup.Kind() != LookupNeedsAttention || out.lookup.Attention() != AttentionOperation {
+				t.Fatalf("corrupt reopen = (kind=%v, attn=%q, err=%v), want LookupNeedsAttention(%q)",
+					out.lookup.Kind(), out.lookup.Attention(), out.err, AttentionOperation)
+			}
+		case <-time.After(waitTimeout):
+			t.Fatal("timed out waiting for corrupt reopen result")
+		}
+
+		summary, err := DiscardOperation(ctx, root, opID)
+		if err != nil || summary.State() != RecoveryOperationDiscarded {
+			t.Fatalf("DiscardOperation after rejected reopen = (%+v, %v), want discarded", summary, err)
+		}
+	})
+}
+
+func newBoundAuthority(t *testing.T, root string) *Authority {
+	t.Helper()
+	auth, err := New(Config{RootPath: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := auth.BindDestination(context.Background()); err != nil {
+		_ = auth.Close()
+		t.Fatal(err)
+	}
+	return auth
 }

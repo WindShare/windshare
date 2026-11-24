@@ -63,15 +63,30 @@ func (a *Authority) CreateOperation(
 		return nil, transfer.ErrInvalidOutputBinding
 	}
 
+	op, claimed, err := a.createOrClaimUnderDirLock(ctx, artifact, layout)
+	if err != nil {
+		return nil, err
+	}
+	if op != nil {
+		return op, nil
+	}
+	return a.finishRecheckedReopenLocked(ctx, claimed)
+}
+
+func (a *Authority) createOrClaimUnderDirLock(
+	ctx context.Context,
+	artifact receivecontract.ArtifactSpec,
+	layout receivecontract.DirectoryTreeLayout,
+) (*Operation, claimedTask, error) {
 	dirLock, err := acquireDirLock(a.root)
 	if err != nil {
-		return nil, wrapOutputFault(ctx, transferfault.OutputOwnership, "lock destination directory", err)
+		return nil, claimedTask{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "lock destination directory", err)
 	}
 	defer dirLock.Close()
 
 	ctrlDir, err := ensureControlDir(a.root)
 	if err != nil {
-		return nil, wrapOutputFault(ctx, transferfault.OutputOwnership, "prepare control directory", err)
+		return nil, claimedTask{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "prepare control directory", err)
 	}
 	defer ctrlDir.Close()
 
@@ -79,33 +94,33 @@ func (a *Authority) CreateOperation(
 	// automatic admission must re-check uniqueness under dirLock before creating
 	// a new task. Explicit --redownload intentionally creates a separate task.
 	if !a.admission.redownload {
-		existing, recheckErr := a.recheckAutomaticCreateLocked(ctx, ctrlDir, a.admission.selection)
+		claimed, recheckErr := a.recheckAutomaticCreateUnderDirLock(ctx, ctrlDir, a.admission.selection)
 		if recheckErr != nil {
-			return nil, recheckErr
+			return nil, claimedTask{}, recheckErr
 		}
-		if existing != nil {
-			return existing, nil
+		if claimed.taskLock != nil {
+			return nil, claimed, nil
 		}
 	}
 
 	opID, err := randomOperationID(a.random)
 	if err != nil {
-		return nil, err
+		return nil, claimedTask{}, err
 	}
 	resID, err := randomReservationID(a.random)
 	if err != nil {
-		return nil, err
+		return nil, claimedTask{}, err
 	}
 
 	authorityRef, err := ensureAuthorityRef(ctrlDir, a.random)
 	if err != nil {
-		return nil, wrapOutputFault(ctx, transferfault.OutputOwnership, "load authority ref", err)
+		return nil, claimedTask{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "load authority ref", err)
 	}
 
 	// Reserve top-level destination entry while holding the short control dir lock.
 	reservation, resDir, ownsRes, err := a.reserveTopLevelLocked(opID, resID, artifact, layout, authorityRef, ctrlDir)
 	if err != nil {
-		return nil, wrapOutputFault(ctx, transferfault.OutputOwnership, "reserve destination entry", err)
+		return nil, claimedTask{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "reserve destination entry", err)
 	}
 	rollbackReservation := func() {
 		if ownsRes {
@@ -116,76 +131,60 @@ func (a *Authority) CreateOperation(
 	plan, err := receivecontract.NewDirectTreePlan(artifact, reservation)
 	if err != nil {
 		rollbackReservation()
-		return nil, err
+		return nil, claimedTask{}, err
 	}
 	intent, err := transfer.NewReceiveIntent(a.admission.selection, artifact, plan)
 	if err != nil {
 		rollbackReservation()
-		return nil, err
+		return nil, claimedTask{}, err
 	}
 
 	op, err := a.initializeOperationDirLocked(ctx, ctrlDir, intent, resDir, ownsRes)
 	if err != nil {
 		rollbackReservation()
-		return nil, err
+		return nil, claimedTask{}, err
 	}
 	a.admission = nil
 	a.operation = op
 	a.stage = stageOperationReady
-	return op, nil
+	return op, claimedTask{}, nil
 }
 
-func (a *Authority) recheckAutomaticCreateLocked(
+func (a *Authority) recheckAutomaticCreateUnderDirLock(
 	ctx context.Context,
 	ctrlDir *Dir,
 	selection transfer.SelectionSpec,
-) (*Operation, error) {
+) (claimedTask, error) {
 	matches, err := findAutomaticMatchesLocked(ctrlDir, selection.Digest())
 	if err != nil {
-		return nil, wrapOutputFault(ctx, transferfault.OutputOwnership, "list control directory", err)
+		return claimedTask{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "list control directory", err)
 	}
 	switch len(matches) {
 	case 0:
-		return nil, nil
+		return claimedTask{}, nil
 	case 1:
-		reopened, err := a.reopenMatchLocked(ctx, ctrlDir, selection, matches[0])
+		claimed, early, err := a.claimOpUnderDirLock(ctx, ctrlDir, matches[0], false)
 		if err != nil {
 			a.admission = nil
 			a.stage = stageStopped
-			return nil, err
+			return claimedTask{}, err
 		}
-		a.admission = nil
-		switch reopened.kind {
-		case LookupReopened:
-			emitTrace(a.diagnostics, traceEvent{
-				component:    "session",
-				operation:    "create_operation",
-				decision:     "reopened",
-				bindingID:    a.bindingID,
-				operationID:  reopened.operation.intent.OperationID(),
-				intentDigest: reopened.operation.intent.Digest(),
-			})
-			return reopened.operation, nil
-		case LookupAlreadyRunning:
+		if early.kind == LookupAlreadyRunning {
+			a.admission = nil
 			emitTrace(a.diagnostics, traceEvent{
 				component: "session",
 				operation: "create_operation",
 				decision:  "already_running",
 				bindingID: a.bindingID,
 			})
-			return nil, ErrAlreadyRunning
-		case LookupNeedsAttention:
-			emitTrace(a.diagnostics, traceEvent{
-				component: "session",
-				operation: "create_operation",
-				decision:  "needs_attention",
-				bindingID: a.bindingID,
-			})
-			return nil, &AttentionError{Reason: reopened.attention}
-		default:
-			a.stage = stageStopped
-			return nil, transfer.ErrInvalidOutputBinding
+			return claimedTask{}, ErrAlreadyRunning
 		}
+		if early.kind != 0 {
+			a.admission = nil
+			a.stage = stageStopped
+			return claimedTask{}, transfer.ErrInvalidOutputBinding
+		}
+		return claimed, nil
 	default:
 		a.admission = nil
 		a.stage = stageStopped
@@ -195,7 +194,43 @@ func (a *Authority) recheckAutomaticCreateLocked(
 			decision:  "ambiguous",
 			bindingID: a.bindingID,
 		})
-		return nil, ErrAmbiguous
+		return claimedTask{}, ErrAmbiguous
+	}
+}
+
+func (a *Authority) finishRecheckedReopenLocked(
+	ctx context.Context,
+	claimed claimedTask,
+) (*Operation, error) {
+	selection := a.admission.selection
+	reopened, err := a.reopenClaimedLocked(ctx, selection, claimed, false)
+	a.admission = nil
+	if err != nil {
+		a.stage = stageStopped
+		return nil, err
+	}
+	switch reopened.kind {
+	case LookupReopened:
+		emitTrace(a.diagnostics, traceEvent{
+			component:    "session",
+			operation:    "create_operation",
+			decision:     "reopened",
+			bindingID:    a.bindingID,
+			operationID:  reopened.operation.intent.OperationID(),
+			intentDigest: reopened.operation.intent.Digest(),
+		})
+		return reopened.operation, nil
+	case LookupNeedsAttention:
+		emitTrace(a.diagnostics, traceEvent{
+			component: "session",
+			operation: "create_operation",
+			decision:  "needs_attention",
+			bindingID: a.bindingID,
+		})
+		return nil, &AttentionError{Reason: reopened.attention}
+	default:
+		a.stage = stageStopped
+		return nil, transfer.ErrInvalidOutputBinding
 	}
 }
 

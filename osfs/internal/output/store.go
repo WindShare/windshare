@@ -57,6 +57,7 @@ type Authority struct {
 	diagnostics diagnostics.Sink
 	random      io.Reader
 	now         func() time.Time
+	openJournal func(*Dir, func() time.Time) (*taskJournal, error)
 
 	mu          sync.Mutex
 	stage       authorityStage
@@ -67,6 +68,15 @@ type Authority struct {
 	bindingID   [32]byte
 	admission   *pendingAdmission
 	operation   *Operation
+}
+
+// claimedTask holds an opened operation directory and its exclusive
+// non-blocking task.lock acquired under dirLock so full journal replay can
+// proceed under task.lock after dirLock is released.
+type claimedTask struct {
+	opDirName string
+	opDir     *Dir
+	taskLock  *FileLock
 }
 
 type pendingAdmission struct {
@@ -103,6 +113,7 @@ func New(cfg Config) (*Authority, error) {
 		diagnostics: cfg.Diagnostics,
 		random:      rand.Reader,
 		now:         time.Now,
+		openJournal: openTaskJournal,
 		stage:       stageConstructed,
 	}, nil
 }
@@ -201,53 +212,55 @@ func (a *Authority) selectByIDLocked(
 	selection transfer.SelectionSpec,
 	opID receivecontract.OperationID,
 ) (ActiveLookup, error) {
+	opDirName := hex.EncodeToString(opID.Bytes())
+	claimed, early, err := a.claimByIDUnderDirLock(ctx, opDirName)
+	if err != nil || early.kind != 0 {
+		return early, err
+	}
+	return a.reopenClaimedLocked(ctx, selection, claimed, true)
+}
+
+func (a *Authority) claimByIDUnderDirLock(
+	ctx context.Context,
+	opDirName string,
+) (claimedTask, ActiveLookup, error) {
 	dirLock, err := acquireDirLock(a.root)
 	if err != nil {
-		return ActiveLookup{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "lock destination directory", err)
+		return claimedTask{}, ActiveLookup{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "lock destination directory", err)
 	}
 	defer dirLock.Close()
 
 	ctrlDir, err := openChildDir(a.root, ControlDirName)
 	if errors.Is(err, fs.ErrNotExist) {
 		a.stage = stageStopped
-		return ActiveLookup{authority: a, kind: LookupNotFound}, nil
+		return claimedTask{}, ActiveLookup{authority: a, kind: LookupNotFound}, nil
 	}
 	if err != nil {
-		return ActiveLookup{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "open control directory", err)
+		return claimedTask{}, ActiveLookup{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "open control directory", err)
 	}
 	defer ctrlDir.Close()
 
-	opDirName := hex.EncodeToString(opID.Bytes())
-	opDir, err := openChildDir(ctrlDir, opDirName)
-	if errors.Is(err, fs.ErrNotExist) {
-		a.stage = stageStopped
-		return ActiveLookup{authority: a, kind: LookupNotFound}, nil
-	}
-	if err != nil {
-		return ActiveLookup{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "open operation directory", err)
-	}
-
-	taskLock, _, lockErr := acquireLockFile(opDir, taskLockFileName, false)
-	if errors.Is(lockErr, ErrNamespaceLockBusy) {
-		_ = opDir.Close()
-		a.stage = stageStopped
-		return ActiveLookup{authority: a, kind: LookupAlreadyRunning}, nil
-	}
-	if lockErr != nil {
-		_ = opDir.Close()
-		return ActiveLookup{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "acquire task lock", lockErr)
-	}
-
-	return a.reopenLocked(ctx, selection, opDirName, opDir, taskLock, true)
+	return a.claimOpUnderDirLock(ctx, ctrlDir, opDirName, true)
 }
 
 func (a *Authority) selectAutomaticLocked(
 	ctx context.Context,
 	selection transfer.SelectionSpec,
 ) (ActiveLookup, error) {
+	claimed, early, err := a.claimAutomaticUnderDirLock(ctx, selection)
+	if err != nil || early.kind != 0 {
+		return early, err
+	}
+	return a.reopenClaimedLocked(ctx, selection, claimed, false)
+}
+
+func (a *Authority) claimAutomaticUnderDirLock(
+	ctx context.Context,
+	selection transfer.SelectionSpec,
+) (claimedTask, ActiveLookup, error) {
 	dirLock, err := acquireDirLock(a.root)
 	if err != nil {
-		return ActiveLookup{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "lock destination directory", err)
+		return claimedTask{}, ActiveLookup{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "lock destination directory", err)
 	}
 	defer dirLock.Close()
 
@@ -256,28 +269,28 @@ func (a *Authority) selectAutomaticLocked(
 		adm := &pendingAdmission{selection: selection}
 		a.admission = adm
 		a.stage = stageLookupHeld
-		return ActiveLookup{authority: a, kind: LookupCreateReady, admission: adm}, nil
+		return claimedTask{}, ActiveLookup{authority: a, kind: LookupCreateReady, admission: adm}, nil
 	}
 	if err != nil {
-		return ActiveLookup{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "open control directory", err)
+		return claimedTask{}, ActiveLookup{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "open control directory", err)
 	}
 	defer ctrlDir.Close()
 
 	matches, err := findAutomaticMatchesLocked(ctrlDir, selection.Digest())
 	if err != nil {
-		return ActiveLookup{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "list control directory", err)
+		return claimedTask{}, ActiveLookup{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "list control directory", err)
 	}
 	switch len(matches) {
 	case 0:
 		adm := &pendingAdmission{selection: selection}
 		a.admission = adm
 		a.stage = stageLookupHeld
-		return ActiveLookup{authority: a, kind: LookupCreateReady, admission: adm}, nil
+		return claimedTask{}, ActiveLookup{authority: a, kind: LookupCreateReady, admission: adm}, nil
 	case 1:
-		return a.reopenMatchLocked(ctx, ctrlDir, selection, matches[0])
+		return a.claimOpUnderDirLock(ctx, ctrlDir, matches[0], false)
 	default:
 		a.stage = stageStopped
-		return ActiveLookup{authority: a, kind: LookupAmbiguous}, nil
+		return claimedTask{}, ActiveLookup{authority: a, kind: LookupAmbiguous}, nil
 	}
 }
 
@@ -313,38 +326,60 @@ func findAutomaticMatchesLocked(
 	return matches, nil
 }
 
-func (a *Authority) reopenMatchLocked(
+// claimOpUnderDirLock opens opDirName and acquires its non-blocking task.lock
+// while dirLock prevents concurrent retirement. Callers release ctrlDir and
+// dirLock before replaying state.log so per-task I/O never blocks unrelated
+// tasks sharing the destination container.
+func (a *Authority) claimOpUnderDirLock(
 	ctx context.Context,
 	ctrlDir *Dir,
-	selection transfer.SelectionSpec,
 	opDirName string,
-) (ActiveLookup, error) {
+	allowNotFound bool,
+) (claimedTask, ActiveLookup, error) {
 	opDir, err := openChildDir(ctrlDir, opDirName)
+	if allowNotFound && errors.Is(err, fs.ErrNotExist) {
+		a.stage = stageStopped
+		return claimedTask{}, ActiveLookup{authority: a, kind: LookupNotFound}, nil
+	}
 	if err != nil {
-		return ActiveLookup{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "open matched operation", err)
+		opLabel := "open matched operation"
+		if allowNotFound {
+			opLabel = "open operation directory"
+		}
+		return claimedTask{}, ActiveLookup{}, wrapOutputFault(ctx, transferfault.OutputOwnership, opLabel, err)
 	}
 	taskLock, _, lockErr := acquireLockFile(opDir, taskLockFileName, false)
 	if errors.Is(lockErr, ErrNamespaceLockBusy) {
 		_ = opDir.Close()
 		a.stage = stageStopped
-		return ActiveLookup{authority: a, kind: LookupAlreadyRunning}, nil
+		return claimedTask{}, ActiveLookup{authority: a, kind: LookupAlreadyRunning}, nil
 	}
 	if lockErr != nil {
 		_ = opDir.Close()
-		return ActiveLookup{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "acquire task lock", lockErr)
+		return claimedTask{}, ActiveLookup{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "acquire task lock", lockErr)
 	}
-	return a.reopenLocked(ctx, selection, opDirName, opDir, taskLock, false)
+	return claimedTask{
+		opDirName: opDirName,
+		opDir:     opDir,
+		taskLock:  taskLock,
+	}, ActiveLookup{}, nil
 }
 
-func (a *Authority) reopenLocked(
+// reopenClaimedLocked finishes reopening an operation under a.mu and task.lock
+// after dirLock has been released. Full journal replay, torn-tail truncation,
+// and compaction stay scoped to the task's own lock.
+func (a *Authority) reopenClaimedLocked(
 	ctx context.Context,
 	selection transfer.SelectionSpec,
-	opDirName string,
-	opDir *Dir,
-	taskLock *FileLock,
+	claimed claimedTask,
 	explicitByID bool,
 ) (ActiveLookup, error) {
-	journal, err := openTaskJournal(opDir, a.now)
+	opDirName, opDir, taskLock := claimed.opDirName, claimed.opDir, claimed.taskLock
+	openJournal := a.openJournal
+	if openJournal == nil {
+		openJournal = openTaskJournal
+	}
+	journal, err := openJournal(opDir, a.now)
 	if err != nil {
 		_ = errors.Join(taskLock.Close(), opDir.Close())
 		if errors.Is(err, errJournalCorrupt) || errors.Is(err, fs.ErrNotExist) {
