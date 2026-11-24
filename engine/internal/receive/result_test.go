@@ -13,6 +13,7 @@ import (
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/engine/internal/task"
+	"github.com/windshare/windshare/engine/output"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
 )
@@ -303,5 +304,38 @@ func TestPreparationFailureAfterConfirmedRelayStop(t *testing.T) {
 			cleanup != nil && (!errors.Is(failure, cleanup) || completed.Value.Recovery.Reason != RecoveryNeedsInspection) {
 			t.Fatalf("primary failure = %+v, cleanup=%v", failure, cleanup)
 		}
+	}
+}
+
+func TestReceiveSettlementRetainsValidNameAdjustmentsAndRejectsInvalid(t *testing.T) {
+	adjustments := output.NameAdjustmentSummary{
+		Count: 2,
+		Samples: []output.NameAdjustment{
+			{LogicalPath: "CON.txt", PhysicalPath: "entry-CON.windshare-01.txt"},
+			{LogicalPath: "12:30.log", PhysicalPath: "12-30.windshare-02.log"},
+		},
+	}
+	settled, err := Settle(SettlementInput{
+		Result:          successfulJobResult(t),
+		Destination:     "C:/downloads/project",
+		NameAdjustments: adjustments,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled.Outcome != task.OutcomeSuccess || settled.FailureClass != task.FailureNone {
+		t.Fatalf("name adjustments degraded outcome: %+v", settled)
+	}
+	adjustments.Samples[0].LogicalPath = "mutated"
+	if settled.Value.NameAdjustments.Count != 2 || len(settled.Value.NameAdjustments.Samples) != 2 ||
+		settled.Value.NameAdjustments.Samples[0].LogicalPath != "CON.txt" {
+		t.Fatalf("settled adjustments = %+v", settled.Value.NameAdjustments)
+	}
+
+	if _, err := Settle(SettlementInput{
+		Result:          successfulJobResult(t),
+		NameAdjustments: output.NameAdjustmentSummary{Count: 1},
+	}); !errors.Is(err, ErrInvalidResult) {
+		t.Fatalf("invalid adjustments err = %v, want ErrInvalidResult", err)
 	}
 }

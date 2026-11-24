@@ -137,3 +137,61 @@ func TestDisplayValuesAreEscapedBeforeLayout(t *testing.T) {
 		t.Fatalf("escaped subject = %q", text)
 	}
 }
+
+func TestTransferResultFormatsNameAdjustmentsOnlyWhenPresent(t *testing.T) {
+	t.Parallel()
+	render := func(res TransferResult) string {
+		var out strings.Builder
+		for _, line := range formatTransferResult(res, SelectSymbols(false)) {
+			out.WriteString(lineText(line))
+			out.WriteByte('\n')
+		}
+		return out.String()
+	}
+
+	plain := render(TransferResult{Status: ResultSuccess, Destination: "out", CountersExact: true})
+	if strings.Contains(plain, "compatible name") {
+		t.Fatalf("zero adjustments emitted notice: %q", plain)
+	}
+
+	single := render(TransferResult{
+		Status: ResultSuccess, Destination: "out", CountersExact: false,
+		NameAdjustments: engine.NameAdjustmentSummary{
+			Count: 1,
+			Samples: []engine.NameAdjustment{
+				{LogicalPath: "sub/CON\x1b[31m.txt", PhysicalPath: "sub/entry-CON.windshare-01.txt"},
+			},
+		},
+	})
+	for _, want := range []string{
+		"1 item saved under a compatible name:",
+		`sub/CON\x1b[31m.txt -> sub/entry-CON.windshare-01.txt`,
+	} {
+		if !strings.Contains(single, want) {
+			t.Fatalf("single adjustment output %q missing %q", single, want)
+		}
+	}
+	if strings.Contains(single, ">=1 item") || strings.Contains(single, "more;") {
+		t.Fatalf("unexpected inexact or overflow wording: %q", single)
+	}
+
+	capped := render(TransferResult{
+		Status: ResultSuccess, Destination: "out", CountersExact: true,
+		NameAdjustments: engine.NameAdjustmentSummary{
+			Count: 25,
+			Samples: []engine.NameAdjustment{
+				{LogicalPath: "a:1.txt", PhysicalPath: "a-1.windshare-01.txt"},
+				{LogicalPath: "a:2.txt", PhysicalPath: "a-2.windshare-02.txt"},
+			},
+		},
+	})
+	for _, want := range []string{
+		"25 items saved under compatible names:",
+		"a:1.txt -> a-1.windshare-01.txt",
+		"23 more; use --trace to record all mappings.",
+	} {
+		if !strings.Contains(capped, want) {
+			t.Fatalf("capped adjustment output %q missing %q", capped, want)
+		}
+	}
+}

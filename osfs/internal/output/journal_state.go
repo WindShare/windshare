@@ -46,6 +46,7 @@ type journalRecord struct {
 	LogicalPath       string `json:"lpath,omitempty"`
 	PhysicalComponent string `json:"pcomp,omitempty"`
 	Attempt           uint32 `json:"att,omitempty"`
+	Directory         bool   `json:"dir,omitempty"`
 
 	// File state records ("partial", "publishing", "delivered", "retired")
 	FileID        string          `json:"fid,omitempty"`
@@ -201,6 +202,7 @@ func (s *journalState) applyName(rec journalRecord) error {
 		LogicalPath:       rec.LogicalPath,
 		PhysicalComponent: rec.PhysicalComponent,
 		Attempt:           rec.Attempt,
+		Directory:         rec.Directory,
 	}
 	return nil
 }
@@ -356,6 +358,7 @@ func nameToRecord(m NameMapping) journalRecord {
 		LogicalPath:       m.LogicalPath,
 		PhysicalComponent: m.PhysicalComponent,
 		Attempt:           m.Attempt,
+		Directory:         m.Directory,
 	}
 }
 

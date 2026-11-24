@@ -25,6 +25,7 @@ type TransferResult struct {
 	Elapsed              time.Duration
 	Destination          string
 	DestinationAdjusted  bool
+	NameAdjustments      engine.NameAdjustmentSummary
 	Files                transfer.FileOutcomeSummary
 	SourceOmittedEntries uint64
 	DirectoryFailures    uint64
@@ -65,6 +66,9 @@ func formatTransferResult(result TransferResult, symbols Symbols) []terminalcanv
 		headline,
 		terminalcanvas.NewLine(terminalcanvas.Span{Text: destination}),
 		terminalcanvas.NewLine(terminalcanvas.Span{Text: "  " + formatOutcomeSummary(result, symbols.Separator)}),
+	}
+	if result.NameAdjustments.Count != 0 {
+		lines = append(lines, formatNameAdjustments(result.NameAdjustments)...)
 	}
 	if result.SourceOmittedEntries != 0 {
 		lines = append(lines, terminalcanvas.Plain("  A skipped directory counts as one item; all of its contents are excluded."))
@@ -170,6 +174,44 @@ func countedResultNoun(result TransferResult, count uint64, singular, plural str
 		label = singular
 	}
 	return resultCount(result, count) + " " + label
+}
+
+func exactCountedNoun(count uint64, singular, plural string) string {
+	label := plural
+	if count == 1 {
+		label = singular
+	}
+	return formatCount(count) + " " + label
+}
+
+func formatNameAdjustments(summary engine.NameAdjustmentSummary) []terminalcanvas.Line {
+	if summary.Count == 0 {
+		return nil
+	}
+	// Count comes from the operation's persisted name-mapping ledger rather
+	// than bounded transfer progress counters, so it is always exact.
+	header := "  " + exactCountedNoun(
+		summary.Count,
+		"item saved under a compatible name",
+		"items saved under compatible names",
+	)
+	if len(summary.Samples) == 0 {
+		return []terminalcanvas.Line{terminalcanvas.Plain(header + ".")}
+	}
+	lines := make([]terminalcanvas.Line, 0, len(summary.Samples)+2)
+	lines = append(lines, terminalcanvas.Plain(header+":"))
+	for _, sample := range summary.Samples {
+		lines = append(lines, terminalcanvas.Plain(
+			"    "+escapedDisplay(sample.LogicalPath)+" -> "+escapedDisplay(sample.PhysicalPath),
+		))
+	}
+	if summary.Count > uint64(len(summary.Samples)) {
+		omitted := summary.Count - uint64(len(summary.Samples))
+		lines = append(lines, terminalcanvas.Plain(
+			"    "+formatCount(omitted)+" more; use --trace to record all mappings.",
+		))
+	}
+	return lines
 }
 
 func formatShareResult(result ShareResult, symbols Symbols) terminalcanvas.Line {

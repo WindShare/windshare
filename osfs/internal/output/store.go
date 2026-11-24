@@ -401,6 +401,7 @@ func (a *Authority) reopenLocked(
 		taskLock:  taskLock,
 		journal:   journal,
 	}
+	op.refreshNameAdjustments()
 	a.operation = op
 	a.stage = stageOperationReady
 	return ActiveLookup{authority: a, kind: LookupReopened, operation: op}, nil

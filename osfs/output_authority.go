@@ -15,6 +15,9 @@ type OutputConfig struct {
 	Diagnostics diagnostics.Sink
 }
 
+type NameAdjustment = output.NameAdjustment
+type NameAdjustmentSummary = output.NameAdjustmentSummary
+
 // OutputAuthority owns native best-effort resumable destination storage without
 // depending on application-layer engine ports.
 type OutputAuthority struct {
@@ -138,4 +141,11 @@ func (operation *OutputOperation) Discard(ctx context.Context) error {
 		return transfer.ErrInvalidOutputBinding
 	}
 	return operation.native.Discard(ctx)
+}
+
+func (operation *OutputOperation) NameAdjustments() NameAdjustmentSummary {
+	if operation == nil || operation.native == nil {
+		return NameAdjustmentSummary{}
+	}
+	return operation.native.NameAdjustments()
 }

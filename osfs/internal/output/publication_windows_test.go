@@ -553,3 +553,161 @@ func TestWindowsDiscardUnlinksScratchJunctionWithoutDeletingTarget(t *testing.T)
 		t.Fatalf("junction target was modified by scratch cleanup: (%q, %v)", got, err)
 	}
 }
+
+func TestWindowsNestedReservedNamesReportRelativeAdjustmentsWithoutSidecar(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	auth, err := New(Config{RootPath: root, CreateRoot: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer auth.Close()
+	if err := auth.BindDestination(ctx); err != nil {
+		t.Fatal(err)
+	}
+	sel := testSelectionSpec(t, 0xd1)
+	lookup, err := auth.SelectOperation(ctx, sel, receivecontract.AutomaticOperation())
+	if err != nil || lookup.Kind() != LookupCreateReady {
+		t.Fatalf("select = (%v, %v)", lookup.Kind(), err)
+	}
+	art, err := receivecontract.NewResultRootDirectoryTree(receivecontract.NewSyntheticSelectionResultRoot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, err := auth.CreateOperation(ctx, lookup, art)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, _ := op.ReceiveIntent()
+	res, _ := intent.MaterializationPlan().DestinationReservation()
+	session, err := auth.OpenOperation(ctx, op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootAdm := testAdmitRoot(t, session, intent, 0xd3)
+
+	// Admit a Windows-reserved nested directory ("PRN") and write a colon-named
+	// file inside it alongside a reserved file ("CON") and an ordinary file.
+	rootSrc := ordinaryoutput.EmptySourceCatalogPath()
+	rootReq, err := transfer.NewDirectoryMaterializationRequest(
+		intent,
+		transfer.AuthenticatedSourceDirectory{
+			DirectoryID: rootAdm.DirectoryID(), Generation: rootAdm.Generation(),
+			SourcePath: rootSrc, ModifiedTime: rootAdm.ModifiedTime(),
+		},
+		ordinaryoutput.SourceNodeSelected,
+		transfer.MaterializedDirectoryClaim{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootClaim, err := transfer.NewMaterializedDirectoryClaim(rootAdm, rootReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prnSrc, err := ordinaryoutput.NewSourceCatalogPath("PRN")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prnReq, err := transfer.NewDirectoryMaterializationRequest(
+		intent,
+		transfer.AuthenticatedSourceDirectory{
+			DirectoryID: testID16[catalog.DirectoryID](0xd4), Generation: testID16[catalog.DirectoryGeneration](0xd5),
+			SourcePath: prnSrc, ParentAdmission: rootAdm,
+		},
+		ordinaryoutput.SourceNodeSelected,
+		rootClaim,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prnAdm, err := session.AdmitDirectory(ctx, prnReq)
+	if err != nil {
+		t.Fatalf("AdmitDirectory(PRN): %v", err)
+	}
+	prnClaim, err := transfer.NewMaterializedDirectoryClaim(prnAdm, prnReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writeCommitted := func(file transfer.MaterializationFile, body string) {
+		t.Helper()
+		start, err := session.BeginFile(ctx, file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tx, _, ok := start.Transaction()
+		if !ok {
+			t.Fatalf("expected transaction for %s", file.MaterializationRelativePath())
+		}
+		if err := tx.WriteRange(ctx, 0, []byte(body)); err != nil {
+			t.Fatal(err)
+		}
+		if settled, err := tx.Commit(ctx); err != nil || settled.Kind() != transfer.FilePublished {
+			t.Fatalf("commit %s = (%v, %v)", file.MaterializationRelativePath(), settled.Kind(), err)
+		}
+	}
+
+	writeCommitted(testMaterializationFile(t, session, intent, 0xd6, "CON", 3, rootAdm), "con")
+	writeCommitted(testMaterializationFile(t, session, intent, 0xd8, "ok.txt", 2, rootAdm), "ok")
+
+	logGeom, err := content.NewFileGeometry(3, catalog.DefaultChunkSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logDesc, err := content.NewFileRevisionDescriptor(
+		intent.ShareInstance(), testID16[catalog.FileID](0xda), testID16[content.FileRevision](0xdb), logGeom, catalog.ModifiedTime{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logParent, err := transfer.NewDirectoryMaterializationFileParent(
+		prnReq.Source().DirectoryID, prnReq.Source().Generation, prnReq.Source().SourcePath, prnAdm, prnClaim,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logSrc, err := ordinaryoutput.NewSourceCatalogPath("PRN/12:30.log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	logRel, err := transfer.NewMaterializationRootRelativePath(prnAdm.Path() + "/12:30.log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	logFile, err := transfer.NewMaterializationFile(intent, logSrc, logRel, logDesc, session.SessionID(), logParent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeCommitted(logFile, "log")
+
+	if _, err := session.FinalizeDirectory(ctx, prnAdm); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.FinalizeDirectory(ctx, rootAdm); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.FinalizeTree(ctx, transfer.DirectTreeOutcomeSuccess); err != nil {
+		t.Fatal(err)
+	}
+
+	summary := op.NameAdjustments()
+	if summary.Count != 3 || len(summary.Samples) != 3 {
+		t.Fatalf("windows adjustments = %+v, want 3 entries", summary)
+	}
+	wantLogical := []string{"CON", "PRN", "PRN/12:30.log"}
+	destDir := filepath.Join(root, res.PhysicalName())
+	for i, want := range wantLogical {
+		got := summary.Samples[i]
+		if got.LogicalPath != want || got.PhysicalPath == want {
+			t.Fatalf("sample[%d] = %+v, want logical %q", i, got, want)
+		}
+		if _, err := os.Stat(filepath.Join(destDir, filepath.FromSlash(got.PhysicalPath))); err != nil {
+			t.Fatalf("adjusted path %q missing on disk: %v", got.PhysicalPath, err)
+		}
+	}
+	topEntries, err := os.ReadDir(root)
+	if err != nil || len(topEntries) != 1 || topEntries[0].Name() != res.PhysicalName() {
+		t.Fatalf("unexpected sidecar beside destination: %v (%v)", topEntries, err)
+	}
+}

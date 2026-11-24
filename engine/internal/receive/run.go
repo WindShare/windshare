@@ -86,7 +86,11 @@ func runAttempt(ctx context.Context, input preparedRequest, deps Dependencies, r
 		connectionErr = nil
 	}
 	active.execution.CloseWithReason(getSettlementStopReason(ctx.Err(), admissionErr, runtimeErr, connectionErr))
-	settlement = &SettlementInput{Result: result, AdmissionError: admissionErr, RuntimeError: runtimeErr, ConnectionError: connectionErr, ContextError: ctx.Err(), Destination: prepared.destination, DestinationAdjusted: prepared.destinationAdjusted, Operation: prepared.job.ReceiveIntent().OperationID(), Job: prepared.job.JobID()}
+	var nameAdjustments NameAdjustmentSummary
+	if prepared.operation.Control != nil {
+		nameAdjustments = prepared.operation.Control.NameAdjustments()
+	}
+	settlement = &SettlementInput{Result: result, AdmissionError: admissionErr, RuntimeError: runtimeErr, ConnectionError: connectionErr, ContextError: ctx.Err(), Destination: prepared.destination, DestinationAdjusted: prepared.destinationAdjusted, NameAdjustments: nameAdjustments, Operation: prepared.job.ReceiveIntent().OperationID(), Job: prepared.job.JobID()}
 	return
 }
 

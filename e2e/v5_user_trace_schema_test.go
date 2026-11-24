@@ -203,6 +203,7 @@ func buildV5TracePayloadSchemas() map[string]*v5TraceObjectSchema {
 			v5TraceFields(v5TraceString, "result_status", "drift"),
 			v5TraceFields(v5TraceInteger, "exit_code"),
 			v5TraceFields(v5TraceDecimal, "result_elapsed_ms", "source_omitted_entries", "directory_failures", "omitted_diagnostics", "published_bytes"),
+			v5TraceOptionalFields(v5TraceDecimal, "name_adjustments"),
 			v5TraceFields(v5TraceBool, "destination_adjusted", "counters_exact"),
 			v5TraceObjectField("file_outcomes", fileOutcomes, false),
 			v5TraceObjectField("failure", failure, true),

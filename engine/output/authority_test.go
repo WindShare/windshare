@@ -57,3 +57,41 @@ func TestFactoryOwnsProviderConstructionFailure(t *testing.T) {
 		t.Fatalf("provider failure replaced: %v", err)
 	}
 }
+
+func TestNameAdjustmentSummaryValidationAndClone(t *testing.T) {
+	if !(NameAdjustmentSummary{}).Empty() || !(NameAdjustmentSummary{}).Valid() {
+		t.Fatal("zero summary must be empty and valid")
+	}
+	valid := NameAdjustmentSummary{
+		Count: 25,
+		Samples: []NameAdjustment{
+			{LogicalPath: "CON.txt", PhysicalPath: "entry-CON.windshare-01.txt"},
+		},
+	}
+	if valid.Empty() || !valid.Valid() {
+		t.Fatalf("valid summary rejected: %+v", valid)
+	}
+	cloned := valid.Clone()
+	cloned.Samples[0].LogicalPath = "mutated"
+	if valid.Samples[0].LogicalPath != "CON.txt" {
+		t.Fatal("Clone shared sample backing slice")
+	}
+
+	tooMany := make([]NameAdjustment, MaxNameAdjustmentSamples+1)
+	for i := range tooMany {
+		tooMany[i] = NameAdjustment{LogicalPath: "a", PhysicalPath: "b"}
+	}
+	for _, invalid := range []NameAdjustmentSummary{
+		{Count: 0, Samples: []NameAdjustment{{LogicalPath: "a", PhysicalPath: "b"}}},
+		{Count: 1},
+		{Count: 1, Samples: []NameAdjustment{{LogicalPath: "a", PhysicalPath: "b"}, {LogicalPath: "c", PhysicalPath: "d"}}},
+		{Count: uint64(len(tooMany)), Samples: tooMany},
+		{Count: 1, Samples: []NameAdjustment{{LogicalPath: "", PhysicalPath: "b"}}},
+		{Count: 1, Samples: []NameAdjustment{{LogicalPath: "a", PhysicalPath: ""}}},
+		{Count: 1, Samples: []NameAdjustment{{LogicalPath: "same", PhysicalPath: "same"}}},
+	} {
+		if invalid.Valid() {
+			t.Fatalf("invalid summary accepted: %+v", invalid)
+		}
+	}
+}

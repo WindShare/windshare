@@ -208,6 +208,11 @@ func TestCompatibleNameRepairReusesMappingAcrossRestartWithoutJSONDump(t *testin
 	if _, err := session.PauseTree(ctx); err != nil {
 		t.Fatal(err)
 	}
+	// Single-file reservations stay staged privately until commit, so a paused
+	// single file must not claim it was already saved under a compatible name.
+	if paused := op.NameAdjustments(); paused.Count != 0 || len(paused.Samples) != 0 {
+		t.Fatalf("paused single-file adjustments = %+v, want empty", paused)
+	}
 	if err := auth.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -254,6 +259,10 @@ func TestCompatibleNameRepairReusesMappingAcrossRestartWithoutJSONDump(t *testin
 	}
 	if strings.HasSuffix(entries[0].Name(), ".json") || entries[0].Name() == ControlDirName {
 		t.Fatalf("unexpected entry name %q", entries[0].Name())
+	}
+	if summary := reLookup.Operation().NameAdjustments(); summary.Count != 1 || len(summary.Samples) != 1 ||
+		summary.Samples[0].LogicalPath != ".windshare-tmp" || summary.Samples[0].PhysicalPath != entries[0].Name() {
+		t.Fatalf("completed single-file adjustments = %+v, want .windshare-tmp -> %q", summary, entries[0].Name())
 	}
 	data, err := os.ReadFile(filepath.Join(root, entries[0].Name()))
 	if err != nil || string(data) != "partdone" {

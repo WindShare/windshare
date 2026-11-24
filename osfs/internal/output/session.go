@@ -265,7 +265,7 @@ func (s *Session) openAdmittedDirLocked(
 		}
 		return nil, false, transfer.ErrInvalidOutputBinding
 	}
-	leaf, err := s.names.bindLeaf(logicalPath, parentState.dir)
+	leaf, err := s.names.bindLeaf(logicalPath, parentState.dir, true)
 	if err != nil {
 		return nil, false, wrapOutputFault(ctx, transferfault.OutputNamespaceUnsafe, "map directory name", err)
 	}
@@ -376,6 +376,7 @@ func (s *Session) PauseTree(ctx context.Context) (transfer.DirectTreeSettlement,
 		}
 	}
 	flushErr := s.op.journal.flush()
+	s.op.refreshNameAdjustments()
 
 	s.mu.Lock()
 	s.closeDirHandlesLocked()
@@ -457,6 +458,8 @@ func (s *Session) FinalizeTree(
 	s.closeKind = 2
 	s.closeSettlement = settlement
 	s.mu.Unlock()
+
+	s.op.refreshNameAdjustments()
 
 	if outcome == transfer.DirectTreeOutcomeSuccess {
 		// Completed transfer: acquire the directory lock before releasing

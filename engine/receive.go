@@ -65,6 +65,10 @@ type OutputLookup = receive.OutputLookup
 type OutputLookupKind = receive.OutputLookupKind
 type OutputReservation = receive.OutputReservation
 type OutputOperation = receive.OutputOperation
+type NameAdjustment = receive.NameAdjustment
+type NameAdjustmentSummary = receive.NameAdjustmentSummary
+
+const MaxNameAdjustmentSamples = receive.MaxNameAdjustmentSamples
 
 const (
 	ConnectivityAuto                 = receive.ConnectivityAuto

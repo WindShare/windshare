@@ -132,6 +132,24 @@ func (control outputOperationControl) Discard(ctx context.Context) error {
 	return sealOutputError(control.operation.Discard(ctx))
 }
 
+func (control outputOperationControl) NameAdjustments() output.NameAdjustmentSummary {
+	summary := control.operation.NameAdjustments()
+	if summary.Count == 0 {
+		return output.NameAdjustmentSummary{}
+	}
+	samples := make([]output.NameAdjustment, len(summary.Samples))
+	for i, sample := range summary.Samples {
+		samples[i] = output.NameAdjustment{
+			LogicalPath:  sample.LogicalPath,
+			PhysicalPath: sample.PhysicalPath,
+		}
+	}
+	return output.NameAdjustmentSummary{
+		Count:   summary.Count,
+		Samples: samples,
+	}
+}
+
 var _ output.OperationControl = outputOperationControl{}
 
 func projectOperation(native *osfs.OutputOperation, absRoot string) (output.Operation, error) {

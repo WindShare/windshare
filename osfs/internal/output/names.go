@@ -5,26 +5,52 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"unicode"
 	"unicode/utf8"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 const (
-	MaxPortableNameBytes  = 255
-	MaxNameRepairAttempts = 16
-	MaxNameMappings       = 65_536
-	nameTokenBytes        = 16
-	nameSuffix            = ".windshare-"
-	defaultNamePrefix     = "entry"
-	maxExtensionBytes     = 32
+	MaxPortableNameBytes     = 255
+	MaxNameRepairAttempts    = 16
+	MaxNameMappings          = 65_536
+	MaxNameAdjustmentSamples = 20
+	nameTokenBytes           = 16
+	nameSuffix               = ".windshare-"
+	defaultNamePrefix        = "entry"
+	maxExtensionBytes        = 32
 )
 
 var ErrInvalidNameMapping = errors.New("output name mapping is invalid")
+
+// NameAdjustment records one logical name or path saved under a compatible
+// physical spelling: relative to the destination directory for nested items, or
+// the destination entry name itself when the top-level root or single file was
+// repaired.
+type NameAdjustment struct {
+	LogicalPath  string
+	PhysicalPath string
+}
+
+// NameAdjustmentSummary is a bounded value snapshot of compatible-name repairs
+// materialized by an operation. Count is exact; Samples is capped.
+type NameAdjustmentSummary struct {
+	Count   uint64
+	Samples []NameAdjustment
+}
+
+func (s NameAdjustmentSummary) Clone() NameAdjustmentSummary {
+	return NameAdjustmentSummary{
+		Count:   s.Count,
+		Samples: slices.Clone(s.Samples),
+	}
+}
 
 // NameMapping persists one logical-to-physical component repair so restarts
 // reuse the exact same destination spelling.
@@ -32,6 +58,7 @@ type NameMapping struct {
 	LogicalPath       string `json:"logical"`
 	PhysicalComponent string `json:"physical"`
 	Attempt           uint32 `json:"attempt"`
+	Directory         bool   `json:"dir,omitempty"`
 }
 
 // isReservedContainerRootName reports whether name collides with WindShare's
@@ -254,7 +281,7 @@ func (m *nameMapper) resolveLocked(logical string) (string, error) {
 // bindLeaf resolves the physical leaf name for logicalPath inside parentDir,
 // repairing only when the destination rejects the component, it collides with
 // .windshare-tmp* at the container root, or it aliases another mapped name.
-func (m *nameMapper) bindLeaf(logicalPath string, parentDir *Dir) (string, error) {
+func (m *nameMapper) bindLeaf(logicalPath string, parentDir *Dir, isDir bool) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -284,7 +311,7 @@ func (m *nameMapper) bindLeaf(logicalPath string, parentDir *Dir) (string, error
 			return leaf, nil
 		}
 	}
-	return m.repairLeafLocked(logicalPath, parentRel, parentDir)
+	return m.repairLeafLocked(logicalPath, parentRel, parentDir, isDir)
 }
 
 func leafUsableDirectly(parentDir *Dir, leaf string) (bool, error) {
@@ -299,7 +326,7 @@ func leafUsableDirectly(parentDir *Dir, leaf string) (bool, error) {
 	return false, nil
 }
 
-func (m *nameMapper) repairLeafLocked(logicalPath, parentRel string, parentDir *Dir) (string, error) {
+func (m *nameMapper) repairLeafLocked(logicalPath, parentRel string, parentDir *Dir, isDir bool) (string, error) {
 	if len(m.mappings) >= MaxNameMappings {
 		return "", ErrInvalidNameMapping
 	}
@@ -323,6 +350,7 @@ func (m *nameMapper) repairLeafLocked(logicalPath, parentRel string, parentDir *
 			LogicalPath:       logicalPath,
 			PhysicalComponent: comp,
 			Attempt:           attempt,
+			Directory:         isDir,
 		}
 		if m.persist != nil {
 			if err := m.persist(rec); err != nil {
@@ -366,4 +394,135 @@ func sanitizeTopLevelComponent(opID receivecontract.OperationID, logicalName str
 		}
 	}
 	return "", false, errors.New("compatible top-level name attempts are exhausted")
+}
+
+func (op *Operation) NameAdjustments() NameAdjustmentSummary {
+	if op == nil {
+		return NameAdjustmentSummary{}
+	}
+	op.summaryMu.Lock()
+	defer op.summaryMu.Unlock()
+	return op.nameAdjustments.Clone()
+}
+
+func (op *Operation) refreshNameAdjustments() {
+	if op == nil || op.journal == nil {
+		return
+	}
+	mappings, delivered, hasDelivered := op.journal.nameAdjustmentSnapshot()
+	summary := summarizeNameAdjustments(op.intent, mappings, delivered, hasDelivered)
+	op.summaryMu.Lock()
+	op.nameAdjustments = summary
+	op.summaryMu.Unlock()
+}
+
+// summarizeNameAdjustments derives a deterministic, bounded value snapshot of
+// compatible-name repairs actually materialized on disk so ordinary transfers
+// pay zero allocation cost and settled results survive control-dir retirement.
+func summarizeNameAdjustments(
+	intent transfer.ReceiveIntent,
+	mappings []NameMapping,
+	delivered map[string]struct{},
+	hasDelivered bool,
+) NameAdjustmentSummary {
+	if intent.IsZero() {
+		return NameAdjustmentSummary{}
+	}
+	reservation, ok := intent.MaterializationPlan().DestinationReservation()
+	if !ok || reservation.IsZero() {
+		return NameAdjustmentSummary{}
+	}
+	topAdjustment, hasTop := topLevelNameAdjustment(reservation, hasDelivered)
+	if !hasTop && len(mappings) == 0 {
+		return NameAdjustmentSummary{}
+	}
+	nested := collectNestedNameAdjustments(intent.OperationID(), reservation, mappings, delivered)
+	total := len(nested)
+	if hasTop {
+		total++
+	}
+	if total == 0 {
+		return NameAdjustmentSummary{}
+	}
+	sampleCount := min(total, MaxNameAdjustmentSamples)
+	samples := make([]NameAdjustment, 0, sampleCount)
+	if hasTop {
+		samples = append(samples, topAdjustment)
+	}
+	if remaining := sampleCount - len(samples); remaining > 0 {
+		samples = append(samples, nested[:remaining]...)
+	}
+	return NameAdjustmentSummary{
+		Count:   uint64(total),
+		Samples: samples,
+	}
+}
+
+func topLevelNameAdjustment(
+	reservation receivecontract.DestinationReservation,
+	hasDelivered bool,
+) (NameAdjustment, bool) {
+	if reservation.Kind() != receivecontract.ReservationNamedContainerEntry ||
+		reservation.PhysicalName() == reservation.LogicalReservedName() {
+		return NameAdjustment{}, false
+	}
+	switch reservation.EntryKind() {
+	case receivecontract.ContainerEntryResultRoot:
+	case receivecontract.ContainerEntrySingleFile:
+		if !hasDelivered {
+			return NameAdjustment{}, false
+		}
+	default:
+		return NameAdjustment{}, false
+	}
+	return NameAdjustment{
+		LogicalPath:  reservation.LogicalReservedName(),
+		PhysicalPath: reservation.PhysicalName(),
+	}, true
+}
+
+func collectNestedNameAdjustments(
+	opID receivecontract.OperationID,
+	reservation receivecontract.DestinationReservation,
+	mappings []NameMapping,
+	delivered map[string]struct{},
+) []NameAdjustment {
+	if len(mappings) == 0 {
+		return nil
+	}
+	mapper, err := newNameMapper(opID, reservation, mappings, nil, nil)
+	if err != nil {
+		return nil
+	}
+	prefix := ""
+	if reservation.EntryKind() == receivecontract.ContainerEntryResultRoot {
+		prefix = reservation.RequestedName() + "/"
+	}
+	nested := make([]NameAdjustment, 0, len(mappings))
+	for _, mapping := range mappings {
+		if !mapping.Directory {
+			if _, ok := delivered[mapping.LogicalPath]; !ok {
+				continue
+			}
+		}
+		phys, resolveErr := mapper.resolveLocked(mapping.LogicalPath)
+		if resolveErr != nil || phys == "" {
+			continue
+		}
+		logical := strings.TrimPrefix(mapping.LogicalPath, prefix)
+		if logical == "" || logical == phys {
+			continue
+		}
+		nested = append(nested, NameAdjustment{
+			LogicalPath:  logical,
+			PhysicalPath: phys,
+		})
+	}
+	slices.SortFunc(nested, func(a, b NameAdjustment) int {
+		if a.LogicalPath != b.LogicalPath {
+			return strings.Compare(a.LogicalPath, b.LogicalPath)
+		}
+		return strings.Compare(a.PhysicalPath, b.PhysicalPath)
+	})
+	return nested
 }

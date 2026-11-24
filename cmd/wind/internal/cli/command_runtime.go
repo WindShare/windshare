@@ -380,6 +380,9 @@ func (runtime *commandRuntime) StageTransferResult(
 		PublishedBytes:       strconv.FormatUint(result.PublishedBytes, 10),
 		CountersExact:        result.CountersExact,
 	}
+	if result.NameAdjustments.Count != 0 {
+		payload.NameAdjustments = strconv.FormatUint(result.NameAdjustments.Count, 10)
+	}
 	if connectivity.DownloadID != "" {
 		payload.DownloadConnectivity = buildDownloadConnectivityPayload(connectivity)
 	}
@@ -624,6 +627,7 @@ type transferSettledTracePayload struct {
 	Drift                string                            `json:"drift"`
 	ResultElapsedMS      string                            `json:"result_elapsed_ms"`
 	DestinationAdjusted  bool                              `json:"destination_adjusted"`
+	NameAdjustments      string                            `json:"name_adjustments,omitempty"`
 	FileOutcomes         map[string]string                 `json:"file_outcomes"`
 	DirectoryFailures    string                            `json:"directory_failures"`
 	OmittedDiagnostics   string                            `json:"omitted_diagnostics"`

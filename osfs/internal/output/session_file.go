@@ -78,7 +78,7 @@ func (s *Session) BeginFile(
 	}
 
 	// Resolve physical filename inside parentDir (reusing any persisted mapping).
-	physLeaf, err := s.names.bindLeaf(canonicalPath, parentDir)
+	physLeaf, err := s.names.bindLeaf(canonicalPath, parentDir, false)
 	if err != nil {
 		return transfer.FileStart{}, wrapFileFault(ctx, transferfault.OutputNamespaceUnsafe, "map file name", err)
 	}

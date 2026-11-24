@@ -33,6 +33,9 @@ func (authority *retainedAttemptAuthority) Discard(context.Context) error {
 	authority.discards++
 	return nil
 }
+func (authority *retainedAttemptAuthority) NameAdjustments() output.NameAdjustmentSummary {
+	return output.NameAdjustmentSummary{}
+}
 
 func TestReceiveAttemptLifetimeKeepsOneOperationUntilDecision(t *testing.T) {
 	for _, test := range []struct {

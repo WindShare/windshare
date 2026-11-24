@@ -131,6 +131,27 @@ func (j *taskJournal) nameMappings() []NameMapping {
 	return out
 }
 
+func (j *taskJournal) nameAdjustmentSnapshot() ([]NameMapping, map[string]struct{}, bool) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	hasDelivered := len(j.state.delivered) > 0
+	if len(j.state.names) == 0 {
+		return nil, nil, hasDelivered
+	}
+	mappings := make([]NameMapping, 0, len(j.state.names))
+	for _, m := range j.state.names {
+		mappings = append(mappings, m)
+	}
+	var delivered map[string]struct{}
+	if hasDelivered {
+		delivered = make(map[string]struct{}, len(j.state.delivered))
+		for path := range j.state.delivered {
+			delivered[path] = struct{}{}
+		}
+	}
+	return mappings, delivered, hasDelivered
+}
+
 func (j *taskJournal) lookupDelivered(fileID catalog.FileID, path string) (deliveredEntry, bool) {
 	j.mu.Lock()
 	defer j.mu.Unlock()

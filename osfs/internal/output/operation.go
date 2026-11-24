@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"sync"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/transfer"
@@ -25,6 +26,9 @@ type Operation struct {
 	ownsRes   bool // true when resultDir is distinct from authority.root and must be closed
 	taskLock  *FileLock
 	journal   *taskJournal
+
+	summaryMu       sync.Mutex
+	nameAdjustments NameAdjustmentSummary
 
 	opened    bool
 	completed bool
@@ -233,7 +237,7 @@ func (a *Authority) initializeOperationDirLocked(
 	}
 	_ = ctrlDir.Sync()
 
-	return &Operation{
+	op := &Operation{
 		authority: a,
 		intent:    intent,
 		opDirName: opDirName,
@@ -242,7 +246,9 @@ func (a *Authority) initializeOperationDirLocked(
 		ownsRes:   ownsRes,
 		taskLock:  taskLock,
 		journal:   journal,
-	}, nil
+	}
+	op.refreshNameAdjustments()
+	return op, nil
 }
 
 func (a *Authority) reserveTopLevelLocked(
@@ -480,6 +486,7 @@ func (op *Operation) closeResources() error {
 	if op == nil || op.closed {
 		return nil
 	}
+	op.refreshNameAdjustments()
 	op.closed = true
 	var err error
 	if op.ownsRes && op.resultDir != nil {

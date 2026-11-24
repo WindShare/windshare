@@ -17,6 +17,10 @@ type OutputAuthority = output.Authority
 type OutputConfig = output.Config
 type OutputFactoryFunc = output.FactoryFunc
 type OutputFactory = output.Factory
+type NameAdjustment = output.NameAdjustment
+type NameAdjustmentSummary = output.NameAdjustmentSummary
+
+const MaxNameAdjustmentSamples = output.MaxNameAdjustmentSamples
 
 const (
 	OutputLookupCreateReady    = output.OutputLookupCreateReady

@@ -13,6 +13,6 @@ Durability is tiered by file size to avoid small-file I/O amplification while pr
 
 `get` automatically continues a matching task. `get --redownload` reserves a separate collision-safe destination and leaves the original continuation target intact; `resume retry --operation <id>` selects either task. Completion or `resume discard` removes `.windshare-tmp/<op>/` (and `.windshare-tmp/` when empty) while preserving all published and unrelated files in the destination.
 
-Source names are preserved when the destination accepts them. Names rejected by the destination or colliding with `.windshare-tmp*` at the destination container root receive a stable compatible spelling retaining usable extensions; saved mappings are persisted in `state.log`, reused on resume, and emitted via structured diagnostics without writing report files beside the destination.
+Source names are preserved when the destination accepts them. Names rejected by the destination or colliding with `.windshare-tmp*` at the destination container root receive a stable compatible spelling retaining usable extensions; saved mappings are persisted in `state.log`, reused on resume, reported as a bounded summary in receive results, and emitted via structured diagnostics without writing report files beside the destination.
 
 See [CLI recovery](cli.md#resume) and [validation](validation.md).

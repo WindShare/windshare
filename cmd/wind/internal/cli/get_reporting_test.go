@@ -417,3 +417,76 @@ func TestMissingSelectionEchoesTypedOnlyValuesInCommandLineOrder(t *testing.T) {
 		})
 	}
 }
+
+func TestGetResultReportsNameAdjustmentsWithoutChangingSuccessExit(t *testing.T) {
+	stderr := &bytes.Buffer{}
+	recorder := newFakeUserTrace(diaglog.RunStatus{})
+	app := &App{
+		Stderr: stderr,
+		terminalCapabilities: terminalcanvas.CapabilityProviderFunc(func() terminalcanvas.Capabilities {
+			return terminalcanvas.Capabilities{Columns: 500}
+		}),
+		openUserTrace: func(diaglog.Target, string, diaglog.RunOptions) (runTraceRecorder, error) {
+			return recorder, nil
+		},
+	}
+	runtime, err := app.newCommandRuntime(commandGet, testExactTraceOptions(filepath.Join(t.TempDir(), "get.ndjson")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	settlement, err := transfer.NewDirectTreeSettlement(transfer.DirectTreeSettlementSuccess)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiveID, jobID := newGetReportingIDs(t)
+	settled, err := engine.SettleReceive(engine.ReceiveSettlementInput{
+		Result: transfer.JobResult{
+			Outcome: transfer.DirectTreeOutcomeSuccess, Settlement: settlement, SucceededFiles: 1,
+			Progress: transfer.ReceiveProgressSnapshot{
+				Discovery: transfer.DiscoveryComplete, CountersExact: true,
+				DiscoveredFiles: 1, DiscoveredBytes: 4, VerifiedBytes: 4,
+				PublishedFiles: 1, PublishedBytes: 4,
+				FileOutcomes: transfer.FileOutcomeSummary{DownloadedFiles: 1},
+			},
+		},
+		Destination: filepath.Join(t.TempDir(), "project"),
+		NameAdjustments: engine.NameAdjustmentSummary{
+			Count: 1,
+			Samples: []engine.NameAdjustment{
+				{LogicalPath: "sub/CON.txt", PhysicalPath: "sub/entry-CON.windshare-01.txt"},
+			},
+		},
+		Operation: receiveID,
+		Job:       jobID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := app.reportEngineReceive(settled, receiveSelection{}, runtime); code != ExitOK {
+		t.Fatalf("exit=%d, want %d", code, ExitOK)
+	}
+	runtime.Close()
+	output := stderr.String()
+	for _, want := range []string{
+		"Download completed",
+		"1 item saved under a compatible name:",
+		"sub/CON.txt -> sub/entry-CON.windshare-01.txt",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("stderr=%q missing %q", output, want)
+		}
+	}
+	var settledPayload struct {
+		NameAdjustments string `json:"name_adjustments"`
+	}
+	foundSettled := false
+	for _, rec := range recorder.recorded() {
+		if rec.Event == "transfer_settled" {
+			foundSettled = true
+			decodeRecordPayload(t, rec.Payload, &settledPayload)
+		}
+	}
+	if !foundSettled || settledPayload.NameAdjustments != "1" {
+		t.Fatalf("transfer_settled name_adjustments = %q (found=%t)", settledPayload.NameAdjustments, foundSettled)
+	}
+}

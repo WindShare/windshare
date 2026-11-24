@@ -91,6 +91,7 @@ func buildTransferResult(
 		Elapsed:              input.Value.Elapsed,
 		Destination:          input.Value.Destination,
 		DestinationAdjusted:  input.Value.DestinationAdjusted,
+		NameAdjustments:      input.Value.NameAdjustments.Clone(),
 		Files:                r.Progress.FileOutcomes,
 		SourceOmittedEntries: r.Progress.SourceOmittedEntries,
 		DirectoryFailures:    saturatingCount(len(r.Directories), r.OmittedDirectoryFailures),

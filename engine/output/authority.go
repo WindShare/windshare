@@ -4,11 +4,56 @@ package output
 import (
 	"context"
 	"errors"
+	"slices"
 
 	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
+
+const MaxNameAdjustmentSamples = 20
+
+// NameAdjustment records one logical name or path saved under a compatible
+// physical spelling: relative to the destination directory for nested items, or
+// the destination entry name itself when the top-level root or single file was
+// repaired.
+type NameAdjustment struct {
+	LogicalPath  string
+	PhysicalPath string
+}
+
+// NameAdjustmentSummary is a bounded value snapshot of compatible-name repairs
+// materialized by an output backend. Count is exact; Samples is capped.
+type NameAdjustmentSummary struct {
+	Count   uint64
+	Samples []NameAdjustment
+}
+
+func (summary NameAdjustmentSummary) Empty() bool {
+	return summary.Count == 0 && len(summary.Samples) == 0
+}
+
+func (summary NameAdjustmentSummary) Valid() bool {
+	if summary.Count == 0 {
+		return len(summary.Samples) == 0
+	}
+	if len(summary.Samples) == 0 || uint64(len(summary.Samples)) > summary.Count || len(summary.Samples) > MaxNameAdjustmentSamples {
+		return false
+	}
+	for _, sample := range summary.Samples {
+		if sample.LogicalPath == "" || sample.PhysicalPath == "" || sample.LogicalPath == sample.PhysicalPath {
+			return false
+		}
+	}
+	return true
+}
+
+func (summary NameAdjustmentSummary) Clone() NameAdjustmentSummary {
+	return NameAdjustmentSummary{
+		Count:   summary.Count,
+		Samples: slices.Clone(summary.Samples),
+	}
+}
 
 var ErrContract = errors.New("receive output authority violated its contract")
 var ErrShareStopped = errors.New("retained output belongs to a stopped share")
@@ -35,6 +80,9 @@ type OperationControl interface {
 	Idle() bool
 	RecordShareStopped(context.Context) error
 	Discard(context.Context) error
+	// NameAdjustments returns a bounded value snapshot of compatible-name
+	// repairs made for this operation. It remains readable after terminal close.
+	NameAdjustments() NameAdjustmentSummary
 }
 
 type Operation struct {
