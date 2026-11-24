@@ -23,11 +23,25 @@ const (
 	journalCompactMinLines = 256
 )
 
+var errJournalTailDirty = errors.New("osfs: task journal tail rollback failed")
+
+// journalFile is the narrow file handle contract required by taskJournal.
+// *os.File satisfies it directly; tests can wrap it to inject short writes or
+// rollback failures without simulating a full filesystem.
+type journalFile interface {
+	WriteAt(b []byte, off int64) (int, error)
+	Truncate(size int64) error
+	Sync() error
+	Close() error
+}
+
 // taskJournal owns append-only persistence and compaction for one operation.
 type taskJournal struct {
 	mu             sync.Mutex
 	opDir          *Dir
-	file           *os.File
+	file           journalFile
+	offset         int64
+	tailDirty      bool
 	state          journalState
 	dirty          bool
 	unflushedCount int
@@ -82,13 +96,10 @@ func openTaskJournal(opDir *Dir, now func() time.Time) (*taskJournal, error) {
 		}
 		state.tornTail = false
 	}
-	if _, err := f.Seek(0, io.SeekEnd); err != nil {
-		_ = f.Close()
-		return nil, err
-	}
 	j := &taskJournal{
 		opDir:    opDir,
 		file:     f,
+		offset:   validBytes,
 		state:    state,
 		lastSync: now(),
 		now:      now,
@@ -237,6 +248,9 @@ func (j *taskJournal) appendLocked(rec journalRecord, syncNow bool) error {
 	if j.file == nil {
 		return fs.ErrClosed
 	}
+	if j.tailDirty {
+		return errJournalTailDirty
+	}
 	if j.appendHook != nil {
 		if err := j.appendHook(rec.Kind); err != nil {
 			return err
@@ -246,12 +260,17 @@ func (j *taskJournal) appendLocked(rec journalRecord, syncNow bool) error {
 	if err != nil {
 		return err
 	}
-	if _, err := j.file.Write(line); err != nil {
-		return err
+	n, err := j.file.WriteAt(line, j.offset)
+	if err == nil && n != len(line) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		return j.rollbackAppendLocked(err)
 	}
 	if err := j.state.apply(rec); err != nil {
-		return err
+		return j.rollbackAppendLocked(err)
 	}
+	j.offset += int64(n)
 	j.state.lineCount++
 	j.dirty = true
 	j.unflushedCount++
@@ -272,6 +291,18 @@ func (j *taskJournal) appendLocked(rec journalRecord, syncNow bool) error {
 		}
 	}
 	return nil
+}
+
+// rollbackAppendLocked truncates any partial or rejected bytes written beyond
+// j.offset so a later append cannot concatenate onto a torn record and trap
+// corruption in the middle of state.log. If truncation itself fails, further
+// appends are refused so the torn bytes stay strictly at EOF for reopen.
+func (j *taskJournal) rollbackAppendLocked(cause error) error {
+	if truncErr := j.file.Truncate(j.offset); truncErr != nil {
+		j.tailDirty = true
+		return errors.Join(cause, truncErr)
+	}
+	return cause
 }
 
 func (j *taskJournal) shouldCompactLocked() bool {
@@ -355,14 +386,12 @@ func (j *taskJournal) compactLocked() error {
 	if reopenErr != nil {
 		return errors.Join(renameErr, reopenErr)
 	}
-	if _, seekErr := reopened.Seek(0, io.SeekEnd); seekErr != nil {
-		_ = reopened.Close()
-		return errors.Join(renameErr, seekErr)
-	}
 	j.file = reopened
 	if renameErr != nil {
 		return renameErr
 	}
+	j.offset = int64(buf.Len())
+	j.tailDirty = false
 	j.state.lineCount = lines
 	j.dirty = false
 	j.unflushedCount = 0
