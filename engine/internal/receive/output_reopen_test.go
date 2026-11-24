@@ -120,7 +120,7 @@ func (authority *layoutRecordingGetOutputAuthority) Create(
 	if err != nil {
 		return getOutputOperation{}, err
 	}
-	return getOutputOperation{Intent: intent, Mode: getOutputResumable, Materializer: testUnusedMaterializer{}}, nil
+	return getOutputOperation{Intent: intent, Materializer: testUnusedMaterializer{}}, nil
 }
 
 func TestResolveGetOutputOperationReopensBeforeShapeAndRefusesConcurrentLease(t *testing.T) {
@@ -131,14 +131,9 @@ func TestResolveGetOutputOperationReopensBeforeShapeAndRefusesConcurrentLease(t 
 		if err != nil {
 			t.Fatal(err)
 		}
-		mode, err := authority.BindDestination(ctx)
-		if err != nil {
+		if err := authority.BindDestination(ctx); err != nil {
 			_ = authority.Close()
 			t.Fatal(err)
-		}
-		if mode != getOutputResumable {
-			_ = authority.Close()
-			t.Fatalf("certified output mode=%d", mode)
 		}
 		return authority
 	}
@@ -406,14 +401,9 @@ func TestResolveGetOutputOperationRejectsConcurrentAutomaticCreateDuringShapePro
 		if err != nil {
 			t.Fatal(err)
 		}
-		mode, err := authority.BindDestination(ctx)
-		if err != nil {
+		if err := authority.BindDestination(ctx); err != nil {
 			_ = authority.Close()
 			t.Fatal(err)
-		}
-		if mode != getOutputResumable {
-			_ = authority.Close()
-			t.Fatalf("certified output mode=%d", mode)
 		}
 		return authority
 	}

@@ -32,7 +32,6 @@ const (
 	ReceiveShareStopRecorded        = receive.ShareStopRecorded
 	ReceiveRetentionNone            = receive.RetentionNone
 	ReceiveRetentionCheckpoints     = receive.RetentionCheckpoints
-	ReceiveRetentionLiveReleased    = receive.RetentionLiveReleased
 	ReceiveRetentionDiscarded       = receive.RetentionDiscarded
 )
 
@@ -62,7 +61,6 @@ type OutputFactory = receive.OutputFactory
 type OutputFactoryFunc = receive.OutputFactoryFunc
 type OutputConfig = receive.OutputConfig
 type OutputAuthority = receive.OutputAuthority
-type OutputMode = receive.OutputMode
 type OutputLookup = receive.OutputLookup
 type OutputLookupKind = receive.OutputLookupKind
 type OutputReservation = receive.OutputReservation
@@ -76,8 +74,6 @@ const (
 	ReceivePeerSessionUnavailable    = receive.PeerSessionUnavailable
 	ReceivePeerSessionUnsafe         = receive.PeerSessionUnsafe
 	ReceivePeerLocalStop             = receive.PeerLocalStop
-	OutputResumable                  = receive.OutputResumable
-	OutputLiveOnly                   = receive.OutputLiveOnly
 	OutputLookupCreateReady          = receive.OutputLookupCreateReady
 	OutputLookupNotFound             = receive.OutputLookupNotFound
 	OutputLookupReopened             = receive.OutputLookupReopened

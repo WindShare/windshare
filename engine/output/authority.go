@@ -15,15 +15,6 @@ var ErrShareStopped = errors.New("retained output belongs to a stopped share")
 var ErrOperationAlreadyRunning = errors.New("receive output operation is already running")
 var ErrOperationAmbiguous = errors.New("receive output operation ownership is ambiguous")
 
-type Mode uint8
-
-const (
-	OutputResumable Mode = iota + 1
-	OutputLiveOnly
-)
-
-func (mode Mode) Valid() bool { return mode == OutputResumable || mode == OutputLiveOnly }
-
 // A missing explicit selection cannot acquire permission to create a new
 // download. Only CreateReady carries that reservation authority.
 type LookupKind uint8
@@ -48,7 +39,6 @@ type OperationControl interface {
 
 type Operation struct {
 	Intent       transfer.ReceiveIntent
-	Mode         Mode
 	Materializer transfer.DirectTreeMaterializer
 	Control      OperationControl
 	// Destination is an optional provider-owned display label, never output authority.
@@ -57,7 +47,7 @@ type Operation struct {
 }
 
 func (o Operation) Valid() bool {
-	return !o.Intent.IsZero() && o.Mode.Valid() && o.Materializer != nil
+	return !o.Intent.IsZero() && o.Materializer != nil
 }
 
 type Reservation interface {
@@ -92,7 +82,7 @@ func (lookup Lookup) Valid() bool {
 }
 
 type Authority interface {
-	BindDestination(context.Context) (Mode, error)
+	BindDestination(context.Context) error
 	SelectOperation(context.Context, transfer.SelectionSpec, receivecontract.OperationSelection) (Lookup, error)
 	Close() error
 }

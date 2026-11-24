@@ -21,9 +21,9 @@ type bindingOnlyGetOutputAuthority struct {
 	events *[]string
 }
 
-func (authority *bindingOnlyGetOutputAuthority) BindDestination(context.Context) (engine.OutputMode, error) {
+func (authority *bindingOnlyGetOutputAuthority) BindDestination(context.Context) error {
 	*authority.events = append(*authority.events, "bind")
-	return engine.OutputResumable, nil
+	return nil
 }
 
 func (authority *bindingOnlyGetOutputAuthority) Close() error {

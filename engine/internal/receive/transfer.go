@@ -37,7 +37,6 @@ type getOutputPreparation struct {
 	contentReady chan struct{}
 	paths        *receiverContentPaths
 	authority    getOutputAuthority
-	mode         getOutputMode
 	displayRoot  string
 }
 
@@ -67,19 +66,13 @@ func (a *runner) prepareGetOutput(
 	if authority == nil {
 		return getOutputPreparation{}, observation.fail(stepLocalFailure, errGetOutputAdapterContract)
 	}
-	mode, err := authority.BindDestination(ctx)
-	if err != nil {
+	if err := authority.BindDestination(ctx); err != nil {
 		closeErr := authority.Close()
 		observation.recordCleanup(closeErr)
 		return getOutputPreparation{}, observation.fail(stepLocalFailure, errors.Join(err, closeErr))
 	}
-	if !mode.Valid() {
-		closeErr := authority.Close()
-		observation.recordCleanup(closeErr)
-		return getOutputPreparation{}, observation.fail(stepLocalFailure, errors.Join(errGetOutputAdapterContract, closeErr))
-	}
 	return getOutputPreparation{
-		authority: authority, mode: mode, displayRoot: outputRoot, operation: new(getOutputOperation), admission: request.admission, operationID: request.operationID,
+		authority: authority, displayRoot: outputRoot, operation: new(getOutputOperation), admission: request.admission, operationID: request.operationID,
 		contentReady: make(chan struct{}), paths: newReceiverContentPaths(observation),
 	}, stepReady
 }
@@ -308,9 +301,6 @@ func (a *runner) finishGetTransfer(ctx context.Context, request preparedRequest,
 		}
 		return nil, code
 	}
-	if output.mode == getOutputLiveOnly {
-		observation.warningCode(FailureOutputRecoveryUnavailable)
-	}
 	// Lane timing may queue relay admission while shape and destination authority
 	// are being resolved. Releasing this separate gate only after the immutable
 	// operation and job exist prevents any content request from outrunning them.
@@ -354,10 +344,6 @@ func (a *runner) buildGetTransferJob(
 	}
 	if err != nil {
 		return nil, getOutputOperation{}, "", false, reportGetOutputAdmissionFailure(observation, err)
-	}
-	if admission.operation.Mode != output.mode {
-		return nil, getOutputOperation{}, "", false,
-			reportGetOutputAdmissionFailure(observation, errGetOutputReservationContract)
 	}
 	destination, adjusted, err := getOperationDestination(output.displayRoot, admission.operation)
 	if err != nil {

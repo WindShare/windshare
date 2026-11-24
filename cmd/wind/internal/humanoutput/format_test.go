@@ -74,7 +74,7 @@ func TestFailureMessagesCoverClosedVocabulary(t *testing.T) {
 		engine.FailureSourceUnavailable, engine.FailureSourceChanged, engine.FailureSourceMissing,
 		engine.FailureSourceAccessDenied, engine.FailureSourceUnsupported, engine.FailureSourceOmitted,
 		engine.FailureCatalogUnavailable, engine.FailureSessionFailed, engine.FailureOutputFailed,
-		engine.FailureOutputBusy, engine.FailureOutputOperationAlreadyRunning, engine.FailureOutputRecoveryUnavailable,
+		engine.FailureOutputBusy, engine.FailureOutputOperationAlreadyRunning,
 		engine.FailureOutputNeedsAttention, engine.FailureRetainedOutputMissing, engine.FailureDestinationCollision,
 		engine.FailureCheckpointFailed, engine.FailureCheckpointRevisionConflict, engine.FailureCheckpointInvalid,
 		engine.FailureOwnedObjectUnknown,

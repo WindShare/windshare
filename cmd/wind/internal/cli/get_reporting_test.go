@@ -257,17 +257,6 @@ func TestGetFailureProjectionDoesNotRenderProviderText(t *testing.T) {
 	}
 }
 
-func TestGetLiveOnlyWarningExplainsRecoveryWithoutReportingUnsafeOutput(t *testing.T) {
-	runtime, stderr := newGetReportingRuntime(t, false, false)
-	runtime.ObserveEngine(engine.Observation{Event: engine.Warning{Failure: engine.Failure{Code: engine.FailureOutputRecoveryUnavailable}}})
-	runtime.Close()
-	output := stderr.String()
-	if !strings.Contains(output, "retry only while") || !strings.Contains(output, "unfinished progress") ||
-		strings.Contains(output, "could not be updated safely") {
-		t.Fatalf("live-only warning=%q", output)
-	}
-}
-
 func TestGetWarningUsesClosedFailureVocabulary(t *testing.T) {
 	runtime, stderr := newGetReportingRuntime(t, false, false)
 	runtime.ObserveEngine(engine.Observation{Event: engine.Warning{Failure: engine.Failure{Code: engine.FailureOutputFailed}}})

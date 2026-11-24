@@ -24,7 +24,7 @@ func TestRedownloadPreservesAutomaticContinuationAndExactTaskSelection(t *testin
 			t.Fatal(err)
 		}
 		defer a.Close()
-		if _, err := a.BindDestination(ctx); err != nil {
+		if err := a.BindDestination(ctx); err != nil {
 			t.Fatal(err)
 		}
 		admitted, err := resolveGetOutputOperation(ctx, a, &fixedGetShapeResolver{decision: shape}, selection, policy, id)
@@ -45,7 +45,7 @@ func TestRedownloadPreservesAutomaticContinuationAndExactTaskSelection(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := wrong.BindDestination(ctx); err != nil {
+	if err := wrong.BindDestination(ctx); err != nil {
 		t.Fatal(err)
 	}
 	wrongSelection := getReopenSelection(t, false, []string{"unrelated"})

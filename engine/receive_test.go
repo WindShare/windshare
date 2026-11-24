@@ -17,12 +17,12 @@ import (
 
 type admissionOutput struct{}
 
-func (admissionOutput) BindDestination(context.Context) (OutputMode, error) {
-	return OutputLiveOnly, nil
+func (admissionOutput) BindDestination(context.Context) error {
+	return nil
 }
 
 func (admissionOutput) SelectOperation(context.Context, transfer.SelectionSpec, receivecontract.OperationSelection) (OutputLookup, error) {
-	return OutputLookup{}, errors.New("live output cannot reopen")
+	return OutputLookup{}, errors.New("admission output cannot reopen")
 }
 
 func (admissionOutput) Close() error { return nil }

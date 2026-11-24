@@ -14,7 +14,6 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/humanoutput"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/engine"
-	"github.com/windshare/windshare/engine/recovery"
 )
 
 func (a *App) receiveDependencies() engine.ReceiveDependencies {
@@ -43,9 +42,6 @@ func (a *App) reportEngineReceive(result engine.TaskCompletion[engine.ReceiveRes
 		cause = result.CleanupError
 	}
 	failure, hasFailure := engine.DescribeFailure(cause)
-	if result.Value.OutputAttention == recovery.AttentionRecoveryUnavailable {
-		a.writeCompleteLine("Existing progress is retained, but restart recovery is unavailable on this destination. Restore its recovery capability before retrying; inspect with wind resume list -o <directory>.")
-	}
 	if result.Outcome != engine.OutcomeSuccess {
 		a.reportBlockedReceiveItems(result.Value.Transfer)
 	}
@@ -137,8 +133,6 @@ func (a *App) reportReceiveRecovery(result engine.ReceiveResult, selection recei
 		if !recovery.ShareStopped() {
 			a.writeCompleteLine("Saved partials: %d bytes. Previously delivered: %d files (%d bytes).", result.Transfer.Progress.RestartReusableBytes, result.Transfer.Progress.FileOutcomes.PreviouslyPublishedFiles, result.Transfer.Progress.PreviouslyPublishedBytes)
 		}
-	case engine.ReceiveRetentionLiveReleased:
-		a.writeCompleteLine("Download stopped; unfinished progress could not be retained after exit.")
 	case engine.ReceiveRetentionDiscarded:
 		a.writeCompleteLine("Unfinished owned output was discarded; completed files were kept.")
 		return
@@ -271,9 +265,6 @@ func (a *App) promptReceiveRecovery(ctx context.Context, reader *bufio.Reader, p
 		a.writeCompleteLine("Download paused: %s. Saved partials: %d bytes. Previously delivered: %d files (%d bytes).", reason, pause.Transfer.Progress.RestartReusableBytes, pause.Transfer.Progress.FileOutcomes.PreviouslyPublishedFiles, pause.Transfer.Progress.PreviouslyPublishedBytes)
 	}
 	a.reportBlockedReceiveItems(pause.Transfer)
-	if pause.Recovery.Retention == engine.ReceiveRetentionLiveReleased {
-		a.writeCompleteLine("Exit releases unfinished progress on this destination.")
-	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return engine.ReceiveRecoveryExit, err

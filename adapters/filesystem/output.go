@@ -42,11 +42,8 @@ type outputAuthority struct {
 
 var _ output.Authority = (*outputAuthority)(nil)
 
-func (authority *outputAuthority) BindDestination(ctx context.Context) (output.Mode, error) {
-	if err := authority.native.BindDestination(ctx); err != nil {
-		return 0, sealOutputError(err)
-	}
-	return output.OutputResumable, nil
+func (authority *outputAuthority) BindDestination(ctx context.Context) error {
+	return sealOutputError(authority.native.BindDestination(ctx))
 }
 
 func (authority *outputAuthority) SelectOperation(
@@ -152,7 +149,6 @@ func projectOperation(native *osfs.OutputOperation, absRoot string) (output.Oper
 	}
 	return output.Operation{
 		Intent:              intent,
-		Mode:                output.OutputResumable,
 		Control:             outputOperationControl{operation: native},
 		Materializer:        outputMaterializer{operation: native},
 		Destination:         destination,

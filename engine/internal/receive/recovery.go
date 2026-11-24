@@ -63,7 +63,6 @@ type ProgressRetention uint8
 const (
 	RetentionNone ProgressRetention = iota
 	RetentionCheckpoints
-	RetentionLiveReleased
 	RetentionDiscarded
 )
 
@@ -188,17 +187,12 @@ func runOperation(ctx context.Context, request Request, deps Dependencies, attem
 func settleRetainedOutput(completed *task.Completion[Result], retained *getOutputPreparation, taskControl task.Control) output.OperationControl {
 	result := &completed.Value
 	result.Operation = retained.operation.Intent.OperationID()
-	switch retained.mode {
-	case OutputResumable:
-		result.Recovery.Retention = RetentionCheckpoints
-	case OutputLiveOnly:
-		result.Recovery.Retention = RetentionLiveReleased
-	}
+	result.Recovery.Retention = RetentionCheckpoints
 	control := retained.operation.Control
 	if control == nil || !control.Idle() {
 		return nil
 	}
-	if result.Recovery.ShareStopped() && retained.mode == OutputResumable {
+	if result.Recovery.ShareStopped() {
 		ctx, cancel := taskControl.CleanupContext()
 		defer cancel()
 		if err := control.RecordShareStopped(ctx); err != nil {

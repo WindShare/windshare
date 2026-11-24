@@ -65,7 +65,6 @@ const (
 	FailureOutputFailed                  FailureCode = "output_failed"
 	FailureOutputBusy                    FailureCode = "output_busy"
 	FailureOutputOperationAlreadyRunning FailureCode = "output_operation_already_running"
-	FailureOutputRecoveryUnavailable     FailureCode = "output_recovery_unavailable"
 	FailureOutputNeedsAttention          FailureCode = "output_needs_attention"
 	FailureRetainedOutputMissing         FailureCode = "retained_output_missing"
 	FailureDestinationCollision          FailureCode = "destination_collision"
@@ -358,8 +357,6 @@ func classifyReceiveCode(code receive.FailureCode) (FailureCode, bool) {
 		return FailureOutputOperationAlreadyRunning, true
 	case receive.FailureOutputNeedsAttention:
 		return FailureOutputNeedsAttention, true
-	case receive.FailureOutputRecoveryUnavailable:
-		return FailureOutputRecoveryUnavailable, true
 	case receive.FailureRetainedOutputMissing:
 		return FailureRetainedOutputMissing, true
 	case receive.FailurePeerConfiguration, receive.FailurePeerNegotiation,

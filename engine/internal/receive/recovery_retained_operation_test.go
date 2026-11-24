@@ -11,7 +11,7 @@ import (
 )
 
 func TestReceiveRetryKeepsFrozenSelection(t *testing.T) {
-	prepared, _ := recoveryTestPreparation(t, OutputResumable)
+	prepared, _ := recoveryTestPreparation(t)
 	paths := []string{"tree"}
 	request := Request{
 		Capability: link.Link{Suite: link.SuiteSenderAuthenticated}, Connectivity: ConnectivityRelayOnly, Only: paths,
@@ -41,7 +41,7 @@ func TestReceiveRetryKeepsFrozenSelection(t *testing.T) {
 }
 
 func TestRetryPreparationFailureRetainsOperationInExitResult(t *testing.T) {
-	prepared, authority := recoveryTestPreparation(t, OutputResumable)
+	prepared, authority := recoveryTestPreparation(t)
 	operation := prepared.operation.Intent.OperationID()
 	attempts, decisions := 0, 0
 	request := Request{Capability: link.Link{Suite: link.SuiteSenderAuthenticated}, Connectivity: ConnectivityRelayOnly, OnPause: func(_ context.Context, pause Pause) (RecoveryAction, error) {

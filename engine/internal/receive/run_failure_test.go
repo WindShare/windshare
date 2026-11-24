@@ -15,13 +15,12 @@ import (
 )
 
 type failedOutputAuthority struct {
-	mode              OutputMode
 	bindErr, closeErr error
 	closed            int
 }
 
-func (a *failedOutputAuthority) BindDestination(context.Context) (OutputMode, error) {
-	return a.mode, a.bindErr
+func (a *failedOutputAuthority) BindDestination(context.Context) error {
+	return a.bindErr
 }
 func (a *failedOutputAuthority) SelectOperation(context.Context, transfer.SelectionSpec, receivecontract.OperationSelection) (OutputLookup, error) {
 	panic("failed preparation performed selection")
@@ -34,16 +33,14 @@ func TestReceivePreparationRetainsCleanupFailureAndJoinsBeforeReturn(t *testing.
 	for _, test := range []struct {
 		name       string
 		factoryErr error
-		mode       OutputMode
 		bindErr    error
 		want       error
 	}{
-		{"binding failure", nil, OutputResumable, bindErr, bindErr},
-		{"construction rollback", bindErr, OutputResumable, nil, bindErr},
-		{"invalid output capability", nil, 0, nil, errGetOutputAdapterContract},
+		{"binding failure", nil, bindErr, bindErr},
+		{"construction rollback", bindErr, nil, bindErr},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			output := &failedOutputAuthority{mode: test.mode, bindErr: test.bindErr, closeErr: closeErr}
+			output := &failedOutputAuthority{bindErr: test.bindErr, closeErr: closeErr}
 			request := Request{Capability: link.Link{Suite: link.SuiteSenderAuthenticated}, Connectivity: ConnectivityRelayOnly, Output: OutputFactoryFunc(func(OutputConfig) (OutputAuthority, error) { return output, test.factoryErr }), Destination: t.TempDir(), Diagnostics: testDiagnosticSink(t)}
 			dialed := false
 			result := Run(context.Background(), request, Dependencies{ReceiverDial: func(context.Context, relayv2.ReceiverConfig) (relayset.ReceiverConnection, error) {
@@ -58,7 +55,7 @@ func TestReceivePreparationRetainsCleanupFailureAndJoinsBeforeReturn(t *testing.
 }
 func TestReceiveCancellationCannotHideOutputCleanupFailure(t *testing.T) {
 	cleanup := errors.New("output cleanup failed")
-	output := &failedOutputAuthority{mode: OutputResumable, closeErr: cleanup}
+	output := &failedOutputAuthority{closeErr: cleanup}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	result := Run(ctx, Request{Capability: link.Link{Suite: link.SuiteSenderAuthenticated}, Connectivity: ConnectivityRelayOnly, Output: OutputFactoryFunc(func(OutputConfig) (OutputAuthority, error) { return output, nil }), Destination: t.TempDir()}, Dependencies{})
@@ -119,7 +116,7 @@ func TestReceiveRejectsNonCanonicalSelectionAsInvalidInputBeforeIO(t *testing.T)
 			request := Request{Capability: link.Link{Suite: link.SuiteSenderAuthenticated}, Connectivity: ConnectivityRelayOnly, Only: test.only,
 				Output: OutputFactoryFunc(func(OutputConfig) (OutputAuthority, error) {
 					created = true
-					return &failedOutputAuthority{mode: OutputResumable}, nil
+					return &failedOutputAuthority{}, nil
 				}), Destination: t.TempDir(), Diagnostics: testDiagnosticSink(t)}
 			result := Run(context.Background(), request, Dependencies{ReceiverDial: func(context.Context, relayv2.ReceiverConfig) (relayset.ReceiverConnection, error) {
 				dialed = true

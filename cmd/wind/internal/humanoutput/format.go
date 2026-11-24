@@ -186,7 +186,7 @@ func failureMessage(failure engine.Failure) string {
 	case engine.FailureSessionFailed:
 		message = "The transfer session failed."
 	case engine.FailureOutputFailed, engine.FailureOutputBusy, engine.FailureOutputOperationAlreadyRunning,
-		engine.FailureOutputRecoveryUnavailable, engine.FailureCheckpointFailed,
+		engine.FailureCheckpointFailed,
 		engine.FailureOutputNeedsAttention, engine.FailureDestinationCollision,
 		engine.FailureCheckpointRevisionConflict, engine.FailureCheckpointInvalid, engine.FailureOwnedObjectUnknown:
 		message = outputFailureMessage(failure.Code)
@@ -212,8 +212,6 @@ func outputFailureMessage(code engine.FailureCode) string {
 		return "The destination is busy. Check for another WindShare command or a program holding its files open before retrying."
 	case engine.FailureOutputOperationAlreadyRunning:
 		return "This download is already running at this destination. Check the running command; if the download stops before completing, rerun this command to resume."
-	case engine.FailureOutputRecoveryUnavailable:
-		return "This destination supports retry only while WindShare stays open. Exiting discards unfinished progress; completed files stay."
 	case engine.FailureCheckpointFailed:
 		return "The recovery checkpoint could not be updated safely."
 	case engine.FailureOutputNeedsAttention:

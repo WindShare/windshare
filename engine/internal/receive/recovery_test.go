@@ -37,7 +37,6 @@ func (authority *retainedAttemptAuthority) Discard(context.Context) error {
 func TestReceiveAttemptLifetimeKeepsOneOperationUntilDecision(t *testing.T) {
 	for _, test := range []struct {
 		name       string
-		mode       OutputMode
 		action     RecoveryAction
 		cancel     bool
 		unattended bool
@@ -45,12 +44,11 @@ func TestReceiveAttemptLifetimeKeepsOneOperationUntilDecision(t *testing.T) {
 		outcome    ProgressRetention
 		discarded  int
 	}{
-		{"retry", OutputLiveOnly, RecoveryRetry, false, false, 2, RetentionNone, 0},
-		{"discard", OutputResumable, RecoveryDiscard, false, false, 1, RetentionDiscarded, 1},
-		{"exit restart", OutputResumable, RecoveryExit, false, false, 1, RetentionCheckpoints, 0},
-		{"exit live", OutputLiveOnly, RecoveryExit, false, false, 1, RetentionLiveReleased, 0},
-		{"cancel", OutputResumable, RecoveryRetry, true, false, 1, RetentionCheckpoints, 0},
-		{"unattended", OutputLiveOnly, RecoveryRetry, false, true, 1, RetentionLiveReleased, 0},
+		{"retry", RecoveryRetry, false, false, 2, RetentionNone, 0},
+		{"discard", RecoveryDiscard, false, false, 1, RetentionDiscarded, 1},
+		{"exit", RecoveryExit, false, false, 1, RetentionCheckpoints, 0},
+		{"cancel", RecoveryRetry, true, false, 1, RetentionCheckpoints, 0},
+		{"unattended", RecoveryRetry, false, true, 1, RetentionCheckpoints, 0},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			selection := getReopenSelection(t, true, nil)
@@ -66,7 +64,7 @@ func TestReceiveAttemptLifetimeKeepsOneOperationUntilDecision(t *testing.T) {
 			}
 			authority := &retainedAttemptAuthority{}
 			operation := admission.operation
-			operation.Mode, operation.Control = test.mode, authority
+			operation.Control = authority
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			attempts, decisions := 0, 0
@@ -83,7 +81,7 @@ func TestReceiveAttemptLifetimeKeepsOneOperationUntilDecision(t *testing.T) {
 			result := runOperation(ctx, request, Dependencies{}, func(_ context.Context, _ preparedRequest, _ Dependencies, retained *getOutputPreparation) task.Completion[Result] {
 				attempts++
 				if attempts == 1 {
-					*retained = getOutputPreparation{authority: authority, operation: &operation, mode: test.mode}
+					*retained = getOutputPreparation{authority: authority, operation: &operation}
 					if test.cancel {
 						cancel()
 					}

@@ -26,8 +26,8 @@ func TestResumeMissingOperationReportsDomainFailureBeforeShapeResolution(t *test
 				t.Fatal(err)
 			}
 			defer authority.Close()
-			if mode, err := authority.BindDestination(ctx); err != nil || mode != OutputResumable {
-				t.Fatalf("bind = %v, %v", mode, err)
+			if err := authority.BindDestination(ctx); err != nil {
+				t.Fatalf("bind = %v", err)
 			}
 			var id receivecontract.OperationID
 			if explicit {

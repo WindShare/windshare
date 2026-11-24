@@ -24,7 +24,6 @@ const (
 	FailureOutputOperationAlreadyRunning
 	FailureOutputNeedsAttention
 	FailureOutputOwnership
-	FailureOutputRecoveryUnavailable
 	FailureRetainedOutputMissing
 	FailurePeerConfiguration
 	FailurePeerNegotiation

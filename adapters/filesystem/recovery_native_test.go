@@ -160,9 +160,8 @@ func createNativeResumeOperation(
 	if err != nil {
 		t.Fatal(err)
 	}
-	mode, err := authority.BindDestination(ctx)
-	if err != nil || mode != output.OutputResumable {
-		t.Fatalf("destination mode = (%+v, %v)", mode, err)
+	if err := authority.BindDestination(ctx); err != nil {
+		t.Fatalf("BindDestination() = %v", err)
 	}
 	lookup, err := authority.SelectOperation(ctx, selection, receivecontract.AutomaticOperation())
 	if err != nil || lookup.Kind != output.OutputLookupCreateReady || lookup.Reservation == nil {

@@ -9,7 +9,6 @@ import (
 
 var errGetOutputAdapterContract = output.ErrContract
 
-type OutputMode = output.Mode
 type OutputLookupKind = output.LookupKind
 type OutputOperation = output.Operation
 type OutputReservation = output.Reservation
@@ -20,8 +19,6 @@ type OutputFactoryFunc = output.FactoryFunc
 type OutputFactory = output.Factory
 
 const (
-	OutputResumable            = output.OutputResumable
-	OutputLiveOnly             = output.OutputLiveOnly
 	OutputLookupCreateReady    = output.OutputLookupCreateReady
 	OutputLookupNotFound       = output.OutputLookupNotFound
 	OutputLookupReopened       = output.OutputLookupReopened
@@ -30,7 +27,6 @@ const (
 	OutputLookupAmbiguous      = output.OutputLookupAmbiguous
 )
 
-type getOutputMode = OutputMode
 type getOutputLookupKind = OutputLookupKind
 type getOutputOperation = OutputOperation
 type getOutputLookup = OutputLookup
@@ -39,8 +35,6 @@ type getOutputAuthorityConfig = OutputConfig
 type getOutputAuthorityFactory = OutputFactory
 
 const (
-	getOutputResumable            = OutputResumable
-	getOutputLiveOnly             = OutputLiveOnly
 	getOutputLookupCreateReady    = OutputLookupCreateReady
 	getOutputLookupNotFound       = OutputLookupNotFound
 	getOutputLookupReopened       = OutputLookupReopened

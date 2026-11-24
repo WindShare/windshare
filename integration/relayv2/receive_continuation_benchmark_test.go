@@ -241,7 +241,7 @@ func runReceiveEvidenceSample(
 }
 
 func reserveReceiveEvidenceOutput(ctx context.Context, descriptor catalog.ShareDescriptor, authority output.Authority) (output.Operation, error) {
-	if _, err := authority.BindDestination(ctx); err != nil {
+	if err := authority.BindDestination(ctx); err != nil {
 		return output.Operation{}, err
 	}
 	rules, err := transfer.NewSelectionRules(true, nil)

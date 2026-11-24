@@ -74,13 +74,12 @@ func (reason BlockedReason) String() string {
 type AttentionReason = output.AttentionReason
 
 const (
-	AttentionRecoveryUnavailable = output.AttentionRecoveryUnavailable
-	AttentionNone                = output.AttentionNone
-	AttentionDestination         = output.AttentionDestination
-	AttentionRegistry            = output.AttentionRegistry
-	AttentionLease               = output.AttentionLease
-	AttentionOperation           = output.AttentionOperation
-	AttentionCleanup             = output.AttentionCleanup
+	AttentionNone        = output.AttentionNone
+	AttentionDestination = output.AttentionDestination
+	AttentionRegistry    = output.AttentionRegistry
+	AttentionLease       = output.AttentionLease
+	AttentionOperation   = output.AttentionOperation
+	AttentionCleanup     = output.AttentionCleanup
 )
 
 type BlockedItem struct {

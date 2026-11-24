@@ -114,7 +114,7 @@ wind resume discard -o <directory> --item <N>
 - `get --redownload` starts a separate task in a collision-safe destination. The original task and its automatic continuation remain intact; `resume retry --operation <id>` selects either task.
 - Delivered files stay completed within a task even after being moved or deleted. Saved partials resume only when their source revision matches. Checkpoints survive normal exit; a crash may lose the latest unsaved ranges. See [native output](native-output.md).
 - When a share has stopped, ask for a new link. Progress saved under the original link appears as `share-stopped` once the receiver confirms the stop while it owns the operation. Interactive downloads can discard unfinished output or leave it for `resume discard`.
-- `resume list` shows recovery state and blocked items. Capability loss keeps existing operations visible as `needs-attention` with `recovery-unavailable`.
+- `resume list` shows recovery state and blocked items.
 - `resume discard` re-lists the inventory and confirms the selected operation before removing proven-owned unfinished state. Published and unrecognized files remain.
 
 Ctrl-C, SIGTERM, and SIGHUP request graceful shutdown and return the command's normal exit status. Repeated SIGTERM/SIGHUP keep cleanup running; a second Ctrl-C forces exit 130. `nohup` keeps ignoring SIGHUP.

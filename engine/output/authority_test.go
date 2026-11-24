@@ -15,11 +15,8 @@ func (reservationFixture) Create(context.Context, receivecontract.ArtifactSpec) 
 }
 
 func TestLookupCannotClaimReopenedWorkWithoutAnOutputOperation(t *testing.T) {
-	if (Operation{}).Valid() || (Mode(0)).Valid() || Mode(255).Valid() {
+	if (Operation{}).Valid() {
 		t.Fatal("empty output state accepted")
-	}
-	if !OutputResumable.Valid() || !OutputLiveOnly.Valid() {
-		t.Fatal("output mode rejected")
 	}
 	for _, invalid := range []Lookup{
 		{Kind: OutputLookupCreateReady},
