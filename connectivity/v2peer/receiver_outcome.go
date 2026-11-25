@@ -36,6 +36,7 @@ const (
 	ReceiverProvenanceLocalAdmissionTimeout                 ReceiverTerminalProvenance = "local_admission_timeout"
 	ReceiverProvenanceLocalOperationContract                ReceiverTerminalProvenance = "local_operation_contract"
 	ReceiverProvenanceRemoteOperationRejected               ReceiverTerminalProvenance = "remote_operation_rejected"
+	ReceiverProvenanceRemoteOperationRetry                  ReceiverTerminalProvenance = "remote_operation_retry"
 	ReceiverProvenanceRemoteSessionRejected                 ReceiverTerminalProvenance = "remote_session_rejected"
 	ReceiverProvenanceRemoteUnknownControl                  ReceiverTerminalProvenance = "remote_unknown_control"
 	ReceiverProvenanceRemoteControlMalformed                ReceiverTerminalProvenance = "remote_control_malformed"
@@ -113,6 +114,7 @@ func validReceiverBoundDecision(decision receiverAttemptDecision) bool {
 	case ReceiverTerminalRemote:
 		switch decision.transitionProvenance {
 		case ReceiverProvenanceRemoteOperationRejected,
+			ReceiverProvenanceRemoteOperationRetry,
 			ReceiverProvenanceRemoteSessionRejected,
 			ReceiverProvenanceRemoteUnknownControl,
 			ReceiverProvenanceRemoteControlMalformed,
@@ -143,6 +145,7 @@ func validReceiverBoundDecision(decision receiverAttemptDecision) bool {
 			ReceiverProvenanceLocalOperationContract,
 			ReceiverProvenanceSignalingAdapterContract,
 			ReceiverProvenanceRemoteOperationRejected,
+			ReceiverProvenanceRemoteOperationRetry,
 			ReceiverProvenanceRemoteUnknownControl,
 			ReceiverProvenanceRemoteControlMalformed:
 			return true

@@ -12,8 +12,10 @@ import {
   LaneAdmissionRejectedError,
   LaneAdmissionTransportError,
   LaneInstallationError,
+  OperationRetryError,
   type ReceiverSessionRuntime,
 } from '../../src/session/runtime'
+import { classifyPeerAttemptFailure } from '../../src/connectivity/peer-failure'
 import {
   createPeerPathIdentityValue,
   createProtocolOperationIdentity,
@@ -70,6 +72,7 @@ class FakeSession {
   installationGate: Promise<void> | undefined
   adoptFailure: unknown
   authenticatedRejection: LaneRejection | undefined
+  offerNextFailure: unknown
   adoptionClosesPeer = false
   adoptionIgnoresSignal = false
 
@@ -77,7 +80,9 @@ class FakeSession {
     return {
       id: 43n,
       requestKind: kind,
-      next: () => new Promise<never>(() => undefined),
+      next: () => this.offerNextFailure === undefined
+        ? new Promise<never>(() => undefined)
+        : Promise.reject(this.offerNextFailure),
       cancel: () => undefined,
     }
   }
@@ -514,6 +519,54 @@ describe('browser peer attempt phase executor', () => {
     first.cancel('runtime-stop')
     second.cancel('runtime-stop')
     await Promise.all([first.result, second.result])
+  })
+
+  it('classifies OperationRetryError on a delayed PeerOffer as retryable without stopping the path or session', async () => {
+    const { diagnostics, executor, session } = fixture()
+    session.offerNextFailure = new OperationRetryError()
+    const attempt = executor.createAttempt(attemptContext())
+
+    const result = await attempt.result
+    expect(result).toEqual({
+      type: 'failed',
+      failure: {
+        kind: 'local-transient',
+        phase: 'negotiation',
+        reason: 'operation-retry',
+      },
+    })
+    if (result.type !== 'failed') throw new Error('expected failed attempt result')
+    expect(classifyPeerAttemptFailure(result.failure)).toEqual({
+      type: 'retry-attempt',
+      reason: 'local-transient',
+    })
+    expect(session.isClosed).toBe(false)
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      eventName: 'peer_attempt',
+      stage: 'failed',
+      failure: { kind: 'local-transient', phase: 'negotiation', reason: 'operation-retry' },
+      failureScope: 'attempt-transient',
+      typedErrorCode: 'peer-negotiation',
+      retryable: true,
+    }))
+  })
+
+  it('keeps unknown local signaling errors fail-closed at path scope', async () => {
+    const { executor, session } = fixture()
+    session.offerNextFailure = new Error('unexpected local signaling bug')
+    const attempt = executor.createAttempt(attemptContext())
+
+    const result = await attempt.result
+    expect(result).toEqual({
+      type: 'failed',
+      failure: { kind: 'local-contract', code: 'unknown-local-failure' },
+    })
+    if (result.type !== 'failed') throw new Error('expected failed attempt result')
+    expect(classifyPeerAttemptFailure(result.failure)).toEqual({
+      type: 'stop-path',
+      reason: 'local-contract',
+    })
+    expect(session.isClosed).toBe(false)
   })
 })
 

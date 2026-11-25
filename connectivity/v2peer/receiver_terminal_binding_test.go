@@ -609,6 +609,7 @@ func TestReceiverCoreProvenanceMappingIsOneToOne(t *testing.T) {
 		receiversession.PeerProvenanceLocalContextEnded:           ReceiverProvenanceLocalContextEnded,
 		receiversession.PeerProvenanceLocalOperationContract:      ReceiverProvenanceLocalOperationContract,
 		receiversession.PeerProvenanceRemoteOperationRejected:     ReceiverProvenanceRemoteOperationRejected,
+		receiversession.PeerProvenanceRemoteOperationRetry:        ReceiverProvenanceRemoteOperationRetry,
 		receiversession.PeerProvenanceRemoteUnknownControl:        ReceiverProvenanceRemoteUnknownControl,
 		receiversession.PeerProvenanceRemoteControlMalformed:      ReceiverProvenanceRemoteControlMalformed,
 		receiversession.PeerProvenanceRemoteFailureMalformed:      ReceiverProvenanceRemoteFailureMalformed,

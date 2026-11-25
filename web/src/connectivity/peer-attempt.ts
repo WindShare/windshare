@@ -15,7 +15,7 @@ import {
   type ProtocolSessionIdentity,
 } from '../session/identities'
 import { LaneCodecError, type LaneGrant } from '../session/lane-codec'
-import { SessionRuntimeError } from '../session/runtime-types'
+import { OperationRetryError, SessionRuntimeError } from '../session/runtime-types'
 import {
   CandidateLimitExceededError,
   PeerNegotiationError,
@@ -487,7 +487,8 @@ function failedPhaseFromSource(
   routeFailureSignal: AbortSignal | undefined,
 ): Extract<PhaseWorkSettlement<never>, { readonly type: 'failed' }> {
   const authenticatedPeerOperation = routeFailureSignal?.aborted === true &&
-    routeFailureSignal.reason === error && error instanceof AuthenticatedPeerOperationError
+    routeFailureSignal.reason === error &&
+    (error instanceof AuthenticatedPeerOperationError || error instanceof OperationRetryError)
   return failedPhase(
     error,
     authenticatedPeerOperation ? 'authenticated-peer-operation' : 'local',
@@ -560,6 +561,9 @@ function classifyAttemptError(error: unknown): PeerAttemptFailure {
       kind: 'authenticated-peer-operation',
       code: error.protocolFailure.content.code,
     })
+  }
+  if (error instanceof OperationRetryError) {
+    return Object.freeze({ kind: 'local-transient', phase: 'negotiation', reason: 'operation-retry' })
   }
   if (error instanceof LaneAdmissionRejectedError) {
     return Object.freeze({ kind: 'authenticated-lane-rejection', rejection: error.rejection })

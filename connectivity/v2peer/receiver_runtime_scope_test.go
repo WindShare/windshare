@@ -361,3 +361,263 @@ func TestReceiverRuntimeCrossScopeOperationErrorIsRemoteSessionUnsafe(t *testing
 func receiverRuntimeScopeHasClass(classes []ReceiverCauseClass, expected ReceiverCauseClass) bool {
 	return slices.Contains(classes, expected)
 }
+
+func TestReceiverRuntimeOperationRetryRemainsAttemptTransientAndAllowsFreshRetry(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), receiverRuntimeScopeTestTimeout)
+	t.Cleanup(cancel)
+
+	selected := filepath.Join(t.TempDir(), "receiver-runtime-retry.txt")
+	if err := os.WriteFile(selected, []byte("receiver runtime retry"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := content.NewHandlePool(content.DefaultHandlePoolConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := pool.Close(); err != nil {
+			t.Errorf("close revision handle pool: %v", err)
+		}
+	})
+	preparedSender, err := liveshare.PrepareSender(ctx, sourceBoundarySenderConfig([]string{selected}, liveshare.SenderConfig{
+		Relays: []string{receiverRuntimeScopeRelay}, ChunkSize: catalog.MinChunkSize,
+		RevisionCapacity: pool,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := preparedSender.Close(); err != nil {
+			t.Errorf("close prepared sender: %v", err)
+		}
+	})
+
+	capability := preparedSender.Capability()
+	registration := preparedSender.Registration()
+	t.Cleanup(func() {
+		clear(capability.ReadSecret)
+		clear(registration.SenderPrivateKey)
+	})
+	preparedReceiver, err := liveshare.PrepareReceiver(liveshare.ReceiverConfig{
+		Capacity:         testReceiveCapacity(t),
+		Capability:       capability,
+		DescriptorObject: registration.Descriptor,
+		PeerControls: v2signal.ReceiverControlValidator{
+			MaximumCandidates: receiverRuntimeScopeCandidateLimit,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(preparedReceiver.Close)
+
+	share := preparedReceiver.Descriptor().ShareInstance()
+	keyTree, err := content.NewKeyTree(capability.ReadSecret, share)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionAuth, err := keyTree.SessionAuthKey()
+	if err != nil {
+		keyTree.Destroy()
+		t.Fatal(err)
+	}
+	sessionAuthKey := sessionAuth.Bytes()
+	sessionAuth.Destroy()
+	keyTree.Destroy()
+	t.Cleanup(func() { clear(sessionAuthKey) })
+
+	senderLane, receiverLane := newCandidateTransactionChannelPair()
+	t.Cleanup(func() {
+		_ = receiverLane.Close()
+		_ = senderLane.Close()
+	})
+	connected := make(chan receiverRuntimeScopeConnectResult, 1)
+	go func() {
+		runtime, connectErr := preparedReceiver.Connect(ctx, receiverLane, transferlanes.RouteRelay)
+		connected <- receiverRuntimeScopeConnectResult{runtime: runtime, err: connectErr}
+	}()
+
+	clientFrame := receiveTest(t, senderLane.Recv())
+	replayGuard, err := protocolsession.NewClientHelloReplayGuard(1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientHello, err := replayGuard.AcceptClientHello(clientFrame, share, sessionAuthKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	senderEphemeral, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	senderNonce := make([]byte, protocolsession.HandshakeNonceBytes)
+	if _, err := io.ReadFull(rand.Reader, senderNonce); err != nil {
+		t.Fatal(err)
+	}
+	serverHello, err := protocolsession.NewServerHello(
+		clientHello,
+		senderNonce,
+		senderEphemeral.PublicKey(),
+		receiverRuntimeScopeInitialLaneID,
+		registration.SenderPrivateKey,
+	)
+	clear(senderNonce)
+	if err != nil {
+		t.Fatal(err)
+	}
+	senderKeys, err := protocolsession.DeriveSenderSession(
+		senderEphemeral,
+		sessionAuthKey,
+		clientHello,
+		serverHello,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(senderKeys.Destroy)
+	if err := senderLane.Send(ctx, framechannel.Frame(serverHello.Encoded())); err != nil {
+		t.Fatal(err)
+	}
+	connectedResult := receiveTest(t, connected)
+	if connectedResult.err != nil || connectedResult.runtime == nil {
+		t.Fatalf("connect receiver runtime: runtime=%p err=%v", connectedResult.runtime, connectedResult.err)
+	}
+	receiverRuntime := connectedResult.runtime
+	t.Cleanup(receiverRuntime.Close)
+
+	sessionID := senderKeys.ProtocolSessionID()
+	receiverToSenderBinding := protocolsession.EnvelopeBinding{
+		ShareInstance: share, ProtocolSessionID: sessionID,
+		LaneID: receiverRuntimeScopeInitialLaneID, LaneEpoch: serverHello.InitialLaneEpoch(),
+		Direction: protocolsession.DirectionReceiverToSender,
+	}
+	senderToReceiverBinding := receiverToSenderBinding
+	senderToReceiverBinding.Direction = protocolsession.DirectionSenderToReceiver
+	offerOpener, err := protocolsession.NewEnvelopeOpener(senderKeys.ReceiverToSender(), receiverToSenderBinding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(offerOpener.Destroy)
+	responseSealer, err := protocolsession.NewEnvelopeSealer(senderKeys.SenderToReceiver(), senderToReceiverBinding, rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(responseSealer.Destroy)
+
+	receiverFactory, err := newTestReceiverFactory(t, ReceiverFactoryConfig{
+		MaxCandidates:     receiverRuntimeScopeCandidateLimit,
+		NegotiationBudget: receiverRuntimeScopePhaseBudget,
+		AdmissionBudget:   receiverRuntimeScopePhaseBudget,
+		PeerConnections: ReceiverPeerConnectionFactoryFunc(func(pion.Configuration) (ReceiverPeerConnection, error) {
+			return newReceiverTestPeerConnection(), nil
+		}),
+		DataChannels: DataChannelAdapterFunc(func(*pion.DataChannel) (PeerDataChannel, error) {
+			return newReceiverTestChannel(), nil
+		}),
+		ReceiverTerminationObservationCapacity: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	traces := receiverFactory.ReceiverTerminationObservations()
+	receiverSignaling, err := NewRuntimeReceiverSignaling(receiverRuntime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slot := testPeerSlot(t)
+	firstAttempt, err := receiverFactory.Start(ctx, receiverSignaling, receiverRuntime, slot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = firstAttempt.Close() })
+
+	firstEnvelope, err := offerOpener.Open(receiveTest(t, senderLane.Recv()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstOffer, err := protocolsession.DecodeMessage(firstEnvelope.Plaintext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstOpID, hasID := firstOffer.OperationID()
+	if firstOffer.Kind() != protocolsession.MessagePeerOffer || !hasID || firstOpID.IsZero() {
+		t.Fatalf("first offer kind=%d op=%d present=%t", firstOffer.Kind(), firstOpID, hasID)
+	}
+
+	retryBody, err := protocolsession.EncodeOperationRetry(protocolsession.OperationRetryReasonReplayWindow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retryMsg, err := protocolsession.NewMessage(protocolsession.MessageOperationRetry, &firstOpID, retryBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retryPlaintext, err := protocolsession.EncodeMessage(retryMsg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealedRetry, err := responseSealer.Seal(retryPlaintext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := senderLane.Send(ctx, framechannel.Frame(sealedRetry.Frame)); err != nil {
+		t.Fatal(err)
+	}
+
+	receiveTest(t, firstAttempt.Done())
+	outcome := firstAttempt.Outcome()
+	if outcome.OperationID() != firstOpID ||
+		outcome.TransitionAuthority() != ReceiverTerminalRemote ||
+		outcome.TransitionProvenance() != ReceiverProvenanceRemoteOperationRetry ||
+		outcome.Disposition() != ReceiverDispositionFallbackAllowed ||
+		outcome.ConsequenceProvenance() != ReceiverProvenanceRemoteOperationRetry ||
+		outcome.RecoveryScope() != protocolsession.PeerFailureAttemptTransient {
+		t.Fatalf("operation retry outcome=%+v scope=%s", outcome, outcome.RecoveryScope())
+	}
+	if !outcome.HasRetainedCauseClass(ReceiverCauseNegotiation) ||
+		outcome.HasRetainedCauseClass(ReceiverCauseUnknown) {
+		t.Fatalf("operation retry retained classes=%v", outcome.RetainedCauseClasses())
+	}
+	trace := receiveTest(t, traces)
+	if trace.TransitionAuthority() != ReceiverTerminalRemote ||
+		trace.TransitionProvenance() != ReceiverProvenanceRemoteOperationRetry ||
+		trace.Disposition() != ReceiverDispositionFallbackAllowed ||
+		!receiverRuntimeScopeHasClass(trace.RetainedCauseClasses(), ReceiverCauseNegotiation) {
+		t.Fatalf("operation retry trace=%+v", trace)
+	}
+	if receiverRuntime.Stopping() {
+		t.Fatal("operation retry closed the healthy receiver session")
+	}
+
+	// Verify the same session and peer slot can immediately issue a fresh attempt
+	// with a new OperationID and advancing AttemptSequence (as peerset does).
+	secondAttempt, err := receiverFactory.Start(ctx, receiverSignaling, receiverRuntime, slot)
+	if err != nil {
+		t.Fatalf("fresh retry attempt start failed: %v", err)
+	}
+	t.Cleanup(func() { _ = secondAttempt.Close() })
+	secondEnvelope, err := offerOpener.Open(receiveTest(t, senderLane.Recv()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondOffer, err := protocolsession.DecodeMessage(secondEnvelope.Plaintext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondOpID, hasSecondID := secondOffer.OperationID()
+	if secondOffer.Kind() != protocolsession.MessagePeerOffer || !hasSecondID || secondOpID <= firstOpID {
+		t.Fatalf("second offer kind=%d op=%d (first=%d)", secondOffer.Kind(), secondOpID, firstOpID)
+	}
+	decodedFirst, err := v2signal.DecodeOffer(firstOffer.Body())
+	if err != nil {
+		t.Fatal(err)
+	}
+	decodedSecond, err := v2signal.DecodeOffer(secondOffer.Body())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decodedSecond.Binding.AttemptSequence <= decodedFirst.Binding.AttemptSequence ||
+		decodedSecond.Binding.AttemptID == decodedFirst.Binding.AttemptID {
+		t.Fatalf("retry binding did not advance: first=%+v second=%+v", decodedFirst.Binding, decodedSecond.Binding)
+	}
+}

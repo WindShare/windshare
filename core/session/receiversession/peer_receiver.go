@@ -437,6 +437,7 @@ func validReceiverPeerTransition(transition receiverPeerTerminalTransition) bool
 	case PeerTerminalAuthorityRemote:
 		switch transition.provenance {
 		case PeerProvenanceRemoteSessionRejected, PeerProvenanceRemoteOperationRejected,
+			PeerProvenanceRemoteOperationRetry,
 			PeerProvenanceRemoteUnknownControl,
 			PeerProvenanceRemoteControlMalformed,
 			PeerProvenanceRemoteFailureMalformed,
@@ -460,6 +461,7 @@ func validReceiverPeerConsequence(consequence receiverPeerTerminalConsequence) b
 			PeerProvenanceLocalContextEnded,
 			PeerProvenanceLocalOperationContract,
 			PeerProvenanceRemoteOperationRejected,
+			PeerProvenanceRemoteOperationRetry,
 			PeerProvenanceRemoteUnknownControl,
 			PeerProvenanceRemoteControlMalformed:
 			return true

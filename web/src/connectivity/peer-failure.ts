@@ -14,6 +14,7 @@ export type PeerLocalTransientReason =
   | 'admission-timeout'
   | 'transport-loss'
   | 'signaling-delivery-loss'
+  | 'operation-retry'
   | 'lane-installation-failed'
 
 export type PeerLocalPolicyCode =
@@ -196,6 +197,7 @@ function isLocalTransient(value: Record<string, unknown>): boolean {
     'admission-timeout',
     'transport-loss',
     'signaling-delivery-loss',
+    'operation-retry',
     'lane-installation-failed',
   ])) return false
   if (value.reason === 'negotiation-timeout' || value.reason === 'tab-capacity-timeout') return value.phase === 'negotiation'

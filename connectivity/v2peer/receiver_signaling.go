@@ -279,7 +279,8 @@ func receiverSignalingTerminationFromCore(
 	if !ok {
 		return receiverSignalingAdapterFailure(binding, nil)
 	}
-	if decision.transitionProvenance == ReceiverProvenanceRemoteOperationRejected {
+	switch decision.transitionProvenance {
+	case ReceiverProvenanceRemoteOperationRejected:
 		decision.recoveryScope = protocolsession.PeerFailurePathTerminal
 		for _, diagnostic := range termination.Diagnostics().Components() {
 			if diagnostic.Code() == receiversession.PeerDiagnosticRemoteOperationRejected {
@@ -288,6 +289,8 @@ func receiverSignalingTerminationFromCore(
 				}
 			}
 		}
+	case ReceiverProvenanceRemoteOperationRetry:
+		decision.recoveryScope = protocolsession.PeerFailureAttemptTransient
 	}
 	diagnostics, truncated := receiverCoreTerminalDiagnostics(termination.Diagnostics())
 	return ReceiverSignalingTermination{
@@ -373,6 +376,8 @@ func receiverProvenanceFromCore(
 		return ReceiverProvenanceLocalOperationContract, true
 	case receiversession.PeerProvenanceRemoteOperationRejected:
 		return ReceiverProvenanceRemoteOperationRejected, true
+	case receiversession.PeerProvenanceRemoteOperationRetry:
+		return ReceiverProvenanceRemoteOperationRetry, true
 	case receiversession.PeerProvenanceRemoteSessionRejected:
 		return ReceiverProvenanceRemoteSessionRejected, true
 	case receiversession.PeerProvenanceRemoteUnknownControl:
@@ -421,6 +426,8 @@ func receiverCoreTerminalDiagnostics(
 			if failure, ok := diagnostic.RemoteFailure(); ok {
 				causes = append(causes, receiversession.NewRemoteOperationError(failure))
 			}
+		case receiversession.PeerDiagnosticOperationRetry:
+			causes = append(causes, errReceiverOperationRetry)
 		case receiversession.PeerDiagnosticRemoteFailureMalformed:
 			causes = append(causes, protocolsession.ErrInvalidOperationFailure)
 		case receiversession.PeerDiagnosticRemoteFailureScopeViolation:

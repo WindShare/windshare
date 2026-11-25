@@ -12,7 +12,10 @@ import (
 
 const maxReceiverErrorDepth = 64
 
-var errReceiverOpaqueCause = errors.New("receiver operation retained an opaque failure")
+var (
+	errReceiverOpaqueCause    = errors.New("receiver operation retained an opaque failure")
+	errReceiverOperationRetry = errors.New("peer offer fell behind sender replay window")
+)
 
 // receiverFilteredError preserves outer phase context when a benign leaf is
 // stripped from a wrapped error without making the stripped leaf reachable via
@@ -295,7 +298,7 @@ func directReceiverCauseClass(cause error) (ReceiverCauseClass, bool) {
 		return ReceiverCauseChannelAdmission, true
 	case ErrEventCapacity:
 		return ReceiverCauseEventCapacity, true
-	case ErrNegotiation:
+	case ErrNegotiation, errReceiverOperationRetry:
 		return ReceiverCauseNegotiation, true
 	case ErrProtocol, protocolsession.ErrUnknownMessageKind, protocolsession.ErrInvalidOperationFailure:
 		return ReceiverCauseProtocol, true

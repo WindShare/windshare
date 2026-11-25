@@ -12,8 +12,11 @@ func receiverPeerProtocolOutcome(termination PeerTermination, cause sessionobs.P
 			termination.ConsequenceProvenance() == PeerProvenanceLocalContextEnded)
 	if !localStop {
 		failure := sessionobs.ProtocolOperationCauseProtocolFailure
-		if termination.Severity() == PeerTerminalSessionUnavailable {
+		switch {
+		case termination.Severity() == PeerTerminalSessionUnavailable:
 			failure = sessionobs.ProtocolOperationCauseRuntimeClosed
+		case termination.ConsequenceProvenance() == PeerProvenanceRemoteOperationRetry:
+			failure = sessionobs.ProtocolOperationCauseReplayWindow
 		}
 		cause = cause.Merge(failure)
 	}
@@ -26,6 +29,8 @@ func receiverPeerProtocolOutcome(termination PeerTermination, cause sessionobs.P
 			component = sessionobs.ProtocolOperationCauseOperationClosed
 		case PeerDiagnosticRuntimeClosed:
 			component = sessionobs.ProtocolOperationCauseRuntimeClosed
+		case PeerDiagnosticOperationRetry:
+			component = sessionobs.ProtocolOperationCauseReplayWindow
 		}
 		cause = cause.Merge(component)
 	}

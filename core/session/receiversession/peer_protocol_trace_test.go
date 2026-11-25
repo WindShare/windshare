@@ -158,3 +158,89 @@ func TestProtocolTraceDoesNotTreatUnownedCancellationAsNormal(t *testing.T) {
 		}
 	})
 }
+
+func TestReceiverPeerOperationRetryClassificationAndTrace(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		fixture, recorder := newReceiverPeerProtocolTraceFixture(t)
+		operationID := fixture.operation.OperationID()
+		body, err := protocolsession.EncodeOperationRetry(protocolsession.OperationRetryReasonReplayWindow)
+		if err != nil {
+			t.Fatal(err)
+		}
+		retryMessage, err := protocolsession.NewMessage(
+			protocolsession.MessageOperationRetry,
+			&operationID,
+			body,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		enqueueCallResponse(fixture.call, retryMessage)
+
+		termination := requireReceiverPeerTermination(t, fixture.operation.Receive(context.Background()))
+		assertReceiverPeerTermination(
+			t,
+			fixture.operation,
+			termination,
+			PeerTerminalAuthorityRemote,
+			PeerProvenanceRemoteOperationRetry,
+			PeerTerminalOperationOnly,
+			PeerProvenanceRemoteOperationRetry,
+			PeerDiagnosticOperationRetry,
+		)
+		if receiverPeerDiagnosticsContain(termination.Diagnostics(), PeerDiagnosticOpaqueFailure) {
+			t.Fatalf("operation retry recorded opaque diagnostic: %+v", termination.Diagnostics().Components())
+		}
+		if fixture.operation.OperationID() != operationID {
+			t.Fatal("operation retry mutated stable operation identity")
+		}
+		assertReceiverPeerTerminationsEqual(t, termination, fixture.operation.Terminate(context.Background()))
+		assertReceiverPeerProtocolTrace(
+			t,
+			fixture,
+			recorder,
+			sessionobs.ProtocolOperationReceiverFailed,
+			sessionobs.ProtocolOperationCauseReplayWindow,
+		)
+	})
+}
+
+func TestReceiverPeerOperationRetryYieldsToStrongerSeverity(t *testing.T) {
+	retryEvidence := newReceiverPeerTerminalEvidence(
+		PeerTerminalAuthorityRemote,
+		PeerProvenanceRemoteOperationRetry,
+		PeerTerminalOperationOnly,
+		receiverPeerDiagnostic(PeerDiagnosticOperationRetry),
+	)
+	unsafeEvidence := newReceiverPeerTerminalEvidence(
+		PeerTerminalAuthorityRemote,
+		PeerProvenanceRemoteFailureScopeViolation,
+		PeerTerminalSessionUnsafe,
+		receiverPeerDiagnostic(PeerDiagnosticRemoteFailureScopeViolation),
+	)
+	operation := &PeerOperation{
+		token:        new(receiverPeerOperationToken),
+		receiving:    true,
+		terminalDone: make(chan struct{}),
+	}
+	_, _, done := operation.claimTerminal(retryEvidence)
+	operation.claimTerminal(unsafeEvidence)
+	operation.completeTerminalCleanup(nil)
+	operation.endReceive()
+	termination := operation.awaitTerminal(done)
+	assertReceiverPeerTermination(
+		t,
+		operation,
+		termination,
+		PeerTerminalAuthorityRemote,
+		PeerProvenanceRemoteOperationRetry,
+		PeerTerminalSessionUnsafe,
+		PeerProvenanceRemoteFailureScopeViolation,
+		PeerDiagnosticOperationRetry,
+		PeerDiagnosticRemoteFailureScopeViolation,
+	)
+	stage, cause := receiverPeerProtocolOutcome(termination, sessionobs.ProtocolOperationCauseNone)
+	if stage != sessionobs.ProtocolOperationReceiverFailed || cause != sessionobs.ProtocolOperationCauseProtocolFailure {
+		t.Fatalf("unsafe consequence trace = (%v, %v), want protocol failure", stage, cause)
+	}
+}

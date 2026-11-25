@@ -15,6 +15,7 @@ describe('v2 peer failure classifier', () => {
     'admission-timeout',
     'transport-loss',
     'signaling-delivery-loss',
+    'operation-retry',
     'lane-installation-failed',
   ]
 

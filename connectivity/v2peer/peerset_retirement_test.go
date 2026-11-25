@@ -41,6 +41,8 @@ func TestReceiverRecoveryScopeUsesSealedDecisionAndFailsClosed(t *testing.T) {
 		scope    protocolsession.PeerFailureRecoveryScope
 	}{
 		{"local ICE", receiverOperationDecision(ReceiverTerminalLocal, ReceiverProvenanceLocalNegotiationFailure), protocolsession.PeerFailureAttemptTransient},
+		{"remote operation retry", receiverOperationDecision(ReceiverTerminalRemote, ReceiverProvenanceRemoteOperationRetry), protocolsession.PeerFailureAttemptTransient},
+		{"local operation contract", receiverOperationDecision(ReceiverTerminalLocal, ReceiverProvenanceLocalOperationContract), protocolsession.PeerFailurePathTerminal},
 		{"unknown rejection", receiverOperationDecision(ReceiverTerminalRemote, ReceiverProvenanceRemoteOperationRejected), protocolsession.PeerFailurePathTerminal},
 		{"authentication", receiverAttemptDecision{disposition: ReceiverDispositionSessionUnsafe}, protocolsession.PeerFailureSessionTerminal},
 		{"runtime retired", receiverUnavailableDecision(), protocolsession.PeerFailureSessionTerminal},

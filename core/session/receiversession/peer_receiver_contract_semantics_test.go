@@ -154,6 +154,7 @@ func TestReceiverPeerEvidenceClassificationPreservesOwnershipScope(t *testing.T)
 		{cause: session.ErrRuntimeClosed, code: PeerDiagnosticRuntimeClosed},
 		{cause: session.ErrOperationOverflow, code: PeerDiagnosticOperationOverflow},
 		{cause: protocolsession.ErrUnknownMessageKind, code: PeerDiagnosticUnknownControl},
+		{cause: sessioncore.ErrOperationRetry, code: PeerDiagnosticOperationRetry},
 	} {
 		diagnostic := receiverPeerDiagnosticForCause(testCase.cause, PeerDiagnosticOpaqueFailure)
 		if diagnostic.Code() != testCase.code {

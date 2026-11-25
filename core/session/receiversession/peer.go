@@ -50,6 +50,7 @@ const (
 	PeerProvenanceLocalContextEnded
 	PeerProvenanceLocalOperationContract
 	PeerProvenanceRemoteOperationRejected
+	PeerProvenanceRemoteOperationRetry
 	PeerProvenanceRemoteUnknownControl
 	PeerProvenanceRemoteControlMalformed
 	PeerProvenanceRemoteFailureMalformed
@@ -72,6 +73,7 @@ const (
 	PeerDiagnosticUnknownControl
 	PeerDiagnosticControlMalformed
 	PeerDiagnosticRemoteOperationRejected
+	PeerDiagnosticOperationRetry
 	PeerDiagnosticRemoteFailureMalformed
 	PeerDiagnosticRemoteFailureScopeViolation
 	PeerDiagnosticRemoteAnswerConflict
@@ -314,6 +316,17 @@ func (operation *PeerOperation) classifyReceiveError(
 	if isExactReceiverPeerCause(err, session.ErrRuntimeClosed) {
 		return receiverPeerRuntimeEvidence(err)
 	}
+	if isExactReceiverPeerCause(err, sessioncore.ErrOperationRetry) {
+		// Sender declined admission below its replay window without faulting
+		// the session or path; surface remote retry ownership so recovery
+		// issues a fresh binding and OperationID within its bounded budget.
+		return newReceiverPeerTerminalEvidence(
+			PeerTerminalAuthorityRemote,
+			PeerProvenanceRemoteOperationRetry,
+			PeerTerminalOperationOnly,
+			receiverPeerDiagnostic(PeerDiagnosticOperationRetry),
+		)
+	}
 	if ctx != nil && ctx.Err() != nil && isExactReceiverPeerCause(err, ctx.Err()) {
 		return receiverPeerLocalEvidence(PeerProvenanceLocalContextEnded, err)
 	}
@@ -413,6 +426,8 @@ func receiverPeerDiagnosticForCause(
 		return receiverPeerDiagnostic(PeerDiagnosticOperationOverflow)
 	case isExactReceiverPeerCause(cause, protocolsession.ErrUnknownMessageKind):
 		return receiverPeerDiagnostic(PeerDiagnosticUnknownControl)
+	case isExactReceiverPeerCause(cause, sessioncore.ErrOperationRetry):
+		return receiverPeerDiagnostic(PeerDiagnosticOperationRetry)
 	default:
 		return receiverPeerDiagnostic(fallback)
 	}
