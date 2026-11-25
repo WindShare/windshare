@@ -1,8 +1,16 @@
-import { catalogCapacityReason, transferFailureReason } from '../../transfer/fault'
+import { catalogCapacityReason, classifyNativeError, transferFailureReason } from '../../transfer/fault'
 import type { SettledTransferJobResult } from '../../transfer/job'
 import { transitionReceiveState } from '../../transfer/state'
+import { emitOutputTrace, type OutputTraceSource } from '../diagnostics'
+import type { ReceiveStore } from '../store/database'
 import { maxRangeEnd, type OPFSTargetRecord, type ReceiveFileRecord, type ReceiveTaskRecord } from '../store/types'
 import { hasZipLayout } from '../zip/stored-members'
+import {
+  artifactDownloadMediaType,
+  triggerBrowserDownload,
+  type BrowserDownloadWindow,
+} from './browser-handoff'
+import { mergeSourceOmittedEntries } from './contract'
 
 export type IncompleteOPFSJobStatus = Exclude<SettledTransferJobResult['status'], 'completed'>
 
@@ -56,6 +64,177 @@ export function isPersistedCompletedRecord(
     current.allocatedLength === target.allocatedLength &&
     sourceOmittedEntries === record.sourceOmittedEntries &&
     record.discoveryComplete
+}
+
+export function completedOPFSTaskRecord(
+  record: ReceiveTaskRecord,
+  target: OPFSTargetRecord,
+  lifecycle: ReceiveTaskRecord['lifecycle'],
+  sourceOmittedEntries: bigint | undefined,
+  updatedAt = Date.now(),
+): ReceiveTaskRecord {
+  const copy: { -readonly [K in keyof ReceiveTaskRecord]: ReceiveTaskRecord[K] } = {
+    ...record,
+    target,
+    lifecycle,
+    discoveryComplete: true,
+    updatedAt,
+  }
+  if (sourceOmittedEntries === undefined) delete copy.sourceOmittedEntries
+  else copy.sourceOmittedEntries = sourceOmittedEntries
+  return Object.freeze(copy)
+}
+
+export interface PublishCompletedOPFSInput {
+  readonly record: ReceiveTaskRecord
+  readonly fileHandle: Pick<FileSystemFileHandle, 'getFile'>
+  readonly sealedSize: bigint
+  readonly allocatedLength: bigint
+  readonly result: SettledTransferJobResult
+  readonly store: Pick<ReceiveStore, 'putTask'>
+  readonly windowPort: BrowserDownloadWindow
+  readonly trace?: OutputTraceSource
+  readonly onRecordPersisted: (record: ReceiveTaskRecord) => void
+  readonly onTruncated: (physicalSize: bigint) => Promise<ReceiveTaskRecord>
+}
+
+export async function publishCompletedOPFSTask(input: PublishCompletedOPFSInput): Promise<ReceiveTaskRecord> {
+  let file: File | undefined
+  try {
+    file = await input.fileHandle.getFile()
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'NotFoundError') {
+      return input.onTruncated(0n)
+    }
+    // A transient failure to read a committed object can be retried from Downloads.
+  }
+  if (file !== undefined && BigInt(file.size) !== input.sealedSize) {
+    return input.onTruncated(BigInt(file.size))
+  }
+
+  const currentTarget = input.record.target as OPFSTargetRecord
+  const target: OPFSTargetRecord = Object.freeze({
+    ...currentTarget,
+    allocatedLength: input.allocatedLength,
+    sealedSize: input.sealedSize,
+  })
+  const readyLifecycle = readyToSaveLifecycle(
+    input.record.lifecycle,
+    input.sealedSize,
+    target.fileName,
+    input.result.contentWarning,
+  )
+  const sourceOmittedEntries = mergeSourceOmittedEntries(
+    input.result.sourceOmittedEntries,
+    input.record.sourceOmittedEntries,
+    input.result.discoveryComplete,
+  )
+
+  // Persist the sealed `ready-to-save` barrier before browser handoff so a close/crash after
+  // `anchor.click()` still leaves the completed ZIP offline-exportable rather than paused.
+  const { record: readyRecord, persistError } = await persistReadyToSave(
+    input,
+    target,
+    readyLifecycle,
+    sourceOmittedEntries,
+  )
+  // A late stop or pause leaves a complete file in `ready-to-save` for the user to export on demand.
+  if (input.result.status !== 'completed' || file === undefined) {
+    if (persistError !== undefined) throw persistError
+    return readyRecord
+  }
+
+  // Even when IndexedDB cannot persist `ready-to-save`, still hand off the verified local file so
+  // a metadata write failure never withholds an already-completed download from the user.
+  const handedOffLifecycle = handoffCompletedFile(
+    input,
+    file,
+    target.fileName,
+    readyLifecycle,
+    sourceOmittedEntries,
+  )
+  if (persistError !== undefined) throw persistError
+  if (handedOffLifecycle === readyRecord.lifecycle) return readyRecord
+  return persistDownloadStarted(input, readyRecord, target, handedOffLifecycle, sourceOmittedEntries)
+}
+
+async function persistReadyToSave(
+  input: PublishCompletedOPFSInput,
+  target: OPFSTargetRecord,
+  readyLifecycle: ReceiveTaskRecord['lifecycle'],
+  sourceOmittedEntries: bigint | undefined,
+): Promise<Readonly<{ record: ReceiveTaskRecord; persistError?: unknown }>> {
+  if (isPersistedCompletedRecord(input.record, target, readyLifecycle, sourceOmittedEntries)) {
+    return { record: input.record }
+  }
+  const candidate = completedOPFSTaskRecord(input.record, target, readyLifecycle, sourceOmittedEntries)
+  try {
+    await input.store.putTask(candidate)
+    input.onRecordPersisted(candidate)
+    emitOutputTrace(input.trace, 'publication', {
+      backend: 'origin_private',
+      task_id: input.record.taskId,
+      transition: 'ready_to_save',
+      sealed_bytes: String(target.sealedSize),
+    })
+    return { record: candidate }
+  } catch (persistError) {
+    emitOutputTrace(input.trace, 'publication', {
+      backend: 'origin_private',
+      task_id: input.record.taskId,
+      transition: 'ready_to_save_persist_failed',
+      error_class: classifyNativeError(persistError),
+    })
+    return { record: input.record, persistError }
+  }
+}
+
+function handoffCompletedFile(
+  input: PublishCompletedOPFSInput,
+  file: File,
+  fileName: string,
+  lifecycle: ReceiveTaskRecord['lifecycle'],
+  sourceOmittedEntries: bigint | undefined,
+): ReceiveTaskRecord['lifecycle'] {
+  try {
+    const mediaType = artifactDownloadMediaType(input.record.artifact.kind)
+    triggerBrowserDownload(input.windowPort, file, fileName, mediaType)
+    emitOutputTrace(input.trace, 'publication', {
+      backend: 'origin_private',
+      task_id: input.record.taskId,
+      transition: 'committed',
+      ...(sourceOmittedEntries === undefined ? {} : { source_omitted_entries: String(sourceOmittedEntries) }),
+    })
+    return transitionReceiveState(lifecycle, { kind: 'download-started', retained: true, fileName })
+  } catch {
+    /* Downloads can retry a handoff that needs a fresh user gesture. */
+    return lifecycle
+  }
+}
+
+async function persistDownloadStarted(
+  input: PublishCompletedOPFSInput,
+  readyRecord: ReceiveTaskRecord,
+  target: OPFSTargetRecord,
+  lifecycle: ReceiveTaskRecord['lifecycle'],
+  sourceOmittedEntries: bigint | undefined,
+): Promise<ReceiveTaskRecord> {
+  const updated = completedOPFSTaskRecord(readyRecord, target, lifecycle, sourceOmittedEntries)
+  try {
+    await input.store.putTask(updated)
+    input.onRecordPersisted(updated)
+    return updated
+  } catch (error) {
+    // `ready-to-save` is already durable and browser handoff succeeded; keep the persisted state
+    // instead of failing a completed download.
+    emitOutputTrace(input.trace, 'publication', {
+      backend: 'origin_private',
+      task_id: input.record.taskId,
+      transition: 'handoff_persist_failed',
+      error_class: classifyNativeError(error),
+    })
+    return readyRecord
+  }
 }
 
 export function survivingFileCoverage(row: ReceiveFileRecord, physicalSize: bigint): ReceiveFileRecord {

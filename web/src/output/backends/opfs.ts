@@ -42,9 +42,8 @@ import {
 import {
   completedZipTailOffset,
   hasCompletedZipFile,
-  isPersistedCompletedRecord,
   nextOPFSIncompleteLifecycle,
-  readyToSaveLifecycle,
+  publishCompletedOPFSTask,
   survivingFileCoverage,
   type IncompleteOPFSJobStatus,
 } from './opfs-settlement'
@@ -443,71 +442,19 @@ class OPFSSessionHandle implements OutputSessionHandle {
     await this.#lock.release()
   }
 
-  async #publishCompleted(sealedSize: bigint, result: SettledTransferJobResult): Promise<ReceiveTaskRecord> {
-    let file: File | undefined
-    try {
-      file = await this.#fileHandle.getFile()
-    } catch (error) {
-      if (isNotFound(error)) return this.#interruptTruncatedOutput(0n, result)
-      // A transient failure to read a committed object can be retried from Downloads.
-    }
-    if (file !== undefined && BigInt(file.size) !== sealedSize) {
-      return this.#interruptTruncatedOutput(BigInt(file.size), result)
-    }
-    const currentTarget = this.#record.target as OPFSTargetRecord
-    const target: OPFSTargetRecord = Object.freeze({
-      ...currentTarget,
-      allocatedLength: this.#zip?.allocatedLength ?? sealedSize,
+  #publishCompleted(sealedSize: bigint, result: SettledTransferJobResult): Promise<ReceiveTaskRecord> {
+    return publishCompletedOPFSTask({
+      record: this.#record,
+      fileHandle: this.#fileHandle,
       sealedSize,
+      allocatedLength: this.#zip?.allocatedLength ?? sealedSize,
+      result,
+      store: this.#store,
+      windowPort: this.#windowPort,
+      ...(this.#diagnostics?.trace === undefined ? {} : { trace: this.#diagnostics.trace }),
+      onRecordPersisted: record => { this.#record = record },
+      onTruncated: physicalSize => this.#interruptTruncatedOutput(physicalSize, result),
     })
-
-    let nextLifecycle = readyToSaveLifecycle(this.#record.lifecycle, sealedSize, target.fileName, result.contentWarning)
-    const { sourceOmittedEntries: previousOmitted, ...baseRecord } = this.#record
-    const sourceOmittedEntries = mergeSourceOmittedEntries(
-      result.sourceOmittedEntries,
-      previousOmitted,
-      result.discoveryComplete,
-    )
-    // A late stop or pause leaves a complete file in `ready-to-save` for the user to export on demand.
-    if (result.status === 'completed' && file !== undefined) {
-      nextLifecycle = this.#handoffCompletedFile(file, target.fileName, nextLifecycle, sourceOmittedEntries)
-    }
-
-    if (isPersistedCompletedRecord(this.#record, target, nextLifecycle, sourceOmittedEntries)) {
-      return this.#record
-    }
-
-    const updated: ReceiveTaskRecord = Object.freeze({
-      ...baseRecord,
-      target,
-      lifecycle: nextLifecycle,
-      ...(sourceOmittedEntries === undefined ? {} : { sourceOmittedEntries }),
-      discoveryComplete: true,
-      updatedAt: Date.now(),
-    })
-    await this.#store.putTask(updated)
-    this.#record = updated
-    return updated
-  }
-
-  #handoffCompletedFile(
-    file: File,
-    fileName: string,
-    lifecycle: ReceiveTaskRecord['lifecycle'],
-    sourceOmittedEntries: bigint | undefined,
-  ): ReceiveTaskRecord['lifecycle'] {
-    try {
-      const mediaType = artifactDownloadMediaType(this.#record.artifact.kind)
-      triggerBrowserDownload(this.#windowPort, file, fileName, mediaType)
-      emitOutputTrace(this.#diagnostics?.trace, 'publication', {
-        backend: 'origin_private', task_id: this.taskId, transition: 'committed',
-        ...(sourceOmittedEntries === undefined ? {} : { source_omitted_entries: String(sourceOmittedEntries) }),
-      })
-      return transitionReceiveState(lifecycle, { kind: 'download-started', retained: true, fileName })
-    } catch {
-      /* Downloads can retry a handoff that needs a fresh user gesture. */
-      return lifecycle
-    }
   }
 
   async #interruptTruncatedOutput(physicalSize: bigint, result: SettledTransferJobResult): Promise<ReceiveTaskRecord> {

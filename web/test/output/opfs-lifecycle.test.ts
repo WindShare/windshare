@@ -11,6 +11,7 @@ import type { BrowserOutputWindow, StartBackendTaskInput } from '../../src/outpu
 import {
   deleteOPFSTask, exportPartialOPFSZip, openNewOPFSSession, reopenOPFSSession, saveRetainedOPFSTask,
 } from '../../src/output/backends/opfs'
+import type { OutputTraceEvent } from '../../src/output/diagnostics'
 import type { NativeObjectIO } from '../../src/output/native-object/contracts'
 import type { ReceiveStore } from '../../src/output/store/database'
 import { buildPartialZipBlob } from '../../src/output/zip/progressive-zip'
@@ -43,14 +44,16 @@ function fixture(artifact: StartBackendTaskInput['artifact'], wrapIO?: (io: Nati
     const traced = { ...io, close: async () => { await io.close(); events.push('native.close') } }
     return wrapIO?.(traced) ?? traced
   } }
-  const ports = { env, store, windowPort }
+  const traces: OutputTraceEvent[] = []
+  const diagnostics = { backend: 'origin_private' as const, trace: { current: (event: OutputTraceEvent) => { traces.push(event) } } }
+  const ports = { env, store, windowPort, diagnostics }
   const task = {
     taskId, artifact, selectionKey: 'selection', lifecycle: initialReceiveState(taskId),
     selection: { shareInstance: 's', syntheticRoot: 'root', defaultSelected: true, rules: [] },
   }
   const directory = () => root.dirs.get('windshare-tasks')!
   const part = () => directory().files.get(taskId + '.part')
-  return { ...ports, open: () => openNewOPFSSession({ ...ports, task }), directory, part, memory, events, downloads }
+  return { ...ports, open: () => openNewOPFSSession({ ...ports, task }), directory, part, memory, events, downloads, traces }
 }
 
 const zip = { kind: 'zip-archive' as const, name: 'bundle.zip' }
@@ -400,6 +403,124 @@ describe('OPFS object ownership and recovery', () => {
     await Promise.all([marking2, committing2])
     await session2.close()
     expect((await f2.store.getTask(taskId))?.lifecycle.kind).toBe('ready-to-save')
+  })
+})
+
+describe('OPFS completed publication durability', () => {
+  it('persists ready-to-save before ZIP handoff and keeps offline save intact if download-started persistence fails', async () => {
+    const f = fixture(zip)
+    const session = await f.open()
+    const file = await session.transferOutput.openFile(fileRequest, new AbortController().signal)
+    await file.writeAt(0n, bytes)
+    await file.commit([byteRange(0n, 4n)])
+
+    const order: string[] = []
+    const originalPutTask = f.memory.putTask.bind(f.memory)
+    vi.spyOn(f.memory, 'putTask').mockImplementation(async record => {
+      order.push(`putTask:${record.lifecycle.kind}`)
+      await originalPutTask(record)
+    })
+    const originalCreateObjectURL = f.windowPort.URL!.createObjectURL.bind(f.windowPort.URL)
+    vi.spyOn(f.windowPort.URL!, 'createObjectURL').mockImplementation(blob => {
+      order.push('handoff')
+      return originalCreateObjectURL(blob)
+    })
+
+    const settled = await session.settle(completion)
+    await session.close()
+    expect(settled.lifecycle.kind).toBe('download-started')
+    expect(order).toEqual(['putTask:ready-to-save', 'handoff', 'putTask:download-started'])
+
+    // If persisting `download-started` fails after handoff, the durable `ready-to-save` record
+    // stays intact so the download does not fail and offline save still exports the complete ZIP.
+    const f2 = fixture(zip)
+    const session2 = await f2.open()
+    const file2 = await session2.transferOutput.openFile(fileRequest, new AbortController().signal)
+    await file2.writeAt(0n, bytes)
+    await file2.commit([byteRange(0n, 4n)])
+    const originalPutTask2 = f2.memory.putTask.bind(f2.memory)
+    vi.spyOn(f2.memory, 'putTask').mockImplementation(async record => {
+      if (record.lifecycle.kind === 'download-started') {
+        throw new DOMException('quota exceeded', 'QuotaExceededError')
+      }
+      await originalPutTask2(record)
+    })
+
+    const settled2 = await session2.settle(completion)
+    await session2.close()
+    expect(settled2.lifecycle.kind).toBe('ready-to-save')
+    expect(f2.downloads).toHaveLength(1)
+    expect(f2.traces.filter(event => event.eventName === 'publication').map(event => event.payload.transition))
+      .toEqual(['ready_to_save', 'committed', 'handoff_persist_failed'])
+
+    const retainedEnv = {
+      store: f2.store,
+      windowPort: f2.windowPort as unknown as BrowserOutputWindow,
+      opfsEnv: f2.env,
+      locks: f2.env.locks,
+    }
+    const [snapshot] = await loadRetainedTasks(retainedEnv)
+    expect(snapshot?.lifecycle.kind).toBe('ready-to-save')
+    expect(snapshot?.actions).toEqual(['save', 'discard'])
+    expect(retainedTaskReadiness(snapshot!, null)).toBe('local')
+
+    vi.mocked(f2.memory.putTask).mockRestore()
+    const exported = await executeRetainedTaskAction(retainedEnv, taskId, 'save')
+    expect(exported.updated?.lifecycle.kind).toBe('download-started')
+    expect(f2.downloads).toHaveLength(2)
+    expect(f2.downloads[1]?.fileName).toBe('bundle.zip')
+    const reader = new ZipReader(new BlobReader(f2.downloads[1]!.blob), { checkSignature: true, useWebWorkers: false })
+    try {
+      const [entry] = await reader.getEntries()
+      expect(entry?.filename).toBe('f')
+      expect(await (entry as FileEntry).getData(new Uint8ArrayWriter())).toEqual(bytes)
+    } finally {
+      await reader.close()
+    }
+  })
+
+  it('still hands off a verified ZIP when ready-to-save persistence fails and skips redundant single-file writes', async () => {
+    const f = fixture(zip)
+    const session = await f.open()
+    const file = await session.transferOutput.openFile(fileRequest, new AbortController().signal)
+    await file.writeAt(0n, bytes)
+    await file.commit([byteRange(0n, 4n)])
+
+    const quotaError = new DOMException('quota exceeded', 'QuotaExceededError')
+    vi.spyOn(f.memory, 'putTask').mockRejectedValueOnce(quotaError)
+    await expect(session.settle(completion)).rejects.toBe(quotaError)
+    await session.close()
+
+    expect(f.downloads).toHaveLength(1)
+    expect(f.downloads[0]?.fileName).toBe('bundle.zip')
+    const reader = new ZipReader(new BlobReader(f.downloads[0]!.blob), { checkSignature: true, useWebWorkers: false })
+    try {
+      const [entry] = await reader.getEntries()
+      expect(entry?.filename).toBe('f')
+      expect(await (entry as FileEntry).getData(new Uint8ArrayWriter())).toEqual(bytes)
+    } finally {
+      await reader.close()
+    }
+    expect(f.traces.filter(event => event.eventName === 'publication').map(event => event.payload.transition))
+      .toEqual(['ready_to_save_persist_failed', 'committed'])
+
+    // Single-file OPFS already seals `ready-to-save` during commit, so settle only persists `download-started`.
+    const fSingle = fixture(single)
+    const singleSession = await fSingle.open()
+    const singleFile = await singleSession.transferOutput.openFile(fileRequest, new AbortController().signal)
+    await singleFile.writeAt(0n, bytes)
+    await singleFile.commit([byteRange(0n, 4n)])
+    const persistedKinds: string[] = []
+    const originalSinglePut = fSingle.memory.putTask.bind(fSingle.memory)
+    vi.spyOn(fSingle.memory, 'putTask').mockImplementation(async record => {
+      persistedKinds.push(record.lifecycle.kind)
+      await originalSinglePut(record)
+    })
+
+    const settledSingle = await singleSession.settle(completion)
+    await singleSession.close()
+    expect(settledSingle.lifecycle.kind).toBe('download-started')
+    expect(persistedKinds).toEqual(['download-started'])
   })
 })
 
