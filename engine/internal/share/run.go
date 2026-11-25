@@ -136,6 +136,9 @@ func (s *activeShare) run(ctx, resourceContext context.Context, request Request)
 		ObserveStatus(func(relayset.SenderStatus))
 	}); ok {
 		d.Controller.bindRelayStatus(status.Status)
+		// ObserveStatus serializes callbacks under the relay set's lock, so
+		// previous requires no separate mutex; keep this callback non-blocking
+		// and non-reentrant (leaf notifications only).
 		var previous relayset.SenderStatus
 		status.ObserveStatus(func(value relayset.SenderStatus) {
 			if value != previous {

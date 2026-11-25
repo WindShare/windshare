@@ -70,6 +70,12 @@ func (s *Sender) setRegistrationLocked(url string, registration routeRegistratio
 	return notifyFallback
 }
 
+// ObserveStatus delivers the current status immediately and subsequent
+// aggregate transitions synchronously and in causal order while holding s.mu
+// (and, on endpoint-driven transitions, the endpoint's registration lock).
+// Holding the lock keeps transitions serialized and suppresses notifications
+// atomically once StopRecovery runs. The callback must not block or reenter
+// Sender (including via StopRecovery).
 func (s *Sender) ObserveStatus(observer func(SenderStatus)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
