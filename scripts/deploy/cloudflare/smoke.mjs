@@ -6,6 +6,7 @@ import { realpathSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, rmdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { CloudflareRequestError, cloudflareClient } from './cloudflare.mjs';
 import { FULL_DEPLOYMENT, RELAY_ONLY_DEPLOYMENT } from './configuration.mjs';
@@ -13,6 +14,7 @@ import { STATE_BINDING } from './deployment.mjs';
 import { turnKeyName, turnKeyPrefix } from './turn.mjs';
 
 const REQUEST_TIMEOUT_MS = 30_000;
+export const CLEANUP_LOOKUP_RETRY_DELAYS_MS = Object.freeze([500, 1000, 2000]);
 
 function deploymentIdFromSettings(settings) {
   const binding = settings?.bindings?.find(item => item.name === STATE_BINDING && item.type === 'plain_text');
@@ -25,23 +27,56 @@ function deploymentIdFromSettings(settings) {
   }
 }
 
-export async function cleanupSmokeResources({ workerName, ownedKeyName, client, deleteWorker }) {
-  const failures = [];
-  let workerSettings = null;
-  let workerLookupFailed = false;
-  try {
-    workerSettings = await client(workerName).settings();
-  } catch (error) {
-    workerLookupFailed = true;
-    failures.push(error);
-  }
+function isRetryableLookupError(error) {
+  if (!(error instanceof CloudflareRequestError)) return true;
+  return error.status === 408 || error.status === 429 || error.status >= 500;
+}
 
-  const deploymentId = ownedKeyName ? undefined : deploymentIdFromSettings(workerSettings);
-  const exactKeyName = ownedKeyName ?? (deploymentId ? turnKeyName(workerName, deploymentId) : undefined);
+async function lookupWorkerSettings(workerClient, { wait, retryDelaysMs }) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const settings = await workerClient.settings();
+      return settings === null ? { status: 'absent' } : { status: 'present', settings };
+    } catch (error) {
+      if (!isRetryableLookupError(error) || attempt >= retryDelaysMs.length) {
+        return { status: 'failed', error };
+      }
+      await wait(retryDelaysMs[attempt]);
+    }
+  }
+}
+
+export async function cleanupSmokeResources({
+  workerName,
+  deploymentReceipt = null,
+  client,
+  deleteWorker,
+  wait = delay,
+  lookupRetryDelaysMs = CLEANUP_LOOKUP_RETRY_DELAYS_MS,
+}) {
+  const failures = [];
+  const consoleWorkerName = workerName + '-console';
+  const receiptConfirmed = deploymentReceipt !== null;
+  const receiptKeyName = typeof deploymentReceipt?.deploymentId === 'string' && deploymentReceipt.deploymentId.length > 0
+    ? turnKeyName(workerName, deploymentReceipt.deploymentId)
+    : undefined;
+  const lookupOptions = { wait, retryDelaysMs: lookupRetryDelaysMs };
+
+  // When deployment.json was read with a deploymentId, both Workers and the exact TURN key are
+  // already proven owned; skip settings lookups so transient control-plane errors cannot block cleanup.
+  const workerLookup = receiptConfirmed && receiptKeyName
+    ? null
+    : await lookupWorkerSettings(client(workerName), lookupOptions);
+  if (workerLookup?.status === 'failed') failures.push(workerLookup.error);
+
+  const settingsDeploymentId = receiptKeyName || workerLookup?.status !== 'present'
+    ? undefined
+    : deploymentIdFromSettings(workerLookup.settings);
+  const exactKeyName = receiptKeyName ?? (settingsDeploymentId ? turnKeyName(workerName, settingsDeploymentId) : undefined);
 
   // Only inspect account-level TURN keys when this run may have reached provisionTURN
-  // (report already read, relay Worker uploaded, or Worker lookup failed).
-  if (exactKeyName || workerSettings !== null || workerLookupFailed) {
+  // (deployment receipt read, relay Worker confirmed present, or its settings lookup failed).
+  if (receiptConfirmed || workerLookup?.status === 'present' || workerLookup?.status === 'failed') {
     // Prefix fallback is safe only because smoke.mjs allocates a fresh per-run random workerName.
     const prefix = turnKeyPrefix(workerName);
     const isOwned = key => (exactKeyName ? key.name === exactKeyName : key.name.startsWith(prefix));
@@ -60,12 +95,21 @@ export async function cleanupSmokeResources({ workerName, ownedKeyName, client, 
     }
   }
 
-  try {
-    if (await client(workerName + '-console').settings()) deleteWorker(workerName + '-console');
-  } catch (error) {
-    failures.push(error);
+  let shouldDeleteConsole = receiptConfirmed;
+  if (!shouldDeleteConsole) {
+    const consoleLookup = await lookupWorkerSettings(client(consoleWorkerName), lookupOptions);
+    if (consoleLookup.status === 'failed') failures.push(consoleLookup.error);
+    shouldDeleteConsole = consoleLookup.status === 'present';
   }
-  if (workerSettings !== null) {
+  if (shouldDeleteConsole) {
+    try {
+      deleteWorker(consoleWorkerName);
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+
+  if (receiptConfirmed || workerLookup?.status === 'present') {
     try {
       deleteWorker(workerName);
     } catch (error) {
@@ -163,6 +207,7 @@ async function runSmoke() {
   }
 
   let attempted = false;
+  let deploymentReceipt = null;
   let ownedKeyName;
   const client = name => cloudflareClient({ accountId: env.CLOUDFLARE_ACCOUNT_ID, workerName: name, apiToken: env.CLOUDFLARE_API_TOKEN });
   try {
@@ -173,9 +218,16 @@ async function runSmoke() {
     const run = () => command(process.execPath, ['scripts/deploy/cloudflare/run.mjs']);
     run();
     const before = JSON.parse(await readFile(join(outputDirectory, 'deployment.json'), 'utf8'));
-    // Record ownership before live probing so an initial hosting probe failure still deletes the key.
-    if (typeof before?.deploymentId === 'string' && before.deploymentId.length > 0) {
-      ownedKeyName = turnKeyName(workerName, before.deploymentId);
+    // Record the deployment receipt before live probing so any probe failure cleans up both Workers
+    // and the TURN key directly without depending on extra control-plane settings reads.
+    const deploymentId = typeof before?.deploymentId === 'string' && before.deploymentId.length > 0
+      ? before.deploymentId
+      : undefined;
+    if (before && typeof before === 'object') {
+      deploymentReceipt = { deploymentId };
+    }
+    if (deploymentId) {
+      ownedKeyName = turnKeyName(workerName, deploymentId);
     }
     await verifyHosting(before);
     assert.ok(ownedKeyName, 'Deployment report is missing deploymentId.');
@@ -226,7 +278,7 @@ async function runSmoke() {
       if (attempted) {
         await cleanupSmokeResources({
           workerName,
-          ownedKeyName,
+          deploymentReceipt,
           client,
           deleteWorker: name => command(process.execPath, [wrangler, 'delete', name, '--config', 'relay-rust/crates/relay-cloudflare/wrangler.toml']),
         });
