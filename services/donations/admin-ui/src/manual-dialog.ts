@@ -71,8 +71,14 @@ function attachCodepointCounter(
   const counter = h('span', { className: 'char-counter' }, `0 / ${maxCodePoints}`)
   const sync = (): void => {
     const length = Array.from(input.value).length
+    const overLimit = length > maxCodePoints
     counter.textContent = `${length} / ${maxCodePoints}`
-    counter.classList.toggle('is-over', length > maxCodePoints)
+    counter.classList.toggle('is-over', overLimit)
+    if (overLimit) {
+      input.setAttribute('aria-invalid', 'true')
+    } else {
+      input.removeAttribute('aria-invalid')
+    }
   }
   input.addEventListener('input', sync)
   return counter
@@ -165,11 +171,13 @@ function buildManualFormControls(t: CopyCatalog): ManualFormControls {
       id: 'manual-donated-at-input',
       attrs: { type: 'datetime-local' },
     }),
+    // Enforce codepoint caps via soft-limit validation instead of HTML maxlength:
+    // maxlength counts UTF-16 code units (cutting emoji short), silently truncates
+    // pasted reference IDs/notes, and interrupts CJK IME composition near the cap.
     nameInput: h('input', {
       id: 'manual-name-input',
       attrs: {
         type: 'text',
-        maxlength: String(MAX_DISPLAY_NAME_CODEPOINTS),
         placeholder: t.manualNamePlaceholder,
         autocomplete: 'off',
       },
@@ -178,7 +186,6 @@ function buildManualFormControls(t: CopyCatalog): ManualFormControls {
       id: 'manual-message-input',
       attrs: {
         rows: '3',
-        maxlength: String(MAX_MESSAGE_CODEPOINTS),
         placeholder: t.manualMessagePlaceholder,
       },
     }),
@@ -186,7 +193,6 @@ function buildManualFormControls(t: CopyCatalog): ManualFormControls {
       id: 'manual-external-id-input',
       attrs: {
         type: 'text',
-        maxlength: String(MAX_MANUAL_EXTERNAL_ID_CODEPOINTS),
         placeholder: t.manualExternalIdPlaceholder,
         autocomplete: 'off',
       },
