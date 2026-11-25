@@ -5,10 +5,10 @@ import { probeNativeObjectSupport } from '../native-object/support'
 import type { SelectionShape } from '../../transfer/discovery'
 import type { TransferOutputSession } from '../../transfer/output-port'
 import type { ResolvedArtifactSpec, SelectionSpec } from '../../transfer/selection'
-import type { ReceiveLifecycleState, SafeRenamedSummary } from '../../transfer/state'
+import { transitionReceiveState, type ReceiveLifecycleState, type SafeRenamedSummary } from '../../transfer/state'
 import type { SettledTransferJobResult } from '../../transfer/job'
 import type { ReceiveStore } from '../store/database'
-import type { ReceiveTaskRecord, TaskTargetRecord } from '../store/types'
+import { completedTuplesBytes, type ReceiveTaskRecord, type TaskTargetRecord } from '../store/types'
 import { supportsBrowserDownload, type BrowserDownloadWindow } from './browser-handoff'
 
 const MEBIBYTE = 1024n * 1024n
@@ -47,6 +47,12 @@ export interface OutputSessionHandle {
   subscribeSafeRenamed?(listener: (summary: SafeRenamedSummary) => void): () => void
   /** Settles the backend after `TransferJob.run()` finishes and persists the final task record. */
   settle(result: SettledTransferJobResult): Promise<ReceiveTaskRecord>
+  /**
+   * Undoes durable reservation or reopen state mutations when startup aborts before
+   * `TransferJob` activation. Must be invoked while the session still holds its task lock;
+   * becomes a no-op once output writes or settlement begin.
+   */
+  rollbackUnactivated(): Promise<void>
   /** Closes live handles and releases the cross-tab Web Lock without deleting retained data. */
   close(): Promise<void>
 }
@@ -366,4 +372,46 @@ export async function loadLockedReopenableTask<Kind extends 'opfs' | 'fsa'>(
     throw new DOMException('This download is no longer resumable', 'InvalidStateError')
   }
   return current as ReceiveTaskRecord & { readonly target: Extract<TaskTargetRecord, { readonly kind: Kind }> }
+}
+
+/**
+ * Restores a reopened task's persisted metadata when startup aborts before
+ * `TransferJob` activation, preserving the prior pause reason and durable file
+ * coverage without touching retained bytes on disk or in OPFS.
+ */
+export async function restoreReopenedTaskRecord(
+  prior: ReceiveTaskRecord,
+  store: Pick<ReceiveStore, 'listTaskFiles' | 'putTask'>,
+): Promise<ReceiveTaskRecord> {
+  const files = await store.listTaskFiles(prior.taskId)
+  let completedFiles = 0n
+  let completedBytes = 0n
+  let retainedBytes = 0n
+  let discoveredFiles = 0n
+  let discoveredBytes = 0n
+  for (const file of files) {
+    if (file.zipEntry?.kind === 'directory') continue
+    discoveredFiles += 1n
+    discoveredBytes += file.size
+    retainedBytes += completedTuplesBytes(file.completedRanges)
+    if (file.status === 'completed') {
+      completedFiles += 1n
+      completedBytes += file.size
+    }
+  }
+  const lifecycle = prior.lifecycle.kind === 'paused'
+    ? Object.freeze({ ...prior.lifecycle, completedFiles, completedBytes, retainedBytes })
+    : transitionReceiveState(prior.lifecycle, {
+        kind: 'paused',
+        reason: 'interrupted',
+        completedFiles,
+        completedBytes,
+        retainedBytes,
+        discoveredFiles,
+        discoveredBytes,
+        discoveryComplete: prior.discoveryComplete,
+      })
+  const restored: ReceiveTaskRecord = Object.freeze({ ...prior, lifecycle })
+  await store.putTask(restored)
+  return restored
 }

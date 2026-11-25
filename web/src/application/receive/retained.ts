@@ -19,7 +19,7 @@ import { acquireTaskLock, isTaskLockedElsewhere, TaskBusyError } from '../../out
 import { completedTuplesBytes, type ReceiveTaskRecord } from '../../output/store/types'
 import { classifyNativeError, storagePauseReason } from '../../transfer/fault'
 import type { JoinedBrowserShare } from '../browser-share/gateway'
-import { closeOutputSession } from './session-opener'
+import { closeUnactivatedOutputSession } from './session-opener'
 import { transitionReceiveState } from '../../transfer/state'
 import {
   actionsForState,
@@ -323,20 +323,11 @@ export async function reopenRetainedTask(
   const session = await reopenOutput(env, task)
   const prior = session.reopenedFrom ?? task
   const authoritative = session.record ?? prior
-  // The session owns the Web Lock. Restore the previous intent before releasing it if the share changed mid-open.
+  // The session owns the Web Lock. Roll back the reopen transition before releasing it if the share changed mid-open.
   if (env.signal?.aborted) return { joined, task: authoritative, session }
   const current = currentShare()
   if (current?.descriptor.shareInstanceId !== authoritative.shareInstance) {
-    try {
-      const { counts } = await readCheckpointCounts(prior, env.store)
-      const { completedFiles, completedBytes, retainedBytes } = counts
-      const lifecycle = prior.lifecycle.kind === 'paused'
-        ? { ...prior.lifecycle, completedFiles, completedBytes, retainedBytes }
-        : transitionReceiveState(prior.lifecycle, { kind: 'paused', reason: 'interrupted', ...counts })
-      await env.store.putTask({ ...prior, lifecycle })
-    } finally {
-      await closeOutputSession(session, env.outputTrace)
-    }
+    await closeUnactivatedOutputSession(session, env.outputTrace)
     throw matchingShareRequired()
   }
   return { joined: current, task: authoritative, session }

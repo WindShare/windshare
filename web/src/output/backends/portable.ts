@@ -247,6 +247,10 @@ class PortableSessionHandle implements OutputSessionHandle {
     return record
   }
 
+  async rollbackUnactivated(): Promise<void> {
+    // Portable sessions defer persistence until settlement, so nothing was written on open.
+  }
+
   async close(): Promise<void> {
     if (!this.#settled) {
       this.#zip?.abort()

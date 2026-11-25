@@ -654,6 +654,7 @@ describe('single-file quick download planning and activation ownership', () => {
     const firstSessionGate = deferred<OutputSessionHandle>()
     const firstOpenCalled = deferred<void>()
     const staleClosed = deferred<void>()
+    const staleRollback = vi.fn(async () => undefined)
     const staleClose = vi.fn(async () => { staleClosed.resolve() })
     const secondJobGate = deferred<ReturnType<typeof makeJobResult>>()
     let openCalls = 0
@@ -679,6 +680,7 @@ describe('single-file quick download planning and activation ownership', () => {
           discoveryComplete: true,
           updatedAt: Date.now(),
         }),
+        rollbackUnactivated: vi.fn(async () => undefined),
         close: vi.fn(async () => undefined),
       }
     })
@@ -700,15 +702,17 @@ describe('single-file quick download planning and activation ownership', () => {
     coordinator.suspendForNewShare()
     expect(coordinator.startSingleFileDownload(fileB, dir)).toEqual({ kind: 'started' })
 
-    // Resolve stale session A late — it must close immediately and never interfere with B.
+    // Resolve stale session A late — it must roll back and close immediately without interfering with B.
     firstSessionGate.resolve({
       taskId: 'stale-a',
       backend: 'portable',
       transferOutput: { capabilities: { resumable: false } } as unknown as OutputSessionHandle['transferOutput'],
       settle: vi.fn(),
+      rollbackUnactivated: staleRollback,
       close: staleClose,
     })
     await staleClosed.promise
+    expect(staleRollback).toHaveBeenCalledTimes(1)
     expect(staleClose).toHaveBeenCalledTimes(1)
     await waitForSnapshot(coordinator, s => s.activeSingleFileId === fileB.idText)
 

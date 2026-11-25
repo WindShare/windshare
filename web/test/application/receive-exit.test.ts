@@ -134,7 +134,12 @@ describe('receive session shutdown', () => {
     await closing
     expect(f.startConnectivity).not.toHaveBeenCalled()
     expect(f.memory.events.slice(-2)).toEqual(['lock.release', 'db.close'])
-    expect([...f.memory.tasks.values()][0]?.lifecycle.kind).toBe('downloading')
+    if (action === 'new') {
+      expect(f.memory.tasks.size).toBe(0)
+      expect(f.parent.children.size).toBe(0)
+    } else {
+      expect([...f.memory.tasks.values()][0]?.lifecycle).toMatchObject({ kind: 'paused', reason: 'user' })
+    }
   })
 
   it('keeps recoverable and healthy tasks actionable when one row is unreadable and IDB is full', async () => {

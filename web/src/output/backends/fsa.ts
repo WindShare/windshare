@@ -30,6 +30,7 @@ import {
 import {
   loadLockedReopenableTask,
   mergeSourceOmittedEntries,
+  restoreReopenedTaskRecord,
   type BrowserOutputWindow,
   type OutputSessionHandle,
   type StartBackendTaskInput,
@@ -41,7 +42,7 @@ import {
 import { destinationChanged, FSAOutputFile, verifyExistingFSAFile } from './fsa-file'
 import {
   buildFSATargetRecord, collectFSATopLevelClaims, openFSADirectory, openFSAFile,
-  reserveFSATarget, rollbackReservedTarget, type FSADirectory,
+  reserveFSATarget, rollbackFSATaskTarget, rollbackReservedTarget, type FSADirectory,
 } from './fsa-reservation'
 import {
   SafeNameRegistry, applySafeRenamedFields, collectSafeRenamedFromRecords,
@@ -305,6 +306,8 @@ class FSASessionHandle implements OutputSessionHandle {
   readonly #fileDirectories = new Set<FileSystemDirectoryHandle>()
   readonly #reclaimedPlaceholders: FileSystemFileHandle[] = []
   #reservedPlaceholderActive = false
+  #outputTouched = false
+  #rolledBack = false
   #reclaimTail: Promise<void> = Promise.resolve()
 
   constructor(
@@ -345,6 +348,7 @@ class FSASessionHandle implements OutputSessionHandle {
         : {}),
       openFile: (request: TransferFileRequest, signal: AbortSignal) => this.#openFile(request, signal),
       markDiscoveryComplete: async () => {
+        this.#outputTouched = true
         const record = Object.freeze({ ...this.#record, discoveryComplete: true, updatedAt: Date.now() })
         await this.#store.putTask(record)
         this.#record = record
@@ -362,6 +366,7 @@ class FSASessionHandle implements OutputSessionHandle {
   }
 
   async settle(result: SettledTransferJobResult): Promise<ReceiveTaskRecord> {
+    this.#outputTouched = true
     const files = await this.#store.listTaskFiles(this.taskId)
     let retainedBytes = 0n
     let hasUnfinished = false
@@ -413,12 +418,31 @@ class FSASessionHandle implements OutputSessionHandle {
     return nextRecord
   }
 
+  async rollbackUnactivated(): Promise<void> {
+    if (this.#rolledBack || this.#outputTouched) return
+    this.#rolledBack = true
+    if (this.reopenedFrom !== undefined) {
+      this.#record = await restoreReopenedTaskRecord(this.reopenedFrom, this.#store) as FSATaskRecord
+      emitOutputTrace(this.#diagnostics?.trace, 'reopen', {
+        backend: 'file_system_access', task_id: this.taskId, transition: 'rolled_back',
+      })
+      return
+    }
+    const removedPlaceholder = await rollbackFSATaskTarget(this.#record.target)
+    await this.#store.deleteTask(this.taskId)
+    emitOutputTrace(this.#diagnostics?.trace, 'output_reservation', {
+      backend: 'file_system_access', task_id: this.taskId, transition: 'rolled_back',
+      removed_placeholder: removedPlaceholder,
+    })
+  }
+
   async close(): Promise<void> {
     await this.#lock.release()
   }
 
   async #ensureDirectory(request: TransferDirectoryRequest, signal: AbortSignal): Promise<void> {
     signal.throwIfAborted()
+    this.#outputTouched = true
     await this.#resolveDirectory(request.path, signal)
   }
 
@@ -434,6 +458,7 @@ class FSASessionHandle implements OutputSessionHandle {
 
   async #openFile(request: TransferFileRequest, signal: AbortSignal): Promise<TransferOutputFile> {
     signal.throwIfAborted()
+    this.#outputTouched = true
     let record = this.#files.find(this.taskId, request.fileId)
     const parent = await this.#resolveDirectory(request.path.slice(0, -1), signal, record?.fsaPath)
     const target = this.#record.target

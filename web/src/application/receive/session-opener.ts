@@ -69,3 +69,23 @@ export async function closeOutputSession(session: OutputSessionHandle, trace: Ou
     })
   }
 }
+
+/**
+ * Undoes an opened session's reservation or reopen transition when startup aborts
+ * before `TransferJob` activation, always releasing handles and the task lock afterward.
+ */
+export async function closeUnactivatedOutputSession(
+  session: OutputSessionHandle,
+  trace: OutputTraceSource | undefined,
+): Promise<void> {
+  try {
+    await session.rollbackUnactivated()
+  } catch (error) {
+    emitOutputTrace(trace, 'settlement', {
+      task_id: session.taskId, backend: diagnosticBackendName(session.backend),
+      transition: 'rollback_failed', error_class: classifyNativeError(error),
+    })
+  } finally {
+    await closeOutputSession(session, trace)
+  }
+}

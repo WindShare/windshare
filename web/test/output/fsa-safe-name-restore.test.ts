@@ -703,6 +703,7 @@ describe('WorkspaceTask live observation and TaskPresentation safeNameRestore st
           target: { kind: 'fsa', parentHandle: { name: 'Downloads' } as FileSystemDirectoryHandle, reservedName: 'Root', collisionIndex: 0, singleFile: false, reservedAtMs: 0 },
           safeRenamed: updatedSummary, discoveryComplete: true, updatedAt: Date.now(),
         }),
+        rollbackUnactivated: async () => undefined,
         close: async () => undefined,
       }
       const joined = {

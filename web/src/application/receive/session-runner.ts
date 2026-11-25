@@ -9,7 +9,7 @@ import type { ReceiveLifecycleState, SafeRenamedSummary } from '../../transfer/s
 import type { JoinedBrowserShare } from '../browser-share/gateway'
 import { DisconnectCheckpointGuard } from './disconnect-checkpoint-guard'
 import type { ExecutionState, WorkspaceTask } from './execution-state'
-import { closeOutputSession } from './session-opener'
+import { closeOutputSession, closeUnactivatedOutputSession } from './session-opener'
 import { BeforeUnloadGuard, type BeforeUnloadEventTarget } from './unload-guard'
 import { ScreenWakeLockGuard, type ScreenWakeLockWindowTarget } from './wake-lock-guard'
 
@@ -102,9 +102,9 @@ export class ReceiveSessionRunner {
     return true
   }
 
-  closeDetached(session: OutputSessionHandle): Promise<void> {
-    this.#traceDetached(session)
-    return closeOutputSession(session, this.#outputTrace)
+  async closeUnactivated(session: OutputSessionHandle): Promise<void> {
+    await closeUnactivatedOutputSession(session, this.#outputTrace)
+    if (!this.#isDisposed()) this.#onSessionFinished()
   }
 
   dispose(): void {
@@ -118,7 +118,7 @@ export class ReceiveSessionRunner {
   async run(input: SessionRunInput): Promise<void> {
     const { transferToken, joined, session, selection, activeSelectionKey, rootPath, singleFileId, display, initialLifecycle, callbacks } = input
     if (this.#isDisposed() || !this.#execution.transitionToRunning(transferToken, session.taskId, singleFileId)) {
-      return this.closeDetached(session)
+      return this.closeUnactivated(session)
     }
 
     let connectivity: ReturnType<JoinedBrowserShare['beginDownloadConnectivity']> | undefined
@@ -174,7 +174,8 @@ export class ReceiveSessionRunner {
       this.#closeDisconnectGuard()
       this.#unloadGuard.setArmed(false)
       this.#wakeLockGuard.setArmed(false)
-      await closeOutputSession(session, this.#outputTrace)
+      if (activated) await closeOutputSession(session, this.#outputTrace)
+      else await closeUnactivatedOutputSession(session, this.#outputTrace)
       try { connectivity?.close() } catch { /* Best-effort connectivity release. */ }
       this.#execution.releaseTransferIfOwned(transferToken)
       this.#publish()

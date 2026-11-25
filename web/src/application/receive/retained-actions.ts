@@ -38,7 +38,7 @@ export interface RetainedTaskActionsOptions {
   readonly isDisposed: () => boolean
   readonly publish: () => void
   readonly clearActiveTask: () => void
-  readonly closeDetached: (session: OutputSessionHandle) => Promise<void>
+  readonly closeUnactivated: (session: OutputSessionHandle) => Promise<void>
   readonly runSession: (input: SessionRunInput) => Promise<void>
   readonly refreshStorageEstimate: () => void
   readonly dispatchAsyncError: (error: unknown, custom?: (error: unknown) => void) => void
@@ -143,7 +143,7 @@ export class RetainedTaskActions {
       const env = retainedTaskEnvironment(store, this.#envPorts(), this.#options.signal)
       const { joined, task, session } = await reopenRetainedTask(env, taskId, this.#options.currentJoinedShare)
       if (this.#options.isDisposed() || !this.#options.execution.ownsTransfer(token)) {
-        await this.#options.closeDetached(session)
+        await this.#options.closeUnactivated(session)
         return
       }
       let sessionInput: SessionRunInput
@@ -164,7 +164,7 @@ export class RetainedTaskActions {
           },
         }
       } catch (error) {
-        await this.#options.closeDetached(session)
+        await this.#options.closeUnactivated(session)
         throw error
       }
       await this.#options.runSession(sessionInput)

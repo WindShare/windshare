@@ -161,7 +161,7 @@ export class ReceiveCoordinator {
       isDisposed: () => this.#disposed,
       publish: () => this.#publish(),
       clearActiveTask: () => this.startNewDownload(),
-      closeDetached: session => this.#sessions.closeDetached(session),
+      closeUnactivated: session => this.#sessions.closeUnactivated(session),
       runSession: input => this.#sessions.run(input),
       refreshStorageEstimate: () => { void this.#capabilities.refreshStorageEstimate() },
       dispatchAsyncError: (error, custom) => this.#dispatchAsyncError(error, custom),
@@ -627,7 +627,7 @@ export class ReceiveCoordinator {
       return
     }
 
-    if (!this.#execution.ownsTransfer(token)) return this.#sessions.closeDetached(session)
+    if (!this.#execution.ownsTransfer(token)) return this.#sessions.closeUnactivated(session)
     await this.#sessions.run({
       transferToken: token,
       joined,

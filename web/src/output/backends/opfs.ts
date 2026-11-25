@@ -35,6 +35,7 @@ import {
   loadLockedReopenableTask,
   mergeSourceOmittedEntries,
   resolveZipEntryPath,
+  restoreReopenedTaskRecord,
   type OutputSessionHandle,
   type StartBackendTaskInput,
 } from './contract'
@@ -296,6 +297,8 @@ class OPFSSessionHandle implements OutputSessionHandle {
   readonly #windowPort: BrowserDownloadWindow
   readonly #diagnostics: OutputDiagnosticsPorts | undefined
   #closingIO: Promise<void> | undefined
+  #outputTouched = false
+  #rolledBack = false
   #taskWriteTail: Promise<unknown> = Promise.resolve()
 
   constructor(input: Readonly<{
@@ -334,6 +337,7 @@ class OPFSSessionHandle implements OutputSessionHandle {
       }),
       ...(input.zip === undefined ? {} : {
         ensureDirectory: async (request: TransferDirectoryRequest) => {
+          this.#outputTouched = true
           const zipPath = resolveZipEntryPath(input.record.artifact, request.path)
           if (zipPath === undefined) return
           await input.zip!.ensureDirectory(request.directoryId, zipPath, request.modifiedTimeMilliseconds)
@@ -344,6 +348,7 @@ class OPFSSessionHandle implements OutputSessionHandle {
       } : {}),
       openFile: (request: TransferFileRequest, signal: AbortSignal) => this.#openFile(request, signal),
       markDiscoveryComplete: () => this.#serializeTaskWrite(async () => {
+        this.#outputTouched = true
         // Single-file commit may already have promoted this task to `ready-to-save`.
         if (this.#record.discoveryComplete || this.#record.lifecycle.kind !== 'downloading') return
         const updated = Object.freeze({ ...this.#record, discoveryComplete: true, updatedAt: Date.now() })
@@ -358,6 +363,7 @@ class OPFSSessionHandle implements OutputSessionHandle {
   }
 
   async settle(result: SettledTransferJobResult): Promise<ReceiveTaskRecord> {
+    this.#outputTouched = true
     if (result.status === 'completed' && this.#zip !== undefined) {
       return this.#settleCompletedZip(result)
     }
@@ -407,6 +413,29 @@ class OPFSSessionHandle implements OutputSessionHandle {
       await this.#closeIO()
       await this.#taskWriteTail
     }
+  }
+
+  async rollbackUnactivated(): Promise<void> {
+    if (this.#rolledBack || this.#outputTouched) return
+    this.#rolledBack = true
+    if (this.reopenedFrom !== undefined) {
+      this.#record = await restoreReopenedTaskRecord(this.reopenedFrom, this.#store)
+      emitOutputTrace(this.#diagnostics?.trace, 'reopen', {
+        backend: 'origin_private', task_id: this.taskId, transition: 'rolled_back',
+      })
+      return
+    }
+    // Close the exclusive SyncAccessHandle before unlinking the freshly created object.
+    await this.#closeIO()
+    const removedPlaceholder = await removePrivateObject(
+      this.#directory,
+      (this.#record.target as OPFSTargetRecord).objectName,
+    )
+    await this.#store.deleteTask(this.taskId)
+    emitOutputTrace(this.#diagnostics?.trace, 'output_reservation', {
+      backend: 'origin_private', task_id: this.taskId, transition: 'rolled_back',
+      removed_placeholder: removedPlaceholder,
+    })
   }
 
   async close(): Promise<void> {
@@ -583,6 +612,7 @@ class OPFSSessionHandle implements OutputSessionHandle {
 
   async #openFile(request: TransferFileRequest, signal: AbortSignal): Promise<TransferOutputFile> {
     signal.throwIfAborted()
+    this.#outputTouched = true
     if (this.#zip !== undefined) {
       return this.#openZipFile(request)
     }

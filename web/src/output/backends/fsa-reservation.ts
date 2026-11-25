@@ -240,6 +240,24 @@ export async function rollbackReservedTarget(
   await removeDirectoryIfEmpty(parentHandle, reserved.reservedName)
 }
 
+/**
+ * Safely removes the untouched top-level placeholder created by `openNewFSASession`
+ * when startup fails before activation. Leaves externally modified files or non-empty
+ * directories untouched.
+ */
+export async function rollbackFSATaskTarget(target: FSATargetRecord): Promise<boolean> {
+  if (target.singleFile) {
+    const outcome = await removeVerifiedFSALeaf(
+      target.parentHandle,
+      target.reservedName,
+      target.reservedFile.handle,
+      target.reservedFile.fingerprint,
+    )
+    return outcome === 'removed'
+  }
+  return removeDirectoryIfEmpty(target.parentHandle, target.reservedName)
+}
+
 async function reserveRootEntry(
   parent: FileSystemDirectoryHandle,
   name: string,
