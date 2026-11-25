@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -32,6 +33,12 @@ const (
 	windowsDirReadAccess = windows.FILE_LIST_DIRECTORY | windows.FILE_READ_ATTRIBUTES | windows.SYNCHRONIZE
 	windowsSyncDirOpts   = windows.FILE_DIRECTORY_FILE | windows.FILE_SYNCHRONOUS_IO_NONALERT
 	windowsSyncFileOpts  = windows.FILE_NON_DIRECTORY_FILE | windows.FILE_SYNCHRONOUS_IO_NONALERT
+
+	windowsTicksPerSecond           = int64(10_000_000)
+	windowsNanosPerTick             = int64(100)
+	windowsFiletimeEpochUnixSeconds = int64(-11_644_473_600) // 1601-01-01T00:00:00Z
+	windowsFiletimeMaxUnixSeconds   = int64(math.MaxInt64/windowsTicksPerSecond) + windowsFiletimeEpochUnixSeconds
+	windowsFiletimeMaxSubsecTicks   = int64(math.MaxInt64 % windowsTicksPerSecond)
 )
 
 type fileAttributeTagInfo struct {
@@ -537,20 +544,53 @@ func entryMatchesSpelling(parent *Dir, name string) (exact bool, resultErr error
 // rename bound interrupted updates.
 func syncDir(*os.File) error { return nil }
 
+// timeToWindowsFiletime converts t to a strictly positive signed FILETIME
+// without using time.Time.UnixNano (which silently wraps outside 1678-2262).
+// Zero is rejected because SetFileTime treats it as "leave unchanged", and
+// values above math.MaxInt64 are rejected because NT treats negative file times
+// as control sentinels or invalid parameters.
+func timeToWindowsFiletime(t time.Time) (windows.Filetime, error) {
+	sec := t.Unix()
+	subsecTicks := int64(t.Nanosecond()) / windowsNanosPerTick
+	if sec < windowsFiletimeEpochUnixSeconds || sec > windowsFiletimeMaxUnixSeconds {
+		return windows.Filetime{}, windows.ERROR_INVALID_PARAMETER
+	}
+	if sec == windowsFiletimeMaxUnixSeconds && subsecTicks > windowsFiletimeMaxSubsecTicks {
+		return windows.Filetime{}, windows.ERROR_INVALID_PARAMETER
+	}
+	ticks := (sec-windowsFiletimeEpochUnixSeconds)*windowsTicksPerSecond + subsecTicks
+	if ticks <= 0 {
+		return windows.Filetime{}, windows.ERROR_INVALID_PARAMETER
+	}
+	return windows.Filetime{
+		LowDateTime:  uint32(ticks),
+		HighDateTime: uint32(ticks >> 32),
+	}, nil
+}
+
 func setFileModifiedTime(handle *os.File, t time.Time) error {
-	stamp := windows.NsecToFiletime(t.UnixNano())
-	err := windows.SetFileTime(windows.Handle(handle.Fd()), nil, nil, &stamp)
+	if handle == nil {
+		return fs.ErrClosed
+	}
+	stamp, err := timeToWindowsFiletime(t)
+	if err != nil {
+		return err
+	}
+	err = windows.SetFileTime(windows.Handle(handle.Fd()), nil, nil, &stamp)
 	runtime.KeepAlive(handle)
 	return err
 }
 
 func setDirModifiedTime(d *Dir, t time.Time) error {
+	stamp, err := timeToWindowsFiletime(t)
+	if err != nil {
+		return err
+	}
 	h, err := ntCreateAt(d, "", windows.FILE_WRITE_ATTRIBUTES|windows.SYNCHRONIZE, windows.FILE_OPEN, windowsSyncDirOpts)
 	if err != nil {
 		return err
 	}
 	defer windows.CloseHandle(h)
-	stamp := windows.NsecToFiletime(t.UnixNano())
 	return windows.SetFileTime(h, nil, nil, &stamp)
 }
 

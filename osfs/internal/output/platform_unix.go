@@ -301,7 +301,7 @@ func renameFileNoReplace(srcDir *Dir, srcName string, dstDir *Dir, dstName strin
 	return err
 }
 
-func directoryEntryMatchesSpelling(parent *Dir, name string, observed os.FileInfo) (exact bool, resultErr error) {
+func directoryEntryMatchesSpelling(parent *Dir, name string, observed unix.Stat_t) (exact bool, resultErr error) {
 	fd, err := unix.Openat(int(parent.handle.Fd()), ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	runtime.KeepAlive(parent.handle)
 	if err != nil {
@@ -310,19 +310,21 @@ func directoryEntryMatchesSpelling(parent *Dir, name string, observed os.FileInf
 	handle := os.NewFile(uintptr(fd), parent.path)
 	defer func() { resultErr = errors.Join(resultErr, handle.Close()) }()
 	for {
-		entries, readErr := handle.ReadDir(nativeSpellingBatchSize)
+		names, readErr := handle.Readdirnames(nativeSpellingBatchSize)
 		if readErr != nil && !errors.Is(readErr, io.EOF) {
 			return false, readErr
 		}
-		for _, entry := range entries {
-			if !exactEntrySpelling(name, entry.Name()) {
+		for _, entryName := range names {
+			if !exactEntrySpelling(name, entryName) {
 				continue
 			}
-			candidate, statErr := entry.Info()
-			if statErr != nil {
-				return false, statErr
+			// Anchor the identity check to the open directory fd instead of
+			// DirEntry.Info(), which falls back to path-based os.Lstat.
+			var candidate unix.Stat_t
+			if statErr := unix.Fstatat(int(handle.Fd()), entryName, &candidate, unix.AT_SYMLINK_NOFOLLOW); statErr != nil {
+				return false, &os.PathError{Op: "fstatat", Path: filepath.Join(parent.path, entryName), Err: statErr}
 			}
-			if !os.SameFile(observed, candidate) {
+			if candidate.Dev != observed.Dev || candidate.Ino != observed.Ino {
 				return false, ErrUnsafeNamespace
 			}
 			return true, nil

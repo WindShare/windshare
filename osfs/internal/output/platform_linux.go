@@ -3,6 +3,7 @@
 package output
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -16,6 +17,9 @@ import (
 const procFileDescriptorDirectory = "/proc/self/fd"
 
 func setDirModifiedTime(d *Dir, t time.Time) error {
+	if d == nil || d.handle == nil {
+		return fs.ErrClosed
+	}
 	mtime, err := unix.TimeToTimespec(t)
 	if err != nil {
 		return err
@@ -27,6 +31,9 @@ func setDirModifiedTime(d *Dir, t time.Time) error {
 }
 
 func setFileModifiedTime(handle *os.File, t time.Time) error {
+	if handle == nil {
+		return fs.ErrClosed
+	}
 	mtime, err := unix.TimeToTimespec(t)
 	if err != nil {
 		return err
@@ -55,11 +62,11 @@ func entryMatchesSpelling(parent *Dir, name string) (exact bool, resultErr error
 	if err == nil {
 		return exactEntrySpelling(name, filepath.Base(path)), nil
 	}
-	info, statErr := handle.Stat()
-	if statErr != nil {
+	var observed unix.Stat_t
+	if statErr := unix.Fstat(fd, &observed); statErr != nil {
 		return false, statErr
 	}
-	return directoryEntryMatchesSpelling(parent, name, info)
+	return directoryEntryMatchesSpelling(parent, name, observed)
 }
 
 func exactEntrySpelling(requested, actual string) bool { return requested == actual }
