@@ -10,7 +10,7 @@ import {
   removeVerifiedFSALeaf,
   sameFSAEntry,
 } from './fsa-cleanup'
-import { SafeNameRegistry, decideCollisionName, deterministicSafeComponent } from './safe-name'
+import { SafeNameRegistry, decideCollisionName, deterministicSafeCandidates } from './safe-name'
 
 const MAX_COLLISION_ATTEMPTS = 1_000
 const EMPTY_CLAIMED_NAMES: ReadonlySet<string> = new Set()
@@ -144,7 +144,7 @@ export async function openFSADirectory(
     return await openOwned(name)
   } catch (error) {
     if (!requiresSafeComponent(error)) throw error
-    const safe = await deterministicSafeComponent({ taskId, logicalPath, entryKind: 'directory' })
+    const [safe] = await deterministicSafeCandidates({ taskId, logicalPath, entryKind: 'directory' })
     const opened = await openOwned(safe)
     if (opened.kind === 'opened') {
       safeNames.recordDirectory(logicalPath, opened.directory.physicalPath)
@@ -160,23 +160,46 @@ export async function openFSAFile(
   safeNames: SafeNameRegistry,
   taskId: string,
 ): Promise<{ handle: FileSystemFileHandle; created: boolean }> {
-  const open = async (name: string) => {
-    try {
-      return { handle: await parent.getFileHandle(name), created: false }
-    } catch (error) {
-      if (!isMissingFSAEntry(error)) throw error
-    }
-    return { handle: await parent.getFileHandle(name, { create: true }), created: true }
-  }
   try {
-    return await open(leaf)
+    return await openOrCreateFSAFile(parent, leaf)
   } catch (error) {
     if (!requiresSafeComponent(error)) throw error
-    const name = await deterministicSafeComponent({ taskId, logicalPath, entryKind: 'file' })
-    const entry = await open(name)
-    safeNames.record(logicalPath, 'file', name)
-    return entry
+    return openSafeFSAFile(parent, logicalPath, safeNames, taskId, error)
   }
+}
+
+async function openOrCreateFSAFile(
+  parent: FileSystemDirectoryHandle,
+  name: string,
+): Promise<{ handle: FileSystemFileHandle; created: boolean }> {
+  try {
+    return { handle: await parent.getFileHandle(name), created: false }
+  } catch (error) {
+    if (!isMissingFSAEntry(error)) throw error
+  }
+  return { handle: await parent.getFileHandle(name, { create: true }), created: true }
+}
+
+async function openSafeFSAFile(
+  parent: FileSystemDirectoryHandle,
+  logicalPath: readonly string[],
+  safeNames: SafeNameRegistry,
+  taskId: string,
+  initialError: unknown,
+): Promise<{ handle: FileSystemFileHandle; created: boolean }> {
+  const candidates = await deterministicSafeCandidates({ taskId, logicalPath, entryKind: 'file' })
+  let lastError: unknown = initialError
+  for (const candidate of candidates) {
+    try {
+      const entry = await openOrCreateFSAFile(parent, candidate)
+      safeNames.record(logicalPath, 'file', candidate)
+      return entry
+    } catch (error) {
+      if (!requiresSafeComponent(error)) throw error
+      lastError = error
+    }
+  }
+  throw lastError
 }
 
 export async function reserveFSATarget(
@@ -193,13 +216,11 @@ export async function reserveFSATarget(
     let reservedName = decideCollisionName(requestedName, kind, collisionIndex)
     let entry = await tryReserveCandidate(parentHandle, reservedName, singleFile, claimedNames)
     if (entry === 'invalid-name') {
-      reservedName = await deterministicSafeComponent({
-        taskId,
-        logicalPath: [requestedName],
-        entryKind: kind,
-        collisionIndex,
-      })
-      entry = await tryReserveCandidate(parentHandle, reservedName, singleFile, claimedNames)
+      const safe = await reserveSafeTargetCandidate(
+        parentHandle, requestedName, singleFile, taskId, collisionIndex, claimedNames,
+      )
+      reservedName = safe.reservedName
+      entry = safe.entry
       if (typeof entry !== 'string') safeNames.recordRoot([requestedName], kind, reservedName)
     }
     if (entry === 'claimed') {
@@ -212,6 +233,35 @@ export async function reserveFSATarget(
     outputFault(FaultScope.Job, OutputFaultCode.TargetCollision),
     'Could not allocate a unique name in the selected folder',
   )
+}
+
+async function reserveSafeTargetCandidate(
+  parentHandle: FileSystemDirectoryHandle,
+  requestedName: string,
+  singleFile: boolean,
+  taskId: string,
+  collisionIndex: number,
+  claimedNames: ReadonlySet<string>,
+): Promise<Readonly<{
+  reservedName: string
+  entry: ReservedRootEntry | 'claimed' | 'exists' | 'invalid-name'
+}>> {
+  const kind = singleFile ? 'file' : 'directory'
+  const candidates = await deterministicSafeCandidates({
+    taskId,
+    logicalPath: [requestedName],
+    entryKind: kind,
+    collisionIndex,
+  })
+  let lastName = candidates[0]
+  for (const candidate of candidates) {
+    lastName = candidate
+    const entry = await tryReserveCandidate(parentHandle, candidate, singleFile, claimedNames)
+    // Only another name rejection justifies dropping the extension; 'exists' and 'claimed'
+    // show the browser accepted this extension and the outer loop should increment collisionIndex.
+    if (entry !== 'invalid-name') return { reservedName: candidate, entry }
+  }
+  return { reservedName: lastName, entry: 'invalid-name' }
 }
 
 async function tryReserveCandidate(

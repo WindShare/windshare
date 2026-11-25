@@ -9,7 +9,7 @@ import type { JoinedBrowserShare } from '../../src/application/browser-share/gat
 import type { FrozenSelectionPolicy } from '../../src/catalog/selection'
 import { openNewFSASession, reopenFSASession } from '../../src/output/backends/fsa'
 import { loadFSARestorePlan, writeFSARestoreArtifact } from '../../src/output/backends/fsa-restore'
-import { deterministicSafeComponent } from '../../src/output/backends/safe-name'
+import { deterministicSafeCandidates } from '../../src/output/backends/safe-name'
 import type { OutputTraceEvent } from '../../src/output/diagnostics'
 import { FSARestoreTargetMissingError } from '../../src/output/model/safe-name-restore'
 import type { ReceiveStore } from '../../src/output/store/database'
@@ -19,9 +19,11 @@ import type { SettledTransferJobResult } from '../../src/transfer/job'
 import { initialReceiveState, transitionReceiveState, type SafeRenamedSummary } from '../../src/transfer/state'
 import { presentTask } from '../../src/ui/tasks/present'
 import { taskFixture } from '../../src/ui/tasks/fixtures'
-import { FakeDirectoryHandle, FakeFileHandle, MemoryReceiveStore } from './fsa-fixture'
+import { FakeDirectoryHandle, FakeFileHandle, MemoryReceiveStore, type RejectNameRule } from './fsa-fixture'
 
 const SIGNAL = new AbortController().signal
+const rejectRestrictedExtension = (name: string) => /\.(cfg|dll|exe)$/i.test(name)
+const rejectColonOrExecutable = (name: string) => name.includes(':') || /\.(cfg|dll|exe)$/i.test(name)
 
 function createFakeLockManager(): LockManager {
   const queues = new Map<string, Promise<void>>()
@@ -67,7 +69,7 @@ function settled(status: SettledTransferJobResult['status'], overrides: Partial<
 describe('FSA safe-name live notification, single source of truth, resume, and crash recovery', () => {
   it('emits live subscribeSafeRenamed immediately on first file or directory rename before settle', async () => {
     const memory = new MemoryReceiveStore()
-    const parent = new FakeDirectoryHandle('Downloads', memory.events, ['empty.cfg', 'app.dll'])
+    const parent = new FakeDirectoryHandle('Downloads', memory.events, rejectRestrictedExtension)
     const session = await openNewFSASession({
       task: {
         taskId: 'live-task',
@@ -103,7 +105,7 @@ describe('FSA safe-name live notification, single source of truth, resume, and c
   it('preserves renames across pause/resume without overwrites and drops pruned/unfinished ghost counts on partial or failed settle', async () => {
     const memory = new MemoryReceiveStore()
     const store = memory as unknown as ReceiveStore
-    const parent = new FakeDirectoryHandle('Downloads', memory.events, ['a.cfg', 'b.dll', 'part.dll', 'empty.cfg', 'abandoned.cfg'])
+    const parent = new FakeDirectoryHandle('Downloads', memory.events, rejectRestrictedExtension)
 
     const run1 = await openNewFSASession({
       task: {
@@ -172,7 +174,7 @@ describe('FSA safe-name live notification, single source of truth, resume, and c
   it('keeps putTask before cleanup on failed settle, strips safeRenamed on failure, and distinguishes single-file collisionIndex', async () => {
     const memory = new MemoryReceiveStore()
     const store = memory as unknown as ReceiveStore
-    const parent = new FakeDirectoryHandle('Downloads', memory.events, ['tool.dll'])
+    const parent = new FakeDirectoryHandle('Downloads', memory.events, rejectRestrictedExtension)
     parent.putUserFile('report.pdf', Uint8Array.of(9))
 
     // Failed task must not persist safeRenamed and must not clean disk if putTask throws.
@@ -238,7 +240,7 @@ describe('FSA safe-name live notification, single source of truth, resume, and c
   it('reconstructs safeRenamed during crash recovery in pauseFromCheckpoints', async () => {
     const memory = new MemoryReceiveStore()
     const store = memory as unknown as ReceiveStore
-    const parent = new FakeDirectoryHandle('Downloads', memory.events, ['pyvenv.cfg'])
+    const parent = new FakeDirectoryHandle('Downloads', memory.events, rejectRestrictedExtension)
     const session = await openNewFSASession({
       task: {
         taskId: 'crashed-fsa',
@@ -267,7 +269,7 @@ describe('FSA safe-name live notification, single source of truth, resume, and c
   })
 
   it('isolates re-shared safe directory names across tasks in both discovery orders and restores only the renamed directory', async () => {
-    const priorSafeName = await deterministicSafeComponent({
+    const [priorSafeName] = await deterministicSafeCandidates({
       taskId: 'prior-task',
       logicalPath: ['empty.cfg'],
       entryKind: 'directory',
@@ -310,7 +312,7 @@ describe('FSA safe-name live notification, single source of truth, resume, and c
       const saved = await session.settle(settled('completed', { completedFiles: 2n, completedBytes: 2n }))
       await session.close()
 
-      const newSafeName = await deterministicSafeComponent({ taskId, logicalPath: ['empty.cfg'], entryKind: 'directory' })
+      const [newSafeName] = await deterministicSafeCandidates({ taskId, logicalPath: ['empty.cfg'], entryKind: 'directory' })
       expect(newSafeName).not.toBe(priorSafeName)
       const root = parent.children.get('Bundle') as FakeDirectoryHandle
       expect([...root.children.keys()].sort()).toEqual([newSafeName, priorSafeName].sort())
@@ -330,7 +332,7 @@ describe('FSA safe-name live notification, single source of truth, resume, and c
       const store = memory as unknown as ReceiveStore
       const parent = new FakeDirectoryHandle('Downloads', memory.events, ['empty.cfg'])
       const taskId = `collide-${order}`
-      const collidingName = await deterministicSafeComponent({
+      const [collidingName] = await deterministicSafeCandidates({
         taskId,
         logicalPath: ['empty.cfg'],
         entryKind: 'directory',
@@ -398,7 +400,7 @@ describe('FSA safe-name live notification, single source of truth, resume, and c
     const pauseMem = new MemoryReceiveStore()
     const pauseStore = pauseMem as unknown as ReceiveStore
     const pauseParent = new FakeDirectoryHandle('Downloads', pauseMem.events, ['empty.cfg'])
-    const pauseSafe = await deterministicSafeComponent({ taskId: 'pause-collide', logicalPath: ['empty.cfg'], entryKind: 'directory' })
+    const [pauseSafe] = await deterministicSafeCandidates({ taskId: 'pause-collide', logicalPath: ['empty.cfg'], entryKind: 'directory' })
     const run1 = await openNewFSASession({
       task: {
         taskId: 'pause-collide',
@@ -452,15 +454,251 @@ describe('FSA safe-name live notification, single source of truth, resume, and c
     await crashRun2.settle(settled('completed', { completedFiles: 1n, completedBytes: 1n }))
     await crashRun2.close()
 
-    const crashSafe = await deterministicSafeComponent({ taskId: 'crash-reuse', logicalPath: ['empty.cfg'], entryKind: 'directory' })
+    const [crashSafe] = await deterministicSafeCandidates({ taskId: 'crash-reuse', logicalPath: ['empty.cfg'], entryKind: 'directory' })
     const crashRoot = crashParent.children.get('CrashPkg') as FakeDirectoryHandle
     expect([...crashRoot.children.keys()]).toEqual([crashSafe])
     expect([...(crashRoot.children.get(crashSafe) as FakeDirectoryHandle).children.keys()]).toEqual(['ok.txt'])
   })
 })
 
+describe('FSA two-step safe-name extension preservation and fallback', () => {
+  it('preserves compatible extensions in folder and single-file downloads across pause/resume and falls back to extensionless on blocked suffixes', async () => {
+    const memory = new MemoryReceiveStore()
+    const store = memory as unknown as ReceiveStore
+    const parent = new FakeDirectoryHandle('Downloads', memory.events, rejectColonOrExecutable)
+
+    // 1. Folder download: notes:2026.pdf keeps .pdf across pause/resume; setup.exe and my:tool.exe fall back to extensionless.
+    const run1 = await openNewFSASession({
+      task: {
+        taskId: 'two-step-dir',
+        selectionKey: 'sel-two-step-dir',
+        selection: { shareInstance: 's1', syntheticRoot: 'r1', defaultSelected: true, rules: [] },
+        artifact: { kind: 'directory-tree', name: 'Mixed' },
+        lifecycle: initialReceiveState('two-step-dir'),
+      },
+      parentHandle: parent as unknown as FileSystemDirectoryHandle,
+      store,
+    })
+
+    const pdfPart1 = await run1.transferOutput.openFile({
+      fileId: 'f-pdf', path: ['notes:2026.pdf'], sourcePath: ['Mixed', 'notes:2026.pdf'], revision: 'r1', exactSize: 4n,
+    }, SIGNAL)
+    await pdfPart1.writeAt(0n, Uint8Array.of(1, 2))
+    await pdfPart1.pause([byteRange(0n, 2n)])
+
+    const setupExe = await run1.transferOutput.openFile({
+      fileId: 'f-exe', path: ['setup.exe'], sourcePath: ['Mixed', 'setup.exe'], revision: 'r2', exactSize: 2n,
+    }, SIGNAL)
+    await setupExe.writeAt(0n, Uint8Array.of(3, 4))
+    await setupExe.commit([byteRange(0n, 2n)])
+
+    const toolExe = await run1.transferOutput.openFile({
+      fileId: 'f-colon-exe', path: ['my:tool.exe'], sourcePath: ['Mixed', 'my:tool.exe'], revision: 'r3', exactSize: 2n,
+    }, SIGNAL)
+    await toolExe.writeAt(0n, Uint8Array.of(5, 6))
+    await toolExe.commit([byteRange(0n, 2n)])
+
+    const pausedDir = await run1.settle(settled('paused', {
+      pauseReason: 'user', completedFiles: 2n, completedBytes: 4n, discoveredFiles: 3n, discoveredBytes: 8n,
+    }))
+    await run1.close()
+
+    const run2 = await reopenFSASession({ task: pausedDir, store, allowPermissionPrompt: false })
+    const pdfPart2 = await run2.transferOutput.openFile({
+      fileId: 'f-pdf', path: ['notes:2026.pdf'], sourcePath: ['Mixed', 'notes:2026.pdf'], revision: 'r1', exactSize: 4n,
+    }, SIGNAL)
+    await pdfPart2.writeAt(2n, Uint8Array.of(7, 8))
+    await pdfPart2.commit([byteRange(0n, 4n)])
+    await run2.settle(settled('completed', { completedFiles: 3n, completedBytes: 8n }))
+    await run2.close()
+
+    const [pdfWithExt] = await deterministicSafeCandidates({
+      taskId: 'two-step-dir', logicalPath: ['notes:2026.pdf'], entryKind: 'file',
+    })
+    const [, setupFallback] = await deterministicSafeCandidates({
+      taskId: 'two-step-dir', logicalPath: ['setup.exe'], entryKind: 'file',
+    })
+    const [, toolFallback] = await deterministicSafeCandidates({
+      taskId: 'two-step-dir', logicalPath: ['my:tool.exe'], entryKind: 'file',
+    })
+
+    const mixedDir = parent.children.get('Mixed') as FakeDirectoryHandle
+    expect([...mixedDir.children.keys()].sort()).toEqual([pdfWithExt, setupFallback!, toolFallback!].sort())
+    expect(pdfWithExt.endsWith('.pdf')).toBe(true)
+    expect(setupFallback).toMatch(/\.windshare-[0-9a-f]{16}$/u)
+    expect(toolFallback).toMatch(/\.windshare-[0-9a-f]{16}$/u)
+    expect([...(mixedDir.children.get(pdfWithExt) as FakeFileHandle).bytes]).toEqual([1, 2, 7, 8])
+
+    const winPlan = await loadFSARestorePlan(store, 'two-step-dir', 'windows')
+    expect(winPlan.restorable.map(step => [step.fromName, step.toName])).toEqual([[setupFallback, 'setup.exe']])
+    expect(winPlan.unsupported.map(entry => [entry.fromName, entry.toName]).sort()).toEqual([
+      [pdfWithExt, 'notes:2026.pdf'],
+      [toolFallback, 'my:tool.exe'],
+    ].sort())
+
+    // 2. Single-file downloads: notes:2026.pdf keeps .pdf across pause/resume; setup.exe and my:tool.exe fall back to extensionless.
+    const singlePdf1 = await openNewFSASession({
+      task: {
+        taskId: 'single-pdf',
+        selectionKey: 'sel-single-pdf',
+        selection: { shareInstance: 's1', syntheticRoot: 'r1', defaultSelected: true, rules: [] },
+        artifact: { kind: 'original-file', name: 'notes:2026.pdf', singleFileId: 'sf-pdf' },
+        lifecycle: initialReceiveState('single-pdf'),
+      },
+      parentHandle: parent as unknown as FileSystemDirectoryHandle,
+      store,
+    })
+    const [expectedSinglePdf] = await deterministicSafeCandidates({
+      taskId: 'single-pdf', logicalPath: ['notes:2026.pdf'], entryKind: 'file', collisionIndex: 0,
+    })
+    expect(singlePdf1.record?.target.kind === 'fsa' ? singlePdf1.record.target.reservedName : '').toBe(expectedSinglePdf)
+    const spw1 = await singlePdf1.transferOutput.openFile({
+      fileId: 'sf-pdf', path: ['notes:2026.pdf'], sourcePath: ['notes:2026.pdf'], revision: 'r1', exactSize: 4n,
+    }, SIGNAL)
+    await spw1.writeAt(0n, Uint8Array.of(9, 10))
+    await spw1.pause([byteRange(0n, 2n)])
+    const pausedSinglePdf = await singlePdf1.settle(settled('paused', {
+      pauseReason: 'user', completedFiles: 0n, completedBytes: 0n, discoveredFiles: 1n, discoveredBytes: 4n,
+    }))
+    await singlePdf1.close()
+
+    const singlePdf2 = await reopenFSASession({ task: pausedSinglePdf, store, allowPermissionPrompt: false })
+    const spw2 = await singlePdf2.transferOutput.openFile({
+      fileId: 'sf-pdf', path: ['notes:2026.pdf'], sourcePath: ['notes:2026.pdf'], revision: 'r1', exactSize: 4n,
+    }, SIGNAL)
+    await spw2.writeAt(2n, Uint8Array.of(11, 12))
+    await spw2.commit([byteRange(0n, 4n)])
+    await singlePdf2.settle(settled('completed', { completedFiles: 1n, completedBytes: 4n }))
+    await singlePdf2.close()
+    expect([...(parent.children.get(expectedSinglePdf) as FakeFileHandle).bytes]).toEqual([9, 10, 11, 12])
+
+    for (const [taskId, fileName] of [
+      ['single-setup-exe', 'setup.exe'],
+      ['single-colon-exe', 'my:tool.exe'],
+    ] as const) {
+      const sess = await openNewFSASession({
+        task: {
+          taskId,
+          selectionKey: `sel-${taskId}`,
+          selection: { shareInstance: 's1', syntheticRoot: 'r1', defaultSelected: true, rules: [] },
+          artifact: { kind: 'original-file', name: fileName, singleFileId: `fid-${taskId}` },
+          lifecycle: initialReceiveState(taskId),
+        },
+        parentHandle: parent as unknown as FileSystemDirectoryHandle,
+        store,
+      })
+      const [, expectedFallback] = await deterministicSafeCandidates({
+        taskId, logicalPath: [fileName], entryKind: 'file', collisionIndex: 0,
+      })
+      expect(sess.record?.target.kind === 'fsa' ? sess.record.target.reservedName : '').toBe(expectedFallback)
+      const w = await sess.transferOutput.openFile({
+        fileId: `fid-${taskId}`, path: [fileName], sourcePath: [fileName], revision: 'r1', exactSize: 2n,
+      }, SIGNAL)
+      await w.writeAt(0n, Uint8Array.of(1, 2))
+      await w.commit([byteRange(0n, 2n)])
+      await sess.settle(settled('completed', { completedFiles: 1n, completedBytes: 2n }))
+      await sess.close()
+    }
+
+    const exePlan = await loadFSARestorePlan(store, 'single-setup-exe', 'windows')
+    expect(exePlan.restorable.map(step => step.toName)).toEqual(['setup.exe'])
+    const colonExePosixPlan = await loadFSARestorePlan(store, 'single-colon-exe', 'posix')
+    expect(colonExePosixPlan.restorable.map(step => step.toName)).toEqual(['my:tool.exe'])
+  })
+
+  it('advances single-file collisionIndex instead of stripping extension on exists/claimed and propagates non-name errors on candidate 1', async () => {
+    const memory = new MemoryReceiveStore()
+    const store = memory as unknown as ReceiveStore
+    const parent = new FakeDirectoryHandle('Downloads', memory.events, rejectColonOrExecutable)
+
+    // Pre-occupy collisionIndex=0 with-extension candidate on disk ('exists') AND pre-claim collisionIndex=1 in IndexedDB ('claimed').
+    const [existingSlot0] = await deterministicSafeCandidates({
+      taskId: 'single-collide', logicalPath: ['notes:2026.pdf'], entryKind: 'file', collisionIndex: 0,
+    })
+    const [claimedSlot1] = await deterministicSafeCandidates({
+      taskId: 'single-collide', logicalPath: ['notes:2026.pdf'], entryKind: 'file', collisionIndex: 1,
+    })
+    const [expectedSlot2] = await deterministicSafeCandidates({
+      taskId: 'single-collide', logicalPath: ['notes:2026.pdf'], entryKind: 'file', collisionIndex: 2,
+    })
+    parent.putUserFile(existingSlot0, Uint8Array.of(42))
+    await store.putTask({
+      taskId: 'other-paused-task',
+      shareInstance: 's-other',
+      selectionKey: 'sel-other',
+      selection: { shareInstance: 's-other', syntheticRoot: 'r-other', defaultSelected: true, rules: [] },
+      artifact: { kind: 'original-file', name: 'other.pdf', singleFileId: 'fid-other' },
+      backend: 'fsa',
+      lifecycle: transitionReceiveState(initialReceiveState('other-paused-task'), {
+        kind: 'paused', reason: 'user', completedFiles: 0n, completedBytes: 0n,
+        retainedBytes: 0n, discoveredFiles: 0n, discoveredBytes: 0n, discoveryComplete: false,
+      }),
+      target: {
+        kind: 'fsa',
+        parentHandle: parent as unknown as FileSystemDirectoryHandle,
+        reservedName: claimedSlot1,
+        collisionIndex: 0,
+        singleFile: true,
+        reservedAtMs: Date.now() - 5_000,
+        reservedFile: {
+          handle: new FakeFileHandle(claimedSlot1, `/Downloads/${claimedSlot1}`, memory.events) as unknown as FileSystemFileHandle,
+          fingerprint: { size: 0, lastModified: 0 },
+        },
+      },
+      discoveryComplete: false,
+      updatedAt: Date.now() - 5_000,
+    })
+
+    const session = await openNewFSASession({
+      task: {
+        taskId: 'single-collide',
+        selectionKey: 'sel-single-collide',
+        selection: { shareInstance: 's1', syntheticRoot: 'r1', defaultSelected: true, rules: [] },
+        artifact: { kind: 'original-file', name: 'notes:2026.pdf', singleFileId: 'sf-col' },
+        lifecycle: initialReceiveState('single-collide'),
+      },
+      parentHandle: parent as unknown as FileSystemDirectoryHandle,
+      store,
+    })
+    expect(session.record?.target.kind === 'fsa' ? session.record.target.reservedName : '').toBe(expectedSlot2)
+    expect(session.record?.target.kind === 'fsa' ? session.record.target.collisionIndex : -1).toBe(2)
+    expect(expectedSlot2.endsWith('.pdf')).toBe(true)
+    await session.close()
+
+    // A permission error on candidate 1 inside openFSAFile must propagate rather than falling back to candidate 2.
+    const permSession = await openNewFSASession({
+      task: {
+        taskId: 'perm-fail',
+        selectionKey: 'sel-perm',
+        selection: { shareInstance: 's1', syntheticRoot: 'r1', defaultSelected: true, rules: [] },
+        artifact: { kind: 'directory-tree', name: 'PermDir' },
+        lifecycle: initialReceiveState('perm-fail'),
+      },
+      parentHandle: parent as unknown as FileSystemDirectoryHandle,
+      store,
+    })
+    const [permCand1, permCand2] = await deterministicSafeCandidates({
+      taskId: 'perm-fail', logicalPath: ['notes:2026.pdf'], entryKind: 'file',
+    })
+    const permDir = parent.children.get('PermDir') as FakeDirectoryHandle
+    const origGetFile = permDir.getFileHandle.bind(permDir)
+    const attempted: string[] = []
+    vi.spyOn(permDir, 'getFileHandle').mockImplementation(async (name, options) => {
+      attempted.push(name)
+      if (name === permCand1) throw new DOMException('permission denied', 'NotAllowedError')
+      return origGetFile(name, options)
+    })
+    await expect(permSession.transferOutput.openFile({
+      fileId: 'f-perm', path: ['notes:2026.pdf'], sourcePath: ['PermDir', 'notes:2026.pdf'], revision: 'r1', exactSize: 4n,
+    }, SIGNAL)).rejects.toMatchObject({ name: 'NotAllowedError' })
+    expect(attempted).toEqual(['notes:2026.pdf', permCand1])
+    expect(permDir.children.has(permCand2!)).toBe(false)
+    await permSession.close()
+  })
+})
+
 describe('writeFSARestoreArtifact concurrency, user-activation order, and POSIX fallback', () => {
-  async function createSavedTaskWithRename(rejectNames: readonly string[] = ['app.dll']) {
+  async function createSavedTaskWithRename(rejectNames: RejectNameRule = rejectRestrictedExtension) {
     const memory = new MemoryReceiveStore()
     const store = memory as unknown as ReceiveStore
     const parent = new FakeDirectoryHandle('Downloads', memory.events, rejectNames)
@@ -642,7 +880,7 @@ describe('writeFSARestoreArtifact concurrency, user-activation order, and POSIX 
     for (const locks of [createFakeLockManager(), undefined] as const) {
       const memory = new MemoryReceiveStore()
       const store = memory as unknown as ReceiveStore
-      const parent = new FakeDirectoryHandle('Downloads', memory.events, ['first.dll', 'second.dll'])
+      const parent = new FakeDirectoryHandle('Downloads', memory.events, rejectRestrictedExtension)
       await createSavedSingleFileTask(memory, parent, 'single-1', 'first.dll')
       await createSavedSingleFileTask(memory, parent, 'single-2', 'second.dll')
 
@@ -670,7 +908,7 @@ describe('writeFSARestoreArtifact concurrency, user-activation order, and POSIX 
     // 1. External non-empty file created after entryExists must not be overwritten.
     const racing = new MemoryReceiveStore()
     const racingStore = racing as unknown as ReceiveStore
-    const racingParent = new FakeDirectoryHandle('Downloads', racing.events, ['app.dll'])
+    const racingParent = new FakeDirectoryHandle('Downloads', racing.events, rejectRestrictedExtension)
     await createSavedSingleFileTask(racing, racingParent, 'single-race', 'app.dll')
 
     const origGetFile = racingParent.getFileHandle.bind(racingParent)

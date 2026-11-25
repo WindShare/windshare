@@ -119,6 +119,8 @@ export class FakeFileHandle {
   }
 }
 
+export type RejectNameRule = readonly string[] | ((name: string) => boolean)
+
 export class FakeDirectoryHandle {
   readonly kind = 'directory' as const
   readonly name: string
@@ -126,19 +128,24 @@ export class FakeDirectoryHandle {
   readonly children = new Map<string, FakeDirectoryHandle | FakeFileHandle>()
   readonly stats: FakeFsStats
   readonly #events: string[]
-  readonly #rejectNames: Set<string>
+  readonly #rejectName: (name: string) => boolean
 
   constructor(
     name: string,
     events: string[],
-    rejectNames: readonly string[] = [],
+    rejectNames: RejectNameRule = [],
     path = `/${name}`,
     stats: FakeFsStats = { recursiveRemoveCalls: 0 },
   ) {
     this.name = name
     this.path = path
     this.#events = events
-    this.#rejectNames = new Set(rejectNames)
+    if (typeof rejectNames === 'function') {
+      this.#rejectName = rejectNames
+    } else {
+      const blocked = new Set(rejectNames)
+      this.#rejectName = candidate => blocked.has(candidate)
+    }
     this.stats = stats
   }
 
@@ -159,7 +166,7 @@ export class FakeDirectoryHandle {
   }
 
   async getDirectoryHandle(name: string, options?: { create?: boolean }): Promise<FakeDirectoryHandle> {
-    if (this.#rejectNames.has(name)) throw new TypeError(`Invalid name ${name}`)
+    if (this.#rejectName(name)) throw new TypeError(`Invalid name ${name}`)
     const existing = this.children.get(name)
     if (existing instanceof FakeDirectoryHandle) return existing
     if (existing instanceof FakeFileHandle) throw new DOMException('type mismatch', 'TypeMismatchError')
@@ -167,7 +174,7 @@ export class FakeDirectoryHandle {
     const created = new FakeDirectoryHandle(
       name,
       this.#events,
-      [...this.#rejectNames],
+      this.#rejectName,
       `${this.path}/${name}`,
       this.stats,
     )
@@ -176,7 +183,7 @@ export class FakeDirectoryHandle {
   }
 
   async getFileHandle(name: string, options?: { create?: boolean }): Promise<FakeFileHandle> {
-    if (this.#rejectNames.has(name)) throw new TypeError(`Invalid name ${name}`)
+    if (this.#rejectName(name)) throw new TypeError(`Invalid name ${name}`)
     const existing = this.children.get(name)
     if (existing instanceof FakeFileHandle) return existing
     if (existing instanceof FakeDirectoryHandle) throw new DOMException('type mismatch', 'TypeMismatchError')

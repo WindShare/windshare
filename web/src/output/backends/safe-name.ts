@@ -18,21 +18,19 @@ const SAFE_NAME_DOMAIN = 'windshare/fsa-safe-name/v1'
 const SAFE_NAME_MARKER = '.windshare-'
 const SAFE_NAME_HASH_BYTES = 8
 const MAX_READABLE_PREFIX_BYTES = 64
+const MAX_EXTENSION_BYTES = 32
 const FALLBACK_PREFIX = 'entry'
 const RESERVED_STEM_PREFIX = 'entry-'
 const MAX_COLLISION_INDEX = 0xffff_ffff
 
 const TEXT_ENCODER = new TextEncoder()
 const SAFE_CODE_POINT = /[\p{L}\p{N}]/u
-const SAFE_NAME_SUFFIX_PATTERN = /\.windshare-[0-9a-f]{16}$/
 
 export type SafeNameEntryKind = 'file' | 'directory'
 export type SafeNameEntryScope = 'root' | 'child'
 export type DirectoryClaimStatus = 'claimed' | 'owned' | 'conflict'
 
-export function isSafeComponentName(name: string): boolean {
-  return SAFE_NAME_SUFFIX_PATTERN.test(name)
-}
+export type DeterministicSafeCandidates = readonly [string] | readonly [string, string]
 
 export interface DeterministicSafeComponentInput {
   readonly taskId: string
@@ -42,15 +40,43 @@ export interface DeterministicSafeComponentInput {
 }
 
 /**
- * Produces a per-task deterministic, portable FSA component for a logical name
- * rejected by the browser or OS. Salting with the task's random ID isolates
- * each download from re-shared safe names and sender predictions while keeping
- * pause/resume and crash recovery deterministic within the same task.
- * Replacing any original extension avoids repeating blocked-suffix refusals.
+ * Produces per-task deterministic, portable FSA component candidates in preference
+ * order for a logical name rejected at `getFileHandle` / `getDirectoryHandle`.
+ * Salting with the task's random ID isolates each download from re-shared safe names
+ * and sender predictions while keeping pause/resume and crash recovery deterministic
+ * within the same task.
+ *
+ * Files with a portable extension return `[withExtension, withoutExtension]` so files
+ * rejected for illegal characters, reserved names, or length remain directly openable,
+ * while callers can still fall back to the extensionless form when the browser rejects
+ * the extension itself during handle acquisition (rare post-write `writer.close()`
+ * policy rejections are outside handle-acquisition probing). Directories never preserve
+ * extensions.
  */
-export async function deterministicSafeComponent(
+export async function deterministicSafeCandidates(
   input: DeterministicSafeComponentInput,
-): Promise<string> {
+): Promise<DeterministicSafeCandidates> {
+  const collisionIndex = validateSafeComponentInput(input)
+  const encodedPath = input.logicalPath.map(segment => `${segment.length}:${segment}`).join('/')
+  const material = TEXT_ENCODER.encode(
+    `${SAFE_NAME_DOMAIN}\0${input.taskId.length}:${input.taskId}\0${input.entryKind}\0${collisionIndex}\0${encodedPath}`,
+  )
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', material))
+  const suffix = hexPrefix(digest, SAFE_NAME_HASH_BYTES)
+  const leaf = input.logicalPath.at(-1)!
+  const withoutExtension = buildSafeComponent(leaf, suffix)
+  if (input.entryKind !== 'file') {
+    return Object.freeze([withoutExtension] as const)
+  }
+  const split = extractCompatibleExtension(leaf)
+  if (split === undefined) {
+    return Object.freeze([withoutExtension] as const)
+  }
+  const withExtension = buildSafeComponent(split.stem, suffix, split.extension)
+  return Object.freeze([withExtension, withoutExtension] as const)
+}
+
+function validateSafeComponentInput(input: DeterministicSafeComponentInput): number {
   if (input.taskId.length === 0) {
     throw new TypeError('Deterministic safe component requires a non-empty taskId')
   }
@@ -66,15 +92,28 @@ export async function deterministicSafeComponent(
   if (!Number.isSafeInteger(collisionIndex) || collisionIndex < 0 || collisionIndex > MAX_COLLISION_INDEX) {
     throw new RangeError('Safe component collision index must be an unsigned 32-bit integer')
   }
+  return collisionIndex
+}
 
-  const encodedPath = input.logicalPath.map(segment => `${segment.length}:${segment}`).join('/')
-  const material = TEXT_ENCODER.encode(
-    `${SAFE_NAME_DOMAIN}\0${input.taskId.length}:${input.taskId}\0${input.entryKind}\0${collisionIndex}\0${encodedPath}`,
-  )
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', material))
-  const suffix = hexPrefix(digest, SAFE_NAME_HASH_BYTES)
-  const prefix = readablePrefix(input.logicalPath.at(-1)!)
-  const candidate = `${prefix}${SAFE_NAME_MARKER}${suffix}`
+// Mirrors Go's osfs/internal/output/names.go extension extraction so non-restorable
+// cross-platform filenames retain their file association when the browser permits it.
+function extractCompatibleExtension(
+  leaf: string,
+): Readonly<{ stem: string; extension: string }> | undefined {
+  const dot = leaf.lastIndexOf('.')
+  if (dot <= 0) return undefined
+  const extension = leaf.slice(dot)
+  if (
+    TEXT_ENCODER.encode(extension).byteLength > MAX_EXTENSION_BYTES ||
+    !isPortableOutputName(`file${extension}`)
+  ) {
+    return undefined
+  }
+  return { stem: leaf.slice(0, dot), extension }
+}
+
+function buildSafeComponent(stemSource: string, suffix: string, extension = ''): string {
+  const candidate = `${readablePrefix(stemSource)}${SAFE_NAME_MARKER}${suffix}${extension}`
   const safeName = isPortableOutputName(candidate) ? candidate : `${RESERVED_STEM_PREFIX}${candidate}`
   if (!isPortableOutputName(safeName)) {
     throw new TypeError('Generated FSA safe component failed portable output validation')
