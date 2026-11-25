@@ -8,11 +8,14 @@ import {
   type PublicWallResponse,
 } from '../src/model'
 import {
+  RANKING_RULE_SIGNATURE,
   REFERENCE_MICRO_USD_PER_MAJOR,
+  TopSupportersAccumulator,
   computeComparableUsdScore,
   normalizeDonorDedupKey,
   selectTopSupporters,
 } from '../src/ranking'
+import { computePublicWallProjectionFingerprint } from '../src/wall-projection'
 import { createInMemoryWallStore } from './wall-harness'
 
 function makeEntry(overrides: Partial<PublicWallEntry> & { readonly id: string }): PublicWallEntry {
@@ -96,6 +99,81 @@ describe('top supporters ranking semantics', () => {
       makeEntry({ id: 'id-d', displayName: 'Dave', amountMinor: 5000, donatedAt: 1000 }),
     ])
     expect(top.map(e => e.id)).toEqual(['id-a', 'id-b', 'id-c'])
+  })
+
+  it('matches full sort-and-dedup reference results across arbitrary orderings and stays idempotent on duplicate ids', () => {
+    const referenceSelect = (entries: readonly PublicWallEntry[], limit: number): PublicWallEntry[] => {
+      if (limit <= 0) return []
+      const scored = entries
+        .map(entry => ({
+          entry,
+          score: computeComparableUsdScore(entry.amountMinor, entry.currency, entry.minorDigits),
+        }))
+        .filter((item): item is { entry: PublicWallEntry; score: bigint } => item.score !== null)
+        .toSorted((a, b) => {
+          if (a.score !== b.score) return a.score > b.score ? -1 : 1
+          if (a.entry.donatedAt !== b.entry.donatedAt) return a.entry.donatedAt - b.entry.donatedAt
+          if (a.entry.id === b.entry.id) return 0
+          return a.entry.id < b.entry.id ? -1 : 1
+        })
+      const seenNamed = new Set<string>()
+      const result: PublicWallEntry[] = []
+      for (const { entry } of scored) {
+        const key = entry.displayName === null ? '' : normalizeDonorDedupKey(entry.displayName)
+        if (key.length > 0) {
+          if (seenNamed.has(key)) continue
+          seenNamed.add(key)
+        }
+        result.push(entry)
+        if (result.length >= limit) break
+      }
+      return result
+    }
+
+    // Deterministic LCG to test varied permutations without flaky randomness.
+    let state = 0x5eed1234
+    const nextInt = (maxExclusive: number): number => {
+      state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0
+      return state % maxExclusive
+    }
+    const namePool: readonly (string | null)[] = [null, 'Alice', 'Ａｌｉｃｅ', '  alice ', 'Bob', 'BOB', 'Carol', 'Dave', '   ']
+    const currencyPool = ['USD', 'CNY', 'EUR', 'JPY', 'KRW', 'ZZZ'] as const
+
+    for (let trial = 0; trial < 120; trial += 1) {
+      const count = 1 + nextInt(25)
+      const dataset: PublicWallEntry[] = []
+      for (let i = 0; i < count; i += 1) {
+        const currency = currencyPool[nextInt(currencyPool.length)] ?? 'USD'
+        const minorDigits = currency === 'JPY' || currency === 'KRW' ? 0 : 2
+        dataset.push(makeEntry({
+          id: `t${trial}-e${String(i).padStart(2, '0')}`,
+          displayName: namePool[nextInt(namePool.length)] ?? null,
+          amountMinor: (1 + nextInt(12)) * 500,
+          currency,
+          minorDigits,
+          donatedAt: 1_700_000_000 + nextInt(6),
+        }))
+      }
+      for (const limit of [0, 1, 2, 3, 5]) {
+        expect(selectTopSupporters(dataset, limit).map(e => e.id)).toEqual(
+          referenceSelect(dataset, limit).map(e => e.id),
+        )
+      }
+    }
+
+    // Re-adding an identical anonymous entry must not claim two Top Supporter slots.
+    const anon = makeEntry({ id: 'anon-same', displayName: null, amountMinor: 50_000, donatedAt: 100 })
+    const acc = new TopSupportersAccumulator(3)
+    for (const item of [anon, anon]) {
+      acc.add(item)
+    }
+    expect(acc.result().map(e => e.id)).toEqual(['anon-same'])
+
+    // Projection fingerprint is deterministic and sensitive to ranking-rule changes.
+    const defaultFp = computePublicWallProjectionFingerprint()
+    expect(defaultFp).toMatch(/^proj-v1-[0-9a-f]{16}$/)
+    expect(computePublicWallProjectionFingerprint(RANKING_RULE_SIGNATURE)).toBe(defaultFp)
+    expect(computePublicWallProjectionFingerprint(`${RANKING_RULE_SIGNATURE}|CNY:140000`)).not.toBe(defaultFp)
   })
 })
 

@@ -12,6 +12,7 @@ import {
   type VisibilityKind,
   type WallVisibility,
 } from './model'
+import type { RankableSupporterEntry } from './ranking'
 
 const DEFAULT_ADMIN_PAGE_LIMIT = 50
 const MAX_ADMIN_PAGE_LIMIT = 100
@@ -81,16 +82,74 @@ export const WALL_SCHEMA_STATEMENTS: readonly string[] = [
     donation_id TEXT NOT NULL,
     created_at INTEGER NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS public_wall_projection (
+    singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+    wall_version INTEGER NOT NULL,
+    projection_fingerprint TEXT NOT NULL,
+    top_supporters_json TEXT NOT NULL,
+    snapshot_json TEXT NOT NULL,
+    etag TEXT NOT NULL
+  )`,
 ]
 
 export const ADMIN_DONATION_COLUMNS = `id, provider, external_id, display_name, amount_minor, currency,
   minor_digits, message, visibility_kind, visibility_json, donated_at`
 
-export const PUBLIC_WALL_PUBLISHED_SQL = `SELECT id, provider, display_name, amount_minor, currency,
-       minor_digits, message, donated_at
+export const PUBLIC_WALL_ENTRY_COLUMNS = `id, provider, display_name, amount_minor, currency,
+  minor_digits, message, donated_at`
+
+export const PUBLIC_WALL_RECENT_SQL = `SELECT ${PUBLIC_WALL_ENTRY_COLUMNS}
 FROM donations
 WHERE visibility_kind = 'published'
-ORDER BY donated_at DESC, id DESC`
+ORDER BY donated_at DESC, id DESC
+LIMIT ?`
+
+// Omit message/provider and ORDER BY during rare fallback ranking rebuilds so SQLite
+// streams only the fields required to select the winning Top Supporters IDs.
+export const PUBLIC_WALL_RANKABLE_SQL = `SELECT id, display_name, amount_minor, currency, minor_digits, donated_at
+FROM donations
+WHERE visibility_kind = 'published'`
+
+export const SELECT_PUBLIC_WALL_PROJECTION_SQL = `SELECT c.wall_version AS current_wall_version,
+       p.wall_version AS projected_wall_version,
+       p.projection_fingerprint,
+       p.top_supporters_json,
+       p.snapshot_json,
+       p.etag
+FROM donation_config c
+LEFT JOIN public_wall_projection p ON p.singleton_id = 1
+WHERE c.singleton_id = 1`
+
+export const UPSERT_PUBLIC_WALL_PROJECTION_SQL = `INSERT INTO public_wall_projection (
+  singleton_id,
+  wall_version,
+  projection_fingerprint,
+  top_supporters_json,
+  snapshot_json,
+  etag
+) VALUES (1, ?, ?, ?, ?, ?)
+ON CONFLICT(singleton_id) DO UPDATE SET
+  wall_version = excluded.wall_version,
+  projection_fingerprint = excluded.projection_fingerprint,
+  top_supporters_json = excluded.top_supporters_json,
+  snapshot_json = excluded.snapshot_json,
+  etag = excluded.etag`
+
+// Seed the initial empty projection only for brand-new databases at version 0 with zero
+// published rows so upgraded databases with existing donations still trigger self-healing.
+export const SEED_EMPTY_PUBLIC_WALL_PROJECTION_SQL = `INSERT OR IGNORE INTO public_wall_projection (
+  singleton_id,
+  wall_version,
+  projection_fingerprint,
+  top_supporters_json,
+  snapshot_json,
+  etag
+)
+SELECT 1, 0, ?, '[]', ?, ?
+FROM donation_config
+WHERE singleton_id = 1
+  AND wall_version = 0
+  AND NOT EXISTS (SELECT 1 FROM donations WHERE visibility_kind = 'published' LIMIT 1)`
 
 export const INSERT_DONATION_SQL = `INSERT INTO donations (
   id, provider, external_id, display_name, amount_minor, currency,
@@ -157,6 +216,17 @@ export function rowToPublicWallEntry(row: Record<string, unknown>): PublicWallEn
     currency: String(row.currency),
     minorDigits: Number(row.minor_digits),
     message: row.message === null ? null : String(row.message),
+    donatedAt: Number(row.donated_at),
+  }
+}
+
+export function rowToRankableSupporterEntry(row: Record<string, unknown>): RankableSupporterEntry {
+  return {
+    id: String(row.id),
+    displayName: row.display_name === null ? null : String(row.display_name),
+    amountMinor: Number(row.amount_minor),
+    currency: String(row.currency),
+    minorDigits: Number(row.minor_digits),
     donatedAt: Number(row.donated_at),
   }
 }

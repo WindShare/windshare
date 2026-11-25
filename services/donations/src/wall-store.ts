@@ -1,10 +1,9 @@
-import { createHash, randomBytes } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
 import {
   ADMIN_SESSION_TTL_SECONDS,
   CRYPTO_INTENT_TTL_SECONDS,
   MIN_PUBLIC_CNY_MINOR,
   MIN_PUBLIC_USD_MINOR,
-  PUBLIC_WALL_LIMIT,
   applyVisibilityCommand,
   clampDonatedAt,
   encodeAdminCursor,
@@ -27,16 +26,24 @@ import {
   type DonationRecord,
   type NonPrivateVisibilityKind,
   type PublicWallEntry,
-  type PublicWallResponse,
   type WallVisibility,
 } from './model'
-import { selectTopSupporters } from './ranking'
 import { determineInitialVisibility } from './sanitize'
+import {
+  PublicWallProjectionStore,
+  commitResultToPublicWallDelta,
+  computePublicWallEtag,
+  matchesIfNoneMatch,
+  recordBatchPublicWallDelta,
+  singleAddedPublicWallDelta,
+  visibilityTransitionToPublicWallDelta,
+  type SqlStoragePort,
+  type WallSnapshot,
+} from './wall-projection'
 import {
   ADMIN_DONATION_COLUMNS,
   INSERT_DONATION_SQL,
   INSERT_MANUAL_IDEMPOTENCY_SQL,
-  PUBLIC_WALL_PUBLISHED_SQL,
   REDACT_PRIVATE_DONATION_SQL,
   SELECT_MANUAL_IDEMPOTENCY_SQL,
   WALL_SCHEMA_STATEMENTS,
@@ -46,15 +53,18 @@ import {
   reduceVisibilityCounts,
   rowToCryptoIntent,
   rowToDonationRecord,
-  rowToPublicWallEntry,
 } from './wall-queries'
+
+export { computePublicWallEtag, matchesIfNoneMatch, type SqlStoragePort, type WallSnapshot }
 
 const CLEANUP_BATCH_SIZE = 32
 const RATE_LIMIT_STALE_SECONDS = 3600
 // Keep parameterized IN-clause chunks well under SQLite's 999 bound parameter ceiling.
 const SQL_IN_BATCH_SIZE = 100
-// Truncate SHA-256 to 64 bits (16 hex chars) for compact strong ETag content suffixes.
-const WALL_ETAG_DIGEST_HEX_LENGTH = 16
+
+export interface WallStoreOptions {
+  readonly projectionFingerprint?: string
+}
 
 export type RateLimitScope = 'crypto' | 'admin_login'
 
@@ -81,16 +91,6 @@ const RATE_LIMIT_POLICIES: Readonly<Record<RateLimitScope, ScopeRateLimitPolicy>
     ip: { capacity: 5, windowSeconds: 300 },
   },
 })
-
-export interface SqlStoragePort {
-  exec(query: string, ...bindings: unknown[]): Iterable<Record<string, unknown>>
-}
-
-export interface WallSnapshot {
-  readonly version: number
-  readonly etag: string
-  readonly json: string
-}
 
 export interface RateLimitDecision {
   readonly allowed: boolean
@@ -123,34 +123,6 @@ function firstRow(cursor: Iterable<Record<string, unknown>>): Record<string, unk
   return null
 }
 
-export function computePublicWallEtag(wallVersion: number, serializedJson: string): string {
-  // Bind the strong ETag to the serialized representation bytes as well as wallVersion
-  // so projection changes (schema fields, ranking/FX rules) invalidate stale 304 caches
-  // even when no database mutation incremented wall_version.
-  const digest = createHash('sha256')
-    .update(serializedJson, 'utf8')
-    .digest('hex')
-    .slice(0, WALL_ETAG_DIGEST_HEX_LENGTH)
-  return `"wall-v${wallVersion}-${digest}"`
-}
-
-function normalizeEtag(raw: string): string {
-  const trimmed = raw.trim()
-  return trimmed.startsWith('W/') ? trimmed.slice(2).trim() : trimmed
-}
-
-export function matchesIfNoneMatch(header: string | null, strongEtag: string): boolean {
-  if (header === null || header.trim().length === 0) return false
-  const target = normalizeEtag(strongEtag)
-  for (const part of header.split(',')) {
-    const candidate = part.trim()
-    if (candidate === '*' || normalizeEtag(candidate) === target) {
-      return true
-    }
-  }
-  return false
-}
-
 function evaluateBucket(
   row: Record<string, unknown> | null,
   policy: BucketPolicy,
@@ -177,11 +149,20 @@ function evaluateBucket(
 export class WallStore {
   private readonly sql: SqlStoragePort
   private readonly runTx: <T>(closure: () => T) => T
-  private cachedWall: WallSnapshot | null = null
+  private readonly wallProjection: PublicWallProjectionStore
 
-  constructor(sql: SqlStoragePort, runTx: <T>(closure: () => T) => T = fn => fn()) {
+  constructor(
+    sql: SqlStoragePort,
+    runTx: <T>(closure: () => T) => T = fn => fn(),
+    options?: WallStoreOptions,
+  ) {
     this.sql = sql
     this.runTx = runTx
+    this.wallProjection = new PublicWallProjectionStore(
+      sql,
+      runTx,
+      options?.projectionFingerprint,
+    )
     this.ensureSchema()
   }
 
@@ -202,6 +183,7 @@ export class WallStore {
         MIN_PUBLIC_CNY_MINOR,
         MIN_PUBLIC_USD_MINOR,
       )
+      this.wallProjection.seedEmptyProjectionInTx()
     })
   }
 
@@ -223,11 +205,6 @@ export class WallStore {
       },
       wallVersion: Number(row.wall_version),
     }
-  }
-
-  private bumpWallVersion(): void {
-    this.sql.exec('UPDATE donation_config SET wall_version = wall_version + 1 WHERE singleton_id = 1')
-    this.cachedWall = null
   }
 
   getConfig(): DonationConfig {
@@ -261,26 +238,7 @@ export class WallStore {
   }
 
   getPublicWallSnapshot(): WallSnapshot {
-    if (this.cachedWall !== null) {
-      return this.cachedWall
-    }
-    const { wallVersion } = this.readConfigRow()
-    const allPublished: PublicWallEntry[] = []
-    for (const row of this.sql.exec(PUBLIC_WALL_PUBLISHED_SQL)) {
-      allPublished.push(rowToPublicWallEntry(row))
-    }
-    const payload: PublicWallResponse = {
-      version: wallVersion,
-      entries: allPublished.slice(0, PUBLIC_WALL_LIMIT),
-      topSupporters: selectTopSupporters(allPublished),
-    }
-    const json = JSON.stringify(payload)
-    this.cachedWall = {
-      version: wallVersion,
-      etag: computePublicWallEtag(wallVersion, json),
-      json,
-    }
-    return this.cachedWall
+    return this.wallProjection.getSnapshot()
   }
 
   private consumeRateLimitInTx(
@@ -551,18 +509,18 @@ export class WallStore {
     input: CreateManualDonationInput,
     nowSec: number,
   ): CreateManualDonationResult {
-    return this.runTx(() => {
+    return this.wallProjection.runProjectedTx<CreateManualDonationResult>(() => {
       const requestHash = input.idempotencyKey === null
         ? null
         : computeManualDonationRequestHash(input)
       if (input.idempotencyKey !== null && requestHash !== null) {
         const replayed = this.resolveManualIdempotencyInTx(input.idempotencyKey, requestHash)
-        if (replayed !== null) return replayed
+        if (replayed !== null) return { result: replayed, delta: null }
       }
 
       const externalId = input.externalId ?? `manual_${generateUrlSafeId(12)}`
       if (this.hasDonation(input.provider, externalId)) {
-        return { ok: false, code: 'duplicate_external_id' }
+        return { result: { ok: false, code: 'duplicate_external_id' }, delta: null }
       }
       const record: DonationRecord = {
         id: generateUrlSafeId(12),
@@ -580,24 +538,23 @@ export class WallStore {
       if (input.idempotencyKey !== null && requestHash !== null) {
         this.sql.exec(INSERT_MANUAL_IDEMPOTENCY_SQL, input.idempotencyKey, requestHash, record.id, nowSec)
       }
-      this.bumpWallVersion()
       return {
-        ok: true,
-        record,
-        counts: this.getVisibilityCounts(),
-        replayed: false,
+        result: {
+          ok: true,
+          record,
+          counts: this.getVisibilityCounts(),
+          replayed: false,
+        },
+        delta: singleAddedPublicWallDelta(record),
       }
     })
   }
 
   commitDonation(input: CommitDonationInput, nowSec: number): CommitDonationResult {
-    return this.runTx(() => {
+    return this.wallProjection.runProjectedTx(() => {
       const { config } = this.readConfigRow()
       const result = this.insertDonationInTx(input, config, nowSec)
-      if (result.outcome !== 'deduplicated') {
-        this.bumpWallVersion()
-      }
-      return result
+      return { result, delta: commitResultToPublicWallDelta(result) }
     })
   }
 
@@ -606,19 +563,20 @@ export class WallStore {
     nowSec: number,
   ): CommitDonationResult[] {
     if (inputs.length === 0) return []
-    return this.runTx(() => {
+    return this.wallProjection.runProjectedTx(() => {
       const { config } = this.readConfigRow()
       const results: CommitDonationResult[] = []
-      let mutatedAny = false
+      const addedById = new Map<string, PublicWallEntry>()
+      const removedIds = new Set<string>()
       for (const input of inputs) {
         const result = this.insertDonationInTx(input, config, nowSec)
-        if (result.outcome !== 'deduplicated') mutatedAny = true
+        recordBatchPublicWallDelta(result, addedById, removedIds)
         results.push(result)
       }
-      if (mutatedAny) {
-        this.bumpWallVersion()
-      }
-      return results
+      const delta = addedById.size === 0 && removedIds.size === 0
+        ? null
+        : { added: [...addedById.values()], removedIds }
+      return { result: results, delta }
     })
   }
 
@@ -704,7 +662,7 @@ export class WallStore {
     command: AdminVisibilityCommand,
     nowSec: number,
   ): ModerateVisibilityResult {
-    return this.runTx(() => {
+    return this.wallProjection.runProjectedTx<ModerateVisibilityResult>(() => {
       const row = firstRow(this.sql.exec(
         `SELECT id, provider, external_id, display_name, amount_minor, currency,
                 minor_digits, message, visibility_kind, visibility_json, donated_at
@@ -712,12 +670,12 @@ export class WallStore {
         id,
       ))
       if (row === null) {
-        return { ok: false, code: 'not_found' }
+        return { result: { ok: false, code: 'not_found' }, delta: null }
       }
       const existing = rowToDonationRecord(row)
       const transition = applyVisibilityCommand(existing.visibility, command, nowSec)
       if (!transition.ok) {
-        return transition
+        return { result: transition, delta: null }
       }
 
       this.sql.exec(
@@ -728,13 +686,20 @@ export class WallStore {
         JSON.stringify(transition.next),
         id,
       )
-      this.bumpWallVersion()
+      const updatedRecord: DonationRecord = { ...existing, visibility: transition.next }
       return {
-        ok: true,
-        record: { ...existing, visibility: transition.next },
-        fromVisibility: existing.visibility,
-        toVisibility: transition.next,
-        counts: this.getVisibilityCounts(),
+        result: {
+          ok: true,
+          record: updatedRecord,
+          fromVisibility: existing.visibility,
+          toVisibility: transition.next,
+          counts: this.getVisibilityCounts(),
+        },
+        delta: visibilityTransitionToPublicWallDelta(
+          existing.visibility.kind,
+          transition.next.kind,
+          updatedRecord,
+        ),
       }
     })
   }

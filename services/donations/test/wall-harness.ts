@@ -11,7 +11,12 @@ import type {
   CreateManualDonationInput,
   DonationProvider,
 } from '../src/model'
-import { WallStore, matchesIfNoneMatch, type SqlStoragePort } from '../src/wall-store'
+import {
+  WallStore,
+  matchesIfNoneMatch,
+  type SqlStoragePort,
+  type WallStoreOptions,
+} from '../src/wall-store'
 
 export type AsyncWallStub = {
   [K in Exclude<keyof DonationWallRpc, keyof Rpc.DurableObjectBranded>]: DonationWallRpc[K] extends (...args: infer P) => infer R
@@ -19,14 +24,23 @@ export type AsyncWallStub = {
     : never
 }
 
-export function createWallStoreFromDb(db: DatabaseSync): WallStore {
+export interface WallHarnessOptions {
+  readonly storeOptions?: WallStoreOptions
+  readonly onSqlExec?: (query: string, bindings: readonly unknown[]) => void
+}
+
+export function createWallStoreFromDb(
+  db: DatabaseSync,
+  options?: WallHarnessOptions,
+): WallStore {
   const sqlPort: SqlStoragePort = {
     exec(query: string, ...bindings: unknown[]): Iterable<Record<string, unknown>> {
+      options?.onSqlExec?.(query, bindings)
       const stmt = db.prepare(query)
       const params = bindings as SQLInputValue[]
       const trimmed = query.trimStart().toUpperCase()
       if (trimmed.startsWith('SELECT')) {
-        return stmt.all(...params) as Record<string, unknown>[]
+        return stmt.iterate(...params) as Iterable<Record<string, unknown>>
       }
       stmt.run(...params)
       return []
@@ -51,7 +65,7 @@ export function createWallStoreFromDb(db: DatabaseSync): WallStore {
       inTx = false
     }
   }
-  return new WallStore(sqlPort, runTx)
+  return new WallStore(sqlPort, runTx, options?.storeOptions)
 }
 
 export function createInMemoryWallStoreWithDb(): { readonly store: WallStore; readonly db: DatabaseSync } {

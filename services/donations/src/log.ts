@@ -21,6 +21,13 @@ export interface NowPaymentsIntentFallbackEvent {
   readonly reason: 'not_found_or_expired'
 }
 
+export type WallProjectionRebuildReason =
+  | 'missing_projection'
+  | 'version_mismatch'
+  | 'fingerprint_mismatch'
+  | 'corrupt_projection'
+  | 'top_supporter_removed'
+
 function emit(level: 'info' | 'warn' | 'error', event: string, fields: Record<string, unknown>): void {
   const line = JSON.stringify({ event, ...fields })
   if (level === 'error') {
@@ -281,4 +288,20 @@ export function logAdminStorageError(fields: {
     retryable: fields.retryable,
     overloaded: fields.overloaded,
   })
+}
+
+export function logWallProjectionRebuilt(fields: {
+  readonly reason: WallProjectionRebuildReason
+  readonly wallVersion: number
+  readonly scannedRows: number
+}): void {
+  emit(
+    fields.reason === 'corrupt_projection' ? 'warn' : 'info',
+    'donation.wall_projection_rebuilt',
+    {
+      reason: fields.reason,
+      wall_version: fields.wallVersion,
+      scanned_rows: fields.scannedRows,
+    },
+  )
 }
