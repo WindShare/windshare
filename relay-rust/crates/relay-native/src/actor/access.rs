@@ -35,7 +35,7 @@ impl RevocationReason {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct ResidentRevocation {
+struct ResidentRevocation {
     attribution: Attribution,
     reason: RevocationReason,
 }
@@ -191,7 +191,7 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
         }
     }
 
-    pub(super) fn resident_revocation(&self) -> Option<ResidentRevocation> {
+    fn resident_revocation(&self) -> Option<ResidentRevocation> {
         // Fresh registration resolves the bearer before live policy can revoke a share.
         let attribution = self.attribution()?;
         if !self.node.access.allowed(self.identity.share, attribution) {
@@ -209,6 +209,38 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
         }
     }
 
+    // Steady-state transfer controls (`DeliveryConsumed`, `ConnectionProbe`,
+    // `SettlementAck`, `SessionAdmitted`) rely on the lock-free `access_changes`
+    // edge check. Handshake controls that establish or restore access to a
+    // resident share must re-check live policy because a prior revocation may
+    // already have been consumed while the share sat in Grace or after restart.
+    const fn requires_resident_access(kind: FrameKind) -> bool {
+        matches!(
+            kind,
+            FrameKind::RegisterInit
+                | FrameKind::ResumeCredential
+                | FrameKind::RegisterProof
+                | FrameKind::DescriptorUpload
+                | FrameKind::Join
+        )
+    }
+
+    pub(super) fn control_access_refusal(&self, kind: FrameKind) -> Option<RevocationReason> {
+        if Self::requires_resident_access(kind)
+            && let Some(revocation) = self.resident_revocation()
+        {
+            return Some(revocation.reason);
+        }
+        // A direct share restriction outlives residency.
+        if kind == FrameKind::Join
+            && self.residency.is_none()
+            && self.node.access.share_restricted(self.identity.share)
+        {
+            return Some(RevocationReason::AccessPolicy);
+        }
+        None
+    }
+
     // Every policy or public-budget revocation bumps `access_changes`, so the
     // steady-state frame path only performs a lock-free version check.
     pub(super) fn enforce_access_if_changed(&mut self) -> Result<()> {
@@ -223,20 +255,28 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
         let Some(revocation) = self.resident_revocation() else {
             return Ok(());
         };
-        self.disconnect_revoked_ports(revocation)
+        let connections: Vec<_> = self.ports.keys().copied().collect();
+        if !connections.is_empty() {
+            tracing::warn!(
+                event = "share_access_revoked",
+                share = ?self.identity.share,
+                attribution = ?revocation.attribution,
+                reason = revocation.reason.as_str()
+            );
+        }
+        for connection in connections {
+            self.ports.remove(&connection);
+            let step = self
+                .relay
+                .handle(Input::Disconnected(connection), self.environment.now());
+            self.outputs(step)?;
+        }
+        Ok(())
     }
 
-    pub(super) fn refuse_control_access(
-        &mut self,
-        connection: ConnectionRef,
-        kind: FrameKind,
-        revocation: ResidentRevocation,
-        now: UnixMillis,
-    ) -> Result<()> {
-        self.refuse_connection_access(connection, kind, revocation.reason, now)?;
-        self.disconnect_revoked_ports(revocation)
-    }
-
+    // Only refuses this handshake socket. Active sessions are torn down by the
+    // edge-triggered `enforce_access_if_changed` sweep so concurrent pending
+    // handshakes (or an in-progress STOP) each receive their own protocol reply.
     pub(super) fn refuse_connection_access(
         &mut self,
         connection: ConnectionRef,
@@ -261,25 +301,5 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
         }
         let step = self.relay.handle(Input::Disconnected(connection), now);
         self.outputs(step)
-    }
-
-    fn disconnect_revoked_ports(&mut self, revocation: ResidentRevocation) -> Result<()> {
-        let connections: Vec<_> = self.ports.keys().copied().collect();
-        if !connections.is_empty() {
-            tracing::warn!(
-                event = "share_access_revoked",
-                share = ?self.identity.share,
-                attribution = ?revocation.attribution,
-                reason = revocation.reason.as_str()
-            );
-        }
-        for connection in connections {
-            self.ports.remove(&connection);
-            let step = self
-                .relay
-                .handle(Input::Disconnected(connection), self.environment.now());
-            self.outputs(step)?;
-        }
-        Ok(())
     }
 }

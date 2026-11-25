@@ -558,6 +558,70 @@ async fn revoked_resident_share_refuses_resume_and_join_after_access_change_is_c
 }
 
 #[tokio::test]
+async fn revoked_resident_share_refuses_concurrent_joins_and_resume_in_grace() {
+    use windshare_relay_core::lifecycle::Record;
+
+    let fixture = Fixture::new();
+    let now_seconds = fixture.now(false).0 / 1000;
+    let (generation, account_bearer, policy) = access_fixture(now_seconds);
+    let share_bytes = *fixture.identity().share.as_bytes();
+
+    for revocation in [PolicyRevocation::ShareBan, PolicyRevocation::AccountBan] {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Database::open(
+            &directory.path().join("authority.sqlite"),
+            fixture.identity().relay,
+        )
+        .unwrap();
+        let node = Runtime::default();
+        node.access.configure(policy.clone()).unwrap();
+        set_admission(&node, generation, 1, Admission::Accepting);
+
+        with_access_actor(node.clone(), store.clone(), &fixture, async |harness| {
+            let mut sender = harness
+                .publish(1, Some(account_bearer.as_str()), &fixture)
+                .await;
+            apply_policy_revocation(
+                revocation,
+                &node,
+                generation,
+                &policy,
+                share_bytes,
+                now_seconds,
+            );
+            assert_closed(&mut sender).await;
+
+            // Connect all redialing peers before enqueueing their handshakes so
+            // siblings are simultaneously in `self.ports` during Grace.
+            harness
+                .now
+                .store(resume_now(&fixture), std::sync::atomic::Ordering::Release);
+            let mut first_join = harness.connect(2, None, &fixture).await;
+            let mut second_join = harness.connect(3, None, &fixture).await;
+            let mut resumed = harness
+                .connect(4, Some(account_bearer.as_str()), &fixture)
+                .await;
+            harness.send(2, fixture.bytes("joinB64")).await;
+            harness.send(3, fixture.bytes("joinB64")).await;
+            harness.send(4, fixture.bytes("resumeInitB64")).await;
+
+            assert_refused(&mut first_join, ErrorFrame::AccessDenied).await;
+            assert_refused(&mut second_join, ErrorFrame::AccessDenied).await;
+            assert_refused(&mut resumed, ErrorFrame::AccessDenied).await;
+        })
+        .await;
+
+        assert!(matches!(
+            store
+                .load(fixture.identity().share)
+                .unwrap()
+                .map(|stored| stored.record()),
+            Some(Record::Grace(_))
+        ));
+    }
+}
+
+#[tokio::test]
 async fn restricted_nonresident_share_refuses_each_join_including_pending_siblings() {
     let fixture = Fixture::new();
     let identity = fixture.identity();
