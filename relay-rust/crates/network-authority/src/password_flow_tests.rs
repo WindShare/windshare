@@ -139,6 +139,20 @@ fn shared_password_verifier_vectors_parse_and_verify_with_domain_separation() {
 }
 
 #[test]
+fn username_normalization_uses_ascii_lowering_and_trims_unicode_whitespace() {
+    assert_eq!(
+        crate::registration::username("\u{00A0}\u{3000}Alice_1.0\u{3000}\u{00A0}").unwrap(),
+        "alice_1.0"
+    );
+    for invalid in ["\u{212A}evin", "\u{0130}van"] {
+        assert!(matches!(
+            fault_of(crate::registration::username(invalid)),
+            Fault::Invalid
+        ));
+    }
+}
+
+#[test]
 fn independent_random_salts_prevent_cookie_resurrection() {
     let mut authority = fixture();
     let original = test_verifier("correct horse battery");

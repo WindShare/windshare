@@ -40,18 +40,21 @@ func (role PasswordRole) domainPrefix() (string, bool) {
 // NormalizeUsername trims surrounding whitespace, lowercases ASCII letters, and
 // verifies the authority's canonical identifier alphabet.
 func NormalizeUsername(raw string) (string, error) {
-	name := strings.ToLower(strings.TrimSpace(raw))
-	if name == "" || len(name) > UsernameMaxBytes {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || len(trimmed) > UsernameMaxBytes {
 		return "", ErrFormat
 	}
-	for i := range len(name) {
-		b := name[i]
-		if (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9') || b == '.' || b == '_' || b == '-' {
+	// Validate the ASCII identifier alphabet before lowercasing so Unicode case
+	// mappings such as Kelvin sign (U+212A) or dotted capital I (U+0130) cannot
+	// fold into ASCII letters.
+	for i := range len(trimmed) {
+		b := trimmed[i]
+		if (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '.' || b == '_' || b == '-' {
 			continue
 		}
 		return "", ErrFormat
 	}
-	return name, nil
+	return strings.ToLower(trimmed), nil
 }
 
 func ValidNewPassword(password string) bool {

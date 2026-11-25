@@ -33,10 +33,11 @@ test('network console PBKDF2 password derivation matches shared cross-language v
 })
 
 test('network console password and username validation enforces byte bounds', async () => {
-  for (const invalid of ['', '   ', 'bad space', 'a@b', '中文', 'a'.repeat(USERNAME_MAX_BYTES + 1)]) {
+  for (const invalid of ['', '   ', 'bad space', 'a@b', '中文', '\u212Aevin', '\u0130van', 'a'.repeat(USERNAME_MAX_BYTES + 1)]) {
     assert.equal(normalizeUsername(invalid), null, invalid)
   }
   assert.equal(normalizeUsername('  Alice_1.0-x  '), 'alice_1.0-x')
+  assert.equal(normalizeUsername('\u00A0\u3000Alice_1.0-x\u3000\u00A0'), 'alice_1.0-x')
 
   assert.equal(isValidNewPassword('a'.repeat(PASSWORD_MIN_BYTES - 1)), false)
   assert.equal(isValidNewPassword('a'.repeat(PASSWORD_MIN_BYTES)), true)

@@ -11,7 +11,7 @@ const PASSWORD_DOMAINS: Readonly<Record<PasswordRole, string>> = {
   admin: 'windshare-admin-password-v1:',
 }
 
-const CANONICAL_USERNAME = /^[a-z0-9._-]{1,64}$/
+const USERNAME_PATTERN = /^[A-Za-z0-9._-]{1,64}$/
 const encoder = new TextEncoder()
 
 function encodeBase64Url(bytes: Uint8Array): string {
@@ -22,8 +22,10 @@ function encodeBase64Url(bytes: Uint8Array): string {
 }
 
 export function normalizeUsername(raw: string): string | null {
-  const canonical = raw.trim().toLowerCase()
-  return CANONICAL_USERNAME.test(canonical) ? canonical : null
+  const trimmed = raw.trim()
+  // Validate the ASCII identifier alphabet before lowercasing so Unicode case
+  // mappings such as Kelvin sign (U+212A) cannot fold into ASCII letters.
+  return USERNAME_PATTERN.test(trimmed) ? trimmed.toLowerCase() : null
 }
 
 export function isValidNewPassword(password: string): boolean {

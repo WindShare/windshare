@@ -56,10 +56,13 @@ func TestPasswordVerifierContractVectors(t *testing.T) {
 }
 
 func TestPasswordAndUsernameValidation(t *testing.T) {
-	for _, invalid := range []string{"", "   ", "has space", "user@example", "名字", strings.Repeat("a", UsernameMaxBytes+1)} {
+	for _, invalid := range []string{"", "   ", "has space", "user@example", "名字", "\u212Aevin", "\u0130van", strings.Repeat("a", UsernameMaxBytes+1)} {
 		if _, err := NormalizeUsername(invalid); !errors.Is(err, ErrFormat) {
 			t.Errorf("NormalizeUsername(%q) = %v, want ErrFormat", invalid, err)
 		}
+	}
+	if canonical, err := NormalizeUsername("\u00A0\u3000Alice_1.0\u3000\u00A0"); err != nil || canonical != "alice_1.0" {
+		t.Fatalf("NormalizeUsername with Unicode whitespace = (%q, %v), want %q", canonical, err, "alice_1.0")
 	}
 	if ValidNewPassword("too-short-1") || ValidNewPassword(strings.Repeat("a", PasswordMaxBytes+1)) {
 		t.Fatal("ValidNewPassword accepted out-of-range length")
