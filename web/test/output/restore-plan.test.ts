@@ -21,7 +21,7 @@ function makeLifecycle(kind: ReceiveLifecycleState['kind']): ReceiveLifecycleSta
     case 'preparing':
       return base
     case 'downloading':
-      return transitionReceiveState(base, { kind: 'downloading', phase: 'receiving' })
+      return transitionReceiveState(base, { kind: 'downloading' })
     case 'paused':
       return transitionReceiveState(base, {
         kind: 'paused', reason: 'user', completedFiles: 1n, completedBytes: 8n,

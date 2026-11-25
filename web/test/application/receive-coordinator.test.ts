@@ -78,13 +78,10 @@ function createSingleFileShare(name = 'report.pdf'): JoinedBrowserShare {
 describe('receive admission and coordinator', () => {
   it('computes accurate actions and readiness across backends and share contexts', () => {
     const base = initialReceiveState('t1')
-    const receiving = transitionReceiveState(base, { kind: 'downloading', phase: 'receiving' })
-    const finalizing = transitionReceiveState(base, { kind: 'downloading', phase: 'finalizing' })
+    const receiving = transitionReceiveState(base, { kind: 'downloading' })
     expect(actionsForState(receiving, 'fsa')).toEqual(['pause', 'stop'])
     expect(actionsForState(receiving, 'opfs')).toEqual(['pause'])
     expect(actionsForState(receiving, 'portable')).toEqual(['stop'])
-    expect(actionsForState(finalizing, 'opfs')).toEqual([])
-    expect(actionsForState(finalizing, 'fsa')).toEqual([])
 
     const pausedOpfs = transitionReceiveState(base, {
       kind: 'paused', reason: 'user',

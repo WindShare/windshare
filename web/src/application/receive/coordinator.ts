@@ -19,7 +19,7 @@ import {
 import { startFSADirectoryPicker } from '../../output/backends/fsa'
 import type { OPFSEnvironment } from '../../output/backends/opfs'
 import { handoffLocalPortableBlob, persistPortableHistory } from '../../output/backends/portable'
-import { emitOutputTrace, type OutputTraceSource } from '../../output/diagnostics'
+import { diagnosticBackendName, emitOutputTrace, type OutputTraceSource } from '../../output/diagnostics'
 import {
   RESTORE_MANIFEST_FILENAME,
   detectRestorePlatform,
@@ -131,7 +131,10 @@ export class ReceiveCoordinator {
       signal: this.#lifetimeAbort.signal,
       isDisposed: () => this.#disposed,
       isLocalTask: taskId => this.#execution.ownsTask(taskId),
-      onChange: () => this.#publish(),
+      onChange: () => {
+        this.#reconcileWorkspaceFromInventory()
+        this.#publish()
+      },
     })
     this.#sessions = new ReceiveSessionRunner({
       windowPort: options.windowPort,
@@ -143,7 +146,11 @@ export class ReceiveCoordinator {
       onSettledRecord: record => this.#inventory.upsertRecord(record),
       onSessionFinished: () => {
         void this.#capabilities.refreshStorageEstimate()
-        void this.refreshRetained()
+        void this.refreshRetained().then(() => {
+          if (!this.#disposed && this.#reconcileWorkspaceFromInventory()) {
+            this.#publish()
+          }
+        })
       },
       reportError: error => this.#reportError(error),
       dispatchAsyncError: (error, custom) => this.#dispatchAsyncError(error, custom),
@@ -232,7 +239,7 @@ export class ReceiveCoordinator {
       return blockedAdmission('actionUnavailable')
     }
     if (
-      this.#workspace.interruption !== null ||
+      this.#workspace.settling !== null ||
       (this.#execution.pendingRetained !== null && action !== 'pause' && action !== 'stop')
     ) {
       return blockedAdmission('busy')
@@ -636,6 +643,7 @@ export class ReceiveCoordinator {
       activeSelectionKey: key,
       rootPath: artifactRootPath(choice.artifact),
       singleFileId: choice.artifact.singleFileId ?? null,
+      isZipArchive: choice.artifact.kind === 'zip-archive',
       display: display ?? null,
       initialLifecycle: initial,
       ...(callbacks === undefined ? {} : { callbacks }),
@@ -660,6 +668,21 @@ export class ReceiveCoordinator {
     })
   }
 
+  #reconcileWorkspaceFromInventory(): boolean {
+    const taskId = this.#workspace.taskId
+    if (taskId === null || this.#execution.ownsTask(taskId)) return false
+    const stored = this.#inventory.tasks.find(task => task.taskId === taskId)
+    if (stored === undefined || !this.#workspace.reconcileFromRetained(stored)) return false
+    emitOutputTrace(this.#options.outputTrace, 'settlement', {
+      backend: diagnosticBackendName(stored.backend),
+      task_id: stored.taskId,
+      transition: 'reconciled_from_inventory',
+      lifecycle: stored.lifecycle.kind,
+      generation: String(stored.lifecycle.generation),
+    })
+    return true
+  }
+
   #activeActions(): readonly ReceiveAction[] {
     return this.#workspace.activeActions(this.#sessions.waitingForLiveJob)
   }
@@ -681,7 +704,7 @@ export class ReceiveCoordinator {
       outageCheckpointed: this.#sessions.outageCheckpointed,
       progress: this.#workspace.progress,
       actions: this.#activeActions(),
-      interruption: this.#workspace.interruption,
+      settling: this.#workspace.settling,
       retained: this.#inventory.snapshot(this.#execution.pendingRetained),
     })
   }

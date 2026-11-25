@@ -93,10 +93,7 @@ export async function openNewFSASession(input: Readonly<{
         const display = input.task.display === undefined
           ? undefined
           : Object.freeze({ ...input.task.display, destinationLabel: input.parentHandle.name })
-        const downloading = transitionReceiveState(input.task.lifecycle, {
-          kind: 'downloading',
-          phase: 'receiving',
-        })
+        const downloading = transitionReceiveState(input.task.lifecycle, { kind: 'downloading' })
         const record: FSATaskRecord = Object.freeze({
           taskId: input.task.taskId,
           shareInstance: input.task.selection.shareInstance,
@@ -170,7 +167,7 @@ export async function reopenFSASession(input: Readonly<{
     const rootHandle = target.singleFile
       ? target.parentHandle
       : await target.parentHandle.getDirectoryHandle(target.reservedName, { create: true })
-    const downloading = transitionReceiveState(current.lifecycle, { kind: 'downloading', phase: 'receiving' })
+    const downloading = transitionReceiveState(current.lifecycle, { kind: 'downloading' })
     const updated: FSATaskRecord = Object.freeze({ ...current, target, lifecycle: downloading, updatedAt: Date.now() })
     const priorFiles = await input.store.listTaskFiles(updated.taskId)
     input.signal?.throwIfAborted()

@@ -22,7 +22,7 @@ function lifecycle(payload: ReceiveStatePayload): ReceiveLifecycleState {
 /** Synthetic identities and domain-shaped facts keep the gallery free of capabilities. */
 export function taskFixture(overrides: Partial<TaskFacts> = {}): TaskFacts {
   return Object.freeze({
-    lifecycle: lifecycle({ kind: 'downloading', phase: 'receiving' }),
+    lifecycle: lifecycle({ kind: 'downloading' }),
     backend: 'fsa',
     display: Object.freeze({ objectLabel: 'Summer photos', destinationLabel: 'Downloads', createdAtMilliseconds: FIXTURE_TIME }),
     actions: Object.freeze([]),
@@ -42,7 +42,7 @@ export function taskFixture(overrides: Partial<TaskFacts> = {}): TaskFacts {
     safeRenamed: null,
     sourceOmittedEntries: 0n,
     details: Object.freeze([]),
-    interruption: null,
+    settling: null,
     outageCheckpointed: false,
     ...overrides,
   })

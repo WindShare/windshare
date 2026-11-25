@@ -227,7 +227,7 @@ describe('FSA reservation claim lifecycle', () => {
   it('retains claims only for lifecycles that can still reopen or discard the reserved slot', async () => {
     const base = initialReceiveState('state-check')
     expect(retainsFSAReservationClaim(base)).toBe(true)
-    expect(retainsFSAReservationClaim(transitionReceiveState(base, { kind: 'downloading', phase: 'receiving' }))).toBe(true)
+    expect(retainsFSAReservationClaim(transitionReceiveState(base, { kind: 'downloading' }))).toBe(true)
     expect(retainsFSAReservationClaim(transitionReceiveState(base, {
       kind: 'paused', reason: 'user', completedFiles: 0n, completedBytes: 0n,
       retainedBytes: 0n, discoveredFiles: 0n, discoveredBytes: 0n, discoveryComplete: false,

@@ -17,6 +17,8 @@ import type {
   PendingRetainedAction,
   ReceiveAction,
   ReceiveBlockReason,
+  ReceiveSettlingPhase,
+  RetainedTaskSnapshot,
 } from './contracts'
 
 export type RetainedLocalCommand = 'save' | 'save-partial' | 'discard' | 'forget'
@@ -268,7 +270,8 @@ export class WorkspaceTask {
   #sourceOmittedEntries = 0n
   #sourceRevisionFailures: SourceRevisionFailures | null = null
   #progress: TransferProgress = EMPTY_TRANSFER_PROGRESS
-  #interruption: 'pause' | 'stop' | null = null
+  #settling: ReceiveSettlingPhase | null = null
+  #unsettledFailure = false
 
   get taskId(): string | null { return this.#taskId }
   get shareInstance(): string | null { return this.#shareInstance }
@@ -280,7 +283,7 @@ export class WorkspaceTask {
   get sourceOmittedEntries(): bigint { return this.#sourceOmittedEntries }
   get sourceRevisionFailures(): SourceRevisionFailures | null { return this.#sourceRevisionFailures }
   get progress(): TransferProgress { return this.#progress }
-  get interruption(): 'pause' | 'stop' | null { return this.#interruption }
+  get settling(): ReceiveSettlingPhase | null { return this.#settling }
 
   get canRelease(): boolean {
     return canReleaseCurrentTask(this.#lifecycle)
@@ -306,7 +309,8 @@ export class WorkspaceTask {
     this.#sourceOmittedEntries = 0n
     this.#sourceRevisionFailures = null
     this.#progress = EMPTY_TRANSFER_PROGRESS
-    this.#interruption = null
+    this.#settling = null
+    this.#unsettledFailure = false
   }
 
   clearActiveIfRunning(): void {
@@ -320,23 +324,25 @@ export class WorkspaceTask {
     shareInstance: string
     selectionKey: string
     backend: SaveBackendKind
+    isZipArchive: boolean
     display: ReceiveOperationDisplay | null
     initialLifecycle: ReceiveLifecycleState
   }>): void {
     const downloading = input.initialLifecycle.kind === 'downloading'
       ? input.initialLifecycle
-      : transitionReceiveState(input.initialLifecycle, { kind: 'downloading', phase: 'receiving' })
+      : transitionReceiveState(input.initialLifecycle, { kind: 'downloading' })
     this.#taskId = input.taskId
     this.#shareInstance = input.shareInstance
     this.#selectionKey = input.selectionKey
     this.#backend = input.backend
-    this.#isZipArchive = false
+    this.#isZipArchive = input.isZipArchive
     this.#lifecycle = downloading
     this.#display = input.display
     this.#safeRenamed = null
     this.#sourceOmittedEntries = 0n
     this.#sourceRevisionFailures = null
-    this.#interruption = null
+    this.#settling = null
+    this.#unsettledFailure = false
     this.#progress = EMPTY_TRANSFER_PROGRESS
   }
 
@@ -354,12 +360,15 @@ export class WorkspaceTask {
   }
 
   markInterruption(action: 'pause' | 'stop'): void {
-    this.#interruption = action
+    this.#settling = action
   }
 
   markFinalizing(): void {
-    if (this.#lifecycle?.kind !== 'downloading') return
-    this.#lifecycle = transitionReceiveState(this.#lifecycle, { kind: 'downloading', phase: 'finalizing' })
+    // Finalizing is a transient in-memory UI phase, never persisted to IndexedDB.
+    // Leave lifecycle `generation` untouched so post-close recovery can reconcile
+    // unsettled failures, and let explicit pause/stop copy retain precedence.
+    if (this.#lifecycle?.kind !== 'downloading' || this.#settling !== null) return
+    this.#settling = 'finalizing'
   }
 
   applySettled(settled: ReceiveTaskRecord): void {
@@ -369,15 +378,18 @@ export class WorkspaceTask {
     this.#safeRenamed = settled.safeRenamed ?? null
     this.#sourceOmittedEntries = settled.sourceOmittedEntries ?? 0n
     this.#sourceRevisionFailures = settled.sourceRevisionFailures ?? null
-    this.#interruption = null
+    this.#settling = null
+    this.#unsettledFailure = false
   }
 
   applyUpdatedLifecycle(lifecycle: ReceiveLifecycleState): void {
     this.#lifecycle = lifecycle
+    this.#settling = null
+    this.#unsettledFailure = false
   }
 
   markFailed(error: unknown): void {
-    this.#interruption = null
+    this.#settling = null
     if (this.#lifecycle === null) return
     let reason: ReceiveFailureReason = transferFailureReason(error)
     if (isAbortError(error)) reason = 'cancelled'
@@ -389,6 +401,30 @@ export class WorkspaceTask {
       // Unsettled FSA failures bypassed terminal disk cleanup, so keep Discard reachable.
       ...(this.#backend === 'fsa' ? { cleanupPending: true as const } : {}),
     })
+    this.#unsettledFailure = true
+  }
+
+  /**
+   * Aligns an idle workspace task with authoritative persisted state from inventory after
+   * an unsettled failure or cross-tab mutation, without adopting active cross-tab runs or
+   * discarding live transfer progress from an already-matching settled delivery.
+   */
+  reconcileFromRetained(stored: RetainedTaskSnapshot): boolean {
+    if (this.#taskId !== stored.taskId || this.#lifecycle === null) return false
+    if (isActiveReceiveState(stored.lifecycle)) return false
+    const newerGeneration = stored.lifecycle.generation > this.#lifecycle.generation
+    const recoveredUnsettledFailure =
+      this.#unsettledFailure && stored.lifecycle.generation === this.#lifecycle.generation
+    if (!newerGeneration && !recoveredUnsettledFailure) return false
+    this.#lifecycle = stored.lifecycle
+    this.#display = stored.display ?? this.#display
+    this.#safeRenamed = stored.safeRenamed ?? null
+    this.#sourceOmittedEntries = stored.sourceOmittedEntries ?? 0n
+    this.#sourceRevisionFailures = stored.sourceRevisionFailures ?? null
+    this.#settling = null
+    this.#unsettledFailure = false
+    this.#progress = EMPTY_TRANSFER_PROGRESS
+    return true
   }
 
   completeSettled(record: ReceiveTaskRecord): void {
@@ -403,13 +439,14 @@ export class WorkspaceTask {
     this.#sourceOmittedEntries = record.sourceOmittedEntries ?? 0n
     this.#sourceRevisionFailures = record.sourceRevisionFailures ?? null
     this.#progress = EMPTY_TRANSFER_PROGRESS
-    this.#interruption = null
+    this.#settling = null
+    this.#unsettledFailure = false
   }
 
   activeActions(hasSessionWithoutLiveJob: boolean): readonly ReceiveAction[] {
     if (hasSessionWithoutLiveJob) return Object.freeze([])
     const canSavePartial = canSavePartialState(this.#lifecycle, this.#backend, this.#isZipArchive)
-    return this.#lifecycle === null || this.#backend === null || this.#interruption !== null
+    return this.#lifecycle === null || this.#backend === null || this.#settling !== null
       ? Object.freeze([])
       : actionsForState(this.#lifecycle, this.#backend, canSavePartial)
   }

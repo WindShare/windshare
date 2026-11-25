@@ -135,7 +135,7 @@ async function openOPFSSession(
     const zip = target.isZip ? await ProgressiveZipWriter.open(task.taskId, ports.store, io, ports.diagnostics?.trace) : undefined
     const record: ReceiveTaskRecord = Object.freeze({
       ...task,
-      lifecycle: transitionReceiveState(task.lifecycle, { kind: 'downloading', phase: 'receiving' }),
+      lifecycle: transitionReceiveState(task.lifecycle, { kind: 'downloading' }),
       updatedAt: Date.now(),
     })
     const session = new OPFSSessionHandle({

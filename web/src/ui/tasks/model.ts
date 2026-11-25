@@ -1,6 +1,7 @@
 import type {
   ReceiveAction,
   ReceiveBlockReason,
+  ReceiveSettlingPhase,
   RetainedReadiness,
   RetainedTaskSnapshot,
 } from '../../application/receive/contracts'
@@ -60,7 +61,7 @@ export interface TaskFacts {
   readonly sourceOmittedEntries: bigint
   readonly details: readonly string[]
   readonly outageCheckpointed: boolean
-  readonly interruption: 'pause' | 'stop' | null
+  readonly settling: ReceiveSettlingPhase | null
 }
 
 export interface TaskProgressPresentation {

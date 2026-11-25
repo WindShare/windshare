@@ -63,7 +63,7 @@ export function activeTaskFacts(input: Readonly<{
       : progress.sourceOmittedEntries,
     details: Object.freeze([]),
     outageCheckpointed: output.outageCheckpointed,
-    interruption: output.interruption,
+    settling: output.settling,
   })
 }
 
@@ -95,7 +95,7 @@ export function retainedTaskFacts(
     sourceOmittedEntries: task.sourceOmittedEntries ?? 0n,
     details: Object.freeze([]),
     outageCheckpointed: false,
-    interruption: null,
+    settling: null,
   })
 }
 

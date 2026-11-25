@@ -187,7 +187,7 @@ describe('BeforeUnloadGuard', () => {
     await vi.waitFor(() => expect(jobCalls).toBe(2))
     expect(listeners.size).toBe(1)
     coordinator.performActiveAction('stop')
-    expect(coordinator.getSnapshot().interruption).toBe('stop')
+    expect(coordinator.getSnapshot().settling).toBe('stop')
     expect(listeners.size).toBe(1)
     resolveJob({
       status: 'stopped',

@@ -5,6 +5,7 @@ import {
   type BrowserCapabilitiesState,
   type ReceiveAction,
   type ReceiveRuntimeSnapshot,
+  type ReceiveSettlingPhase,
 } from '../application/receive/contracts'
 import type { ArtifactOffers, SaveBackendKind } from '../output/model'
 import { EMPTY_TRANSFER_PROGRESS } from '../transfer/progress'
@@ -27,7 +28,7 @@ export interface OutputPresentationSnapshot {
   readonly sourceRevisionFailures: SourceRevisionFailures | null
   readonly actions: readonly ReceiveAction[]
   readonly outageCheckpointed: boolean
-  readonly interruption: 'pause' | 'stop' | null
+  readonly settling: ReceiveSettlingPhase | null
 }
 
 export const EMPTY_RECEIVE_RUNTIME: ReceiveRuntimeSnapshot = Object.freeze({
@@ -46,7 +47,7 @@ export const EMPTY_RECEIVE_RUNTIME: ReceiveRuntimeSnapshot = Object.freeze({
   progress: EMPTY_TRANSFER_PROGRESS,
   actions: Object.freeze([]),
   outageCheckpointed: false,
-  interruption: null,
+  settling: null,
   retained: EMPTY_RETAINED_INVENTORY,
 })
 
@@ -70,7 +71,7 @@ export function presentReceiveOutput(
     sourceRevisionFailures: runtime.sourceRevisionFailures,
     actions: runtime.actions,
     outageCheckpointed: runtime.outageCheckpointed,
-    interruption: runtime.interruption,
+    settling: runtime.settling,
   })
 }
 

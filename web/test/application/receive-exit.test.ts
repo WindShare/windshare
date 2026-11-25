@@ -9,9 +9,13 @@ import { SelectionPolicy } from '../../src/catalog/selection'
 import type { BlockRangeReader } from '../../src/content/broker'
 import { ReceiverConnectionState } from '../../src/receiver/connection-state'
 import { ReceiveStore } from '../../src/output/store/database'
+import { taskLockName } from '../../src/output/store/tab-lock'
 import type { TransferOutputSession } from '../../src/transfer/output-port'
 import { initialReceiveState, transitionReceiveState } from '../../src/transfer/state'
 import { TransferJob, type TransferJobOptions } from '../../src/transfer/job'
+import { composeTasks } from '../../src/ui/experience/task-composition'
+import { EMPTY_PROGRESS } from '../../src/ui/model'
+import { presentReceiveOutput } from '../../src/ui/output'
 import { FakeDirectoryHandle, FakeFileHandle, MemoryReceiveStore } from '../output/fsa-fixture'
 import { makeShareFixture } from '../transfer/share-fixture'
 
@@ -146,7 +150,7 @@ describe('receive session shutdown', () => {
     const receive = f.coordinator({ opfsEnv: env }), base = pausedTask(f)
     const stale = { ...base, taskId: 'stale', backend: 'opfs' as const,
       target: { kind: 'opfs' as const, objectName: 'stale.part', fileName: 'data.bin', isZip: false, allocatedLength: 8n },
-      lifecycle: transitionReceiveState(initialReceiveState('stale'), { kind: 'downloading', phase: 'receiving' }) }
+      lifecycle: transitionReceiveState(initialReceiveState('stale'), { kind: 'downloading' }) }
     const dir = await root.getDirectoryHandle('windshare-tasks', { create: true })
     await dir.getFileHandle(stale.target.objectName, { create: true })
     await f.memory.putTask(stale)
@@ -386,7 +390,9 @@ describe('receive session shutdown', () => {
     await f.start(receive)
     await saving.promise
     const taskId = receive.activeTaskId!
-    expect(receive.getSnapshot().lifecycle).toMatchObject({ kind: 'downloading', phase: 'finalizing' })
+    expect(receive.getSnapshot().lifecycle).toMatchObject({ kind: 'downloading', generation: 2n })
+    expect(receive.getSnapshot().settling).toBe('finalizing')
+    expect(receive.getSnapshot().actions).toEqual([])
     expect(receive.activeActionAdmission('pause').allowed).toBe(false)
     expect(receive.activeActionAdmission('stop').allowed).toBe(false)
     const release = f.holdRelease()
@@ -441,3 +447,199 @@ describe('receive session shutdown', () => {
     await receive.dispose()
   })
 })
+
+describe('unsettled settlement failure reconciliation', () => {
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
+
+  it.each(['fsa', 'opfs'] as const)('reconciles unsettled %s settlement failures to recovered paused state without generation shadowing', async backend => {
+    const f = fixture(), { env } = createMemoryOPFSEnv()
+    const opfsEnv = { ...env, locks: f.locks }
+    vi.spyOn(outputContract, 'probeBrowserOutputCapabilities').mockResolvedValue({
+      indexedDb: true, fsa: true, opfs: true, portable: true, availableStorageBytes: null,
+    })
+    const onActionError = vi.fn()
+    const receive = f.coordinator({ opfsEnv, onActionError })
+    await f.start(receive, backend)
+    await f.waiting.promise
+
+    const putTask = f.memory.putTask.bind(f.memory)
+    if (backend === 'fsa') {
+      let failedOnce = false
+      vi.spyOn(f.memory, 'putTask').mockImplementation(async record => {
+        if (!failedOnce && record.lifecycle.kind === 'paused') {
+          failedOnce = true
+          throw new DOMException('tx failed', 'DataError')
+        }
+        await putTask(record)
+      })
+    } else {
+      vi.spyOn(f.memory, 'putTask').mockRejectedValue(new DOMException('disk full', 'QuotaExceededError'))
+    }
+
+    receive.performActiveAction('pause')
+    await vi.waitFor(() => {
+      expect(onActionError).toHaveBeenCalledOnce()
+      expect(receive.getSnapshot().lifecycle?.kind).toBe('paused')
+    }, { interval: 1 })
+
+    const snapshot = receive.getSnapshot()
+    expect(snapshot.lifecycle).toMatchObject({
+      kind: 'paused',
+      reason: backend === 'fsa' ? 'interrupted' : 'storage-full',
+      generation: 3n,
+      retainedBytes: 4n,
+    })
+    expect(receive.canRetainCurrent).toBe(true)
+    expect(snapshot.actions).toEqual(['continue', 'discard'])
+
+    const composed = composeFromCoordinator(receive, f.source.descriptor.shareInstanceId)
+    expect(composed.current?.stage).toBe(backend === 'fsa' ? 'paused' : 'needs-action')
+    expect(composed.current?.generation).toBe(3n)
+    expect(composed.current?.primaryAction?.id).toBe('continue')
+    expect(composed.tasks[0]?.stage).toBe(composed.current?.stage)
+    expect(f.trace).toHaveBeenCalledWith(expect.objectContaining({
+      eventName: 'settlement',
+      payload: expect.objectContaining({
+        transition: 'reconciled_from_inventory',
+        lifecycle: 'paused',
+        generation: '3',
+      }),
+    }))
+    await receive.dispose()
+  })
+
+  it('reconciles an already-committed OPFS ready-to-save task when settle throws after a mid-run scan', async () => {
+    const f = fixture(), { env } = createMemoryOPFSEnv()
+    const opfsEnv = { ...env, locks: f.locks }
+    vi.spyOn(outputContract, 'probeBrowserOutputCapabilities').mockResolvedValue({
+      indexedDb: true, fsa: false, opfs: true, portable: false, availableStorageBytes: null,
+    })
+    const onActionError = vi.fn()
+    const receive = f.coordinator({ opfsEnv, onActionError })
+    const listTaskFiles = f.memory.listTaskFiles.bind(f.memory)
+    let intercepted = false
+    vi.spyOn(f.memory, 'listTaskFiles').mockImplementation(async id => {
+      if (!intercepted && f.memory.tasks.get(id)?.lifecycle.kind === 'ready-to-save') {
+        intercepted = true
+        // Cache the already-committed ready-to-save row while the task is still locally owned so
+        // the post-close silent refresh sees no inventory diff and relies on post-refresh reconcile.
+        await receive.loadRetained()
+        throw new DOMException('transient read failure', 'DataError')
+      }
+      return listTaskFiles(id)
+    })
+
+    f.reconnect()
+    await f.start(receive, 'opfs')
+    await vi.waitFor(() => {
+      expect(onActionError).toHaveBeenCalledOnce()
+      expect(receive.getSnapshot().lifecycle?.kind).toBe('ready-to-save')
+    }, { interval: 1 })
+
+    expect(receive.getSnapshot().lifecycle).toMatchObject({ kind: 'ready-to-save', generation: 3n })
+    expect(receive.getSnapshot().actions).toEqual(['save', 'discard'])
+    const composed = composeFromCoordinator(receive, f.source.descriptor.shareInstanceId)
+    expect(composed.current?.stage).toBe('ready-to-save')
+    expect(composed.current?.primaryAction?.id).toBe('save')
+    await receive.dispose()
+  })
+
+  it('preserves failed fallback on portable or stale inventory and ignores active cross-tab runs', async () => {
+    const f = fixture(), onActionError = vi.fn()
+    const receive = f.coordinator({ onActionError })
+
+    // 1. Portable failure has no persisted IDB record and must stay visible as failed.
+    const portableError = new DOMException('handoff blocked', 'NotAllowedError')
+    const base = pausedTask(f)
+    const badWindow = {
+      navigator: { locks: f.locks },
+      indexedDB: { open: vi.fn() } as unknown as IDBFactory,
+      URL: { createObjectURL: () => { throw portableError }, revokeObjectURL: vi.fn() },
+      document: { createElement: vi.fn() } as unknown as Document,
+    }
+    const portable = f.coordinator({ windowPort: badWindow, onActionError })
+    f.reconnect()
+    await f.start(portable, 'portable')
+    await vi.waitFor(() => expect(portable.getSnapshot().lifecycle?.kind).toBe('failed'), { interval: 1 })
+    await portable.refreshRetained()
+    expect(portable.getSnapshot().lifecycle?.kind).toBe('failed')
+    await portable.dispose()
+
+    // 2. Resumed FSA task: if settle AND post-close refresh both fail, stale paused (G-1) must not overwrite failed (G+1).
+    await f.memory.putTask(base)
+    await receive.loadRetained()
+    expect(receive.getSnapshot().retained.tasks[0]?.lifecycle.generation).toBe(2n)
+
+    const putTask = f.memory.putTask.bind(f.memory)
+    let failedSettle = false
+    vi.spyOn(f.memory, 'putTask').mockImplementation(async record => {
+      if (!failedSettle && record.lifecycle.kind === 'saved') {
+        failedSettle = true
+        throw new DOMException('write failed', 'DataError')
+      }
+      await putTask(record)
+    })
+    const listTasks = f.memory.listTasks.bind(f.memory)
+    let failedRefresh = false
+    vi.spyOn(f.memory, 'listTasks').mockImplementation(async () => {
+      if (failedSettle && !failedRefresh) {
+        failedRefresh = true
+        throw new DOMException('scan failed', 'DataError')
+      }
+      return listTasks()
+    })
+
+    receive.performRetainedAction(receive.getSnapshot().retained.tasks[0]!, 'continue')
+    await vi.waitFor(() => {
+      expect(failedRefresh).toBe(true)
+      expect(receive.active).toBe(false)
+    }, { interval: 1 })
+    expect(receive.getSnapshot().lifecycle).toMatchObject({ kind: 'failed', generation: 4n })
+    expect(composeFromCoordinator(receive, f.source.descriptor.shareInstanceId).current?.stage).toBe('failed')
+
+    // Once IDB recovers, refresh normalizes downloading (3n) -> paused (4n) and reconciles workspace.
+    await receive.refreshRetained()
+    expect(receive.getSnapshot().lifecycle).toMatchObject({ kind: 'paused', reason: 'interrupted', generation: 4n })
+
+    // 3. Another tab resuming the task (activeElsewhere downloading at 5n) must not poison idle workspace admission.
+    const externalRelease = gate()
+    const externalAcquired = gate()
+    const externalHold = f.locks.request(taskLockName(base.taskId), { mode: 'exclusive' }, async () => {
+      externalAcquired.resolve()
+      await externalRelease.promise
+    })
+    await externalAcquired.promise
+    const pausedRecord = f.memory.tasks.get(base.taskId)!
+    await putTask({
+      ...pausedRecord,
+      lifecycle: transitionReceiveState(pausedRecord.lifecycle, { kind: 'downloading' }),
+      updatedAt: Date.now() + 10,
+    })
+    await receive.refreshRetained()
+    expect(receive.getSnapshot().lifecycle).toMatchObject({ kind: 'paused', generation: 4n })
+    expect(receive.localStartBlockedReason()).toBeNull()
+
+    externalRelease.resolve()
+    await externalHold
+    await receive.dispose()
+  })
+})
+
+function composeFromCoordinator(receive: ReceiveCoordinator, shareInstance: string) {
+  const runtime = receive.getSnapshot()
+  return composeTasks({
+    output: presentReceiveOutput(runtime, 'en'),
+    progress: EMPTY_PROGRESS,
+    taskDisplay: runtime.display,
+    connection: { kind: 'connected' },
+    share: { kind: 'single-file', shareInstance, label: 'data.bin', fileCount: 1n, totalBytes: 8n, discoveryComplete: true } as never,
+    retained: runtime.retained,
+    activeReceiveOperationId: runtime.activeTaskId,
+    startAdmission: {
+      allowed: receive.startBlockedReason() === null,
+      reason: receive.startBlockedReason(),
+      canReleaseCurrent: receive.canReleaseCurrent,
+      localChoice: null,
+    },
+  })
+}

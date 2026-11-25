@@ -109,10 +109,7 @@ export async function persistPortableHistory(
 export function openPortableSession(input: OpenPortableSessionInput): OutputSessionHandle {
   const maxBytes = input.maxBytes ?? PORTABLE_MAX_BYTES
   const isZip = input.task.artifact.kind === 'zip-archive'
-  const downloading = transitionReceiveState(input.task.lifecycle, {
-    kind: 'downloading',
-    phase: 'receiving',
-  })
+  const downloading = transitionReceiveState(input.task.lifecycle, { kind: 'downloading' })
   const display = portableDisplay(input.task.display)
 
   const baseRecord: ReceiveTaskRecord = Object.freeze({

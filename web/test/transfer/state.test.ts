@@ -33,7 +33,7 @@ describe('receive lifecycle state model', () => {
     expect(initial.generation).toBe(1n)
     expect(isActiveReceiveState(initial)).toBe(true)
 
-    const running = transitionReceiveState(initial, { kind: 'downloading', phase: 'receiving' }, t0 + 100)
+    const running = transitionReceiveState(initial, { kind: 'downloading' }, t0 + 100)
     expect(running.generation).toBe(2n)
     expect(receiveElapsedMilliseconds(running.timing, t0 + 2_600)).toBe(2_500)
 
@@ -51,7 +51,7 @@ describe('receive lifecycle state model', () => {
     expect(isActiveReceiveState(paused)).toBe(false)
     expect(receiveElapsedMilliseconds(paused.timing, t0 + 99_000)).toBe(3_000)
 
-    const resumed = transitionReceiveState(paused, { kind: 'downloading', phase: 'receiving' }, t0 + 10_000)
+    const resumed = transitionReceiveState(paused, { kind: 'downloading' }, t0 + 10_000)
     const saved = transitionReceiveState(resumed, { kind: 'saved', savedFiles: 2n, savedBytes: 1_024n }, t0 + 12_000)
     expect(receiveElapsedMilliseconds(saved.timing, t0 + 50_000)).toBe(5_000)
     expect(isDeliveredReceiveState(saved)).toBe(true)

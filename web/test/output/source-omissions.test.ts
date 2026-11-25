@@ -431,7 +431,7 @@ describe('source omission propagation across transfer, backends, and retained hi
       output: {
         ...EMPTY_OUTPUT_PRESENTATION,
         backend: 'fsa',
-        lifecycle: { ...initialReceiveState('live-1'), kind: 'downloading', phase: 'receiving' },
+        lifecycle: { ...initialReceiveState('live-1'), kind: 'downloading' },
       },
       progress: {
         ...EMPTY_PROGRESS,

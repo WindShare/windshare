@@ -78,7 +78,7 @@ interface ReceiveStateBase {
  */
 export type ReceiveLifecycleState =
   | Readonly<ReceiveStateBase & { kind: 'preparing' }>
-  | Readonly<ReceiveStateBase & { kind: 'downloading'; phase: 'receiving' | 'finalizing' }>
+  | Readonly<ReceiveStateBase & { kind: 'downloading' }>
   | Readonly<ReceiveStateBase & {
       kind: 'paused'
       reason: ReceivePauseReason

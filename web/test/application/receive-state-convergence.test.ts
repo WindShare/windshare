@@ -69,7 +69,7 @@ function makeLifecycle(
         discoveredFiles: 1n, discoveredBytes: entry.expectedSize, discoveryComplete: true,
       }, createdAt)
     case 'downloading':
-      return transitionReceiveState(base, { kind: 'downloading', phase: 'receiving' }, createdAt)
+      return transitionReceiveState(base, { kind: 'downloading' }, createdAt)
   }
 }
 

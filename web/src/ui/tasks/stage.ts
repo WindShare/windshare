@@ -14,15 +14,18 @@ export function resolveTaskStage(facts: TaskFacts, language: Language = 'en'): S
   const t = receiverCopy[language].stage
   const state = facts.lifecycle
 
-  if (facts.interruption !== null) {
-    return stage('finishing', facts.interruption === 'pause' ? t.pausing : t.stopping, t.settling, facts.interruption)
+  if (facts.settling === 'pause' || facts.settling === 'stop') {
+    return stage('finishing', facts.settling === 'pause' ? t.pausing : t.stopping, t.settling, facts.settling)
+  }
+  if (facts.settling === 'finalizing') {
+    return stage('finishing', t.finishing, t.finishingHint, 'finalizing')
   }
 
   switch (state.kind) {
     case 'preparing':
       return stage('preparing', t.preparing, t.preparingHint, state.kind)
     case 'downloading':
-      return downloadingStage(facts, state, language)
+      return downloadingStage(facts, language)
     case 'paused':
       return pausedStage(facts, state, language)
     case 'ready-to-save':
@@ -66,11 +69,10 @@ function savedOrPartialStage(
 
 function downloadingStage(
   facts: TaskFacts,
-  state: Extract<TaskFacts['lifecycle'], { kind: 'downloading' }>,
   language: Language,
 ): StageCopy {
   const t = receiverCopy[language].stage
-  if (state.phase === 'finalizing' || facts.progress?.phase === 'finishing') {
+  if (facts.progress?.phase === 'finishing') {
     return stage('finishing', t.finishing, t.finishingHint, 'finalizing')
   }
   if (facts.outageCheckpointed && facts.blocking?.kind === 'reconnecting') {

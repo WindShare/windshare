@@ -32,7 +32,7 @@ export function actionsForState(
     case 'preparing':
       return Object.freeze([])
     case 'downloading':
-      return interruptionActions(state.phase, backend)
+      return downloadingActions(backend)
     case 'paused':
       return Object.freeze([
         'continue',
@@ -87,8 +87,7 @@ function failedActions(
   return state.reason === 'source-changed' ? Object.freeze(['discard']) : Object.freeze(['forget'])
 }
 
-function interruptionActions(phase: 'receiving' | 'finalizing', backend: SaveBackendKind): readonly ReceiveAction[] {
-  if (phase === 'finalizing') return Object.freeze([])
+function downloadingActions(backend: SaveBackendKind): readonly ReceiveAction[] {
   switch (backend) {
     case 'portable':
       return Object.freeze(['stop'])

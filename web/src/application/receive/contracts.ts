@@ -46,6 +46,8 @@ export type ReceiveAction =
   | 'discard'
   | 'forget'
 
+export type ReceiveSettlingPhase = 'pause' | 'stop' | 'finalizing'
+
 export type RetainedReadiness =
   | 'local'
   | 'matching-share'
@@ -107,7 +109,7 @@ export interface ReceiveRuntimeSnapshot {
   readonly outageCheckpointed: boolean
   readonly progress: TransferProgress
   readonly actions: readonly ReceiveAction[]
-  readonly interruption: 'pause' | 'stop' | null
+  readonly settling: ReceiveSettlingPhase | null
   readonly retained: RetainedInventorySnapshot
 }
 

@@ -1098,6 +1098,7 @@ describe('WorkspaceTask live observation and TaskPresentation safeNameRestore st
         activeSelectionKey: 'k1',
         rootPath: [],
         singleFileId: null,
+        isZipArchive: false,
         display: null,
         initialLifecycle: initialReceiveState('live-runner'),
       })

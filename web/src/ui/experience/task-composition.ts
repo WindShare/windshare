@@ -50,7 +50,7 @@ export class TaskComposer {
     const historyInputs = [
       language, snapshot.retained, snapshot.share?.shareInstance, blocking,
       snapshot.activeReceiveOperationId, snapshot.output.lifecycle, snapshot.output.activation,
-      snapshot.output.actions, snapshot.output.interruption,
+      snapshot.output.actions, snapshot.output.settling,
       snapshot.startAdmission.allowed, snapshot.startAdmission.reason, admission,
       snapshot.activeReceiveOperationId === null ? this.#currentFacts : null,
     ]

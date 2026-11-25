@@ -156,6 +156,7 @@ export class RetainedTaskActions {
           activeSelectionKey: task.selectionKey,
           rootPath: artifactRootPath(task.artifact),
           singleFileId: task.artifact.singleFileId ?? null,
+          isZipArchive: task.artifact.kind === 'zip-archive',
           display: task.display ?? null,
           initialLifecycle: task.lifecycle,
           callbacks: {

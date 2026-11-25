@@ -28,6 +28,7 @@ export interface SessionRunInput {
   readonly activeSelectionKey: string
   readonly rootPath: readonly string[]
   readonly singleFileId: string | null
+  readonly isZipArchive: boolean
   readonly display: ReceiveOperationDisplay | null
   readonly initialLifecycle: ReceiveLifecycleState
   readonly callbacks?: SessionRunCallbacks
@@ -116,7 +117,10 @@ export class ReceiveSessionRunner {
   }
 
   async run(input: SessionRunInput): Promise<void> {
-    const { transferToken, joined, session, selection, activeSelectionKey, rootPath, singleFileId, display, initialLifecycle, callbacks } = input
+    const {
+      transferToken, joined, session, selection, activeSelectionKey,
+      rootPath, singleFileId, isZipArchive, display, initialLifecycle, callbacks,
+    } = input
     if (this.#isDisposed() || !this.#execution.transitionToRunning(transferToken, session.taskId, singleFileId)) {
       return this.closeUnactivated(session)
     }
@@ -151,6 +155,7 @@ export class ReceiveSessionRunner {
         shareInstance: joined.descriptor.shareInstanceId,
         selectionKey: activeSelectionKey,
         backend: session.backend,
+        isZipArchive,
         display,
         initialLifecycle,
       })
@@ -198,7 +203,7 @@ export class ReceiveSessionRunner {
       this.#traceDetached(session)
       return
     }
-    if (this.#workspace.lifecycle?.kind === 'downloading') {
+    if (this.#workspace.lifecycle?.kind === 'downloading' && this.#workspace.settling === null) {
       this.#workspace.markFinalizing()
       this.#publish()
     }
