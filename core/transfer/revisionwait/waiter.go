@@ -34,7 +34,6 @@ var (
 	ErrInvalidCapacitySignal = errors.New("revision capacity signal is invalid")
 	ErrWaitBudgetExhausted   = errors.New("revision capacity wait budget exhausted")
 	ErrSessionEnded          = errors.New("revision wait protocol session ended")
-	ErrSessionChanged        = errors.New("revision wait protocol session changed")
 	ErrJitterSource          = errors.New("revision capacity jitter source failed")
 	ErrTimerContract         = errors.New("revision capacity timer contract failed")
 )
@@ -202,7 +201,6 @@ type Waiter struct {
 	accumulated time.Duration
 	attempts    uint64
 	opAttempts  uint64
-	session     protocolsession.ProtocolSessionID
 	lastSignal  *CapacitySignal
 }
 
@@ -283,14 +281,14 @@ func (w *Waiter) Wait(
 	}
 	now := w.now()
 	w.mu.Lock()
+	// Session ownership is validated by the caller before scheduling. Allowing an
+	// active wait to continue across authenticated session replacements keeps the
+	// shared wall-clock budget and visibility threshold continuous even when
+	// replacement happens after timer wakeup during the retry RPC.
 	if !w.active {
 		w.active = true
 		w.activeSince = now
-		w.session = signal.ProtocolSession()
 		w.opAttempts = 0
-	} else if w.session != signal.ProtocolSession() {
-		w.mu.Unlock()
-		return w.finish(TraceSessionEnded, ErrSessionChanged, WaitSessionEnded, observe, trace)
 	}
 	w.attempts++
 	w.opAttempts++
@@ -372,10 +370,7 @@ func (w *Waiter) sleep(
 		if watched.err == nil && !watched.next.IsZero() && watched.next != signal.ProtocolSession() {
 			// Authenticated session replacement wakes the waiter immediately while
 			// preserving accumulated wall-clock budget across generations.
-			w.mu.Lock()
-			w.session = watched.next
-			snap := w.snapshotLocked(w.now())
-			w.mu.Unlock()
+			snap := w.Snapshot()
 			callObserve(observe, snap)
 			w.traceLast(TraceRetryReady, nil, snap, trace)
 			return WaitRetry, nil
@@ -464,7 +459,6 @@ func (w *Waiter) deactivateLocked(now time.Time) Snapshot {
 	}
 	w.active = false
 	w.activeSince = time.Time{}
-	w.session = protocolsession.ProtocolSessionID{}
 	w.opAttempts = 0
 	w.lastSignal = nil
 	return w.snapshotLocked(now)

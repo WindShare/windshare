@@ -3,6 +3,7 @@ package transfer
 import (
 	"context"
 
+	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/revisionwait"
 )
@@ -10,10 +11,11 @@ import (
 func (r *jobRun) openSelectedRevision(ctx context.Context, plan plannedFile) (OpenedRevision, FailureStage, error) {
 	attempt := revisionOpenAttempt{run: r, plan: plan}
 	for {
+		beforeSession := r.job.protocolSessionID()
 		opened, rawOpenErr := r.job.revisions.OpenRevision(ctx, plan.file)
 		signal, capacityBusy := revisionwait.MatchCapacitySignal(rawOpenErr)
 		if capacityBusy {
-			retry, err := attempt.waitForCapacity(ctx, opened, signal)
+			retry, err := attempt.waitForCapacity(ctx, beforeSession, opened, signal)
 			if retry {
 				continue
 			}
@@ -38,12 +40,21 @@ func (attempt *revisionOpenAttempt) traceFunc() func(revisionwait.Trace) {
 
 func (attempt *revisionOpenAttempt) waitForCapacity(
 	ctx context.Context,
+	beforeSession protocolsession.ProtocolSessionID,
 	opened OpenedRevision,
 	signal *revisionwait.CapacitySignal,
 ) (bool, error) {
-	if err := attempt.capacityContractError(ctx, opened, signal); err != nil {
+	superseded, err := attempt.checkCapacityContract(ctx, beforeSession, opened, signal)
+	if err != nil {
 		attempt.stopWait()
 		return false, err
+	}
+	if superseded {
+		if cause := context.Cause(ctx); cause != nil {
+			attempt.finishWait(ctx, cause)
+			return false, fault.FromCancellation(ctx, cause)
+		}
+		return true, nil
 	}
 	attempt.waited = true
 	outcome, err := attempt.run.job.revisionWait.Wait(
@@ -52,26 +63,33 @@ func (attempt *revisionOpenAttempt) waitForCapacity(
 	return attempt.classifyWaitOutcome(ctx, outcome, err)
 }
 
-func (attempt *revisionOpenAttempt) capacityContractError(
+func (attempt *revisionOpenAttempt) checkCapacityContract(
 	ctx context.Context,
+	beforeSession protocolsession.ProtocolSessionID,
 	opened OpenedRevision,
 	signal *revisionwait.CapacitySignal,
-) error {
+) (bool, error) {
 	run := attempt.run
-	sessionID := run.job.protocolSessionID()
-	if !sessionID.IsZero() && signal.ProtocolSession() != sessionID {
-		return fault.DependencyContract(ErrRevisionIdentity)
-	}
 	if !opened.Handle.IsZero() {
 		// A capacity denial cannot grant a capability. Retiring it first keeps a
 		// broken adapter from leaking sender capacity while the job fails closed.
 		run.releaseRevision(ctx, attempt.plan, opened.Handle)
-		return fault.DependencyContract(ErrRevisionIdentity)
+		return false, fault.DependencyContract(ErrRevisionIdentity)
 	}
 	if run.job.revisionWait == nil {
-		return fault.DependencyContract(ErrRevisionWaitUnavailable)
+		return false, fault.DependencyContract(ErrRevisionWaitUnavailable)
 	}
-	return nil
+	sessionID := run.job.protocolSessionID()
+	if !sessionID.IsZero() && signal.ProtocolSession() != sessionID {
+		// Concurrent discovery can replace beforeSession just after this RPC returns
+		// a capacity denial for that prior generation. Retry immediately on the fresh
+		// session while keeping foreign signals fail-closed.
+		if !beforeSession.IsZero() && signal.ProtocolSession() == beforeSession {
+			return true, nil
+		}
+		return false, fault.DependencyContract(ErrRevisionIdentity)
+	}
+	return false, nil
 }
 
 func (attempt *revisionOpenAttempt) classifyWaitOutcome(

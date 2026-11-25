@@ -235,3 +235,245 @@ func TestTransferJobCapacityBudgetPausesTreeWithoutFileErrors(t *testing.T) {
 		t.Fatalf("capacity progress=%+v", result.Progress.CapacityWait)
 	}
 }
+
+type scriptedCapacityRevisions struct {
+	mu       sync.Mutex
+	open     func(call int, file catalog.FileID) (OpenedRevision, error)
+	calls    int
+	released []RevisionHandle
+}
+
+func (s *scriptedCapacityRevisions) OpenRevision(_ context.Context, file catalog.FileID) (OpenedRevision, error) {
+	s.mu.Lock()
+	s.calls++
+	call := s.calls
+	fn := s.open
+	s.mu.Unlock()
+	return fn(call, file)
+}
+
+func (s *scriptedCapacityRevisions) ReleaseRevision(_ context.Context, handle RevisionHandle) error {
+	s.mu.Lock()
+	s.released = append(s.released, handle)
+	s.mu.Unlock()
+	return nil
+}
+
+func capacitySignalForSession(t *testing.T, session protocolsession.ProtocolSessionID, hint time.Duration) *revisionwait.CapacitySignal {
+	t.Helper()
+	signal, err := revisionwait.NewCapacitySignal(hint, session, protocolsession.OperationID(92))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return signal
+}
+
+func dynamicSessionWaitConfig(t *testing.T, session *changingJobSession, budget time.Duration) (*revisionwait.Config, *capacityJobTimers) {
+	t.Helper()
+	timers := &capacityJobTimers{now: time.Unix(1_700_000_000, 0)}
+	return &revisionwait.Config{
+		WaitBudget: budget, AdditiveJitterLimit: time.Millisecond,
+		VisibilityThreshold: time.Millisecond,
+		WatchSession: func(ctx context.Context, expected protocolsession.ProtocolSessionID) (protocolsession.ProtocolSessionID, error) {
+			if current := session.ProtocolSessionID(); current != expected {
+				return current, nil
+			}
+			<-ctx.Done()
+			return protocolsession.ProtocolSessionID{}, ctx.Err()
+		},
+		Now: timers.Now, After: timers.After,
+		Jitter: func(time.Duration) (time.Duration, error) { return 0, nil },
+	}, timers
+}
+
+func TestTransferJobContinuesCapacityWaitAcrossSequentialReplacement(t *testing.T) {
+	file := transferID[catalog.FileID](95)
+	share := transferID[catalog.ShareInstance](80)
+	first := transferID[protocolsession.ProtocolSessionID](91)
+	second := transferID[protocolsession.ProtocolSessionID](92)
+	session := &changingJobSession{id: first}
+	wait, timers := dynamicSessionWaitConfig(t, session, 10*time.Second)
+
+	opened, err := NewOpenedRevision(transferID[RevisionHandle](96), jobDescriptor(t, share, file, 97, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := &scriptedCapacityRevisions{open: func(call int, _ catalog.FileID) (OpenedRevision, error) {
+		switch call {
+		case 1:
+			return OpenedRevision{}, capacitySignalForSession(t, first, 2*time.Second)
+		case 2:
+			session.set(second)
+			return OpenedRevision{}, capacitySignalForSession(t, second, time.Second)
+		default:
+			return opened, nil
+		}
+	}}
+	stream := newTestDiagnosticsStream(t)
+	job, _ := newCapacityTransferJob(t, []catalog.FileID{file}, script, wait, stream.Sink())
+	job.session = session
+
+	result := job.Run(context.Background())
+	if result.Outcome != DirectTreeOutcomeSuccess || result.SucceededFiles != 1 || len(result.Files) != 0 {
+		t.Fatalf("result=%+v", result)
+	}
+	if !slices.Equal(timers.waits, []time.Duration{2 * time.Second, time.Second}) {
+		t.Fatalf("waits=%v", timers.waits)
+	}
+	if result.Progress.CapacityWait.Attempts != 2 || result.Progress.CapacityWait.AccumulatedWait != 3*time.Second {
+		t.Fatalf("capacity progress=%+v", result.Progress.CapacityWait)
+	}
+	var capacityStages []string
+	for _, rec := range drainTestDiagnostics(stream) {
+		if rec.Payload().Get("capacity").Present() {
+			capacityStages = append(capacityStages, rec.Payload().Get("stage").Text())
+		}
+	}
+	wantStages := []string{
+		TransferCapacityRetryScheduled.DiagnosticName(),
+		TransferCapacityRetryReady.DiagnosticName(),
+		TransferCapacityRetryScheduled.DiagnosticName(),
+		TransferCapacityRetryReady.DiagnosticName(),
+		TransferCapacityRetrySucceeded.DiagnosticName(),
+	}
+	if !slices.Equal(capacityStages, wantStages) {
+		t.Fatalf("capacity stages=%v", capacityStages)
+	}
+}
+
+func TestTransferJobSupersededCapacitySignalRetriesAndForeignSignalsFailClosed(t *testing.T) {
+	share := transferID[catalog.ShareInstance](80)
+	first := transferID[protocolsession.ProtocolSessionID](101)
+	second := transferID[protocolsession.ProtocolSessionID](102)
+	foreign := transferID[protocolsession.ProtocolSessionID](103)
+
+	t.Run("superseded prior session retries immediately without charging backoff", func(t *testing.T) {
+		file := transferID[catalog.FileID](104)
+		session := &changingJobSession{id: first}
+		wait, timers := dynamicSessionWaitConfig(t, session, 10*time.Second)
+		opened, err := NewOpenedRevision(transferID[RevisionHandle](105), jobDescriptor(t, share, file, 106, 0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		script := &scriptedCapacityRevisions{open: func(call int, _ catalog.FileID) (OpenedRevision, error) {
+			if call == 1 {
+				session.set(second)
+				return OpenedRevision{}, capacitySignalForSession(t, first, 2*time.Second)
+			}
+			return opened, nil
+		}}
+		job, _ := newCapacityTransferJob(t, []catalog.FileID{file}, script, wait, diagnostics.Sink{})
+		job.session = session
+		result := job.Run(context.Background())
+		if result.Outcome != DirectTreeOutcomeSuccess || result.SucceededFiles != 1 || script.calls != 2 || len(timers.waits) != 0 {
+			t.Fatalf("result=%+v calls=%d waits=%v", result, script.calls, timers.waits)
+		}
+	})
+
+	t.Run("superseded signal mid-wait preserves active wait budget on replacement", func(t *testing.T) {
+		file := transferID[catalog.FileID](107)
+		session := &changingJobSession{id: first}
+		wait, timers := dynamicSessionWaitConfig(t, session, 10*time.Second)
+		opened, err := NewOpenedRevision(transferID[RevisionHandle](108), jobDescriptor(t, share, file, 109, 0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		script := &scriptedCapacityRevisions{open: func(call int, _ catalog.FileID) (OpenedRevision, error) {
+			switch call {
+			case 1:
+				return OpenedRevision{}, capacitySignalForSession(t, first, 2*time.Second)
+			case 2:
+				session.set(second)
+				return OpenedRevision{}, capacitySignalForSession(t, first, 2*time.Second)
+			case 3:
+				return OpenedRevision{}, capacitySignalForSession(t, second, time.Second)
+			default:
+				return opened, nil
+			}
+		}}
+		job, _ := newCapacityTransferJob(t, []catalog.FileID{file}, script, wait, diagnostics.Sink{})
+		job.session = session
+		result := job.Run(context.Background())
+		if result.Outcome != DirectTreeOutcomeSuccess || script.calls != 4 || !slices.Equal(timers.waits, []time.Duration{2 * time.Second, time.Second}) {
+			t.Fatalf("result=%+v calls=%d waits=%v", result, script.calls, timers.waits)
+		}
+		if result.Progress.CapacityWait.Attempts != 2 || result.Progress.CapacityWait.AccumulatedWait != 3*time.Second {
+			t.Fatalf("capacity progress=%+v", result.Progress.CapacityWait)
+		}
+	})
+
+	t.Run("foreign signal stays fail-closed without retry spin", func(t *testing.T) {
+		file := transferID[catalog.FileID](110)
+		session := &changingJobSession{id: first}
+		wait, timers := dynamicSessionWaitConfig(t, session, 10*time.Second)
+		script := &scriptedCapacityRevisions{open: func(_ int, _ catalog.FileID) (OpenedRevision, error) {
+			return OpenedRevision{}, capacitySignalForSession(t, foreign, 2*time.Second)
+		}}
+		job, _ := newCapacityTransferJob(t, []catalog.FileID{file}, script, wait, diagnostics.Sink{})
+		job.session = session
+		result := job.Run(context.Background())
+		if result.Outcome != DirectTreeOutcomePaused || !isSessionCode(result.TerminationFault, fault.SessionDependencyContract) ||
+			!errors.Is(result.TerminationCause, ErrRevisionIdentity) || script.calls != 1 || len(timers.waits) != 0 {
+			t.Fatalf("result=%+v calls=%d waits=%v", result, script.calls, timers.waits)
+		}
+	})
+
+	t.Run("superseded signal carrying handle releases it and fails closed", func(t *testing.T) {
+		file := transferID[catalog.FileID](111)
+		session := &changingJobSession{id: first}
+		wait, timers := dynamicSessionWaitConfig(t, session, 10*time.Second)
+		leaked, err := NewOpenedRevision(transferID[RevisionHandle](112), jobDescriptor(t, share, file, 113, 0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		script := &scriptedCapacityRevisions{open: func(_ int, _ catalog.FileID) (OpenedRevision, error) {
+			session.set(second)
+			return leaked, capacitySignalForSession(t, first, 2*time.Second)
+		}}
+		job, _ := newCapacityTransferJob(t, []catalog.FileID{file}, script, wait, diagnostics.Sink{})
+		job.session = session
+		result := job.Run(context.Background())
+		if result.Outcome != DirectTreeOutcomePaused || !isSessionCode(result.TerminationFault, fault.SessionDependencyContract) ||
+			!slices.Equal(script.released, []RevisionHandle{leaked.Handle}) || script.calls != 1 || len(timers.waits) != 0 {
+			t.Fatalf("result=%+v released=%v calls=%d waits=%v", result, script.released, script.calls, timers.waits)
+		}
+	})
+
+	t.Run("superseded signal without revision wait fails closed", func(t *testing.T) {
+		file := transferID[catalog.FileID](114)
+		session := &changingJobSession{id: first}
+		script := &scriptedCapacityRevisions{open: func(_ int, _ catalog.FileID) (OpenedRevision, error) {
+			session.set(second)
+			return OpenedRevision{}, capacitySignalForSession(t, first, 2*time.Second)
+		}}
+		job, _ := newCapacityTransferJob(t, []catalog.FileID{file}, script, nil, diagnostics.Sink{})
+		job.session = session
+		result := job.Run(context.Background())
+		if result.Outcome != DirectTreeOutcomePaused || !isSessionCode(result.TerminationFault, fault.SessionDependencyContract) ||
+			!errors.Is(result.TerminationCause, ErrRevisionWaitUnavailable) || script.calls != 1 {
+			t.Fatalf("result=%+v calls=%d", result, script.calls)
+		}
+	})
+
+	t.Run("superseded signal on canceled context settles active wait as canceled", func(t *testing.T) {
+		file := transferID[catalog.FileID](115)
+		session := &changingJobSession{id: first}
+		wait, timers := dynamicSessionWaitConfig(t, session, 10*time.Second)
+		ctx, cancel := context.WithCancel(context.Background())
+		script := &scriptedCapacityRevisions{open: func(call int, _ catalog.FileID) (OpenedRevision, error) {
+			if call == 1 {
+				return OpenedRevision{}, capacitySignalForSession(t, first, 2*time.Second)
+			}
+			session.set(second)
+			cancel()
+			return OpenedRevision{}, capacitySignalForSession(t, first, 2*time.Second)
+		}}
+		job, _ := newCapacityTransferJob(t, []catalog.FileID{file}, script, wait, diagnostics.Sink{})
+		job.session = session
+		result := job.Run(ctx)
+		if result.Outcome != DirectTreeOutcomePaused || result.TerminationInterruption != TransferInterruptionCanceled ||
+			result.Progress.CapacityWait.ActiveWaiters != 0 || script.calls != 2 || len(timers.waits) != 1 {
+			t.Fatalf("result=%+v calls=%d waits=%v", result, script.calls, timers.waits)
+		}
+	})
+}

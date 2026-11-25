@@ -545,10 +545,11 @@ func (r *jobRun) readRequestedRange(ctx context.Context, plan plannedFile, opene
 		if err != nil {
 			return buffered, err
 		}
+		beforeSession := r.job.protocolSessionID()
 		rawErr := r.job.blocks.ReadRange(ctx, opened.Handle, opened.Descriptor, requested, buffered)
 		signal, busy := revisionwait.MatchCapacitySignal(rawErr)
 		if busy {
-			retry, waitErr := attempt.waitForCapacity(ctx, OpenedRevision{}, signal)
+			retry, waitErr := attempt.waitForCapacity(ctx, beforeSession, OpenedRevision{}, signal)
 			if retry {
 				continue
 			}

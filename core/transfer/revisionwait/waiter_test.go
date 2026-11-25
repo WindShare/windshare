@@ -285,6 +285,61 @@ func TestWaiterReplacementReopensWithoutResettingBudgetAndSharesBudgetAcrossFile
 	}
 }
 
+func TestWaiterContinuesAcrossSessionReplacementAfterTimerWakeup(t *testing.T) {
+	first := waitTestID[protocolsession.ProtocolSessionID](21)
+	second := waitTestID[protocolsession.ProtocolSessionID](22)
+	third := waitTestID[protocolsession.ProtocolSessionID](23)
+	clock := &fakeClock{now: time.Unix(1_700_000_000, 0)}
+	start := clock.Now()
+	after, waits := instantAfter(clock)
+
+	var watchedMu sync.Mutex
+	var watched []protocolsession.ProtocolSessionID
+	watch := func(ctx context.Context, expected protocolsession.ProtocolSessionID) (protocolsession.ProtocolSessionID, error) {
+		watchedMu.Lock()
+		watched = append(watched, expected)
+		watchedMu.Unlock()
+		<-ctx.Done()
+		return protocolsession.ProtocolSessionID{}, ctx.Err()
+	}
+
+	waiter := newTestWaiter(t, clock, after, watch, 6*time.Second, 0)
+	var traces []Trace
+	trace := func(e Trace) { traces = append(traces, e) }
+
+	outcome, err := waiter.Wait(context.Background(), waitTestSignal(t, first, 2*time.Second), nil, trace)
+	if err != nil || outcome != WaitRetry {
+		t.Fatalf("first wait outcome=%v err=%v", outcome, err)
+	}
+	// Simulate session replacement occurring during the retry RPC after timer wakeup.
+	clock.advance(time.Second)
+	outcome, err = waiter.Wait(context.Background(), waitTestSignal(t, second, 2*time.Second), nil, trace)
+	if err != nil || outcome != WaitRetry {
+		t.Fatalf("second wait after replacement outcome=%v err=%v", outcome, err)
+	}
+	snap := waiter.Snapshot()
+	if snap.ActiveWaiters != 1 || snap.ActiveSince != start || snap.Attempts != 2 || snap.AccumulatedWait != 5*time.Second {
+		t.Fatalf("snapshot after replacement=%+v", snap)
+	}
+	// Remaining budget (1s out of 6s) stays bounded across further replacements.
+	outcome, err = waiter.Wait(context.Background(), waitTestSignal(t, third, 2*time.Second), nil, trace)
+	if outcome != WaitBudgetPaused || !errors.Is(err, ErrWaitBudgetExhausted) {
+		t.Fatalf("third wait outcome=%v err=%v", outcome, err)
+	}
+	if !slices.Equal(*waits, []time.Duration{2 * time.Second, 2 * time.Second, time.Second}) {
+		t.Fatalf("waits=%v", *waits)
+	}
+	watchedMu.Lock()
+	gotWatched := slices.Clone(watched)
+	watchedMu.Unlock()
+	if !slices.Equal(gotWatched, []protocolsession.ProtocolSessionID{first, second, third}) {
+		t.Fatalf("watched sessions=%v", gotWatched)
+	}
+	if len(traces) < 4 || traces[2].Stage != TraceRetryScheduled || traces[2].ProtocolSession != second || traces[2].Attempt != 2 {
+		t.Fatalf("replacement schedule trace=%+v", traces)
+	}
+}
+
 func TestCapacitySignalAndConfigValidationContracts(t *testing.T) {
 	session := waitTestID[protocolsession.ProtocolSessionID](7)
 	signal := waitTestSignal(t, session, time.Second)
