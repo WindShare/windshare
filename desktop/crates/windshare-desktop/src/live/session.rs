@@ -257,7 +257,7 @@ impl Desktop {
         }
         self.network_ui.prune_expanded(&model.preferences);
         self.project_native_shares(&model);
-        if let Some(toast) = self.network_ui.take_remove_toast(&model) {
+        if let Some(toast) = crate::network::relay_removed_toast(&previous_model, &model) {
             self.notify(toast, cx);
         }
         if self.should_close_unblocked_account_overlay(&previous_model, &model, cx) {

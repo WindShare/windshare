@@ -52,7 +52,6 @@ impl SetupDialog {
                     let host = host.clone();
                     let operation_id = operation_id.clone();
                     self.feedback = None;
-                    self.remove_toast_id = None;
                     self.in_flight_id = host.update(cx, |host, cx| {
                         host.submit_relay_setup(
                             &operation_id,
@@ -90,15 +89,12 @@ impl SetupDialog {
         let SetupSource::Native { host, operation_id } = &self.source else {
             return;
         };
-        let is_remove = matches!(edit, PreferenceEdit::Remove(_));
         let host = host.clone();
         let operation_id = operation_id.clone();
         self.feedback = None;
-        let id = host.update(cx, |host, cx| {
+        self.in_flight_id = host.update(cx, |host, cx| {
             host.submit_preference(&operation_id, edit, cx)
         });
-        self.remove_toast_id = is_remove.then(|| id.clone()).flatten();
-        self.in_flight_id = id;
         cx.notify();
     }
 
@@ -283,22 +279,17 @@ impl SetupDialog {
                 self.in_flight_id = None;
                 self.clear_access_key(cx);
                 self.page = SetupPage::Selection;
-                if self.remove_toast_id.take().as_deref() == Some(id) {
-                    cx.emit(SetupDialogEvent::Toast(Text::RelayRemoved));
-                }
                 self.feedback = setup_finished_feedback(model).map(Ok);
                 true
             }
             SetupRequest::Cancelled { id } if id == tracked => {
                 self.in_flight_id = None;
-                self.remove_toast_id = None;
                 self.clear_access_key(cx);
                 self.feedback = Some(Ok(Text::SetupCancelled));
                 false
             }
             SetupRequest::Failed { id, error } if id == tracked => {
                 self.in_flight_id = None;
-                self.remove_toast_id = None;
                 self.feedback = (!model.setup.unfinished()).then(|| Err(error.message.clone()));
                 false
             }

@@ -259,9 +259,6 @@ impl Desktop {
             self.open_scoped_overlay(overlay, scope, initial_focus, subscription, window, cx);
             return;
         };
-        if let Overlay::SharingSetup(target, dialog) = &previous.content {
-            self.handoff_setup_dialog(*target, dialog, cx);
-        }
         self.dialog_sequence += 1;
         // Preserve the replaced overlay's return_focus so dismissing the new dialog
         // returns to the caller beneath rather than the dropped modal.
@@ -288,8 +285,8 @@ impl Desktop {
         let Some(frame) = self.overlays.pop() else {
             return;
         };
-        if let Overlay::SharingSetup(target, dialog) = &frame.content {
-            self.handoff_setup_dialog(*target, dialog, cx);
+        if matches!(frame.content, Overlay::SharingSetup(..)) && self.overlays.is_empty() {
+            self.observe_active_network_setup(cx);
         }
         self.observe_account_overlay_dismissed(cx);
         let fallback = self

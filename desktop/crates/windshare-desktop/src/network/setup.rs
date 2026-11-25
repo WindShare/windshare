@@ -117,7 +117,6 @@ impl Desktop {
                 window.focus(&focus, cx);
             }
             SetupDialogEvent::ReturnToRunningSetup => self.return_to_sharing_setup(window, cx),
-            SetupDialogEvent::Toast(message) => self.notify(message, cx),
             SetupDialogEvent::Completed(toast) => {
                 self.close_overlay(window, cx);
                 if let Some(message) = toast {
@@ -388,41 +387,18 @@ impl Desktop {
         }
     }
 
-    pub(crate) fn handoff_setup_dialog(
-        &mut self,
-        target: SharingSetupTarget,
-        dialog: &gpui::Entity<SetupDialog>,
-        cx: &App,
-    ) {
-        if !matches!(target, SharingSetupTarget::Defaults) {
-            return;
-        }
-        let handoff = dialog.read(cx).in_flight_handoff();
-        if handoff.is_empty() {
-            return;
-        }
-        let settings_visible =
-            self.page == Page::Settings && self.settings_section == SettingsSection::Network;
-        // Dismissing a global setup modal does not cancel the host workflow; hand
-        // ownership to the settings page so it surfaces the settled outcome once
-        // the inline progress banner exits.
-        tracing::info!(
-            event = "desktop.setup_handoff_to_settings",
-            session = std::process::id(),
-            setup_id = ?handoff.in_flight_id,
-            has_remove_toast = handoff.remove_toast_id.is_some(),
-            settings_visible,
-        );
-        self.network_ui
-            .adopt_dialog_handoff(handoff, settings_visible);
-    }
-
     pub(crate) fn observe_active_network_setup(&mut self, cx: &App) {
         if self.page != Page::Settings || self.settings_section != SettingsSection::Network {
             return;
         }
-        if let Runtime::Native(session) = &self.runtime {
-            self.network_ui.observe_active_setup(session.model(cx));
+        if let Runtime::Native(session) = &self.runtime
+            && let Some(setup_id) = self.network_ui.observe_active_setup(session.model(cx))
+        {
+            tracing::info!(
+                event = "desktop.network_setup_observed",
+                session = std::process::id(),
+                setup_id,
+            );
         }
     }
 }

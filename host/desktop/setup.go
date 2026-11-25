@@ -25,6 +25,7 @@ type SetupResult struct {
 	FrontendSaved bool
 	RelayURL      string
 	RelaySaved    bool
+	RelayRemoved  bool
 }
 
 func (result SetupResult) affectsAdmission(explicitRelays []string) bool {
@@ -58,6 +59,7 @@ type SetupView struct {
 	UserCode        string                    `json:"user_code,omitempty"`
 	FrontendSaved   bool                      `json:"frontend_saved"`
 	RelaySaved      bool                      `json:"relay_saved"`
+	RelayRemoved    bool                      `json:"relay_removed"`
 	Recovery        relaysetup.RecoveryAction `json:"recovery,omitempty"`
 	Error           *Failure                  `json:"error,omitempty"`
 }
@@ -160,7 +162,7 @@ func (a *Application) runSetup(ctx context.Context, input SetupInput) {
 	if preferencesErr == nil {
 		a.preferences = preferences.Preferences(a.deps.defaultFrontend)
 	}
-	a.setup.FrontendSaved, a.setup.RelaySaved = result.FrontendSaved, result.RelaySaved
+	a.setup.FrontendSaved, a.setup.RelaySaved, a.setup.RelayRemoved = result.FrontendSaved, result.RelaySaved, result.RelayRemoved
 	a.setup.RelayURL = result.RelayURL
 	// Only the completed workflow receipt can identify an enrollment to clean up.
 	// An input URL alone does not mean this intent acquired that relay's approval.

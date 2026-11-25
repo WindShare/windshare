@@ -173,3 +173,28 @@ func TestSnapshotQueueCoalescesAndReadsDoNotAdvanceRevision(t *testing.T) {
 		t.Fatal("unchanged state emitted notifications")
 	}
 }
+
+func TestSetupSnapshotPropagatesRelayRemoved(t *testing.T) {
+	a, _, _ := fixture(t)
+	a.deps.setup = func(_ context.Context, input SetupInput, _ func(relaysetup.Progress)) (SetupResult, error) {
+		if input.Preference == nil || input.Preference.Action != "remove" {
+			t.Errorf("unexpected setup input: %+v", input)
+		}
+		return SetupResult{RelayRemoved: true}, nil
+	}
+	reply := a.execute(Request{
+		Command: "configure",
+		Setup: &SetupInput{
+			ID:         "setup:remove",
+			Preference: &relayconfig.PreferenceEdit{Action: "remove", Value: "https://one.example"},
+		},
+	})
+	if reply.Error != nil {
+		t.Fatalf("configure rejected: %+v", reply.Error)
+	}
+	a.work.Wait()
+	view := a.snapshot().Setup
+	if view.State != "finished" || view.ID != "setup:remove" || !view.RelayRemoved || view.RelaySaved || view.FrontendSaved {
+		t.Fatalf("unexpected setup view: %+v", view)
+	}
+}

@@ -38,6 +38,7 @@ func (setup nativeSetup) run(ctx context.Context, input SetupInput, progress fun
 	if input.Preference != nil {
 		_, err := setup.settings.Update(ctx, input.Preference.Apply)
 		result.FrontendSaved = err == nil && input.Preference.Action == "frontend"
+		result.RelayRemoved = err == nil && input.Preference.Action == "remove"
 		return result, err
 	}
 	if input.FrontURL != "" {

@@ -1,5 +1,5 @@
 use super::{
-    NetworkSettingsState, SetupDialogHandoff, dialog_host::other_running_for_model,
+    NetworkSettingsState, dialog_host::other_running_for_model, relay_removed_toast,
     settings_visible_setup,
 };
 use crate::localization::Text;
@@ -16,6 +16,7 @@ fn global_context(id: &str) -> SetupContext {
         relay_url: "https://dead.invalid".into(),
         relay_operation: Some(RelayOperation::AddProfile),
         relay_saved: false,
+        relay_removed: false,
     }
 }
 
@@ -24,15 +25,18 @@ fn failure(message: &str) -> Failure {
 }
 
 #[test]
-fn handoff_surfaces_terminal_failure_after_dialog_closes() {
+fn observe_active_setup_adopts_pending_global_setup_before_running_arrives() {
     let mut state = NetworkSettingsState::default();
-    state.adopt_dialog_handoff(
-        SetupDialogHandoff {
-            in_flight_id: Some("setup:1".into()),
-            remove_toast_id: None,
+    let pending_global = Model {
+        setup_request: SetupRequest::Pending {
+            id: "setup:1".into(),
+            operation_id: String::new(),
+            kind: SetupRequestKind::Configure,
         },
-        true,
-    );
+        ..Model::default()
+    };
+    assert_eq!(state.observe_active_setup(&pending_global), Some("setup:1"));
+    assert_eq!(state.observe_active_setup(&pending_global), None);
 
     let failed = Model {
         setup: Setup::Failed {
@@ -46,25 +50,23 @@ fn handoff_surfaces_terminal_failure_after_dialog_closes() {
         },
         ..Model::default()
     };
-
     assert!(settings_visible_setup(&failed.setup).is_none());
     assert!(matches!(
         state.inline_feedback(&failed),
         Some(Err(ref message)) if message == "relay unreachable"
     ));
-}
 
-#[test]
-fn handoff_surfaces_success_and_remove_toast_when_dismissed_in_flight() {
-    let mut state = NetworkSettingsState::default();
-    state.adopt_dialog_handoff(
-        SetupDialogHandoff {
-            in_flight_id: Some("setup:2".into()),
-            remove_toast_id: Some("setup:2".into()),
+    // A pending global setup that succeeds also surfaces inline completion feedback.
+    state.clear_transient();
+    let pending_second = Model {
+        setup_request: SetupRequest::Pending {
+            id: "setup:2".into(),
+            operation_id: String::new(),
+            kind: SetupRequestKind::Configure,
         },
-        true,
-    );
-
+        ..Model::default()
+    };
+    assert_eq!(state.observe_active_setup(&pending_second), Some("setup:2"));
     let mut context = global_context("setup:2");
     context.relay_saved = true;
     let mut finished = Model {
@@ -80,45 +82,10 @@ fn handoff_surfaces_success_and_remove_toast_when_dismissed_in_flight() {
         console_url: None,
         offered_frontend: None,
     });
-
     assert!(matches!(
         state.inline_feedback(&finished),
         Some(Ok(Text::RelayConnected))
     ));
-    assert!(matches!(
-        state.take_remove_toast(&finished),
-        Some(Text::RelayRemoved)
-    ));
-    assert!(state.take_remove_toast(&finished).is_none());
-}
-
-#[test]
-fn empty_handoff_or_off_page_dismissal_does_not_leak_inline_feedback() {
-    let mut state = NetworkSettingsState::default();
-    state.adopt_dialog_handoff(SetupDialogHandoff::default(), true);
-    state.adopt_dialog_handoff(
-        SetupDialogHandoff {
-            in_flight_id: Some("setup:3".into()),
-            remove_toast_id: Some("setup:3".into()),
-        },
-        false,
-    );
-
-    let failed = Model {
-        setup: Setup::Failed {
-            context: global_context("setup:3"),
-            recovery: Some(SetupRecovery::Restart),
-            error: failure("dial tcp failed"),
-        },
-        setup_request: SetupRequest::Failed {
-            id: "setup:3".into(),
-            error: failure("dial tcp failed"),
-        },
-        ..Model::default()
-    };
-
-    assert!(state.inline_feedback(&failed).is_none());
-    assert_eq!(state.remove_toast_id.as_deref(), Some("setup:3"));
 }
 
 #[test]
@@ -134,10 +101,22 @@ fn observe_active_setup_tracks_only_settings_visible_unfinished_setups() {
         ..Model::default()
     };
     let mut state = NetworkSettingsState::default();
-    state.observe_active_setup(&running_global);
+    assert_eq!(state.observe_active_setup(&running_global), Some("setup:4"));
     assert_eq!(state.inline_request_id.as_deref(), Some("setup:4"));
 
-    // Navigating back after a share-scoped setup is running must not adopt it.
+    // Navigating back while a share-scoped setup is pending or running must not adopt it.
+    let pending_share = Model {
+        setup_request: SetupRequest::Pending {
+            id: "setup:5".into(),
+            operation_id: "share:1".into(),
+            kind: SetupRequestKind::Configure,
+        },
+        ..Model::default()
+    };
+    state.clear_transient();
+    assert_eq!(state.observe_active_setup(&pending_share), None);
+    assert_eq!(state.inline_request_id, None);
+
     let mut share_context = global_context("setup:5");
     share_context.operation_id = "share:1".into();
     let running_share = Model {
@@ -150,8 +129,7 @@ fn observe_active_setup_tracks_only_settings_visible_unfinished_setups() {
         },
         ..Model::default()
     };
-    state.clear_transient();
-    state.observe_active_setup(&running_share);
+    assert_eq!(state.observe_active_setup(&running_share), None);
     assert_eq!(state.inline_request_id, None);
 
     // A cancellation-blocking setup is shown inline on settings and stays tracked,
@@ -168,7 +146,10 @@ fn observe_active_setup_tracks_only_settings_visible_unfinished_setups() {
         },
         ..Model::default()
     };
-    state.observe_active_setup(&cancel_required);
+    assert_eq!(
+        state.observe_active_setup(&cancel_required),
+        Some("setup:5")
+    );
     assert_eq!(state.inline_request_id.as_deref(), Some("setup:5"));
     assert!(state.inline_feedback(&cancel_required).is_none());
 
@@ -186,9 +167,71 @@ fn observe_active_setup_tracks_only_settings_visible_unfinished_setups() {
         ..Model::default()
     };
     state.clear_transient();
-    state.observe_active_setup(&settled_failure);
+    assert_eq!(state.observe_active_setup(&settled_failure), None);
     assert_eq!(state.inline_request_id, None);
     assert!(state.inline_feedback(&settled_failure).is_none());
+}
+
+#[test]
+fn relay_removed_toast_fires_once_per_finished_removal_regardless_of_scope() {
+    let idle = Model::default();
+
+    let mut global_removed_ctx = global_context("setup:10");
+    global_removed_ctx.relay_url.clear();
+    global_removed_ctx.relay_operation = None;
+    global_removed_ctx.relay_removed = true;
+    let global_removed = Model {
+        setup: Setup::Finished {
+            context: global_removed_ctx,
+        },
+        ..Model::default()
+    };
+    assert!(matches!(
+        relay_removed_toast(&idle, &global_removed),
+        Some(Text::RelayRemoved)
+    ));
+    // Later unrelated snapshots carrying the same finished setup must not re-fire the toast.
+    assert!(relay_removed_toast(&global_removed, &global_removed).is_none());
+
+    // Removals triggered from RecoverShare carry a non-empty operation_id and still notify
+    // even when consecutive removals coalesce without an intermediate Running snapshot.
+    let mut share_removed_ctx = global_context("setup:11");
+    share_removed_ctx.operation_id = "share:1".into();
+    share_removed_ctx.relay_url.clear();
+    share_removed_ctx.relay_operation = None;
+    share_removed_ctx.relay_removed = true;
+    let share_removed = Model {
+        setup: Setup::Finished {
+            context: share_removed_ctx,
+        },
+        ..Model::default()
+    };
+    assert!(matches!(
+        relay_removed_toast(&global_removed, &share_removed),
+        Some(Text::RelayRemoved)
+    ));
+    assert!(relay_removed_toast(&share_removed, &share_removed).is_none());
+
+    // Non-removal completions and failed removals must not trigger the removed toast.
+    let mut saved_ctx = global_context("setup:12");
+    saved_ctx.relay_saved = true;
+    let saved = Model {
+        setup: Setup::Finished { context: saved_ctx },
+        ..Model::default()
+    };
+    assert!(relay_removed_toast(&share_removed, &saved).is_none());
+
+    let mut failed_ctx = global_context("setup:13");
+    failed_ctx.relay_removed = false;
+    let failed = Model {
+        setup: Setup::Failed {
+            context: failed_ctx,
+            recovery: Some(SetupRecovery::Restart),
+            error: failure("relay is not saved"),
+        },
+        ..Model::default()
+    };
+    assert!(relay_removed_toast(&saved, &failed).is_none());
 }
 
 #[test]

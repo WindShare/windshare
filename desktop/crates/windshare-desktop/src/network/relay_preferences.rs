@@ -241,7 +241,6 @@ impl Desktop {
         self.network_ui.inline_request_id = host.update(cx, |host, cx| {
             host.submit_preference("", PreferenceEdit::Mode(mode), cx)
         });
-        self.network_ui.remove_toast_id = None;
         cx.notify();
     }
 
@@ -256,11 +255,9 @@ impl Desktop {
         let Runtime::Native(session) = &self.runtime else {
             return;
         };
-        let is_remove = matches!(edit, PreferenceEdit::Remove(_));
         let host = session.host.clone();
-        let id = host.update(cx, |host, cx| host.submit_preference("", edit, cx));
-        self.network_ui.remove_toast_id = is_remove.then(|| id.clone()).flatten();
-        self.network_ui.inline_request_id = id;
+        self.network_ui.inline_request_id =
+            host.update(cx, |host, cx| host.submit_preference("", edit, cx));
         cx.notify();
     }
 

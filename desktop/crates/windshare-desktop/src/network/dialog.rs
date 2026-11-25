@@ -33,7 +33,6 @@ pub enum SetupDialogEvent {
     PageChanged,
     FocusChanged,
     ReturnToRunningSetup,
-    Toast(Text),
     Completed(Option<Text>),
     Close,
     PreviewRelay(String),
@@ -51,7 +50,6 @@ pub struct SetupDialog {
     pub(super) expanded_relay: Option<String>,
     pub(super) feedback: Option<Result<Text, String>>,
     pub(super) in_flight_id: Option<String>,
-    pub(super) remove_toast_id: Option<String>,
     overlay_scope: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -115,7 +113,6 @@ impl SetupDialog {
             expanded_relay: None,
             feedback: None,
             in_flight_id,
-            remove_toast_id: None,
             overlay_scope,
             _subscriptions: subscriptions,
         };
@@ -342,12 +339,5 @@ impl SetupDialog {
     pub fn clear_access_key(&self, cx: &mut Context<Self>) {
         self.access_key
             .update(cx, |input, cx| input.set_value("", cx));
-    }
-
-    pub fn in_flight_handoff(&self) -> super::SetupDialogHandoff {
-        super::SetupDialogHandoff {
-            in_flight_id: self.in_flight_id.clone(),
-            remove_toast_id: self.remove_toast_id.clone(),
-        }
     }
 }

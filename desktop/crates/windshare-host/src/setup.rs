@@ -59,6 +59,8 @@ pub struct SetupContext {
     pub relay_operation: Option<RelayOperation>,
     #[serde(default)]
     pub relay_saved: bool,
+    #[serde(default)]
+    pub relay_removed: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, serde::Serialize, PartialEq, Eq)]

@@ -186,8 +186,14 @@ func TestNativeRemoveRelayPreferencePersistsCleanConfig(t *testing.T) {
 	result, err := newTestNativeSetup(t, store).run(t.Context(), SetupInput{
 		Preference: &relayconfig.PreferenceEdit{Action: "remove", Value: "https://one.example"},
 	}, nil)
-	if err != nil || result.FrontendSaved || result.RelaySaved {
+	if err != nil || result.FrontendSaved || result.RelaySaved || !result.RelayRemoved {
 		t.Fatalf("unexpected result=%+v err=%v", result, err)
+	}
+	missing, err := newTestNativeSetup(t, store).run(t.Context(), SetupInput{
+		Preference: &relayconfig.PreferenceEdit{Action: "remove", Value: "https://one.example"},
+	}, nil)
+	if err == nil || missing.RelayRemoved {
+		t.Fatalf("unexpected missing remove result=%+v err=%v", missing, err)
 	}
 	saved, err := store.Load()
 	if err != nil || len(saved.Profiles) != 1 || saved.Profiles[0].PublicURL != "https://two.example" ||

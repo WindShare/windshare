@@ -33,7 +33,16 @@ fn share_wire_contract_enforces_state_specific_payloads() {
         "state": "finished", "id": "setup:1"
     }))
     .unwrap();
-    assert!(matches!(setup, Setup::Finished { context } if context.operation_id.is_empty()));
+    assert!(
+        matches!(setup, Setup::Finished { context } if context.operation_id.is_empty() && !context.relay_removed)
+    );
+    let removed_setup: Setup = serde_json::from_value(serde_json::json!({
+        "state": "finished", "id": "setup:2", "operation_id": "share:1", "relay_removed": true
+    }))
+    .unwrap();
+    assert!(
+        matches!(removed_setup, Setup::Finished { context } if context.operation_id == "share:1" && context.relay_removed)
+    );
 
     let with_backup: Share = serde_json::from_value(serde_json::json!({
         "operation_id": "share", "state": "sharing", "task_id": "engine:1",

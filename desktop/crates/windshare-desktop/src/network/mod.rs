@@ -68,23 +68,24 @@ fn settings_visible_setup(setup: &Setup) -> Option<&SetupContext> {
     })
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct SetupDialogHandoff {
-    pub in_flight_id: Option<String>,
-    pub remove_toast_id: Option<String>,
-}
-
-impl SetupDialogHandoff {
-    pub const fn is_empty(&self) -> bool {
-        self.in_flight_id.is_none() && self.remove_toast_id.is_none()
+pub fn relay_removed_toast(previous: &Model, current: &Model) -> Option<Text> {
+    let Setup::Finished { context } = &current.setup else {
+        return None;
+    };
+    if !context.relay_removed {
+        return None;
     }
+    let already_shown = matches!(
+        &previous.setup,
+        Setup::Finished { context: prev } if prev.id == context.id && prev.relay_removed
+    );
+    (!already_shown).then_some(Text::RelayRemoved)
 }
 
 #[derive(Default)]
 pub struct NetworkSettingsState {
     pub expanded_relay: Option<String>,
     pub inline_request_id: Option<String>,
-    pub remove_toast_id: Option<String>,
 }
 
 impl NetworkSettingsState {
@@ -93,19 +94,18 @@ impl NetworkSettingsState {
         self.inline_request_id = None;
     }
 
-    pub fn adopt_dialog_handoff(&mut self, handoff: SetupDialogHandoff, settings_visible: bool) {
-        if settings_visible && let Some(id) = handoff.in_flight_id {
-            self.inline_request_id = Some(id);
+    pub fn observe_active_setup(&mut self, model: &Model) -> Option<&str> {
+        let active_id = match &model.setup_request {
+            SetupRequest::Pending {
+                id, operation_id, ..
+            } if operation_id.is_empty() => Some(id.as_str()),
+            _ => settings_visible_setup(&model.setup).map(|context| context.id.as_str()),
+        }?;
+        if self.inline_request_id.as_deref() == Some(active_id) {
+            return None;
         }
-        if let Some(id) = handoff.remove_toast_id {
-            self.remove_toast_id = Some(id);
-        }
-    }
-
-    pub fn observe_active_setup(&mut self, model: &Model) {
-        if let Some(context) = settings_visible_setup(&model.setup) {
-            self.inline_request_id = Some(context.id.clone());
-        }
+        self.inline_request_id = Some(active_id.to_owned());
+        self.inline_request_id.as_deref()
     }
 
     pub fn prune_expanded(&mut self, prefs: &RelayPreferences) {
@@ -113,21 +113,6 @@ impl NetworkSettingsState {
             && !prefs.relays.iter().any(|relay| &relay.url == url)
         {
             self.expanded_relay = None;
-        }
-    }
-
-    pub fn take_remove_toast(&mut self, model: &Model) -> Option<Text> {
-        let tracked = self.remove_toast_id.as_deref()?;
-        match &model.setup_request {
-            SetupRequest::Finished { id } if id == tracked => {
-                self.remove_toast_id = None;
-                Some(Text::RelayRemoved)
-            }
-            SetupRequest::Cancelled { id } | SetupRequest::Failed { id, .. } if id == tracked => {
-                self.remove_toast_id = None;
-                None
-            }
-            _ => None,
         }
     }
 
