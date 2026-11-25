@@ -4,6 +4,8 @@ import { useCopy } from '../ui/use-locale'
 import { relayCopy } from './locales'
 import type { RelayClient } from './api'
 
+const CLOUDFLARE_TURN_DASHBOARD_URL = 'https://dash.cloudflare.com/?to=/:account/calls'
+
 export function ManagedTURN({ api }: { api: RelayClient }) {
   const t = useCopy(relayCopy)
   const status = useResource(api.turnStatus)
@@ -27,7 +29,16 @@ export function ManagedTURN({ api }: { api: RelayClient }) {
         />{' '}
         {t.managedTURN}
       </label>
-      <p id="turn-quota">{t.managedTURNHint}</p>
+      <p id="turn-quota">
+        {t.managedTURNHint}{' '}
+        <a
+          href={CLOUDFLARE_TURN_DASHBOARD_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          {t.managedTURNDashboard}
+        </a>
+      </p>
       <ReadError error={status.error} retry={status.retry} />
       <Notice feedback={action.feedback} />
     </section>

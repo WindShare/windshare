@@ -1,6 +1,7 @@
 export const en = {
   managedTURN: 'Managed TURN',
   managedTURNHint: 'Cloudflare includes 1,000 GB per account each month, shared with Realtime SFU. Additional usage is billed at Cloudflare’s rate. Pausing stops new credentials. Existing credentials expire within 30 minutes.',
+  managedTURNDashboard: 'View usage in Cloudflare Dashboard',
   title: 'Node console',
   owner: 'Node owner',
   access: 'Node access',
