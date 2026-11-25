@@ -214,9 +214,7 @@ fn account_and_setup_submissions_record_pending_and_local_failure_atomically() {
     assert!(controller.model().account_busy());
     assert!(controller.model().has_unfinished_work());
 
-    let setup_id = controller
-        .edit_preference("share:1", PreferenceEdit::Mode(RelayMode::Selected))
-        .unwrap();
+    let setup_id = controller.edit_preference("share:1", PreferenceEdit::Mode(RelayMode::Selected));
     assert_eq!(
         controller.model().setup_request,
         SetupRequest::Pending {
@@ -234,14 +232,14 @@ fn account_and_setup_submissions_record_pending_and_local_failure_atomically() {
         AccountRequest::Failed { .. }
     ));
     assert!(controller.model().command_error.is_none());
-    assert!(
-        controller
-            .edit_preference("", PreferenceEdit::Mode(RelayMode::Automatic))
-            .is_none()
-    );
+    let rejected_id = controller.edit_preference("", PreferenceEdit::Mode(RelayMode::Automatic));
     assert!(matches!(
-        controller.model().setup_request,
-        SetupRequest::Failed { .. }
+        &controller.model().setup_request,
+        SetupRequest::Rejected { id, .. } if id == &rejected_id
+    ));
+    assert!(matches!(
+        controller.model().setup_settlement(&rejected_id),
+        Some(SetupSettlement::Failed(_))
     ));
     assert!(controller.model().command_error.is_none());
 }
@@ -249,9 +247,7 @@ fn account_and_setup_submissions_record_pending_and_local_failure_atomically() {
 #[test]
 fn cancel_setup_ignores_terminal_and_superseded_setups() {
     let (controller, receiver) = controller();
-    let first = controller
-        .edit_preference("", PreferenceEdit::Mode(RelayMode::Selected))
-        .unwrap();
+    let first = controller.edit_preference("", PreferenceEdit::Mode(RelayMode::Selected));
     let _ = receiver.try_recv().unwrap();
 
     // Terminal setup (Finished): late cancel must not re-enter Pending or queue a command.
@@ -265,25 +261,21 @@ fn cancel_setup_ignores_terminal_and_superseded_setups() {
     controller
         .shared
         .update(|draft| draft.write().reconcile(finished));
+    assert_eq!(controller.model().setup_request, SetupRequest::Idle);
     assert_eq!(
-        controller.model().setup_request,
-        SetupRequest::Finished { id: first.clone() }
+        controller.model().setup_settlement(&first),
+        Some(SetupSettlement::Finished)
     );
-    controller.cancel_setup(&first);
+    assert!(!controller.cancel_setup(&first));
     assert!(receiver.try_recv().is_err());
-    assert_eq!(
-        controller.model().setup_request,
-        SetupRequest::Finished { id: first.clone() }
-    );
+    assert_eq!(controller.model().setup_request, SetupRequest::Idle);
     assert!(!controller.model().setup_pending());
     assert!(!controller.model().has_unfinished_work());
 
     // Starting a new setup: cancelling the old setup must not clobber the active one.
-    let second = controller
-        .edit_preference("share:2", PreferenceEdit::Mode(RelayMode::Automatic))
-        .unwrap();
+    let second = controller.edit_preference("share:2", PreferenceEdit::Mode(RelayMode::Automatic));
     let _ = receiver.try_recv().unwrap();
-    controller.cancel_setup(&first);
+    assert!(!controller.cancel_setup(&first));
     assert!(receiver.try_recv().is_err());
     assert_eq!(
         controller.model().setup_request,
@@ -295,7 +287,7 @@ fn cancel_setup_ignores_terminal_and_superseded_setups() {
     );
 
     // Active setup can be cancelled once; duplicate cancel while pending is ignored.
-    controller.cancel_setup(&second);
+    assert!(controller.cancel_setup(&second));
     assert!(matches!(
         receiver.try_recv().unwrap(),
         Command::CancelSetup { setup_id } if setup_id == second
@@ -310,7 +302,7 @@ fn cancel_setup_ignores_terminal_and_superseded_setups() {
             },
         }
     );
-    controller.cancel_setup(&second);
+    assert!(!controller.cancel_setup(&second));
     assert!(receiver.try_recv().is_err());
 
     // Terminal setup (Cancelled): late cancel is also ignored.
@@ -324,11 +316,12 @@ fn cancel_setup_ignores_terminal_and_superseded_setups() {
     controller
         .shared
         .update(|draft| draft.write().reconcile(cancelled));
-    controller.cancel_setup(&second);
+    assert!(!controller.cancel_setup(&second));
     assert!(receiver.try_recv().is_err());
+    assert_eq!(controller.model().setup_request, SetupRequest::Idle);
     assert_eq!(
-        controller.model().setup_request,
-        SetupRequest::Cancelled { id: second }
+        controller.model().setup_settlement(&second),
+        Some(SetupSettlement::Cancelled)
     );
     assert!(!controller.model().has_unfinished_work());
 }

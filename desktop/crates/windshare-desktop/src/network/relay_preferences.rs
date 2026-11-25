@@ -238,9 +238,9 @@ impl Desktop {
             return;
         };
         let host = session.host.clone();
-        self.network_ui.inline_request_id = host.update(cx, |host, cx| {
+        self.network_ui.inline_request_id = Some(host.update(cx, |host, cx| {
             host.submit_preference("", PreferenceEdit::Mode(mode), cx)
-        });
+        }));
         cx.notify();
     }
 
@@ -257,7 +257,7 @@ impl Desktop {
         };
         let host = session.host.clone();
         self.network_ui.inline_request_id =
-            host.update(cx, |host, cx| host.submit_preference("", edit, cx));
+            Some(host.update(cx, |host, cx| host.submit_preference("", edit, cx)));
         cx.notify();
     }
 

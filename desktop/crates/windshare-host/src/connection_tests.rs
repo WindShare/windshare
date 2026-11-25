@@ -125,10 +125,17 @@ fn a_rejected_settings_submission_retains_its_own_failure() {
     );
     assert_eq!(
         model.setup_request,
-        crate::SetupRequest::Failed {
+        crate::SetupRequest::Rejected {
             id: "setup:2".into(),
             error: crate::Failure::new("request_rejected", "4"),
         }
+    );
+    assert_eq!(
+        model.setup_settlement("setup:2"),
+        Some(crate::SetupSettlement::Failed(&crate::Failure::new(
+            "request_rejected",
+            "4"
+        )))
     );
     assert_eq!(model.command_error.as_deref(), Some("5"));
 }
@@ -160,6 +167,10 @@ fn cancel_setup_ignores_stale_failure_until_acknowledged() {
     });
     receive(&shared, &mut pending, &stale_snapshot.to_string()).unwrap();
     assert!(shared.model.lock().unwrap().setup_pending());
+    assert_eq!(
+        shared.model.lock().unwrap().setup_settlement("setup:1"),
+        None
+    );
     assert_eq!(
         shared.model.lock().unwrap().in_flight_setup_id("share:a"),
         Some("setup:1")
@@ -217,13 +228,11 @@ fn cancel_setup_ignores_stale_failure_until_acknowledged() {
         }
     });
     receive(&shared, &mut pending, &settled.to_string()).unwrap();
-    assert_eq!(
-        shared.model.lock().unwrap().setup_request,
-        crate::SetupRequest::Failed {
-            id: "setup:1".into(),
-            error: crate::Failure::new("setup_cancel_failed", "new failure"),
-        }
-    );
+    let model = shared.model.lock().unwrap();
+    assert_eq!(model.setup_request, crate::SetupRequest::Idle);
+    assert!(!model.setup_pending());
+    assert!(model.setup.unfinished());
+    assert_eq!(model.setup_settlement("setup:1"), None);
 }
 
 #[test]
@@ -232,21 +241,17 @@ fn cancel_setup_same_revision_reply_settles_against_authoritative_setup() {
         (
             "finished",
             serde_json::json!({ "state": "finished", "id": "setup:1", "relay_saved": true }),
-            crate::SetupRequest::Finished {
-                id: "setup:1".into(),
-            },
+            Some(crate::SetupSettlement::Finished),
         ),
         (
             "cancelled",
             serde_json::json!({ "state": "cancelled", "id": "setup:1" }),
-            crate::SetupRequest::Cancelled {
-                id: "setup:1".into(),
-            },
+            Some(crate::SetupSettlement::Cancelled),
         ),
         (
             "superseded",
             serde_json::json!({ "state": "finished", "id": "setup:2" }),
-            crate::SetupRequest::Idle,
+            None,
         ),
     ];
 
@@ -299,7 +304,8 @@ fn cancel_setup_same_revision_reply_settles_against_authoritative_setup() {
         });
         receive(&shared, &mut pending, &reply.to_string()).unwrap();
         let model = Arc::clone(&shared.model.lock().unwrap());
-        assert_eq!(model.setup_request, expected, "{label}");
+        assert_eq!(model.setup_request, crate::SetupRequest::Idle, "{label}");
+        assert_eq!(model.setup_settlement("setup:1"), expected, "{label}");
         assert!(!model.setup_pending(), "{label}");
         assert!(!model.has_unfinished_work(), "{label}");
     }

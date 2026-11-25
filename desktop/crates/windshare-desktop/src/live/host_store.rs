@@ -86,12 +86,12 @@ impl HostStore {
         relay_url: String,
         access_key: String,
         cx: &mut Context<Self>,
-    ) -> Option<String> {
-        let _ = self
+    ) -> String {
+        let id = self
             .controller
             .setup_relay(operation_id, relay_operation, relay_url, access_key);
         self.refresh(cx);
-        self.model.setup_request.id().map(str::to_owned)
+        id
     }
 
     pub fn submit_preference(
@@ -99,16 +99,16 @@ impl HostStore {
         operation_id: &str,
         edit: windshare_host::PreferenceEdit,
         cx: &mut Context<Self>,
-    ) -> Option<String> {
-        let _ = self.controller.edit_preference(operation_id, edit);
+    ) -> String {
+        let id = self.controller.edit_preference(operation_id, edit);
         self.refresh(cx);
-        self.model.setup_request.id().map(str::to_owned)
+        id
     }
 
-    pub fn cancel_setup(&mut self, setup_id: &str, cx: &mut Context<Self>) -> Option<String> {
-        self.controller.cancel_setup(setup_id);
+    pub fn cancel_setup(&mut self, setup_id: &str, cx: &mut Context<Self>) -> bool {
+        let accepted = self.controller.cancel_setup(setup_id);
         self.refresh(cx);
-        self.model.setup_request.id().map(str::to_owned)
+        accepted
     }
 }
 

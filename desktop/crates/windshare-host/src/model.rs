@@ -414,6 +414,41 @@ impl Model {
         }
     }
 
+    /// Resolves the terminal settlement of `setup_id` from a single priority order:
+    /// a local `Pending` command fences stale host snapshots until acknowledged,
+    /// then the authoritative host `Setup` owns any accepted workflow, and a local
+    /// `Rejected` command surfaces enqueue or host-rejection errors that never
+    /// reached `Model::setup`.
+    pub fn setup_settlement(&self, setup_id: &str) -> Option<crate::SetupSettlement<'_>> {
+        if setup_id.is_empty() {
+            return None;
+        }
+        if matches!(
+            &self.setup_request,
+            crate::SetupRequest::Pending { id, .. } if id == setup_id
+        ) {
+            return None;
+        }
+        if self.setup.context().is_some_and(|ctx| ctx.id == setup_id) {
+            return match &self.setup {
+                Setup::Finished { .. } => Some(crate::SetupSettlement::Finished),
+                Setup::Cancelled { .. } => Some(crate::SetupSettlement::Cancelled),
+                Setup::Failed { error, .. } | Setup::CancelFailed { error, .. }
+                    if !self.setup.unfinished() =>
+                {
+                    Some(crate::SetupSettlement::Failed(error))
+                }
+                _ => None,
+            };
+        }
+        match &self.setup_request {
+            crate::SetupRequest::Rejected { id, error } if id == setup_id => {
+                Some(crate::SetupSettlement::Failed(error))
+            }
+            _ => None,
+        }
+    }
+
     pub fn waits_for_official_authorization(&self, operation_id: &str) -> bool {
         self.operations
             .iter()
@@ -588,42 +623,52 @@ impl Model {
     }
 
     pub(crate) fn reconcile_setup_request(&mut self) {
-        let crate::SetupRequest::Pending { id, kind, .. } = &mut self.setup_request else {
-            return;
-        };
-        if self.setup.context().is_none_or(|ctx| &ctx.id != id) {
-            if matches!(
-                *kind,
-                crate::SetupRequestKind::Cancel { acknowledged: true }
-            ) {
-                self.setup_request = crate::SetupRequest::Idle;
-            }
-            return;
-        }
-        let settled = match (&self.setup, *kind) {
-            (Setup::Finished { .. }, _) => Some(crate::SetupRequest::Finished { id: id.clone() }),
-            (Setup::Cancelled { .. }, _) => Some(crate::SetupRequest::Cancelled { id: id.clone() }),
-            (Setup::Cancelling { .. }, crate::SetupRequestKind::Cancel { acknowledged }) => {
-                if !acknowledged {
-                    *kind = crate::SetupRequestKind::Cancel { acknowledged: true };
+        match &mut self.setup_request {
+            crate::SetupRequest::Idle => {}
+            crate::SetupRequest::Rejected { id, .. } => {
+                // Once the host reaches a terminal state for the same setup, an
+                // earlier command rejection (such as a failed CancelSetup) is
+                // superseded by the authoritative host state.
+                if self.setup.context().is_some_and(|ctx| ctx.id == *id) && !self.setup.unfinished()
+                {
+                    self.setup_request = crate::SetupRequest::Idle;
                 }
-                None
             }
-            (
-                Setup::Failed { error, .. } | Setup::CancelFailed { error, .. },
-                crate::SetupRequestKind::Configure,
-            )
-            | (
-                Setup::CancelFailed { error, .. },
-                crate::SetupRequestKind::Cancel { acknowledged: true },
-            ) => Some(crate::SetupRequest::Failed {
-                id: id.clone(),
-                error: error.clone(),
-            }),
-            _ => None,
-        };
-        if let Some(next) = settled {
-            self.setup_request = next;
+            crate::SetupRequest::Pending { id, kind, .. } => {
+                if self.setup.context().is_none_or(|ctx| &ctx.id != id) {
+                    if matches!(
+                        *kind,
+                        crate::SetupRequestKind::Cancel { acknowledged: true }
+                    ) {
+                        self.setup_request = crate::SetupRequest::Idle;
+                    }
+                    return;
+                }
+                let clear = match (&self.setup, *kind) {
+                    (
+                        Setup::Cancelling { .. },
+                        crate::SetupRequestKind::Cancel { acknowledged },
+                    ) => {
+                        if !acknowledged {
+                            *kind = crate::SetupRequestKind::Cancel { acknowledged: true };
+                        }
+                        false
+                    }
+                    (Setup::Finished { .. } | Setup::Cancelled { .. }, _)
+                    | (
+                        Setup::Failed { .. } | Setup::CancelFailed { .. },
+                        crate::SetupRequestKind::Configure,
+                    )
+                    | (
+                        Setup::CancelFailed { .. },
+                        crate::SetupRequestKind::Cancel { acknowledged: true },
+                    ) => true,
+                    _ => false,
+                };
+                if clear {
+                    self.setup_request = crate::SetupRequest::Idle;
+                }
+            }
         }
     }
 }

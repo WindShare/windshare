@@ -319,11 +319,150 @@ fn setup_cancel_request_settles_if_setup_finishes_first() {
     let mut next = snapshot(1, vec![]);
     next.setup = finished_setup;
     model.reconcile(next);
+    assert_eq!(model.setup_request, crate::SetupRequest::Idle);
     assert_eq!(
-        model.setup_request,
-        crate::SetupRequest::Finished {
-            id: "setup:1".into()
-        }
+        model.setup_settlement("setup:1"),
+        Some(crate::SetupSettlement::Finished)
+    );
+}
+
+#[test]
+fn setup_settlement_reconciles_host_state_without_local_request_mirror() {
+    let mut model = Model::default();
+
+    // Adopted busy setup with SetupRequest::Idle stays unsettled while busy,
+    // then settles directly from authoritative host snapshots.
+    let mut running = snapshot(1, vec![]);
+    running.setup = serde_json::from_value(serde_json::json!({
+        "state": "running",
+        "id": "setup:1",
+        "operation_id": "share:a",
+        "relay_url": "https://relay.example"
+    }))
+    .unwrap();
+    model.reconcile(running);
+    assert_eq!(model.in_flight_setup_id("share:a"), Some("setup:1"));
+    assert_eq!(model.setup_settlement("setup:1"), None);
+
+    let mut finished = snapshot(2, vec![]);
+    finished.setup = serde_json::from_value(serde_json::json!({
+        "state": "finished",
+        "id": "setup:1",
+        "operation_id": "share:a",
+        "relay_saved": true
+    }))
+    .unwrap();
+    model.reconcile(finished);
+    assert_eq!(
+        model.setup_settlement("setup:1"),
+        Some(crate::SetupSettlement::Finished)
+    );
+    assert_eq!(model.setup_settlement("setup:other"), None);
+    assert_eq!(model.setup_settlement(""), None);
+
+    // Unfinished Failed(Cancel) clears pending request without settling early;
+    // when share cancellation drives the same setup to Cancelled, it settles cleanly.
+    model.setup_request = crate::SetupRequest::Pending {
+        id: "setup:2".into(),
+        operation_id: "share:a".into(),
+        kind: crate::SetupRequestKind::Configure,
+    };
+    let mut cancel_required = snapshot(3, vec![]);
+    cancel_required.setup = serde_json::from_value(serde_json::json!({
+        "state": "failed",
+        "id": "setup:2",
+        "operation_id": "share:a",
+        "recovery": "cancel",
+        "error": { "code": "setup_failed", "message": "settings changed" }
+    }))
+    .unwrap();
+    model.reconcile(cancel_required);
+    assert_eq!(model.setup_request, crate::SetupRequest::Idle);
+    assert_eq!(model.setup_settlement("setup:2"), None);
+
+    let mut cancelling = snapshot(4, vec![]);
+    cancelling.setup = serde_json::from_value(serde_json::json!({
+        "state": "cancelling",
+        "id": "setup:2",
+        "operation_id": "share:a"
+    }))
+    .unwrap();
+    model.reconcile(cancelling);
+    assert_eq!(model.in_flight_setup_id("share:a"), Some("setup:2"));
+    assert_eq!(model.setup_settlement("setup:2"), None);
+
+    let mut cancelled = snapshot(5, vec![]);
+    cancelled.setup = serde_json::from_value(serde_json::json!({
+        "state": "cancelled",
+        "id": "setup:2",
+        "operation_id": "share:a"
+    }))
+    .unwrap();
+    model.reconcile(cancelled);
+    assert_eq!(
+        model.setup_settlement("setup:2"),
+        Some(crate::SetupSettlement::Cancelled)
+    );
+
+    // Terminal host failure (recovery: restart) settles as Failed from host state.
+    let mut failed = snapshot(6, vec![]);
+    failed.setup = serde_json::from_value(serde_json::json!({
+        "state": "failed",
+        "id": "setup:3",
+        "recovery": "restart",
+        "error": { "code": "setup_failed", "message": "relay unreachable" }
+    }))
+    .unwrap();
+    model.reconcile(failed);
+    assert_eq!(
+        model.setup_settlement("setup:3"),
+        Some(crate::SetupSettlement::Failed(&Failure::new(
+            "setup_failed",
+            "relay unreachable"
+        )))
+    );
+
+    // A rejected CancelSetup while host is still Running must not settle early
+    // or override a subsequent authoritative Finished snapshot.
+    let mut still_running = snapshot(7, vec![]);
+    still_running.setup = serde_json::from_value(serde_json::json!({
+        "state": "running",
+        "id": "setup:4",
+        "relay_url": "https://relay.example"
+    }))
+    .unwrap();
+    model.reconcile(still_running);
+    model.setup_request = crate::SetupRequest::Rejected {
+        id: "setup:4".into(),
+        error: Failure::new("request_rejected", "cancel command rejected"),
+    };
+    assert_eq!(model.setup_settlement("setup:4"), None);
+
+    let mut completed_after_cancel_reject = snapshot(8, vec![]);
+    completed_after_cancel_reject.setup = serde_json::from_value(serde_json::json!({
+        "state": "finished",
+        "id": "setup:4",
+        "relay_saved": true
+    }))
+    .unwrap();
+    model.reconcile(completed_after_cancel_reject);
+    assert_eq!(model.setup_request, crate::SetupRequest::Idle);
+    assert_eq!(
+        model.setup_settlement("setup:4"),
+        Some(crate::SetupSettlement::Finished)
+    );
+
+    // Local/host rejection for a command that never entered Model::setup settles as Failed.
+    model.setup_request = crate::SetupRequest::Rejected {
+        id: "setup:5".into(),
+        error: Failure::new("request_rejected", "invalid relay URL"),
+    };
+    assert_eq!(
+        model.setup_settlement("setup:5"),
+        Some(crate::SetupSettlement::Failed(&Failure::new(
+            "request_rejected",
+            "invalid relay URL"
+        )))
     );
 }
 

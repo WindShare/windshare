@@ -10,7 +10,9 @@ pub use dialog::{SetupDialog, SetupDialogEvent, SetupSource};
 pub use settings::setting_row;
 
 use crate::localization::Text;
-use windshare_host::{Model, RelayOperation, RelayPreferences, Setup, SetupContext, SetupRequest};
+use windshare_host::{
+    Model, RelayOperation, RelayPreferences, Setup, SetupContext, SetupRequest, SetupSettlement,
+};
 
 #[cfg(test)]
 #[path = "network_tests.rs"]
@@ -118,15 +120,12 @@ impl NetworkSettingsState {
 
     pub fn inline_feedback(&self, model: &Model) -> Option<Result<Text, String>> {
         let tracked = self.inline_request_id.as_deref()?;
-        match &model.setup_request {
-            SetupRequest::Finished { id } if id == tracked => {
-                setup_finished_feedback(model).map(Ok)
+        match model.setup_settlement(tracked)? {
+            SetupSettlement::Finished => setup_finished_feedback(model).map(Ok),
+            SetupSettlement::Cancelled => Some(Ok(Text::SetupCancelled)),
+            SetupSettlement::Failed(error) => {
+                (!model.setup.unfinished()).then(|| Err(error.message.clone()))
             }
-            SetupRequest::Cancelled { id } if id == tracked => Some(Ok(Text::SetupCancelled)),
-            SetupRequest::Failed { id, error } if id == tracked && !model.setup.unfinished() => {
-                Some(Err(error.message.clone()))
-            }
-            _ => None,
         }
     }
 }

@@ -372,8 +372,9 @@ impl Desktop {
             return;
         };
         let host = session.host.clone();
-        self.network_ui.inline_request_id =
-            host.update(cx, |host, cx| host.cancel_setup(&setup_id, cx));
+        if host.update(cx, |host, cx| host.cancel_setup(&setup_id, cx)) {
+            self.network_ui.inline_request_id = Some(setup_id);
+        }
     }
 
     pub fn approve_relay(&self, cx: &Context<Self>) {

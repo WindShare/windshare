@@ -12,7 +12,7 @@ use gpui::{App, Context, Entity, Window};
 use std::sync::Arc;
 use windshare_host::{
     Model, Operation, OperationState, PreferenceEdit, RelayOperation, SelectedRoot, Setup,
-    SetupRequest, ShareState as HostShareState,
+    SetupSettlement, ShareState as HostShareState,
 };
 use windshare_ui::Icon;
 
@@ -52,7 +52,7 @@ impl SetupDialog {
                     let host = host.clone();
                     let operation_id = operation_id.clone();
                     self.feedback = None;
-                    self.in_flight_id = host.update(cx, |host, cx| {
+                    self.in_flight_id = Some(host.update(cx, |host, cx| {
                         host.submit_relay_setup(
                             &operation_id,
                             relay_operation,
@@ -60,7 +60,7 @@ impl SetupDialog {
                             access_key,
                             cx,
                         )
-                    });
+                    }));
                 }
             }
             SetupPage::ReceiverSite => {
@@ -92,9 +92,9 @@ impl SetupDialog {
         let host = host.clone();
         let operation_id = operation_id.clone();
         self.feedback = None;
-        self.in_flight_id = host.update(cx, |host, cx| {
+        self.in_flight_id = Some(host.update(cx, |host, cx| {
             host.submit_preference(&operation_id, edit, cx)
-        });
+        }));
         cx.notify();
     }
 
@@ -132,7 +132,9 @@ impl SetupDialog {
             return;
         };
         let host = host.clone();
-        self.in_flight_id = host.update(cx, |host, cx| host.cancel_setup(&setup_id, cx));
+        if host.update(cx, |host, cx| host.cancel_setup(&setup_id, cx)) {
+            self.in_flight_id = Some(setup_id);
+        }
         cx.notify();
     }
 
@@ -274,26 +276,26 @@ impl SetupDialog {
         let Some(tracked) = self.in_flight_id.as_deref() else {
             return false;
         };
-        match &model.setup_request {
-            SetupRequest::Finished { id } if id == tracked => {
+        match model.setup_settlement(tracked) {
+            Some(SetupSettlement::Finished) => {
                 self.in_flight_id = None;
                 self.clear_access_key(cx);
                 self.page = SetupPage::Selection;
                 self.feedback = setup_finished_feedback(model).map(Ok);
                 true
             }
-            SetupRequest::Cancelled { id } if id == tracked => {
+            Some(SetupSettlement::Cancelled) => {
                 self.in_flight_id = None;
                 self.clear_access_key(cx);
                 self.feedback = Some(Ok(Text::SetupCancelled));
                 false
             }
-            SetupRequest::Failed { id, error } if id == tracked => {
+            Some(SetupSettlement::Failed(error)) => {
                 self.in_flight_id = None;
                 self.feedback = (!model.setup.unfinished()).then(|| Err(error.message.clone()));
                 false
             }
-            _ => false,
+            None => false,
         }
     }
 }

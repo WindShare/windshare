@@ -44,10 +44,6 @@ fn observe_active_setup_adopts_pending_global_setup_before_running_arrives() {
             recovery: Some(SetupRecovery::Restart),
             error: failure("relay unreachable"),
         },
-        setup_request: SetupRequest::Failed {
-            id: "setup:1".into(),
-            error: failure("relay unreachable"),
-        },
         ..Model::default()
     };
     assert!(settings_visible_setup(&failed.setup).is_none());
@@ -71,9 +67,6 @@ fn observe_active_setup_adopts_pending_global_setup_before_running_arrives() {
     context.relay_saved = true;
     let mut finished = Model {
         setup: Setup::Finished { context },
-        setup_request: SetupRequest::Finished {
-            id: "setup:2".into(),
-        },
         ..Model::default()
     };
     finished.preferences.relays.push(SavedRelay {
@@ -103,6 +96,26 @@ fn observe_active_setup_tracks_only_settings_visible_unfinished_setups() {
     let mut state = NetworkSettingsState::default();
     assert_eq!(state.observe_active_setup(&running_global), Some("setup:4"));
     assert_eq!(state.inline_request_id.as_deref(), Some("setup:4"));
+
+    // Settling an adopted running setup without a local SetupRequest still surfaces feedback.
+    let mut finished_ctx = global_context("setup:4");
+    finished_ctx.relay_saved = true;
+    let mut finished_global = Model {
+        setup: Setup::Finished {
+            context: finished_ctx,
+        },
+        ..Model::default()
+    };
+    finished_global.preferences.relays.push(SavedRelay {
+        url: "https://dead.invalid".into(),
+        enabled: true,
+        console_url: None,
+        offered_frontend: None,
+    });
+    assert!(matches!(
+        state.inline_feedback(&finished_global),
+        Some(Ok(Text::RelayConnected))
+    ));
 
     // Navigating back while a share-scoped setup is pending or running must not adopt it.
     let pending_share = Model {
@@ -136,12 +149,8 @@ fn observe_active_setup_tracks_only_settings_visible_unfinished_setups() {
     // without duplicating the error below the banner while still unfinished.
     let cancel_required = Model {
         setup: Setup::Failed {
-            context: share_context,
+            context: share_context.clone(),
             recovery: Some(SetupRecovery::Cancel),
-            error: failure("settings changed"),
-        },
-        setup_request: SetupRequest::Failed {
-            id: "setup:5".into(),
             error: failure("settings changed"),
         },
         ..Model::default()
@@ -153,15 +162,24 @@ fn observe_active_setup_tracks_only_settings_visible_unfinished_setups() {
     assert_eq!(state.inline_request_id.as_deref(), Some("setup:5"));
     assert!(state.inline_feedback(&cancel_required).is_none());
 
+    // Cancelling the owning share settles the host setup directly to Cancelled;
+    // settings must report cancellation instead of a stale failure.
+    let cancelled_share = Model {
+        setup: Setup::Cancelled {
+            context: share_context,
+        },
+        ..Model::default()
+    };
+    assert!(matches!(
+        state.inline_feedback(&cancelled_share),
+        Some(Ok(Text::SetupCancelled))
+    ));
+
     // Already-settled setups must not resurface stale errors on navigation.
     let settled_failure = Model {
         setup: Setup::Failed {
             context: global_context("setup:6"),
             recovery: Some(SetupRecovery::Restart),
-            error: failure("stale error"),
-        },
-        setup_request: SetupRequest::Failed {
-            id: "setup:6".into(),
             error: failure("stale error"),
         },
         ..Model::default()
@@ -170,6 +188,20 @@ fn observe_active_setup_tracks_only_settings_visible_unfinished_setups() {
     assert_eq!(state.observe_active_setup(&settled_failure), None);
     assert_eq!(state.inline_request_id, None);
     assert!(state.inline_feedback(&settled_failure).is_none());
+
+    // Local command rejection that never reached Model::setup still renders inline.
+    state.inline_request_id = Some("setup:7".into());
+    let local_reject = Model {
+        setup_request: SetupRequest::Rejected {
+            id: "setup:7".into(),
+            error: failure("WindShare is closing"),
+        },
+        ..Model::default()
+    };
+    assert!(matches!(
+        state.inline_feedback(&local_reject),
+        Some(Err(ref message)) if message == "WindShare is closing"
+    ));
 }
 
 #[test]

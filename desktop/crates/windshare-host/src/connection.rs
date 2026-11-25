@@ -317,7 +317,7 @@ fn apply_command_error(
                 &draft.read().setup_request,
                 crate::SetupRequest::Pending { id, .. } if id == &setup.id
             ) {
-                draft.write().setup_request = crate::SetupRequest::Failed {
+                draft.write().setup_request = crate::SetupRequest::Rejected {
                     id: setup.id,
                     error,
                 };
@@ -328,7 +328,7 @@ fn apply_command_error(
                 &draft.read().setup_request,
                 crate::SetupRequest::Pending { id, .. } if id == &setup_id
             ) {
-                draft.write().setup_request = crate::SetupRequest::Failed {
+                draft.write().setup_request = crate::SetupRequest::Rejected {
                     id: setup_id,
                     error,
                 };

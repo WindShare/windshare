@@ -159,29 +159,21 @@ pub enum SetupRequest {
         operation_id: String,
         kind: SetupRequestKind,
     },
-    Finished {
-        id: String,
-    },
-    Cancelled {
-        id: String,
-    },
-    Failed {
-        id: String,
-        error: crate::Failure,
-    },
+    /// Local enqueue failure or synchronous host command rejection that never
+    /// transitioned `Model::setup` on the host.
+    Rejected { id: String, error: crate::Failure },
+}
+
+/// Authoritative settlement outcome for a tracked setup ID, reconciling the
+/// local command overlay (`SetupRequest`) with host `Setup` snapshots.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SetupSettlement<'a> {
+    Finished,
+    Cancelled,
+    Failed(&'a crate::Failure),
 }
 
 impl SetupRequest {
-    pub fn id(&self) -> Option<&str> {
-        match self {
-            Self::Idle => None,
-            Self::Pending { id, .. }
-            | Self::Finished { id }
-            | Self::Cancelled { id }
-            | Self::Failed { id, .. } => Some(id),
-        }
-    }
-
     pub const fn is_pending(&self) -> bool {
         matches!(self, Self::Pending { .. })
     }

@@ -12,7 +12,7 @@ mod setup;
 pub use model::ShareAuthorization;
 pub use setup::{
     PreferenceEdit, RelayMode, RelayOperation, RelayPreferences, SavedRelay, Setup, SetupContext,
-    SetupRecovery, SetupRequest, SetupRequestKind,
+    SetupRecovery, SetupRequest, SetupRequestKind, SetupSettlement,
 };
 
 #[cfg(test)]
@@ -278,7 +278,7 @@ impl Controller {
         let _ = self.shared.wake.notify();
     }
 
-    pub fn edit_preference(&self, operation_id: &str, edit: PreferenceEdit) -> Option<String> {
+    pub fn edit_preference(&self, operation_id: &str, edit: PreferenceEdit) -> String {
         self.submit_setup(
             operation_id,
             request::SetupInput {
@@ -294,7 +294,7 @@ impl Controller {
         relay_operation: RelayOperation,
         relay_url: String,
         access_key: String,
-    ) -> Option<String> {
+    ) -> String {
         self.submit_setup(
             operation_id,
             request::SetupInput {
@@ -306,7 +306,7 @@ impl Controller {
         )
     }
 
-    fn submit_setup(&self, operation_id: &str, input: request::SetupInput) -> Option<String> {
+    fn submit_setup(&self, operation_id: &str, input: request::SetupInput) -> String {
         let id = self.operation_id("setup");
         let mut queued = false;
         self.shared.update(|draft| {
@@ -325,19 +325,22 @@ impl Controller {
                         kind: SetupRequestKind::Configure,
                     }
                 }
-                Err(message) => SetupRequest::Failed {
+                Err(message) => SetupRequest::Rejected {
                     id: id.clone(),
                     error: Failure::from(message),
                 },
             };
             draft.write().setup_request = next;
         });
-        let _ = self.shared.wake.notify();
-        queued.then_some(id)
+        if queued {
+            let _ = self.shared.wake.notify();
+        }
+        id
     }
 
-    pub fn cancel_setup(&self, setup_id: &str) {
+    pub fn cancel_setup(&self, setup_id: &str) -> bool {
         let id = setup_id.to_owned();
+        let mut accepted = false;
         let mut queued = false;
         self.shared.update(|draft| {
             let model = draft.read();
@@ -351,6 +354,7 @@ impl Controller {
                 );
                 return;
             }
+            accepted = true;
             let operation_id = model
                 .setup
                 .context()
@@ -378,7 +382,7 @@ impl Controller {
                         },
                     }
                 }
-                Err(message) => SetupRequest::Failed {
+                Err(message) => SetupRequest::Rejected {
                     id,
                     error: Failure::from(message),
                 },
@@ -388,6 +392,7 @@ impl Controller {
         if queued {
             let _ = self.shared.wake.notify();
         }
+        accepted
     }
 
     pub fn resume(&self, operation_id: &str) {
