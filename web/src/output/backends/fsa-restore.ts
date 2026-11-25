@@ -17,9 +17,8 @@ import { buildSafeNameRestorePlan, renderRestoreArtifact } from '../names/restor
 import type { ReceiveStore } from '../store/database'
 import { acquireTaskLock, withFSAReservationLock } from '../store/tab-lock'
 import type { FSADiskFingerprint } from '../store/types'
-import { ensureFSAPermission } from './fsa'
 import { isMissingFSAEntry, readFSADiskFingerprint, removeVerifiedFSALeaf } from './fsa-cleanup'
-import { entryExists } from './fsa-reservation'
+import { ensureFSAPermission, entryExists } from './fsa-reservation'
 
 const MAX_ARTIFACT_COLLISION_ATTEMPTS = 1_000
 const TEXT_ENCODER = new TextEncoder()

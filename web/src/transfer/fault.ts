@@ -189,9 +189,15 @@ export function isQuotaExceededError(error: unknown): boolean {
   return error instanceof Error && error.name === 'QuotaExceededError'
 }
 
+/**
+ * Identifies missing or revoked folder/storage authorization (`NotAllowedError`
+ * or an explicit `PermissionDenied` output fault). Path-scoped browser write-policy
+ * refusals throw `SecurityError` and cannot be resolved by re-granting folder
+ * permission, so they stay local write failures rather than pausing the job.
+ */
 export function isPermissionDeniedError(error: unknown): boolean {
   if (error instanceof TransferFaultError && error.fault.code === OutputFaultCode.PermissionDenied) return true
-  return error instanceof DOMException && (error.name === 'NotAllowedError' || error.name === 'SecurityError')
+  return error instanceof DOMException && error.name === 'NotAllowedError'
 }
 
 export function storagePauseReason(error: unknown): 'storage-full' | 'permission-needed' | undefined {

@@ -41,7 +41,7 @@ import {
 } from './fsa-cleanup'
 import { destinationChanged, FSAOutputFile, verifyExistingFSAFile, type FSAFileOrigin } from './fsa-file'
 import {
-  buildFSATargetRecord, collectFSATopLevelClaims, openFSADirectory, openFSAFile,
+  buildFSATargetRecord, collectFSATopLevelClaims, ensureFSAPermission, openFSADirectory, openFSAFile,
   reserveFSATarget, retainsFSAReservationClaim, rollbackFSATaskTarget, rollbackReservedTarget, type FSADirectory,
 } from './fsa-reservation'
 import {
@@ -64,26 +64,6 @@ export function startFSADirectoryPicker(
     throw new DOMException('Folder picker is unavailable in this browser', 'NotSupportedError')
   }
   return windowPort.showDirectoryPicker({ mode: 'readwrite' })
-}
-
-type PermissionHandle = FileSystemDirectoryHandle & {
-  queryPermission?: (desc: { mode: 'read' | 'readwrite' }) => Promise<'granted' | 'denied' | 'prompt'>
-  requestPermission?: (desc: { mode: 'read' | 'readwrite' }) => Promise<'granted' | 'denied' | 'prompt'>
-}
-
-export async function ensureFSAPermission(
-  handle: FileSystemDirectoryHandle,
-  allowPrompt: boolean,
-  signal?: AbortSignal,
-): Promise<'granted' | 'prompt' | 'denied'> {
-  signal?.throwIfAborted()
-  const permHandle = handle as PermissionHandle
-  if (typeof permHandle.queryPermission !== 'function') return 'granted'
-  const current = await permHandle.queryPermission({ mode: 'readwrite' })
-  signal?.throwIfAborted()
-  if (current === 'granted') return 'granted'
-  if (!allowPrompt || typeof permHandle.requestPermission !== 'function') return current
-  return permHandle.requestPermission({ mode: 'readwrite' })
 }
 
 export async function openNewFSASession(input: Readonly<{

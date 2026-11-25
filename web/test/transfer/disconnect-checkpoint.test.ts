@@ -4,7 +4,10 @@ import { SelectionPolicy } from '../../src/catalog/selection'
 import type { BlockRangeReader } from '../../src/content/broker'
 import { RevisionLeaseExpiredError } from '../../src/content/session-services'
 import { byteRange, type ByteRange } from '../../src/content/geometry'
-import { FaultScope, FileDestinationConflictError, OutputFaultCode, SourceFaultCode, TransferFaultError, outputFailure, sourceFault } from '../../src/transfer/fault'
+import {
+  FaultScope, FileDestinationConflictError, OutputFaultCode, SourceFaultCode, TransferFaultError,
+  isPermissionDeniedError, outputFailure, sourceFault, storagePauseReason,
+} from '../../src/transfer/fault'
 import { TransferJob } from '../../src/transfer/job'
 import type { TransferOutputFile } from '../../src/transfer/output-port'
 import { gate, id, makeShareFixture, outputFile } from './share-fixture'
@@ -435,5 +438,31 @@ describe('transfer output settlement', () => {
       if (mode === 'database') expect(abort).toHaveBeenCalledOnce()
       expect(job.progress().discovery).toBe('failed')
     }
+  })
+
+  it('keeps unabsorbed write-policy SecurityError file-local instead of pausing the whole job for folder permission', async () => {
+    const policyRefusal = new DOMException('Write blocked by path policy', 'SecurityError')
+    expect(isPermissionDeniedError(policyRefusal)).toBe(false)
+    expect(storagePauseReason(policyRefusal)).toBeUndefined()
+    expect(outputFailure(FaultScope.FileLocal, policyRefusal, OutputFaultCode.WriteFailed).fault.code).toBe(OutputFaultCode.WriteFailed)
+
+    const result = await new TransferJob({
+      ...makeShareFixture([movie, song]), selection,
+      output: {
+        sessionId: 'policy-local',
+        capabilities: resumable,
+        openFile: async req => {
+          if (req.path[0] === movie.name) throw policyRefusal
+          return outputFile({})
+        },
+      },
+    }).run()
+
+    expect(result).toMatchObject({
+      status: 'partial',
+      completedFiles: 1n,
+      failedFiles: 1n,
+      error: policyRefusal,
+    })
   })
 })

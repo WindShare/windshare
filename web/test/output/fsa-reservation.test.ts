@@ -1,12 +1,15 @@
 import { describe, expect, it, vi } from 'vitest'
 import { byteRange } from '../../src/content/geometry'
 import { discardFSATask, openNewFSASession, reopenFSASession } from '../../src/output/backends/fsa'
-import { retainsFSAReservationClaim } from '../../src/output/backends/fsa-reservation'
+import { requiresSafeComponent, retainsFSAReservationClaim } from '../../src/output/backends/fsa-reservation'
+import { loadFSARestorePlan } from '../../src/output/backends/fsa-restore'
+import { deterministicSafeCandidates } from '../../src/output/backends/safe-name'
 import type { OutputTraceEvent } from '../../src/output/diagnostics'
 import type { ReceiveStore } from '../../src/output/store/database'
 import type { ReceiveTaskRecord } from '../../src/output/store/types'
+import { OutputFaultCode, isPermissionDeniedError } from '../../src/transfer/fault'
 import type { SettledTransferJobResult } from '../../src/transfer/job'
-import { initialReceiveState, transitionReceiveState } from '../../src/transfer/state'
+import { initialReceiveState, transitionReceiveState, type SafeRenamedSummary } from '../../src/transfer/state'
 import { FakeDirectoryHandle, FakeFileHandle, MemoryReceiveStore } from './fsa-fixture'
 
 const pausedEmpty: SettledTransferJobResult = {
@@ -486,5 +489,194 @@ describe('FSA reservation claim lifecycle', () => {
     expect(parent.children.has('Photos')).toBe(true)
     expect(parent.children.has('Photos (1)')).toBe(false)
     await second.close()
+  })
+})
+
+describe('FSA write-path SecurityError safe-name fallback and permission boundaries', () => {
+  it('classifies SecurityError as safe-component fallback while keeping NotAllowedError as permission loss', () => {
+    expect(requiresSafeComponent(new TypeError('Name is not allowed'))).toBe(true)
+    expect(requiresSafeComponent(new DOMException('mismatch', 'TypeMismatchError'))).toBe(true)
+    expect(requiresSafeComponent(new DOMException('write policy', 'SecurityError'))).toBe(true)
+    expect(requiresSafeComponent(new DOMException('denied', 'NotAllowedError'))).toBe(false)
+  })
+
+  it('safe-renames .git/hooks and .git/config on write-policy SecurityError, survives pause/resume, and builds restorable plans', async () => {
+    const store = new MemoryReceiveStore()
+    const parent = new FakeDirectoryHandle('Downloads', store.events)
+    const signal = new AbortController().signal
+
+    const origGetDir = FakeDirectoryHandle.prototype.getDirectoryHandle
+    const origGetFile = FakeDirectoryHandle.prototype.getFileHandle
+    const dirSpy = vi.spyOn(FakeDirectoryHandle.prototype, 'getDirectoryHandle').mockImplementation(
+      async function (this: FakeDirectoryHandle, name, options) {
+        if (options?.create && this.path.endsWith('/.git') && name === 'hooks') {
+          throw new DOMException('Blocked by write-path policy', 'SecurityError')
+        }
+        return origGetDir.call(this, name, options)
+      },
+    )
+    const fileSpy = vi.spyOn(FakeDirectoryHandle.prototype, 'getFileHandle').mockImplementation(
+      async function (this: FakeDirectoryHandle, name, options) {
+        if (options?.create && this.path.endsWith('/.git') && name === 'config') {
+          throw new DOMException('Blocked by write-path policy', 'SecurityError')
+        }
+        return origGetFile.call(this, name, options)
+      },
+    )
+
+    try {
+      const run1 = await openNewFSASession({
+        task: folderTask('git-repo', 'Repo'),
+        parentHandle: parent as unknown as FileSystemDirectoryHandle,
+        store: store as unknown as ReceiveStore,
+      })
+      const liveSummaries: SafeRenamedSummary[] = []
+      run1.subscribeSafeRenamed?.(summary => { liveSummaries.push(summary) })
+
+      await run1.transferOutput.ensureDirectory!({ directoryId: 'd-git', path: ['.git'] }, signal)
+      await run1.transferOutput.ensureDirectory!({ directoryId: 'd-hooks', path: ['.git', 'hooks'] }, signal)
+
+      const hookFile = await run1.transferOutput.openFile({
+        fileId: 'f-hook',
+        path: ['.git', 'hooks', 'pre-commit'],
+        sourcePath: ['Repo', '.git', 'hooks', 'pre-commit'],
+        revision: 'rev-1',
+        exactSize: 4n,
+      }, signal)
+      await hookFile.writeAt(0n, Uint8Array.of(1, 2, 3, 4))
+      await hookFile.commit([byteRange(0n, 4n)])
+
+      const configPart1 = await run1.transferOutput.openFile({
+        fileId: 'f-config',
+        path: ['.git', 'config'],
+        sourcePath: ['Repo', '.git', 'config'],
+        revision: 'rev-2',
+        exactSize: 4n,
+      }, signal)
+      await configPart1.writeAt(0n, Uint8Array.of(5, 6))
+      await configPart1.pause([byteRange(0n, 2n)])
+
+      expect(liveSummaries.at(-1)?.count).toBe(2)
+
+      const paused = await run1.settle({
+        status: 'paused', pauseReason: 'user', completedFiles: 1n, completedBytes: 4n,
+        discoveredFiles: 2n, discoveredBytes: 8n, discoveryComplete: true, failedFiles: 0n, failedDirectories: 0n,
+      })
+      await run1.close()
+
+      const run2 = await reopenFSASession({
+        task: paused,
+        store: store as unknown as ReceiveStore,
+        allowPermissionPrompt: false,
+      })
+      const configPart2 = await run2.transferOutput.openFile({
+        fileId: 'f-config',
+        path: ['.git', 'config'],
+        sourcePath: ['Repo', '.git', 'config'],
+        revision: 'rev-2',
+        exactSize: 4n,
+      }, signal)
+      await configPart2.writeAt(2n, Uint8Array.of(7, 8))
+      await configPart2.commit([byteRange(0n, 4n)])
+      await run2.settle({
+        status: 'completed', completedFiles: 2n, completedBytes: 8n,
+        discoveredFiles: 2n, discoveredBytes: 8n, discoveryComplete: true, failedFiles: 0n, failedDirectories: 0n,
+      })
+      await run2.close()
+
+      const [safeHooks] = await deterministicSafeCandidates({
+        taskId: 'git-repo', logicalPath: ['.git', 'hooks'], entryKind: 'directory',
+      })
+      const [safeConfig] = await deterministicSafeCandidates({
+        taskId: 'git-repo', logicalPath: ['.git', 'config'], entryKind: 'file',
+      })
+
+      const repoDir = parent.children.get('Repo') as FakeDirectoryHandle
+      const gitDir = repoDir.children.get('.git') as FakeDirectoryHandle
+      expect(gitDir.children.has('hooks')).toBe(false)
+      expect(gitDir.children.has('config')).toBe(false)
+      expect([...((gitDir.children.get(safeHooks) as FakeDirectoryHandle).children.get('pre-commit') as FakeFileHandle).bytes]).toEqual([1, 2, 3, 4])
+      expect([...(gitDir.children.get(safeConfig) as FakeFileHandle).bytes]).toEqual([5, 6, 7, 8])
+
+      for (const platform of ['windows', 'posix'] as const) {
+        const plan = await loadFSARestorePlan(store as unknown as ReceiveStore, 'git-repo', platform)
+        expect(plan.unsupported).toEqual([])
+        expect(plan.restorable.map(step => [step.kind, step.fromName, step.toName])).toEqual([
+          ['file', safeConfig, 'config'],
+          ['directory', safeHooks, 'hooks'],
+        ])
+      }
+    } finally {
+      dirSpy.mockRestore()
+      fileSpy.mockRestore()
+    }
+  })
+
+  it('safe-renames SecurityError-blocked root reservations and stops immediately on blanket directory SecurityError', async () => {
+    const store = new MemoryReceiveStore()
+    const parent = new FakeDirectoryHandle('Downloads', store.events)
+    const origGetDir = parent.getDirectoryHandle.bind(parent)
+    vi.spyOn(parent, 'getDirectoryHandle').mockImplementation(async (name, options) => {
+      if (options?.create && name === '.git') {
+        throw new DOMException('Blocked root .git creation', 'SecurityError')
+      }
+      return origGetDir(name, options)
+    })
+
+    const session = await openNewFSASession({
+      task: folderTask('root-git', '.git'),
+      parentHandle: parent as unknown as FileSystemDirectoryHandle,
+      store: store as unknown as ReceiveStore,
+    })
+    const [expectedRoot] = await deterministicSafeCandidates({
+      taskId: 'root-git', logicalPath: ['.git'], entryKind: 'directory', collisionIndex: 0,
+    })
+    expect(reservedNameOf(session.record)).toBe(expectedRoot)
+    expect(parent.children.has(expectedRoot)).toBe(true)
+    await session.close()
+
+    // Blanket SecurityError on every candidate must surface SecurityError immediately instead of looping 1000 times into TargetCollision.
+    const blockedParent = new FakeDirectoryHandle('Blocked', store.events)
+    const blockedGetDir = vi.spyOn(blockedParent, 'getDirectoryHandle').mockRejectedValue(
+      new DOMException('Directory is restricted', 'SecurityError'),
+    )
+    const blockedGetFile = vi.spyOn(blockedParent, 'getFileHandle').mockRejectedValue(
+      new DOMException('Directory is restricted', 'SecurityError'),
+    )
+    await expect(openNewFSASession({
+      task: folderTask('blanket-sec', 'Project'),
+      parentHandle: blockedParent as unknown as FileSystemDirectoryHandle,
+      store: store as unknown as ReceiveStore,
+    })).rejects.toMatchObject({ name: 'SecurityError' })
+    expect(blockedGetDir.mock.calls.length + blockedGetFile.mock.calls.length).toBeLessThanOrEqual(4)
+  })
+
+  it('maps requestPermission() SecurityError (expired user activation) to PermissionDenied during reopen and discard', async () => {
+    const store = new MemoryReceiveStore()
+    const parent = new FakeDirectoryHandle('Downloads', store.events)
+    const session = await openNewFSASession({
+      task: folderTask('expired-activation', 'Album'),
+      parentHandle: parent as unknown as FileSystemDirectoryHandle,
+      store: store as unknown as ReceiveStore,
+    })
+    const paused = await session.settle(pausedEmpty)
+    await session.close()
+
+    vi.spyOn(parent, 'queryPermission').mockResolvedValue('prompt')
+    vi.spyOn(parent, 'requestPermission').mockRejectedValue(
+      new DOMException('User activation is required to request permissions.', 'SecurityError'),
+    )
+
+    const reopenError = await reopenFSASession({
+      task: paused,
+      store: store as unknown as ReceiveStore,
+      allowPermissionPrompt: true,
+    }).catch((error: unknown) => error)
+    expect(isPermissionDeniedError(reopenError)).toBe(true)
+    expect(reopenError).toMatchObject({ fault: { code: OutputFaultCode.PermissionDenied } })
+
+    const discardError = await discardFSATask(paused, store as unknown as ReceiveStore).catch((error: unknown) => error)
+    expect(isPermissionDeniedError(discardError)).toBe(true)
+    expect(discardError).toMatchObject({ fault: { code: OutputFaultCode.PermissionDenied } })
   })
 })
