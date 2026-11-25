@@ -13,7 +13,6 @@ use windshare_relay_access::{AccountId, entitlement::DAY_SECONDS, restrictions::
 const ACCOUNT_INDEX: &str = "account-index/";
 const ACCOUNT_PAGE_SIZE: usize = 50;
 const USAGE_DAYS: usize = 30;
-const SHARE_LIMIT: usize = 100;
 
 #[derive(Debug, Serialize)]
 pub struct AccountSummary {
@@ -51,8 +50,6 @@ pub struct AccountDetails {
     pub entitlement_version: u64,
     pub recent_usage: Vec<DailyUsage>,
     pub has_older_usage: bool,
-    pub shares: Vec<[u8; 12]>,
-    pub has_more_shares: bool,
 }
 
 pub fn index_key(created_at: u64, id: &AccountId) -> String {
@@ -164,16 +161,6 @@ impl<R: Store, E: Environment> Authority<R, E> {
         let remaining_bytes = daily_limit_bytes.saturating_sub(summary.today_bytes);
         let restricted = self.restricted(Restriction::Account(id))?;
         let (recent_usage, has_older_usage) = self.recent_usage(&id)?;
-        let mut shares = self.store.scan(
-            &format!("{}/", key("attribution", &id)),
-            Some(SHARE_LIMIT + 1),
-        )?;
-        let has_more_shares = shares.len() > SHARE_LIMIT;
-        shares.truncate(SHARE_LIMIT);
-        let shares = shares
-            .into_iter()
-            .map(|(_, value)| serde_json::from_str(&value))
-            .collect::<serde_json::Result<_>>()?;
         Ok(AccountDetails {
             summary,
             today_day,
@@ -184,8 +171,6 @@ impl<R: Store, E: Environment> Authority<R, E> {
             entitlement_version,
             recent_usage,
             has_older_usage,
-            shares,
-            has_more_shares,
         })
     }
 

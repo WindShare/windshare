@@ -1,6 +1,7 @@
 import type { SingleFileDownloadOutcome } from '../../application/receive/contracts'
 import { ReceiveBlockedError, SaveUnavailableError } from '../../application/receive/single-file'
 import { CryptoError } from '../../crypto/errors'
+import { isRelayAccessDenied } from '../../receiver/recovery-failure'
 import { FSARestoreTargetMissingError } from '../../output/model'
 import { catalogCapacityReason, isPermissionDeniedError, isSourceInvalidatedError } from '../../transfer/fault'
 import type { ReceiverFailure } from '../model'
@@ -46,6 +47,7 @@ export function mapReceiverFailure(
   if (error instanceof FSARestoreTargetMissingError) {
     return Object.freeze({ kind: 'restore-target-missing', directoryLabel: error.directoryLabel })
   }
+  if (isRelayAccessDenied(error)) return { kind: 'relayAccessDenied', detail: publicError(error) }
   if (isSourceInvalidatedError(error)) {
     return Object.freeze({ kind: 'source-changed' })
   }
@@ -79,6 +81,7 @@ export function outcomeFailure(
 }
 
 export function joinFailure(error: unknown, detail: string): ReceiverFailure {
+  if (isRelayAccessDenied(error)) return { kind: 'relayAccessDenied', detail }
   if (!(error instanceof CryptoError)) return detail
   switch (error.code) {
     case 'malformed-key':

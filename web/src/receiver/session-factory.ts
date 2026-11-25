@@ -8,7 +8,6 @@ import {
   type RelayReceiverConnection,
 } from '../transport/relay/receiver'
 
-import { admittedRelay } from './relay-admission'
 import type { RelayCandidateSource } from './relay-selection/candidates'
 import { RelayRecovery } from './relay-selection/recovery'
 import type { RecoveryRetry } from './recovery-failure'
@@ -177,7 +176,8 @@ export class BrowserSessionFactory implements ReceiverSessionFactory {
   async #dialValidatedRelay(relayBase: string, signal: AbortSignal,
     currentSession: () => ReceiverSessionRuntime | undefined,
   ): Promise<RelayReceiverConnection> {
-    const relay = await admittedRelay(this.#relayRecovery.candidates.admission, relayBase, signal, admittedSignal => this.#dialRelay(relayBase, this.#capability, { signal: admittedSignal,
+    const relay = await this.#dialRelay(relayBase, this.#capability, {
+      signal,
       receiveTrace: event => emitRelayDelivery(this.#protocolTrace, event, relayBase, () => {
         const session = currentSession()
         return { correlation: session === undefined ? {} : { protocolSessionId: session.protocolSessionIdentity },
@@ -188,7 +188,7 @@ export class BrowserSessionFactory implements ReceiverSessionFactory {
         return { correlation: session === undefined ? {} : { protocolSessionId: session.protocolSessionIdentity },
           shareId: this.#capability.shareId, shareInstanceId: this.#descriptor.shareInstanceId }
       }),
-    }))
+    })
     try {
       const candidate = await this.#openDescriptor(relay.descriptorObject, this.#capability)
       requireSameDescriptor(this.#descriptor, candidate)

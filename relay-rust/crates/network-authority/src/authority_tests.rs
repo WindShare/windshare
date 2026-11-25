@@ -280,7 +280,6 @@ fn batch(
             }]
         },
         resident_accounts: if bytes == 0 { vec![account] } else { vec![] },
-        shares: vec![],
         load: Load {
             relay_budget: None,
             applied_policy_version: 0,
@@ -667,7 +666,6 @@ fn usage_report_rejects_invalid_monthly_relay_budget() {
             created_at: authority.environment.now(),
             records: vec![],
             resident_accounts: vec![],
-            shares: vec![],
             load: Load {
                 relay_budget: Some(budget),
                 applied_policy_version: 0,

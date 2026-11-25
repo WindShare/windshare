@@ -1,5 +1,5 @@
 import type { ReceiveAction } from '../../application/receive/contracts'
-import type { RetainedAdmissionContext } from '../../application/receive/admission'
+import { terminalConnectionBlock, type RetainedAdmissionContext } from '../../application/receive/admission'
 import { resolveWorkspaceRetainedMatch } from '../../application/receive/retained'
 import type { TaskSnapshot } from '../controller/projections'
 import type { TaskAction, TaskPresentation } from '../tasks'
@@ -57,8 +57,7 @@ function admissionContextFor(snapshot: WorkspaceTaskSnapshot): RetainedAdmission
       output.activation !== null ||
       retained.pending?.action === 'continue',
     hasPendingAction: retained.pending !== null,
-    connectionUnavailable: connection.kind === 'unavailable' || connection.kind === 'ended',
-    shareEnded: connection.kind === 'ended',
+    connectionBlock: terminalConnectionBlock(connection),
   }
 }
 

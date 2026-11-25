@@ -7,7 +7,7 @@ import { RevisionCapacityBusyError, requiresRevisionLeaseReplacement } from '../
 import { BandwidthWaitError } from '../contracts/capacity'
 import { GenerationRecoveryExhaustedError } from '../receiver/generation-recovery'
 import {
-  AllRelaysRestrictedError,
+  isRelayAccessDenied,
   RelayCooldownError,
   isTerminalRecoveryFailure,
 } from '../receiver/recovery-failure'
@@ -235,6 +235,11 @@ export function catalogCapacityReason(error: unknown): CatalogCapacityReason | u
   return undefined
 }
 
+export function transferFailureReason(error: unknown): CatalogCapacityReason | 'relay-access-denied' | 'error' {
+  if (isRelayAccessDenied(error)) return 'relay-access-denied'
+  return catalogCapacityReason(error) ?? 'error'
+}
+
 /**
  * Reports whether the browser catalog cache has provably exhausted its
  * committed capacity so no further directory can fit after rollback.
@@ -256,7 +261,7 @@ const MAX_INTERRUPTION_INSPECTION_DEPTH = 8
  */
 export function isRecoverableTransferInterruption(error: unknown, depth = 0): boolean {
   if (depth >= MAX_INTERRUPTION_INSPECTION_DEPTH) return false
-  if (error instanceof BlockLaneAttemptsError) return true
+  if (error instanceof BlockLaneAttemptsError) return !isRelayAccessDenied(error)
   if (error instanceof RevisionCapacityBusyError || requiresRevisionLeaseReplacement(error)) return true
   if (error instanceof RelayEndpointFailure) {
     return isRecoverableTransferInterruption(error.cause, depth + 1)
@@ -277,7 +282,6 @@ function isTransientLaneOrTransportError(error: unknown): boolean {
     error instanceof LaneAdmissionTransportError ||
     error instanceof GenerationRecoveryExhaustedError ||
     error instanceof RelayCooldownError ||
-    error instanceof AllRelaysRestrictedError ||
     error instanceof WebRTCTransportError ||
     error instanceof WebRTCRemoteClosedError ||
     error instanceof WebRTCChannelClosedError

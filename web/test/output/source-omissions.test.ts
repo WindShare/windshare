@@ -328,8 +328,7 @@ describe('source omission propagation across transfer, backends, and retained hi
         currentShareInstance: share.descriptor.shareInstanceId,
         hasActiveDownload: false,
         hasPendingAction: false,
-        connectionUnavailable: false,
-        shareEnded: false,
+        connectionBlock: null,
       },
     })
     expect(match.kind).toBe('local-complete')

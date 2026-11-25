@@ -331,8 +331,7 @@ describe('OPFS object ownership and recovery', () => {
       currentShareInstance: null,
       hasActiveDownload: false,
       hasPendingAction: false,
-      connectionUnavailable: true,
-      shareEnded: true,
+      connectionBlock: 'shareEnded',
     })).toEqual({ allowed: true, reason: null })
 
     const outcome = await executeRetainedTaskAction(retainedEnv, taskId, 'save')

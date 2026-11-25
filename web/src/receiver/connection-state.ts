@@ -1,13 +1,14 @@
 import { RelayReceiverError } from '../transport/relay/receiver'
 import { RELAY_ERROR } from '../transport/relay/protocol'
 import { RelayEndpointFailure } from './relay-selection/race'
+import { isRelayAccessDenied } from './recovery-failure'
 import { StaleShareInstanceError } from './session-factory'
 
 export type ReceiverReconnectActivity =
   | Readonly<{ kind: 'connecting' }>
   | Readonly<{
       kind: 'waiting'
-      reason: 'backoff' | 'capacity' | 'server' | 'bandwidth' | 'authorization'
+      reason: 'backoff' | 'capacity' | 'server' | 'bandwidth'
       /** Deadline on the reconnect clock; rendering must not restart the wait. */
       retryAt: number
     }>
@@ -16,7 +17,7 @@ export type ReceiverConnectionSnapshot =
   | Readonly<{ kind: 'connected' }>
   | Readonly<{ kind: 'reconnecting'; activity: ReceiverReconnectActivity }>
   | Readonly<{ kind: 'ended'; reason: 'share-replaced' | 'share-stopped' }>
-  | Readonly<{ kind: 'unavailable'; reason: 'recovery-exhausted' | 'protocol-failed' }>
+  | Readonly<{ kind: 'unavailable'; reason: 'recovery-exhausted' | 'protocol-failed' | 'access-denied' }>
 
 export class ReceiverConnectionState {
   readonly #listeners = new Set<(snapshot: ReceiverConnectionSnapshot) => void>()
@@ -36,8 +37,7 @@ export class ReceiverConnectionState {
   failed(error: unknown): void {
     const reason = confirmedShareEnd(error)
     if (reason !== null) this.#publish(Object.freeze({ kind: 'ended', reason }))
-    else this.#publish(Object.freeze({ kind: 'unavailable',
-      reason: 'protocol-failed' }))
+    else this.#publish(Object.freeze({ kind: 'unavailable', reason: isRelayAccessDenied(error) ? 'access-denied' : 'protocol-failed' }))
   }
 
   close(): void { this.#listeners.clear() }

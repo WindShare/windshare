@@ -64,12 +64,12 @@ export class SupervisedConnectivity {
     })
   }
 
-  async close(): Promise<void> {
+  async close(reason: unknown = new DOMException('Supervised connectivity closed', 'AbortError')): Promise<void> {
     if (this.#closed) return
     this.#closed = true
     for (const activation of this.#activations.values()) {
       activation.delegate?.close()
-      activation.routes.close(new DOMException('Supervised connectivity closed', 'AbortError'))
+      activation.routes.close(reason)
     }
     this.#activations.clear()
     const current = this.#current

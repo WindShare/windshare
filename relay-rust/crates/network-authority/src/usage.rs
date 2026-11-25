@@ -72,14 +72,9 @@ impl<R: Store, E: Environment> Authority<R, E> {
         };
         // Expected admission refusals commit limiter state in the host transaction.
         // Validate all referenced accounts before writing anything for this report.
-        for account in batch
-            .records
-            .iter()
-            .map(|record| record.account)
-            .chain(batch.shares.iter().map(|entry| entry.account))
-        {
+        for record in &batch.records {
             ensure!(
-                load::<Account>(&self.store, &key("account", &account))?.is_some(),
+                load::<Account>(&self.store, &key("account", &record.account))?.is_some(),
                 Fault::Invalid
             );
         }
@@ -88,7 +83,6 @@ impl<R: Store, E: Environment> Authority<R, E> {
             self.charge_usage(&batch, signed)?;
             ReportResult::UsageReceived
         } else {
-            self.remember_shares(&batch.shares)?;
             let status = self.status(&batch, policy)?;
             // Queued accounting batches can outlive several policy revisions.
             // Only the signed status round trip can acknowledge a drain.

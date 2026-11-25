@@ -4,7 +4,6 @@ import type { ReceiverConnectionSnapshot } from '../../src/receiver/connection-s
 import { systemReconnectClock } from '../../src/receiver/recovery-clock'
 import { ReceiverReconnectSupervisor } from '../../src/receiver/supervisor'
 import { BrowserSessionFactory, type ProtocolGenerationCore } from '../../src/receiver/session-factory'
-import { RelayPolicyDeniedError } from '../../src/receiver/relay-admission'
 import { RelayRecovery } from '../../src/receiver/relay-selection/recovery'
 import type { ReceiverSessionRuntime } from '../../src/session/runtime'
 import type { ProtocolTraceEvent } from '../../src/session/diagnostics'
@@ -32,7 +31,7 @@ function fixture(budget = new GenerationRecoveryBudget()) {
 }
 
 describe('reconnect control admission', () => {
-  it('rebuilds from the independent relay without waiting for the official relay cooldown', async () => {
+  it('rebuilds from the independent relay after the official relay denies access', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(0)
     const clock = { now: () => Date.now(), sleep: systemReconnectClock.sleep }
@@ -43,7 +42,9 @@ describe('reconnect control admission', () => {
     const relay = new TrackedRelay(1)
     const nextRelay = new TrackedRelay(1)
     const dial = vi.fn(async (base: string) => {
-      if (base === official) throw new RelayPolicyDeniedError()
+      if (base === official) throw new RelayReceiverError('Access denied', { relayError: {
+        code: RELAY_ERROR.accessDenied, retryAfterMilliseconds: 0,
+      } })
       if (Date.now() < 1_000) throw new RelayReceiverError('Share is starting', { relayError: {
         code: RELAY_ERROR.starting, retryAfterMilliseconds: 250,
       } })
@@ -79,6 +80,28 @@ describe('reconnect control admission', () => {
       expect(states.at(-1)).toEqual({ kind: 'connected' })
       expect(supervisor.generationId).toBe(2)
       expect(dial.mock.calls.filter(([base]) => base === official)).toHaveLength(1)
+    } finally { await supervisor.close() }
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('preserves the denial for active downloads and later previews after reconnecting', async () => {
+    const { session, factory, supervisor, states } = fixture()
+    const denied = new RelayReceiverError('Access denied', { relayError: {
+      code: RELAY_ERROR.accessDenied, retryAfterMilliseconds: 0,
+    } })
+    factory.connectFreshImpl = async () => { throw denied }
+    try {
+      const activation = supervisor.beginConnectivity('download')
+      const content = supervisor.content.forRoutes(activation.routes)
+      session.detach(1)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(states.at(-1)).toEqual({ kind: 'unavailable', reason: 'access-denied' })
+      expect(() => activation.routes.assertActive()).toThrow(denied)
+      await expect(content.revisions.open(identity(1))).rejects.toBe(denied)
+      expect(() => supervisor.beginConnectivity('preview')).toThrow(denied)
+      supervisor.requestReconnect()
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(factory.connectFreshCalls).toBe(1)
     } finally { await supervisor.close() }
     expect(vi.getTimerCount()).toBe(0)
   })

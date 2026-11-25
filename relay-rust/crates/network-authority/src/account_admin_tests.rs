@@ -183,19 +183,6 @@ fn blocked_account_diagnostics_are_read_only_numeric_and_bounded() {
         )
         .unwrap();
     }
-    let mut ids: Vec<_> = (0..=100).map(|i| [i; 12]).collect();
-    for share in &ids {
-        save(
-            &mut authority.store,
-            &format!(
-                "{}/{}",
-                key("attribution", &id),
-                URL_SAFE_NO_PAD.encode(share)
-            ),
-            share,
-        )
-        .unwrap();
-    }
     save(
         &mut authority.store,
         "settings",
@@ -210,7 +197,7 @@ fn blocked_account_diagnostics_are_read_only_numeric_and_bounded() {
         .unwrap();
     let writes = authority.store.put_count;
     let details = authority.account_by_id(ADMIN, &text).unwrap();
-    assert!(details.restricted && details.has_more_shares && details.has_older_usage);
+    assert!(details.restricted && details.has_older_usage);
     assert_eq!(
         (
             details.today_day,
@@ -237,8 +224,6 @@ fn blocked_account_diagnostics_are_read_only_numeric_and_bounded() {
             .collect::<Vec<_>>(),
         (81..=110).rev().collect::<Vec<_>>()
     );
-    ids.sort_by_key(|share| URL_SAFE_NO_PAD.encode(share));
-    assert_eq!(details.shares, ids[..100]);
     assert_eq!(authority.store.put_count, writes);
     assert!(matches!(
         authority

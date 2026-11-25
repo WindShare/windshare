@@ -72,7 +72,7 @@ export type PreviewSnapshot =
       readonly seeking: boolean
       readonly failure: string | null
     }
-  | { readonly state: 'error'; readonly fileId: string; readonly name: string; readonly message: string }
+  | { readonly state: 'error'; readonly fileId: string; readonly name: string; readonly failure: ReceiverFailure }
 
 export type ShareIdentity =
   | Readonly<{ kind: 'photo' | 'video' | 'file'; shareInstance: string; name: string; file: BrowseRow }>
@@ -101,7 +101,7 @@ export type ReceiverFailure =
   | Readonly<{ kind: 'source-changed' }>
   | Readonly<{ kind: 'restore-target-missing'; directoryLabel: string }>
   | Readonly<{
-      kind: 'invalidLink' | 'secureContext' | 'permissionDenied' | 'browserCatalogLimit' | 'shareCatalogLimit'
+      kind: 'invalidLink' | 'secureContext' | 'permissionDenied' | 'relayAccessDenied' | 'browserCatalogLimit' | 'shareCatalogLimit'
       detail: string
     }>
 

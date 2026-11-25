@@ -161,8 +161,7 @@ export async function recoverAfterBrowserProcessRestart(ids: ProcessCrashIds) {
       currentShareInstance: null,
       hasActiveDownload: false,
       hasPendingAction: false,
-      connectionUnavailable: true,
-      shareEnded: true,
+      connectionBlock: 'shareEnded',
     })
     const opfsSingleExported = await executeRetainedTaskAction(retainedEnv, ids.opfsSingleTaskId, 'save')
     const opfsSummary = await resumeAndCompleteOPFS(ids.opfsTaskId, store, opfsEnv)

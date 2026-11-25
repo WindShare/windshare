@@ -1,5 +1,3 @@
-import type { RelayAdmission } from '../relay-admission'
-
 export const MAXIMUM_RECEIVER_RELAYS = 8
 export type RelayCandidateSource = readonly string[] | RelayCandidates
 export type RelayExpansionStatus = 'complete' | 'incomplete'
@@ -24,7 +22,6 @@ export function receiverRelayBases(values: readonly string[]): readonly string[]
 export class RelayCandidates {
   #bases: readonly string[]
   readonly #listeners = new Set<(bases: readonly string[]) => void>()
-  readonly admission: RelayAdmission | undefined
   readonly #runner: RelayExpansionRunner | undefined
   #current: Promise<unknown>
   #expanding: boolean
@@ -34,9 +31,7 @@ export class RelayCandidates {
   constructor(
     initial: readonly string[],
     expansion?: Promise<readonly string[]> | RelayExpansionRunner,
-    admission?: RelayAdmission,
   ) {
-    this.admission = admission
     this.#bases = initial.length === 0 && expansion ? [] : receiverRelayBases(initial)
     if (typeof expansion === 'function') {
       this.#runner = expansion

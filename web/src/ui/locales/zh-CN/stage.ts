@@ -24,6 +24,8 @@ export const stage: typeof English = {
   senderCapacityHint: '发送方有可用通道后，下载将自动继续。',
   relayBandwidth: '正在等待中转带宽',
   relayBandwidthHint: '中转带宽繁忙，有可用带宽后下载将自动继续。',
+  relayAccessDenied: '中转拒绝访问',
+  accessDeniedHint: '仍可导出已保存在此浏览器中的文件。',
   shareEnded: '分享已结束',
   shareEndedHint: '此分享已结束。已保存在浏览器中的文件仍可直接保存。',
   storage: '存储空间不足',

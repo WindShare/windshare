@@ -5,7 +5,6 @@ import { ReceiverSessionRuntime } from '../session/runtime'
 import { dialRelayReceiver } from '../transport/relay/receiver'
 import type { ProtocolGenerationCore } from './session-factory'
 import { RelayRecovery } from './relay-selection/recovery'
-import { admittedRelay } from './relay-admission'
 import type { RelayCandidateSource } from './relay-selection/candidates'
 import { runInitialJoin, type InitialJoinOptions } from './initial-join'
 import type { InitialJoinAttempt } from './connection-attempt/initial'
@@ -44,10 +43,11 @@ export function joinBrowserRelays(
         correlation: session === undefined ? {} : { protocolSessionId: session.protocolSessionIdentity },
         shareId: capability.shareId,
       })
-      const relay = await admittedRelay(relayRecovery.candidates.admission, relayBase, attemptSignal, signal => dialRelayReceiver(relayBase, ownedCapability, { signal,
+      const relay = await dialRelayReceiver(relayBase, ownedCapability, {
+        signal: attemptSignal,
         receiveTrace: event => emitRelayDelivery(protocolTrace, event, relayBase, traceContext),
         heartbeatTrace: event => emitRelayHeartbeat(protocolTrace, event, relayBase, traceContext),
-      }))
+      })
       try {
         const descriptor = await openShareDescriptor(relay.descriptorObject, ownedCapability, {
           observe: event => protocolTrace?.current?.({

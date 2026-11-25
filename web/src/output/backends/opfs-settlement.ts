@@ -1,4 +1,4 @@
-import { catalogCapacityReason } from '../../transfer/fault'
+import { catalogCapacityReason, transferFailureReason } from '../../transfer/fault'
 import type { SettledTransferJobResult } from '../../transfer/job'
 import { transitionReceiveState } from '../../transfer/state'
 import { maxRangeEnd, type OPFSTargetRecord, type ReceiveFileRecord, type ReceiveTaskRecord } from '../store/types'
@@ -125,7 +125,7 @@ function failedOPFSLifecycle(
       return transitionReceiveState(current, { kind: 'failed', reason: 'source-changed' })
     case 'partial':
     case 'failed': {
-      const reason = catalogCapacityReason(error) ?? 'error'
+      const reason = transferFailureReason(error)
       return transitionReceiveState(current, {
         kind: 'failed',
         reason,

@@ -12,7 +12,6 @@ mod model;
 mod nodes;
 mod password;
 mod profile;
-mod public_blocks;
 mod registration;
 mod restriction_store;
 mod signing;

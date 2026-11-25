@@ -1,17 +1,16 @@
 import { runInitialJoinAttempt, type InitialJoinAttempt } from './connection-attempt/initial'
 import { defaultReconnectBackoff, systemReconnectClock, waitingReconnectBackoff, type ReconnectClock } from './recovery-clock'
-import { AllRelaysRestrictedError, isTerminalRecoveryFailure, latestRecoveryRetry, recoveryRetry } from './recovery-failure'
+import { isTerminalRecoveryFailure, latestRecoveryRetry, recoveryRetry } from './recovery-failure'
 import type { RelayRecovery } from './relay-selection/recovery'
 import { RecoveryWake } from './recovery-wake'
 import type { RecoveryObservation } from './recovery-observation'
 
 const INITIAL_JOIN_WINDOW_MILLISECONDS = 30_000
 
-type JoinHoldReason = 'bandwidth' | 'authorization'
-type JoinPauseReason = 'unreachable' | JoinHoldReason
+type JoinPauseReason = 'unreachable' | 'bandwidth'
 export type InitialJoinState =
   | { readonly kind: 'connecting' }
-  | { readonly kind: 'waiting'; readonly reason: 'sender' | JoinHoldReason; readonly retryAt?: number }
+  | { readonly kind: 'waiting'; readonly reason: 'sender' | 'bandwidth'; readonly retryAt?: number }
   | { readonly kind: 'paused'; readonly reason: JoinPauseReason; readonly retryAt?: number }
 type JoinChoice = 'retry' | 'continue'
 
@@ -23,7 +22,6 @@ interface JoinFailure {
 }
 
 const UNAVAILABLE_MESSAGES = {
-  authorization: 'This share is temporarily unavailable through official relays.',
   bandwidth: 'The connection timed out while waiting for relay bandwidth.',
   unreachable: 'The sender is temporarily unreachable. Retry or continue waiting; the link may still be valid.',
 } satisfies Record<JoinPauseReason, string>
@@ -165,7 +163,7 @@ class InitialJoinRecovery<T> {
         const activeRetryAt = retryAt !== undefined && retryAt > this.#clock.now() ? retryAt : undefined
         this.#publish({ kind: 'paused', reason, ...(activeRetryAt !== undefined && { retryAt: activeRetryAt }) })
       },
-      // A retry click cannot bypass the node's capacity or authorization deadline;
+      // A retry click cannot bypass the node's cooldown deadline;
       // continuing to wait honors the remaining cooldown before dialing automatically.
       selected => selected === 'continue' || retryAt === undefined || this.#clock.now() >= retryAt,
     )
@@ -219,8 +217,7 @@ class InitialJoinRecovery<T> {
     }
     const now = this.#clock.now()
     const retry = latestRecoveryRetry(this.#options.relayRecovery?.nextRetry(), recoveryRetry(error, now))
-    const bandwidthWait = retry?.reason === 'bandwidth' ? 'bandwidth' : undefined
-    const reason = error instanceof AllRelaysRestrictedError ? 'authorization' : bandwidthWait ?? 'unreachable'
+    const reason = retry?.reason === 'bandwidth' ? 'bandwidth' : 'unreachable'
     const required = Math.max(0, (retry?.retryAt ?? now) - now)
     const requiredUntil = required > 0 ? now + required : undefined
     const waitReason = retry?.reason ?? 'backoff'
@@ -246,7 +243,7 @@ class InitialJoinRecovery<T> {
 
   async #sleep(required: number, retryAt: number): Promise<void> {
     const { control, signal } = this.#options
-    // A retry click or online transition cannot bypass the node's capacity or authorization deadline.
+    // A retry click or online transition cannot bypass the node's cooldown deadline.
     if (required > 0) await this.#clock.sleep(required, signal)
     const remaining = Math.max(0, retryAt - this.#clock.now())
     if (remaining <= 0) return

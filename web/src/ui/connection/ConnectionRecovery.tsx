@@ -30,7 +30,6 @@ function recoveryMessage(activity: ReceiverReconnectActivity, t: typeof receiver
   if (activity.kind === 'connecting') return t.reconnecting
   switch (activity.reason) {
     case 'backoff': return t.backoff
-    case 'authorization': return t.authorization
     case 'bandwidth': return t.bandwidth
     case 'capacity': return t.capacity
     case 'server': return t.server

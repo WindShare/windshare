@@ -89,7 +89,7 @@ function pausedStage(
   language: Language,
 ): StageCopy {
   const t = receiverCopy[language].stage
-  if (facts.blocking !== null && (facts.blocking.kind === 'share-ended' || facts.blocking.kind === 'unavailable')) {
+  if (facts.blocking !== null && (facts.blocking.kind === 'share-ended' || facts.blocking.kind === 'unavailable' || facts.blocking.kind === 'access-denied')) {
     return blockingStage(facts.blocking, language)
   }
   if (facts.readiness === 'original-link-required' || facts.readiness === 'different-share') {
@@ -112,6 +112,7 @@ function failedStage(
   if (reason === 'source-changed') {
     return stage('failed', t.sourceChanged, receiverCopy[language].failures.sourceChangedHint, 'source_invalidated')
   }
+  if (reason === 'relay-access-denied') return stage('failed', t.relayAccessDenied, t.accessDeniedHint, reason)
   if (reason === 'portable-limit-exceeded') {
     return stage('failed', t.portableLimitExceeded, t.portableLimitExceededHint, reason)
   }
@@ -134,6 +135,7 @@ function blockingStage(blocking: TaskBlocking, language: Language): StageCopy {
   const t = receiverCopy[language].stage
   switch (blocking.kind) {
     case 'reconnecting': return stage('waiting', t.reconnecting, blocking.description ?? t.reconnectKeepOpen, blocking.kind)
+    case 'access-denied': return stage('needs-action', t.relayAccessDenied, t.accessDeniedHint, blocking.kind)
     case 'unavailable': return stage('needs-action', t.unavailable, blocking.description ?? t.unavailableHint, blocking.kind)
     case 'sender-capacity': return stage('waiting', t.senderCapacity, blocking.description ?? t.senderCapacityHint, blocking.kind)
     case 'relay-bandwidth': return stage('waiting', t.relayBandwidth, blocking.description ?? t.relayBandwidthHint, blocking.kind)

@@ -20,14 +20,15 @@ export type SingleFileDownloadOutcome =
   | Readonly<{ kind: 'unavailable'; error: SaveUnavailableError }>
   | Readonly<{ kind: 'failed'; error: unknown }>
 
+export type TerminalConnectionBlock = 'shareEnded' | 'connectionUnavailable' | 'relayAccessDenied'
+
 export type ReceiveBlockReason =
   | 'connectFirst'
   | 'emptySelection'
   | 'downloading'
   | 'busy'
   | 'matchingShare'
-  | 'shareEnded'
-  | 'connectionUnavailable'
+  | TerminalConnectionBlock
   | 'activeInAnotherTab'
   | 'actionUnavailable'
 

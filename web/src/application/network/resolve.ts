@@ -4,12 +4,10 @@ import type { NetworkSnapshot } from '../../network/node-directory'
 import { RelayCandidates } from '../../receiver/relay-selection/candidates'
 import { canonicalRelayIdentity } from '../../network/relay-endpoint'
 
-import type { RelayAdmission } from '../../receiver/relay-admission'
-
-export function resolveLinkRelays(capability: Suite02CapabilityLink, directory?: NetworkDirectory, admission?: RelayAdmission): RelayCandidates {
-  if (capability.nodeAliases.length === 0) return new RelayCandidates(uniqueEndpoints(capability.relays), undefined, admission)
+export function resolveLinkRelays(capability: Suite02CapabilityLink, directory?: NetworkDirectory): RelayCandidates {
+  if (capability.nodeAliases.length === 0) return new RelayCandidates(uniqueEndpoints(capability.relays))
   if (!directory) {
-    if (capability.relays.length) return new RelayCandidates(uniqueEndpoints(capability.relays), undefined, admission)
+    if (capability.relays.length) return new RelayCandidates(uniqueEndpoints(capability.relays))
     throw new Error('Network directory is unavailable')
   }
   const source = directory
@@ -39,7 +37,7 @@ export function resolveLinkRelays(capability: Suite02CapabilityLink, directory?:
       checkedSnapshot = source.snapshot
       return 'incomplete'
     } finally { stop() }
-  }, admission)
+  })
 }
 
 function uniqueEndpoints(endpoints: readonly string[]): string[] {

@@ -233,14 +233,25 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
         revocation: ResidentRevocation,
         now: UnixMillis,
     ) -> Result<()> {
-        let error = revocation.reason.error_frame();
+        self.refuse_connection_access(connection, kind, revocation.reason, now)?;
+        self.disconnect_revoked_ports(revocation)
+    }
+
+    pub(super) fn refuse_connection_access(
+        &mut self,
+        connection: ConnectionRef,
+        kind: FrameKind,
+        reason: RevocationReason,
+        now: UnixMillis,
+    ) -> Result<()> {
+        let error = reason.error_frame();
         tracing::warn!(
             event = "share_control_access_refused",
             share = ?self.identity.share,
             ?connection,
             ?kind,
-            attribution = ?revocation.attribution,
-            reason = revocation.reason.as_str(),
+            attribution = self.attribution().map(tracing::field::debug),
+            reason = reason.as_str(),
             ?error
         );
         if let Some(port) = self.ports.remove(&connection)
@@ -249,10 +260,7 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
             port.finish();
         }
         let step = self.relay.handle(Input::Disconnected(connection), now);
-        self.outputs(step)?;
-        // Defense in depth: ensure no active sibling connection survives once
-        // control admission observes a revoked share.
-        self.disconnect_revoked_ports(revocation)
+        self.outputs(step)
     }
 
     fn disconnect_revoked_ports(&mut self, revocation: ResidentRevocation) -> Result<()> {

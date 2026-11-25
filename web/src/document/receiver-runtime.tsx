@@ -5,7 +5,7 @@ import type { DocumentDiagnostics } from './diagnostics'
 import type { BrowserOutputWindow } from '../output/backends/contract'
 import { BrowserReceiverGateway } from '../application/browser-share/gateway'
 import { BuiltinNetwork } from '../application/network/builtin'
-import { networkObserver, authorityObserver } from '../application/network/diagnostics'
+import { networkObserver } from '../application/network/diagnostics'
 import {
   createConnectivityTraceSource,
   createFailureReporter,
@@ -24,7 +24,7 @@ export function createReceiverRuntime(
 ): DocumentRuntime {
   const { runtime } = diagnosticOwner
   const outputTrace = createOutputTraceSource(runtime.trace)
-  const network = new BuiltinNetwork(networkObserver(runtime.trace), authorityObserver(runtime.trace))
+  const network = new BuiltinNetwork(networkObserver(runtime.trace))
   const controller = new ReceiverController(new BrowserReceiverGateway({
     network,
     protocolTrace: createProtocolTraceSource(runtime),

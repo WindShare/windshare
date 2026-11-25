@@ -31,10 +31,9 @@ test('the local Worker preserves account and node policy across signed reports a
       body: body === undefined ? undefined : Buffer.isBuffer(body) ? body : JSON.stringify(body),
       signal: AbortSignal.timeout(20_000),
     });
-    const publicPolicy = path === '/v1/blocks' && [200, 304].includes(response.status);
-    assert.equal(response.headers.get('cache-control'), publicPolicy ? 'private, no-cache' : 'no-store');
+    assert.equal(response.headers.get('cache-control'), 'no-store');
     assert.equal(response.headers.get('access-control-allow-origin'), url.origin);
-    const value = response.status === 304 ? await response.text() : await response.json();
+    const value = await response.json();
     assert.equal(response.status, options.status ?? 200, JSON.stringify(value));
     return { response, value };
   }
@@ -115,7 +114,7 @@ test('the local Worker preserves account and node policy across signed reports a
   assert(existing.admission === 'accepting' && existing.anonymous && existing.version === 2);
   const batch = {
     id: [...randomBytes(16)], node, issuer: [...Buffer.from(trust.root, 'base64url')],
-    created_at: Math.floor(Date.now() / 1000), records: [], resident_accounts: [first.account], shares: [],
+    created_at: Math.floor(Date.now() / 1000), records: [], resident_accounts: [first.account],
     load: { applied_policy_version: 2, resident_shares: 0, active_sessions: 0, wire_bytes: 0, forwarded_bytes: 0, admission_refusals: 0 },
   };
   const onlineSeed = (await readFile(join(keys, 'online-1.seed'), 'utf8')).trim();
@@ -218,19 +217,13 @@ test('the local Worker preserves account and node policy across signed reports a
     { kind: 'superseded', version: blocked.restriction_version + 1 });
   await call('/v1/accounts/ticket', {}, { secret: second.credential_secret });
   await call('/v1/accounts/ticket', {}, { secret, status: 403 });
-  await call('/v1/admin/blocks', { kind: 'share', id: share, blocked: true }, { admin: true });
-  const publicBlocks = await call('/v1/blocks', undefined, { method: 'GET' });
-  assert(publicBlocks.value.body && publicBlocks.value.certificate);
-  const blockTag = publicBlocks.response.headers.get('etag');
-  assert(blockTag);
-  const revalidation = { method: 'GET', headers: { 'If-None-Match': blockTag } };
-  const unchanged = await call('/v1/blocks', undefined, { ...revalidation, status: 304 });
-  assert.equal(unchanged.value, '');
-  assert.equal(unchanged.response.headers.get('etag'), blockTag);
-  await call('/v1/admin/blocks', { kind: 'share', id: share, blocked: false }, { admin: true });
-  const updatedBlocks = await call('/v1/blocks', undefined, revalidation);
-  assert.notEqual(updatedBlocks.response.headers.get('etag'), blockTag);
-  assert.notEqual(updatedBlocks.value.body, publicBlocks.value.body);
+  const shareBlock = blocked => call('/v1/admin/blocks', { kind: 'share', id: share, blocked }, { admin: true });
+  for (const restricted of [true, false]) {
+    const { value } = await shareBlock(restricted);
+    const { entries } = await requestPage(value.version);
+    assert.equal(entries.some(entry => entry.kind === 'share' && Buffer.from(entry.id).equals(Buffer.from(share))), restricted);
+  }
+  assert.equal((await request(new URL('/v1/blocks', url))).status, 404);
   const logout = await call('/v1/admin/logout', {}, { admin: true });
   assert.match(logout.response.headers.get('set-cookie'), /Max-Age=0/);
   const revokedSession = await call('/v1/admin/console', undefined, { admin: true, method: 'GET', status: 403 });
@@ -240,7 +233,7 @@ test('the local Worker preserves account and node policy across signed reports a
     node: Buffer.from(node).toString('base64url'), checks: [
       'one-time initialization', 'session cookies and CORS', 'idempotent registration', 'stable refresh identity',
       'password login', 'concurrent node policy updates', 'idempotent enrollment', 'signed node reports', 'idempotent UTC usage', 'independent revocation',
-      'operator account, node and report reads', 'account block and restoration', 'public share restrictions',
+      'operator account, node and report reads', 'account block and restoration', 'node share restrictions',
     ],
   }));
 });

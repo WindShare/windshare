@@ -651,7 +651,7 @@ describe('WorkspaceTask live observation and TaskPresentation safeNameRestore st
       actions: actionsForState(savedState, 'fsa'), activeElsewhere: false, canSavePartial: false,
     }, 'forget', {
       currentShareInstance: 's1', hasActiveDownload: false, hasPendingAction: execution.pendingRetained !== null,
-      connectionUnavailable: false, shareEnded: false,
+      connectionBlock: null,
     })
     expect(admission).toEqual({ allowed: false, reason: 'busy' })
     execution.releaseLocalIfOwned(token!)

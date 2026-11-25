@@ -5,7 +5,7 @@ import type { BlockRangeReader, ContentLaneStatus } from '../content/broker'
 import type { RevisionReader } from '../content/session-services'
 import { discoverSelection, type DiscoveredDirectory, type DiscoveredFile } from './discovery'
 import type { ActiveFileWrite } from './active-file-write'
-import { FaultScope, FileDestinationConflictError, TransferFaultError, catalogCapacityReason, isRecoverableTransferInterruption, storagePauseReason } from './fault'
+import { FaultScope, FileDestinationConflictError, TransferFaultError, isRecoverableTransferInterruption, storagePauseReason, transferFailureReason } from './fault'
 import { transferSingleFile, type FileTransferContext, type SingleFileTransferOutcome, type TransferExit, type TransferPause } from './file-transfer'
 import type { TransferOutputSession } from './output-port'
 import { TransferProgressTracker, type TransferProgress } from './progress'
@@ -284,10 +284,7 @@ export class TransferJob {
     if (this.#discoveryInterrupted(error)) return
     this.#discoveryFailed = true
     this.#failedDirectories += 1n
-    // Preserve permanent catalog capacity failures over generic local directory
-    // errors so settlement explains why oversized or saturated subtrees were skipped.
-    if (catalogCapacityReason(error) !== undefined) this.#firstError = error
-    else this.#firstError ??= error
+    this.#recordFailure(error)
     this.#tracker.observeDirectoryFailed()
   }
 
@@ -320,7 +317,7 @@ export class TransferJob {
   #handleDiscoveryError(error: unknown): void {
     if (this.#discoveryInterrupted(error)) return
     this.#discoveryFailed = true
-    this.#firstError ??= error
+    this.#recordFailure(error)
     this.#tracker.observeDiscoverySettled('failed')
   }
 
@@ -388,12 +385,24 @@ export class TransferJob {
         return
       case 'failed':
         this.#failedFiles += 1n
-        this.#firstError ??= outcome.error
+        this.#recordFailure(outcome.error)
         this.#tracker.observeFileFailed()
         this.#recordMissing(outcome.error instanceof FileDestinationConflictError
           ? { path: file.relativePath, reason: 'destination-conflict', destinationPath: outcome.error.destinationPath }
           : { path: file.relativePath, reason: 'file-failed' })
         return
+    }
+  }
+
+  #recordFailure(error: unknown): void {
+    const reason = transferFailureReason(error)
+    if (this.#exit !== undefined || reason === 'error') {
+      this.#firstError ??= error
+    } else if (reason === 'relay-access-denied') {
+      // A confirmed relay denial applies to every remaining file and directory.
+      this.#failJob(error)
+    } else {
+      this.#firstError = error
     }
   }
 

@@ -46,7 +46,6 @@ fn sign_report(
         created_at,
         records,
         resident_accounts: vec![],
-        shares: vec![],
         load: Load {
             relay_budget: None,
             applied_policy_version,

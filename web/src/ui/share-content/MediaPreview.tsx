@@ -225,8 +225,9 @@ export function MediaPreview({
     {preview.state === 'loading' && <p className="preview-loading" role="status"><ReceiverIcon name="image" />{t.loadingPreview}</p>}
     {preview.state === 'error' && <div className="preview-failure">
       <ReceiverIcon name="file" />
-      <div role="alert"><FailureNotice failure={preview.message} context="preview" /></div>
-      <p>{t.downloadOriginalHint}</p>
+      <div role="alert"><FailureNotice failure={preview.failure} context="preview" /></div>
+      {(typeof preview.failure === 'string' ||
+        (preview.failure.kind !== 'relayAccessDenied' && preview.failure.kind !== 'source-changed')) && <p>{t.downloadOriginalHint}</p>}
     </div>}
     {preview.state === 'image' && <img className="preview-media" src={preview.url}
       alt={t.previewOf(preview.name)}

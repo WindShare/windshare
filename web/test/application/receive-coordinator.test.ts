@@ -7,7 +7,7 @@ import {
   retainedTaskReadiness,
 } from '../../src/application/receive/admission'
 import { presentTask, retainedTaskFacts } from '../../src/ui/tasks'
-import { mapReceiverFailure } from '../../src/ui/controller/failures'
+import { joinFailure, mapReceiverFailure } from '../../src/ui/controller/failures'
 import type { RetainedTaskSnapshot } from '../../src/application/receive/contracts'
 import { ReceiveCoordinator } from '../../src/application/receive/coordinator'
 import { executeRetainedTaskAction } from '../../src/application/receive/retained'
@@ -26,7 +26,10 @@ import type { NativeSupportWorker } from '../../src/output/native-object/support
 import { ReceiveStore } from '../../src/output/store/database'
 import type { ReceiveTaskRecord } from '../../src/output/store/types'
 import type { OutputTraceEvent } from '../../src/output/diagnostics'
-import { isPermissionDeniedError } from '../../src/transfer/fault'
+import { RelayEndpointFailure } from '../../src/receiver/relay-selection/race'
+import { RELAY_ERROR } from '../../src/transport/relay/protocol'
+import { RelayReceiverError } from '../../src/transport/relay/receiver'
+import { isPermissionDeniedError, transferFailureReason } from '../../src/transfer/fault'
 import { initialReceiveState, transitionReceiveState } from '../../src/transfer/state'
 import { FakeDirectoryHandle, MemoryReceiveStore as FSAMemoryReceiveStore } from '../output/fsa-fixture'
 import { createMemoryOPFSEnv, createMockDownloadWindow, MemoryReceiveStore } from '../output/opfs-fixture'
@@ -130,8 +133,7 @@ describe('receive admission and coordinator', () => {
       currentShareInstance: null,
       hasActiveDownload: false,
       hasPendingAction: false,
-      connectionUnavailable: true,
-      shareEnded: true,
+      connectionBlock: 'shareEnded',
     })).toEqual({ allowed: true, reason: null })
     const presentedOpfsPartial = presentTask(retainedTaskFacts(partialOpfsTask))
     expect(presentedOpfsPartial.stage).toBe('ready-to-save')
@@ -187,25 +189,37 @@ describe('receive admission and coordinator', () => {
       currentShareInstance: 'share-b',
       hasActiveDownload: false,
       hasPendingAction: false,
-      connectionUnavailable: false,
-      shareEnded: false,
+      connectionBlock: null,
     })).toEqual({ allowed: false, reason: 'matchingShare' })
 
     expect(admitRetainedAction(task, 'save-partial', {
       currentShareInstance: null,
       hasActiveDownload: false,
       hasPendingAction: false,
-      connectionUnavailable: true,
-      shareEnded: true,
+      connectionBlock: 'shareEnded',
     })).toEqual({ allowed: true, reason: null })
+
+    const denied = { currentShareInstance: 'share-a', hasActiveDownload: false, hasPendingAction: false,
+      connectionBlock: 'relayAccessDenied' as const }
+    expect(admitRetainedAction(task, 'continue', denied)).toEqual({ allowed: false, reason: 'relayAccessDenied' })
+    expect(admitRetainedAction(task, 'save-partial', denied)).toEqual({ allowed: true, reason: null })
 
     expect(admitRetainedAction({ ...task, activeElsewhere: true }, 'discard', {
       currentShareInstance: 'share-a',
       hasActiveDownload: false,
       hasPendingAction: false,
-      connectionUnavailable: false,
-      shareEnded: false,
+      connectionBlock: null,
     })).toEqual({ allowed: false, reason: 'activeInAnotherTab' })
+  })
+
+  it('carries the protocol refusal through opening, browsing and transfer settlement', () => {
+    const denied = new RelayReceiverError('denied', { relayError: { code: RELAY_ERROR.accessDenied, retryAfterMilliseconds: 0 } })
+    const failure = new AggregateError([new RelayEndpointFailure('relay', denied)])
+    const expected = { kind: 'relayAccessDenied', detail: 'detail' }
+    expect(joinFailure(failure, 'detail')).toEqual(expected)
+    expect(mapReceiverFailure(failure, () => 'detail')).toEqual(expected)
+    expect(transferFailureReason(failure)).toBe('relay-access-denied')
+    expect(transferFailureReason(new AggregateError([denied, new Error('offline')]))).toBe('error')
   })
 
   it('invokes showDirectoryPicker synchronously inside startDownload before returning', async () => {
@@ -815,7 +829,7 @@ describe('single-file fresh download, errors, and local blob handoff', () => {
 
     // Explicit retained continue still honors shareEnded admission checks.
     const pausedTask = coordinator.getSnapshot().retained.tasks.find(t => t.taskId === 'paused-task')!
-    coordinator.observeConnection('ended')
+    coordinator.observeConnection('shareEnded')
     expect(coordinator.retainedActionAdmission(pausedTask, 'continue')).toEqual({
       allowed: false,
       reason: 'shareEnded',
