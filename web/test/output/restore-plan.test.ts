@@ -56,7 +56,6 @@ function makeFSATask(overrides: Readonly<{
         reservedName: overrides.reservedName ?? overrides.artifactName ?? 'app.dll',
         collisionIndex: overrides.collisionIndex ?? 0,
         singleFile: true as const,
-        reservedAtMs: 1_000,
         reservedFile: {
           handle: {} as FileSystemFileHandle,
           fingerprint: { size: 0, lastModified: 1_000 },

@@ -639,7 +639,6 @@ describe('FSA two-step safe-name extension preservation and fallback', () => {
         reservedName: claimedSlot1,
         collisionIndex: 0,
         singleFile: true,
-        reservedAtMs: Date.now() - 5_000,
         reservedFile: {
           handle: new FakeFileHandle(claimedSlot1, `/Downloads/${claimedSlot1}`, memory.events) as unknown as FileSystemFileHandle,
           fingerprint: { size: 0, lastModified: 0 },

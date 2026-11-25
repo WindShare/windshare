@@ -48,6 +48,12 @@ export async function verifyExistingFSAFile(
     { ...confirmed, handle, completedRanges: ranges, fsaDiskFingerprint: disk }
 }
 
+export type FSAFileOrigin =
+  | Readonly<{ kind: 'recorded'; record: ReceiveFileRecord }>
+  | Readonly<{ kind: 'fresh-placeholder'; openedAtMs: number }>
+  | Readonly<{ kind: 'reclaimed-placeholder'; fingerprint: FSADiskFingerprint }>
+  | Readonly<{ kind: 'reserved-placeholder'; fingerprint: FSADiskFingerprint; onReleased: () => void }>
+
 interface FSAFileOptions {
   taskId: string
   request: TransferFileRequest
@@ -55,13 +61,9 @@ interface FSAFileOptions {
   handle: FileSystemFileHandle
   physicalPath: readonly string[]
   displayPath: string
-  openedAtMs: number
   signal: AbortSignal
   store: Pick<ReceiveStore, 'putFile' | 'deleteFiles'>
-  existing: ReceiveFileRecord | undefined
-  /** Present when this writer adopted a task-owned single-file reservation placeholder. */
-  reservedPlaceholder?: FSADiskFingerprint
-  onReservedPlaceholderReleased?: () => void
+  origin: FSAFileOrigin
   diagnostics: OutputDiagnosticsPorts | undefined
 }
 
@@ -71,8 +73,13 @@ interface ObservedPublication {
 }
 
 type UnrecordedFile =
-  | { kind: 'placeholder'; acquiredAtMs: number; reservedFingerprint?: FSADiskFingerprint }
-  | { kind: 'published'; observed?: ObservedPublication }
+  | Readonly<{ kind: 'fresh-placeholder'; openedAtMs: number; acquiredAtMs: number }>
+  | Readonly<{ kind: 'reclaimed-placeholder'; fingerprint: FSADiskFingerprint }>
+  | Readonly<{ kind: 'reserved-placeholder'; fingerprint: FSADiskFingerprint; onReleased: () => void }>
+  | Readonly<{ kind: 'published'; observed?: ObservedPublication }>
+
+type UnrecordedPlaceholder = Exclude<UnrecordedFile, { kind: 'published' }>
+type VerifiedPlaceholder = Extract<UnrecordedFile, { kind: 'reclaimed-placeholder' | 'reserved-placeholder' }>
 
 export class FSAOutputFile implements TransferOutputFile {
   readonly completedRanges: readonly ByteRange[]
@@ -89,15 +96,19 @@ export class FSAOutputFile implements TransferOutputFile {
 
   constructor(options: FSAFileOptions) {
     this.#options = options
-    const prior = options.existing
+    const prior = options.origin.kind === 'recorded' ? options.origin.record : undefined
     this.#checkpoint = prior
-    this.#unrecorded = prior === undefined
-      ? {
-          kind: 'placeholder',
-          acquiredAtMs: Date.now(),
-          ...(options.reservedPlaceholder === undefined ? {} : { reservedFingerprint: options.reservedPlaceholder }),
-        }
-      : undefined
+    if (options.origin.kind === 'recorded') {
+      this.#unrecorded = undefined
+    } else if (options.origin.kind === 'fresh-placeholder') {
+      this.#unrecorded = {
+        kind: 'fresh-placeholder',
+        openedAtMs: options.origin.openedAtMs,
+        acquiredAtMs: Date.now(),
+      }
+    } else {
+      this.#unrecorded = options.origin
+    }
     this.completedRanges = fromRangeTuples(prior?.completedRanges ?? [])
     this.#savedBytes = coveredBytes(this.completedRanges)
     if (prior !== undefined) {
@@ -113,7 +124,14 @@ export class FSAOutputFile implements TransferOutputFile {
     signal.throwIfAborted()
     try {
       if (this.#writer === undefined) {
-        if (this.#checkpoint !== undefined) await this.#verifyCurrent()
+        if (this.#checkpoint !== undefined) {
+          await this.#verifyCurrent()
+        } else {
+          // Re-verify reclaimed or reserved placeholders before truncating in case the user edited them after openFile().
+          // Ordinary fresh placeholders skip this check to keep the hot path at zero extra getFile() calls.
+          const placeholder = this.#verifiedPlaceholder()
+          if (placeholder !== undefined) await this.#verifyPlaceholder(placeholder)
+        }
         signal.throwIfAborted()
         this.#writer = await handle.createWritable({ keepExistingData: this.#savedBytes > 0n })
         // Copying a multi-GB prefix can outlive the lease or user action that requested this write.
@@ -168,7 +186,7 @@ export class FSAOutputFile implements TransferOutputFile {
   }
 
   async #reconcileAbortedPublish(): Promise<void> {
-    const { parentDir, handle, openedAtMs, store, request, taskId } = this.#options
+    const { parentDir, handle, store, request, taskId } = this.#options
     const file = this.#unrecorded
     if (file === undefined) {
       // A failed close may have left the previous checkpoint intact. A crash here can repeat this verification.
@@ -180,25 +198,38 @@ export class FSAOutputFile implements TransferOutputFile {
       return
     }
     const name = this.#options.physicalPath.at(-1)!
-    if (file.kind === 'placeholder' && file.reservedFingerprint !== undefined) {
+    if (file.kind === 'reserved-placeholder') {
       // Task-owned single-file reservations survive retry, pause, and detach; terminal cleanup or discard removes them.
       if (this.#hasIntent) {
-        const state = await inspectFSALeaf(parentDir, name, handle, file.reservedFingerprint)
+        const state = await inspectFSALeaf(parentDir, name, handle, file.fingerprint)
         if (state === 'matching' || state === 'missing') {
           await store.deleteFiles([fileRecordId(taskId, request.fileId)])
           this.#hasIntent = false
         }
       }
-      this.#options.onReservedPlaceholderReleased?.()
+      file.onReleased()
       return
     }
-    const outcome = file.kind === 'placeholder'
-      ? await removeUncommittedEmptyPlaceholder(parentDir, name, handle, openedAtMs, file.acquiredAtMs)
-      : await this.#recoverPublication(file.observed)
+    const outcome = await this.#cleanupUnrecorded(file)
     if (outcome !== 'missing' && outcome !== 'removed') return
     if (this.#hasIntent) await store.deleteFiles([fileRecordId(taskId, request.fileId)])
     this.#hasIntent = false
     this.#unrecorded = undefined
+  }
+
+  #cleanupUnrecorded(
+    file: Exclude<UnrecordedFile, { kind: 'reserved-placeholder' }>,
+  ): Promise<'unverified' | 'missing' | 'changed' | 'recorded' | 'preserved' | 'removed'> {
+    const { parentDir, handle } = this.#options
+    const name = this.#options.physicalPath.at(-1)!
+    switch (file.kind) {
+      case 'fresh-placeholder':
+        return removeUncommittedEmptyPlaceholder(parentDir, name, handle, file.openedAtMs, file.acquiredAtMs)
+      case 'reclaimed-placeholder':
+        return removeVerifiedFSALeaf(parentDir, name, handle, file.fingerprint)
+      case 'published':
+        return this.#recoverPublication(file.observed)
+    }
   }
 
   async #recoverPublication(observed: ObservedPublication | undefined): Promise<'unverified' | 'missing' | 'changed' | 'recorded' | 'preserved' | 'removed'> {
@@ -233,6 +264,10 @@ export class FSAOutputFile implements TransferOutputFile {
         await this.#verifyCurrent()
         // With no intervening write, pause and retry already have a durable checkpoint.
         if (status === 'receiving') return
+      } else {
+        // Remote 0-byte files commit without calling writeAt(); verify adopted placeholders before marking complete.
+        const placeholder = this.#verifiedPlaceholder()
+        if (placeholder !== undefined) await this.#verifyPlaceholder(placeholder)
       }
       const confirmed = await this.#confirmRow(row)
       await store.putFile(confirmed)
@@ -260,10 +295,10 @@ export class FSAOutputFile implements TransferOutputFile {
     } catch (cause) {
       const { request, signal } = this.#options
       const file = this.#unrecorded
-      if (status === 'completed' && file?.kind === 'placeholder' && !this.#hasIntent &&
+      if (status === 'completed' && file !== undefined && file.kind !== 'published' && !this.#hasIntent &&
           request.exactSize <= MAX_FSA_PUBLISH_RETRY_BYTES && !signal.aborted &&
           cause instanceof DOMException && cause.name === 'InvalidStateError' &&
-          await this.#retireRejectedPlaceholder(writer, file.acquiredAtMs, cause, file.reservedFingerprint)) {
+          await this.#retireRejectedPlaceholder(writer, file, cause)) {
         throw new RetryableFilePublishError(cause)
       }
       throw cause
@@ -274,25 +309,24 @@ export class FSAOutputFile implements TransferOutputFile {
 
   async #retireRejectedPlaceholder(
     writer: FileSystemWritableFileStream,
-    acquiredAtMs: number,
+    placeholder: UnrecordedPlaceholder,
     cause: DOMException,
-    reservedFingerprint?: FSADiskFingerprint,
   ): Promise<boolean> {
-    const { parentDir, physicalPath, handle, openedAtMs, diagnostics, taskId, request } = this.#options
+    const { parentDir, physicalPath, handle, diagnostics, taskId, request } = this.#options
     try {
       await writer.abort(cause)
       this.#writer = undefined
       const name = physicalPath.at(-1)!
-      const outcome = reservedFingerprint !== undefined
-        ? await removeVerifiedFSALeaf(parentDir, name, handle, reservedFingerprint)
-        : await removeUncommittedEmptyPlaceholder(parentDir, name, handle, openedAtMs, acquiredAtMs)
+      const outcome = placeholder.kind === 'fresh-placeholder'
+        ? await removeUncommittedEmptyPlaceholder(parentDir, name, handle, placeholder.openedAtMs, placeholder.acquiredAtMs)
+        : await removeVerifiedFSALeaf(parentDir, name, handle, placeholder.fingerprint)
       emitOutputTrace(diagnostics?.trace, 'output_write', {
         backend: 'file_system_access', task_id: taskId, file_id: request.fileId,
         transition: 'fresh_publish_rejected', placeholder: outcome, error: classifyNativeError(cause),
       })
       if (outcome !== 'removed') return false
       this.#unrecorded = undefined
-      if (reservedFingerprint !== undefined) this.#options.onReservedPlaceholderReleased?.()
+      if (placeholder.kind === 'reserved-placeholder') placeholder.onReleased()
       return true
     } catch (cleanupError) {
       this.#traceRecovery('cleanup_deferred', cleanupError)
@@ -313,11 +347,42 @@ export class FSAOutputFile implements TransferOutputFile {
   async #recordIntent(): Promise<void> {
     const { store, displayPath } = this.#options
     const fingerprint = await this.#verifyCurrent()
-    if (this.#checkpoint === undefined && fingerprint.size !== 0) throw destinationChanged(displayPath)
+    const placeholder = this.#verifiedPlaceholder()
+    if (placeholder !== undefined) {
+      if (!matchesFSADiskFingerprint(fingerprint, placeholder.fingerprint)) throw destinationChanged(displayPath)
+    } else if (this.#checkpoint === undefined && fingerprint.size !== 0) {
+      throw destinationChanged(displayPath)
+    }
     // IndexedDB and the OS cannot share a commit. Recovery may trust the earlier version only if it still matches.
     const intent = { fingerprint, ranges: this.#checkpoint?.completedRanges ?? [] }
     await store.putFile({ ...this.#row('receiving', []), fsaPendingPublish: intent })
     this.#hasIntent = true
+  }
+
+  #verifiedPlaceholder(): VerifiedPlaceholder | undefined {
+    const file = this.#unrecorded
+    if (file === undefined || file.kind === 'fresh-placeholder' || file.kind === 'published') return undefined
+    return file
+  }
+
+  async #verifyPlaceholder(placeholder: VerifiedPlaceholder): Promise<void> {
+    try {
+      const disk = await this.#readCurrent()
+      if (!matchesFSADiskFingerprint(disk, placeholder.fingerprint)) {
+        throw destinationChanged(this.#options.displayPath)
+      }
+    } catch (error) {
+      if (error instanceof FileDestinationConflictError) {
+        emitOutputTrace(this.#options.diagnostics?.trace, 'output_write', {
+          backend: 'file_system_access',
+          task_id: this.#options.taskId,
+          file_id: this.#options.request.fileId,
+          transition: 'placeholder_conflict',
+          placeholder_kind: placeholder.kind,
+        })
+      }
+      throw error
+    }
   }
 
   async #verifyCurrent(): Promise<FSADiskFingerprint> {

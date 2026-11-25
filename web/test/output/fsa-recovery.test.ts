@@ -300,7 +300,7 @@ describe('FSA publication and recovery', () => {
     // Age the task and placeholder together to confirm abort uses the placeholder's original mtime, not reopen time.
     const earlier = Date.now() - 60_000
     const task = (await store.getTask(session.taskId))!
-    if (task.target.kind === 'fsa') {
+    if (task.target.kind === 'fsa' && !task.target.singleFile) {
       await store.putTask({ ...task, target: { ...task.target, reservedAtMs: earlier } })
     }
     physical.lastModified = earlier + 500
@@ -327,6 +327,124 @@ describe('FSA publication and recovery', () => {
     await expect(reopened.transferOutput.openFile({ ...request, fileId: 'newer', path: ['newer'] }, signal))
       .rejects.toMatchObject({ fault: { code: 'target-collision' } })
     expect(root.children.has('newer')).toBe(true)
+    await reopened.close()
+  })
+})
+
+describe('FSA placeholder verification', () => {
+  it.each(['directory', 'single-file'] as const)(
+    'rejects an externally edited %s placeholder before first write without truncating user content',
+    async mode => {
+      const memory = new MemoryReceiveStore()
+      const parent = new FakeDirectoryHandle('Downloads', memory.events)
+      const store = memory as unknown as ReceiveStore
+      const traces: OutputTraceEvent[] = []
+      const diagnostics = { backend: 'file_system_access' as const, trace: { current: (event: OutputTraceEvent) => traces.push(event) } }
+      const taskId = `toctou-write-${mode}`
+      const artifact = mode === 'single-file'
+        ? { kind: 'directory-tree' as const, name: 'large', singleFileId: 'large' }
+        : { kind: 'directory-tree' as const, name: 'Folder' }
+
+      let activeSession = await openNewFSASession({
+        task: {
+          taskId, selectionKey: 'selection',
+          selection: { shareInstance: 'share', syntheticRoot: 'root', defaultSelected: true, rules: [] },
+          artifact, lifecycle: initialReceiveState(taskId),
+        },
+        parentHandle: parent as unknown as FileSystemDirectoryHandle, store, diagnostics,
+      })
+      if (mode === 'directory') {
+        await activeSession.transferOutput.openFile(request, signal)
+        await activeSession.close()
+        activeSession = await reopenFSASession({
+          task: (await memory.getTask(taskId))!, store, allowPermissionPrompt: false, diagnostics,
+        })
+      }
+
+      const container = mode === 'single-file' ? parent : await parent.getDirectoryHandle('Folder')
+      const writer = await activeSession.transferOutput.openFile(request, signal)
+      const physical = await container.getFileHandle('large')
+      const callsBefore = physical.writableCalls.length
+      physical.overwriteExternally(Uint8Array.of(9, 8, 7))
+
+      await expect(writer.writeAt(0n, Uint8Array.of(1, 2, 3))).rejects.toMatchObject({ fault: { code: 'target-collision' } })
+      expect(physical.writableCalls).toHaveLength(callsBefore)
+      expect(traces).toContainEqual({
+        eventName: 'output_write',
+        payload: {
+          backend: 'file_system_access', task_id: taskId, file_id: 'large',
+          transition: 'placeholder_conflict',
+          placeholder_kind: mode === 'single-file' ? 'reserved-placeholder' : 'reclaimed-placeholder',
+        },
+      })
+      await writer.abort(new DOMException('conflict', 'AbortError'))
+      expect([...(await container.getFileHandle('large')).bytes]).toEqual([9, 8, 7])
+      expect(await memory.getFile(taskId, 'large')).toBeUndefined()
+      await activeSession.close()
+    },
+  )
+
+  it.each(['directory', 'single-file'] as const)(
+    'verifies an adopted %s placeholder before committing a remote 0-byte file',
+    async mode => {
+      const emptyRequest = { ...request, exactSize: 0n }
+      const openAdopted = async (taskId: string) => {
+        const memory = new MemoryReceiveStore()
+        const parent = new FakeDirectoryHandle('Downloads', memory.events)
+        const store = memory as unknown as ReceiveStore
+        const artifact = mode === 'single-file'
+          ? { kind: 'directory-tree' as const, name: 'large', singleFileId: 'large' }
+          : { kind: 'directory-tree' as const, name: 'Folder' }
+        let activeSession = await openNewFSASession({
+          task: {
+            taskId, selectionKey: 'selection',
+            selection: { shareInstance: 'share', syntheticRoot: 'root', defaultSelected: true, rules: [] },
+            artifact, lifecycle: initialReceiveState(taskId),
+          },
+          parentHandle: parent as unknown as FileSystemDirectoryHandle, store,
+        })
+        if (mode === 'directory') {
+          await activeSession.transferOutput.openFile(emptyRequest, signal)
+          await activeSession.close()
+          activeSession = await reopenFSASession({ task: (await memory.getTask(taskId))!, store, allowPermissionPrompt: false })
+        }
+        const container = mode === 'single-file' ? parent : await parent.getDirectoryHandle('Folder')
+        const writer = await activeSession.transferOutput.openFile(emptyRequest, signal)
+        return { memory, container, activeSession, writer }
+      }
+
+      // 1. User writes content before commit([]) -> reject conflict, do not record completion, preserve user bytes.
+      const conflicted = await openAdopted(`empty-conflict-${mode}`)
+      ;(await conflicted.container.getFileHandle('large')).overwriteExternally(Uint8Array.of(4, 2))
+      await expect(conflicted.writer.commit([])).rejects.toMatchObject({ fault: { code: 'target-collision' } })
+      await conflicted.writer.abort(new DOMException('conflict', 'AbortError'))
+      expect([...(await conflicted.container.getFileHandle('large')).bytes]).toEqual([4, 2])
+      expect(await conflicted.memory.getFile(`empty-conflict-${mode}`, 'large')).toBeUndefined()
+      await conflicted.activeSession.close()
+
+      // 2. Untouched 0-byte placeholder commits cleanly.
+      const clean = await openAdopted(`empty-clean-${mode}`)
+      await clean.writer.commit([])
+      expect(await clean.memory.getFile(`empty-clean-${mode}`, 'large')).toMatchObject({
+        status: 'completed', size: 0n, completedRanges: [],
+      })
+      await clean.activeSession.close()
+    },
+  )
+
+  it('preserves a reclaimed 0-byte placeholder on abort when its exact fingerprint changed', async () => {
+    const { open, root, session, store } = await openFolderFixture()
+    await open('large')
+    const physical = await root.getFileHandle('large')
+    const originalMtime = physical.lastModified
+    await session.close()
+
+    const reopened = await reopenFSASession({ task: (await store.getTask(session.taskId))!, store, allowPermissionPrompt: false })
+    const resumed = await reopened.transferOutput.openFile(request, signal)
+    // Simulate an external 0-byte replacement with a newer mtime before abort runs.
+    physical.overwriteExternally(new Uint8Array(0), originalMtime + 1)
+    await resumed.abort(new DOMException('stopped', 'AbortError'))
+    expect(root.children.has('large')).toBe(true)
     await reopened.close()
   })
 })

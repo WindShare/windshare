@@ -39,7 +39,7 @@ import {
   cleanupFSATaskEntries, isMissingFSAEntry, isUncommittedEmptyPlaceholder,
   matchesFSADiskFingerprint, readFSADiskFingerprint, sameFSAEntry, settleFSATerminalCleanup,
 } from './fsa-cleanup'
-import { destinationChanged, FSAOutputFile, verifyExistingFSAFile } from './fsa-file'
+import { destinationChanged, FSAOutputFile, verifyExistingFSAFile, type FSAFileOrigin } from './fsa-file'
 import {
   buildFSATargetRecord, collectFSATopLevelClaims, openFSADirectory, openFSAFile,
   reserveFSATarget, retainsFSAReservationClaim, rollbackFSATaskTarget, rollbackReservedTarget, type FSADirectory,
@@ -461,37 +461,25 @@ class FSASessionHandle implements OutputSessionHandle {
   async #openFile(request: TransferFileRequest, signal: AbortSignal): Promise<TransferOutputFile> {
     signal.throwIfAborted()
     this.#outputTouched = true
-    let record = this.#files.find(this.taskId, request.fileId)
-    const parent = await this.#resolveDirectory(request.path.slice(0, -1), signal, record?.fsaPath)
+    const knownRecord = this.#files.find(this.taskId, request.fileId)
+    const parent = await this.#resolveDirectory(request.path.slice(0, -1), signal, knownRecord?.fsaPath)
     const target = this.#record.target
-    const leaf = record?.fsaPath?.at(-1) ?? record?.handle?.name ??
+    const leaf = knownRecord?.fsaPath?.at(-1) ?? knownRecord?.handle?.name ??
       (target.singleFile ? target.reservedName : request.path.at(-1)!)
-    let handle: FileSystemFileHandle | undefined
-    if (record !== undefined) {
-      handle = await this.#locateRecordedFile(parent, leaf, record)
-      if (handle === undefined) record = undefined
-    }
+    const locatedHandle = knownRecord === undefined ? undefined : await this.#locateRecordedFile(parent, leaf, knownRecord)
     signal.throwIfAborted()
-    let openedAtMs = Date.now()
-    let reservedPlaceholder: FSADiskFingerprint | undefined
-    if (handle === undefined) {
-      const opened = await this.#openUnrecordedFile(parent, request, leaf, openedAtMs)
-      handle = opened.handle
-      record = opened.record
-      openedAtMs = opened.openedAtMs
-      reservedPlaceholder = opened.reservedPlaceholder
-    }
-    const physicalPath = [...parent.physicalPath, handle.name]
+    const opened = locatedHandle !== undefined && knownRecord !== undefined
+      ? { kind: 'recorded' as const, handle: locatedHandle, record: knownRecord }
+      : await this.#openUnrecordedFile(parent, request, leaf, Date.now())
+    const physicalPath = [...parent.physicalPath, opened.handle.name]
     const displayPath = this.#displayPath(physicalPath)
-    const existing = record === undefined ? undefined : await this.#verifyFile(record, handle, displayPath)
+    const origin: FSAFileOrigin = opened.kind === 'recorded'
+      ? { kind: 'recorded', record: await this.#verifyFile(opened.record, opened.handle, displayPath) }
+      : opened.origin
     if (parent.created) this.#fileDirectories.add(parent.handle)
     return new FSAOutputFile({
-      taskId: this.taskId, request, parentDir: parent.handle, handle, physicalPath,
-      displayPath, openedAtMs, signal, store: this.#files, existing,
-      ...(reservedPlaceholder === undefined
-        ? {}
-        : { reservedPlaceholder, onReservedPlaceholderReleased: () => { this.#reservedPlaceholderActive = false } }),
-      diagnostics: this.#diagnostics,
+      taskId: this.taskId, request, parentDir: parent.handle, handle: opened.handle, physicalPath,
+      displayPath, signal, store: this.#files, origin, diagnostics: this.#diagnostics,
     })
   }
 
@@ -500,33 +488,46 @@ class FSASessionHandle implements OutputSessionHandle {
     request: TransferFileRequest,
     leaf: string,
     openedAtMs: number,
-  ): Promise<{
-    readonly handle: FileSystemFileHandle
-    readonly record?: ReceiveFileRecord
-    readonly openedAtMs: number
-    readonly reservedPlaceholder?: FSADiskFingerprint
-  }> {
+  ): Promise<
+    | Readonly<{ kind: 'recorded'; handle: FileSystemFileHandle; record: ReceiveFileRecord }>
+    | Readonly<{ kind: 'placeholder'; handle: FileSystemFileHandle; origin: Exclude<FSAFileOrigin, { kind: 'recorded' }> }>
+  > {
     const target = this.#record.target
     const entry = target.singleFile
       ? await this.#openSingleFileEntry(parent.handle, request.path, leaf)
       : await openFSAFile(parent.handle, request.path, leaf, this.#safeNames, this.taskId)
     const candidatePath = this.#displayPath([...parent.physicalPath, entry.handle.name])
+    const releaseReserved = () => { this.#reservedPlaceholderActive = false }
     if (entry.created) {
-      if (!target.singleFile) return { handle: entry.handle, openedAtMs }
-      const refreshed = await this.#refreshReservedFile(entry.handle, candidatePath)
+      if (!target.singleFile) {
+        return { kind: 'placeholder', handle: entry.handle, origin: { kind: 'fresh-placeholder', openedAtMs } }
+      }
+      const fingerprint = await this.#refreshReservedFile(entry.handle, candidatePath)
       this.#reservedPlaceholderActive = true
-      return { handle: entry.handle, openedAtMs: refreshed.lastModified, reservedPlaceholder: refreshed }
+      return {
+        kind: 'placeholder',
+        handle: entry.handle,
+        origin: { kind: 'reserved-placeholder', fingerprint, onReleased: releaseReserved },
+      }
     }
     // A repeated discovery can hit a completed file; a crash or a user edit can occupy the same name.
     // Resolve that rare case from IndexedDB without retaining a file ID for every ordinary success.
     const record = await this.#store.getFile(this.taskId, request.fileId)
-    if (record !== undefined) return { handle: entry.handle, record, openedAtMs }
+    if (record !== undefined) return { kind: 'recorded', handle: entry.handle, record }
     if (target.singleFile) {
-      const claimed = await this.#claimReservedFile(entry.handle, target.reservedFile, request.fileId, candidatePath)
-      return { handle: entry.handle, openedAtMs: claimed.lastModified, reservedPlaceholder: claimed }
+      const fingerprint = await this.#claimReservedFile(entry.handle, target.reservedFile, request.fileId, candidatePath)
+      return {
+        kind: 'placeholder',
+        handle: entry.handle,
+        origin: { kind: 'reserved-placeholder', fingerprint, onReleased: releaseReserved },
+      }
     }
-    const reclaimedAtMs = await this.#reclaimUncommittedPlaceholder(entry.handle, request.fileId, candidatePath)
-    return { handle: entry.handle, openedAtMs: reclaimedAtMs }
+    const fingerprint = await this.#reclaimUncommittedPlaceholder(entry.handle, target.reservedAtMs, request.fileId, candidatePath)
+    return {
+      kind: 'placeholder',
+      handle: entry.handle,
+      origin: { kind: 'reclaimed-placeholder', fingerprint },
+    }
   }
 
   async #openSingleFileEntry(
@@ -567,8 +568,8 @@ class FSASessionHandle implements OutputSessionHandle {
   }
 
   #reclaimUncommittedPlaceholder(
-    handle: FileSystemFileHandle, fileId: string, displayPath: string,
-  ): Promise<number> {
+    handle: FileSystemFileHandle, reservedAtMs: number, fileId: string, displayPath: string,
+  ): Promise<FSADiskFingerprint> {
     if (this.#reopenedAtMs === undefined) return Promise.reject(destinationChanged(displayPath))
     const reopenedAtMs = this.#reopenedAtMs
     return this.#serializePlaceholderClaim(async () => {
@@ -578,15 +579,15 @@ class FSASessionHandle implements OutputSessionHandle {
       const disk = await readFSADiskFingerprint(handle).catch((cause: unknown) => {
         throw destinationChanged(displayPath, cause)
       })
-      if (!isUncommittedEmptyPlaceholder(disk, this.#record.target.reservedAtMs, reopenedAtMs)) {
+      if (!isUncommittedEmptyPlaceholder(disk, reservedAtMs, reopenedAtMs)) {
         throw destinationChanged(displayPath)
       }
       this.#reclaimedPlaceholders.push(handle)
       emitOutputTrace(this.#diagnostics?.trace, 'reopen', {
         backend: 'file_system_access', task_id: this.taskId, file_id: fileId, transition: 'placeholder_reclaimed',
       })
-      // Preserve the placeholder's original timestamp so an abort before publication can still clean it up.
-      return disk.lastModified
+      // Preserve the exact disk fingerprint so first write, 0-byte commit, and abort cleanup can verify it.
+      return disk
     })
   }
 

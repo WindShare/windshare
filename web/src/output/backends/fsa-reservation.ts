@@ -87,7 +87,6 @@ export function buildFSATargetRecord(
       reservedName: reserved.reservedName,
       collisionIndex: reserved.collisionIndex,
       singleFile: true,
-      reservedAtMs,
       reservedFile: Object.freeze({
         handle: reserved.entry.handle,
         fingerprint: reserved.entry.fingerprint,

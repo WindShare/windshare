@@ -101,7 +101,6 @@ function pausedTask(f: ReturnType<typeof fixture>) {
       reservedName: 'data.bin',
       collisionIndex: 0,
       singleFile: true as const,
-      reservedAtMs: 0,
       reservedFile: {
         handle: reservedHandle as unknown as FileSystemFileHandle,
         fingerprint: { size: 0, lastModified: reservedHandle.lastModified },

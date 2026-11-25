@@ -41,7 +41,6 @@ export type FSATargetRecord =
       reservedName: string
       collisionIndex: number
       singleFile: true
-      reservedAtMs: number
       reservedFile: FSAReservedFile
     }>
 

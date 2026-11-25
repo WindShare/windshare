@@ -28,7 +28,7 @@ describe('FSA durable coverage', () => {
       handle: handle as unknown as FileSystemFileHandle,
       parentDir: { getFileHandle: async () => handle } as unknown as FileSystemDirectoryHandle,
       physicalPath: ['f'], displayPath: 'f', signal: new AbortController().signal,
-      openedAtMs: 0, existing: undefined, store: { putFile } as unknown as ReceiveStore,
+      origin: { kind: 'fresh-placeholder', openedAtMs: 0 }, store: { putFile } as unknown as ReceiveStore,
       diagnostics: { backend: 'file_system_access', trace: { current: trace } },
     })
     // The sparse fake tracks the highest offset and physical timestamp without allocating the logical prefix.
