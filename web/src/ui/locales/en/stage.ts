@@ -23,7 +23,7 @@ export const stage = {
   relayBandwidth: 'Waiting for relay bandwidth',
   relayBandwidthHint: 'Relay bandwidth is busy. The download continues automatically when bandwidth becomes available.',
   relayAccessDenied: 'Relay access denied',
-  accessDeniedHint: 'You can still export files already stored in this browser.',
+  accessDeniedHint: 'Relay access was denied for this share. Files already stored in this browser can still be saved.',
   shareEnded: 'The share has ended',
   shareEndedHint: 'This share is no longer active. Files already stored in this browser can still be saved.',
   storage: 'More storage is needed',
