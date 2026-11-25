@@ -3,6 +3,7 @@
 package output
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/hex"
@@ -10,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -694,4 +696,289 @@ func TestJournalRejectsZeroFingerprintNonEmptyPartialWithoutClobberingPublishing
 	if !errors.Is(replayErr, errJournalCorrupt) {
 		t.Fatalf("readJournalState on persisted zero-fp non-empty partial = %v, want errJournalCorrupt", replayErr)
 	}
+}
+
+type countingRepeatByteReader struct {
+	fill      byte
+	bytesRead int64
+	abortAt   int64
+}
+
+func (r *countingRepeatByteReader) Read(p []byte) (int, error) {
+	if r.abortAt > 0 && r.bytesRead >= r.abortAt {
+		return 0, errors.New("test safety ceiling exceeded: unbounded read")
+	}
+	for i := range p {
+		p[i] = r.fill
+	}
+	r.bytesRead += int64(len(p))
+	return len(p), nil
+}
+
+type errAfterBytesReader struct {
+	remaining []byte
+	err       error
+}
+
+func (r *errAfterBytesReader) Read(p []byte) (int, error) {
+	if len(r.remaining) == 0 {
+		return 0, r.err
+	}
+	n := copy(p, r.remaining)
+	r.remaining = r.remaining[n:]
+	return n, nil
+}
+
+type repeatedLineReader struct {
+	prefix  []byte
+	line    []byte
+	repeats int
+	offset  int
+}
+
+func (r *repeatedLineReader) Read(p []byte) (int, error) {
+	written := 0
+	for written < len(p) {
+		if len(r.prefix) > 0 {
+			n := copy(p[written:], r.prefix)
+			r.prefix = r.prefix[n:]
+			written += n
+			continue
+		}
+		if r.repeats == 0 {
+			if written == 0 {
+				return 0, io.EOF
+			}
+			return written, nil
+		}
+		n := copy(p[written:], r.line[r.offset:])
+		r.offset += n
+		written += n
+		if r.offset == len(r.line) {
+			r.offset = 0
+			r.repeats--
+		}
+	}
+	return written, nil
+}
+
+func mustEncodeTestMetaLine(t *testing.T, seed byte) []byte {
+	t.Helper()
+	sel := testSelectionSpec(t, seed)
+	opID := testID16[receivecontract.OperationID](seed + 1)
+	resID := testID16[receivecontract.DestinationReservationID](seed + 2)
+	var authRaw [receivecontract.AuthorityRefBytes]byte
+	authRaw[0] = seed + 3
+	authRef, err := receivecontract.AuthorityRefFromBytes(authRaw[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	layout, err := receivecontract.NewCompleteDirectoryResultRoot(testID16[catalog.DirectoryID](seed+4), "project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	art, err := receivecontract.NewResultRootDirectoryTree(layout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := receivecontract.NewNativeNamedEntryReservation(opID, resID, art, authRef, "project", "project", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := receivecontract.NewDirectTreePlan(art, res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := transfer.NewReceiveIntent(sel, art, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := metaToRecord(taskMeta{
+		Intent:          intent,
+		SelectionDigest: intent.SelectionSpec().Digest(),
+		Lifecycle:       journalLifecycleActive,
+		StateGen:        initialStateGeneration,
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line, err := encodeJournalLine(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return line
+}
+
+func TestReadBoundedJournalLineBoundsAndErrors(t *testing.T) {
+	const (
+		bufSize  = 16
+		maxBytes = 40
+	)
+
+	t.Run("normal and multi-buffer lines up to exact limit stay aligned", func(t *testing.T) {
+		exactLine := strings.Repeat("x", maxBytes-1) + "\n"
+		shortLine := "ok\n"
+		reader := bufio.NewReaderSize(strings.NewReader(exactLine+shortLine), bufSize)
+
+		got1, err := readBoundedJournalLine(reader, maxBytes)
+		if err != nil || string(got1) != exactLine {
+			t.Fatalf("first line = (%q, %v), want (%q, nil)", got1, err, exactLine)
+		}
+		got2, err := readBoundedJournalLine(reader, maxBytes)
+		if err != nil || string(got2) != shortLine {
+			t.Fatalf("second line = (%q, %v), want (%q, nil)", got2, err, shortLine)
+		}
+		got3, err := readBoundedJournalLine(reader, maxBytes)
+		if len(got3) != 0 || !errors.Is(err, io.EOF) {
+			t.Fatalf("eof = (%q, %v), want (\"\", io.EOF)", got3, err)
+		}
+	})
+
+	t.Run("rejects line exceeding maxBytes within single buffer or across buffers", func(t *testing.T) {
+		readerSmallCap := bufio.NewReaderSize(strings.NewReader("123456789\n"), bufSize)
+		if _, err := readBoundedJournalLine(readerSmallCap, 8); !errors.Is(err, errJournalCorrupt) {
+			t.Fatalf("single-buffer oversized = %v, want errJournalCorrupt", err)
+		}
+
+		readerMulti := bufio.NewReaderSize(strings.NewReader(strings.Repeat("a", maxBytes)+"\n"), bufSize)
+		if _, err := readBoundedJournalLine(readerMulti, maxBytes); !errors.Is(err, errJournalCorrupt) {
+			t.Fatalf("multi-buffer oversized = %v, want errJournalCorrupt", err)
+		}
+	})
+
+	t.Run("preserves multi-buffer torn tail at EOF without newline", func(t *testing.T) {
+		tail := strings.Repeat("t", maxBytes)
+		reader := bufio.NewReaderSize(strings.NewReader(tail), bufSize)
+		got, err := readBoundedJournalLine(reader, maxBytes)
+		if !errors.Is(err, io.EOF) || string(got) != tail {
+			t.Fatalf("torn tail = (%q, %v), want (%q, io.EOF)", got, err, tail)
+		}
+	})
+
+	t.Run("preserves underlying I/O errors instead of misclassifying as corrupt", func(t *testing.T) {
+		errBoom := errors.New("disk read failed")
+		r1 := bufio.NewReaderSize(&errAfterBytesReader{remaining: []byte("part"), err: errBoom}, bufSize)
+		if _, err := readBoundedJournalLine(r1, maxBytes); !errors.Is(err, errBoom) {
+			t.Fatalf("single-buffer io error = %v, want %v", err, errBoom)
+		}
+
+		r2 := bufio.NewReaderSize(&errAfterBytesReader{remaining: bytes.Repeat([]byte("b"), bufSize+5), err: errBoom}, bufSize)
+		if _, err := readBoundedJournalLine(r2, maxBytes); !errors.Is(err, errBoom) {
+			t.Fatalf("multi-buffer io error = %v, want %v", err, errBoom)
+		}
+	})
+}
+
+func TestReadJournalStateBoundsOversizedCorruptLine(t *testing.T) {
+	metaLine := mustEncodeTestMetaLine(t, 0xe1)
+	tail := &countingRepeatByteReader{
+		fill:    'a',
+		abortAt: int64(2 * journalMaxLineBytes),
+	}
+	stream := io.MultiReader(bytes.NewReader(metaLine), tail)
+
+	_, _, err := readJournalStateFromReader(stream)
+	if !errors.Is(err, errJournalCorrupt) {
+		t.Fatalf("readJournalStateFromReader on oversized corrupt line = %v, want errJournalCorrupt", err)
+	}
+	maxExpectedRead := int64(journalMaxLineBytes + journalStateReadBufferBytes)
+	if tail.bytesRead > maxExpectedRead {
+		t.Fatalf("oversized line read %d bytes from tail, want <= %d", tail.bytesRead, maxExpectedRead)
+	}
+}
+
+func TestReadJournalStateAllowsLargeLogsAndMultiBufferLines(t *testing.T) {
+	metaLine := mustEncodeTestMetaLine(t, 0xe7)
+	fid := testID16[catalog.FileID](0xe8)
+	rev := testID16[content.FileRevision](0xe9)
+
+	t.Run("multi-line journal exceeding journalMaxLineBytes replays without truncation", func(t *testing.T) {
+		deliveredLine, err := encodeJournalLine(deliveredToRecord(deliveredEntry{
+			FileID:    fid,
+			Path:      "project/" + strings.Repeat("segment/", 250) + "file.bin",
+			Revision:  rev,
+			ExactSize: 4096,
+		}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		repeats := (journalMaxLineBytes / len(deliveredLine)) + 16
+		stream := &repeatedLineReader{
+			prefix:  metaLine,
+			line:    deliveredLine,
+			repeats: repeats,
+		}
+		state, validBytes, err := readJournalStateFromReader(stream)
+		if err != nil {
+			t.Fatalf("readJournalStateFromReader on >4MiB multi-line log = %v", err)
+		}
+		if state.tornTail {
+			t.Fatal("expected tornTail=false for newline-terminated >4MiB log")
+		}
+		wantBytes := int64(len(metaLine)) + int64(repeats)*int64(len(deliveredLine))
+		if validBytes <= journalMaxLineBytes || validBytes != wantBytes {
+			t.Fatalf("validBytes = %d, want %d (> %d)", validBytes, wantBytes, journalMaxLineBytes)
+		}
+		if state.lineCount != 1+repeats {
+			t.Fatalf("lineCount = %d, want %d", state.lineCount, 1+repeats)
+		}
+	})
+
+	t.Run("valid multi-buffer line and multi-buffer torn tail", func(t *testing.T) {
+		ranges := make([]content.Range, 1500)
+		for i := range ranges {
+			off := uint64(i * 4096)
+			ranges[i] = content.Range{Offset: off, End: off + 2048}
+		}
+		partialLine, err := encodeJournalLine(partialToRecord(partialEntry{
+			FileID:        fid,
+			Path:          "project/fragmented.bin",
+			Revision:      rev,
+			ExactSize:     uint64(len(ranges) * 4096),
+			PartName:      "fragmented.part",
+			Ranges:        ranges,
+			CheckpointGen: 1,
+			Fingerprint:   [stageFingerprintBytes]byte{0x42},
+		}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(partialLine) <= journalStateReadBufferBytes {
+			t.Fatalf("test setup expected partialLine > %d bytes, got %d", journalStateReadBufferBytes, len(partialLine))
+		}
+		deliveredLine, err := encodeJournalLine(deliveredToRecord(deliveredEntry{
+			FileID:    testID16[catalog.FileID](0xea),
+			Path:      "project/after.bin",
+			Revision:  rev,
+			ExactSize: 128,
+		}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		tornTail := bytes.Repeat([]byte("z"), journalStateReadBufferBytes+512)
+
+		stream := io.MultiReader(
+			bytes.NewReader(metaLine),
+			bytes.NewReader(partialLine),
+			bytes.NewReader(deliveredLine),
+			bytes.NewReader(tornTail),
+		)
+		state, validBytes, err := readJournalStateFromReader(stream)
+		if err != nil {
+			t.Fatalf("readJournalStateFromReader with multi-buffer line and torn tail = %v", err)
+		}
+		if !state.tornTail {
+			t.Fatal("expected tornTail=true for unterminated multi-buffer tail")
+		}
+		wantValid := int64(len(metaLine) + len(partialLine) + len(deliveredLine))
+		if validBytes != wantValid {
+			t.Fatalf("validBytes = %d, want %d", validBytes, wantValid)
+		}
+		if got := len(state.partials["project/fragmented.bin"].Ranges); got != len(ranges) {
+			t.Fatalf("partial range count = %d, want %d", got, len(ranges))
+		}
+		if _, ok := state.delivered["project/after.bin"]; !ok {
+			t.Fatal("missing delivered entry after multi-buffer partial line")
+		}
+	})
 }

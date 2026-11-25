@@ -467,6 +467,38 @@ func parseJournalLine(line []byte) (journalRecord, error) {
 	return rec, nil
 }
 
+// readBoundedJournalLine reads at most one '\n'-terminated record (or trailing
+// EOF fragment) from r, failing with errJournalCorrupt as soon as the line
+// exceeds maxBytes so corrupt newline-less data cannot force unbounded memory
+// allocation. The returned slice is only valid until the next read on r.
+func readBoundedJournalLine(r *bufio.Reader, maxBytes int) ([]byte, error) {
+	frag, err := r.ReadSlice('\n')
+	if !errors.Is(err, bufio.ErrBufferFull) {
+		if err != nil && !errors.Is(err, io.EOF) {
+			return nil, err
+		}
+		if len(frag) > maxBytes {
+			return nil, errJournalCorrupt
+		}
+		return frag, err
+	}
+
+	var line []byte
+	for {
+		if err != nil && !errors.Is(err, bufio.ErrBufferFull) && !errors.Is(err, io.EOF) {
+			return nil, err
+		}
+		if len(frag) > maxBytes-len(line) {
+			return nil, errJournalCorrupt
+		}
+		line = append(line, frag...)
+		if !errors.Is(err, bufio.ErrBufferFull) {
+			return line, err
+		}
+		frag, err = r.ReadSlice('\n')
+	}
+}
+
 // readJournalHeader reads only the immutable first record of state.log without
 // replaying file-level progress entries. Callers that need mutable lifecycle
 // state, full integrity validation, or per-file checkpoints must use
@@ -478,14 +510,11 @@ func readJournalHeader(opDir *Dir) (taskHeader, error) {
 	}
 	defer f.Close()
 
-	// Bound total bytes read so a corrupt file without a newline cannot force
-	// unbounded allocation during directory-wide scans.
+	// Bound total bytes read so a corrupt file without a newline or padded with
+	// leading blank lines cannot force unbounded work during directory-wide scans.
 	reader := bufio.NewReaderSize(io.LimitReader(f, journalMaxLineBytes+1), journalHeaderReadBufferBytes)
 	for {
-		raw, readErr := reader.ReadBytes('\n')
-		if len(raw) > journalMaxLineBytes {
-			return taskHeader{}, errJournalCorrupt
-		}
+		raw, readErr := readBoundedJournalLine(reader, journalMaxLineBytes)
 		if readErr != nil && !errors.Is(readErr, io.EOF) {
 			return taskHeader{}, readErr
 		}
@@ -528,20 +557,20 @@ func readVerifiedJournalHeader(opDir *Dir, expectedOpID receivecontract.Operatio
 // treated as an uncommitted torn tail to be truncated before appending.
 // Corruption in earlier lines or a missing meta header returns errJournalCorrupt.
 func readJournalState(opDir *Dir) (journalState, int64, error) {
-	state := newJournalState()
 	f, err := openChildFile(opDir, journalFileName, os.O_RDONLY, 0)
 	if err != nil {
-		return state, 0, err
+		return newJournalState(), 0, err
 	}
 	defer f.Close()
+	return readJournalStateFromReader(f)
+}
 
-	reader := bufio.NewReaderSize(f, journalStateReadBufferBytes)
+func readJournalStateFromReader(r io.Reader) (journalState, int64, error) {
+	state := newJournalState()
+	reader := bufio.NewReaderSize(r, journalStateReadBufferBytes)
 	var validBytes int64
 	for {
-		raw, readErr := reader.ReadBytes('\n')
-		if len(raw) > journalMaxLineBytes {
-			return state, 0, errJournalCorrupt
-		}
+		raw, readErr := readBoundedJournalLine(reader, journalMaxLineBytes)
 		if readErr != nil && !errors.Is(readErr, io.EOF) {
 			return state, 0, readErr
 		}
