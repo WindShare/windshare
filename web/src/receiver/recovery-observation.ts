@@ -29,12 +29,12 @@ export function observeRecovery(
 export function emitRelayHeartbeat(
   source: ProtocolTraceSource | undefined,
   event: RelayHeartbeatTrace,
-  relayBase: string,
+  relayIdentity: string,
   context: () => RelayTraceContext,
 ): void {
   try {
     const observer = source?.current
-    if (observer !== undefined) observer({ eventName: 'relay_heartbeat', ...event, ...context(), relayBase })
+    if (observer !== undefined) observer({ eventName: 'relay_heartbeat', ...event, ...context(), relayIdentity })
   } catch {
     // Capture is passive even before a protocol generation has been admitted.
   }
@@ -43,12 +43,12 @@ export function emitRelayHeartbeat(
 export function emitRelayDelivery(
   source: ProtocolTraceSource | undefined,
   event: ReceiveLedgerEvent,
-  relayBase: string,
+  relayIdentity: string,
   context: () => RelayTraceContext,
 ): void {
   try {
     const observer = source?.current
-    if (observer !== undefined) observer({ eventName: 'relay_delivery', ...event, ...context(), relayBase })
+    if (observer !== undefined) observer({ eventName: 'relay_delivery', ...event, ...context(), relayIdentity })
   } catch {
     // Receive ownership cannot depend on a diagnostic observer.
   }

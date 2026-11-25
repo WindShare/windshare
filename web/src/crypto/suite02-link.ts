@@ -142,8 +142,10 @@ export async function parseSuite02CapabilityLink(
   let url: URL
   try {
     url = new URL(trimmed)
-  } catch (cause) {
-    throw new CryptoError('malformed-link', 'Suite-02 capability URL is invalid', { cause })
+  } catch {
+    // Omit the native TypeError cause: browsers such as Firefox echo the raw
+    // input URL (including its #fragment readSecret) in the error message.
+    throw new CryptoError('malformed-link', 'Suite-02 capability URL is invalid')
   }
   if (url.protocol === '' || url.host === '' || url.hash.length <= 1) {
     throw new CryptoError('malformed-link', 'Suite-02 capability URL is incomplete')

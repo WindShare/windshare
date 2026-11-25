@@ -57,12 +57,17 @@ describe('DiagnosticsRuntime', () => {
       retained_event_count: '0',
     })
 
-    const cause = new Error('socket reset')
-    const root = new Error('session failed', { cause })
+    const cause = new Error(
+      "URL constructor: 'https://user:pass@windshare.top:bad/share?r=https%3A%2F%2Frelay.example%3Ftoken%3Dadm#AgReadSecretKey' is not a valid URL.",
+    )
+    const root = new Error('session failed on https://relay.example/base?token=relay-secret-42', { cause })
+    root.stack = 'Error: session failed\n    at join (http://localhost:5173/src/ui/controller.ts?t=1700000000:583:12)'
     const recorded = runtime.recordFailure({
       stage: 'join',
       operation: 'join.connect',
       error: root,
+      context: { endpoint: 'wss://[2001:db8::1]:8443/v2/ws?token=ipv6-secret#frag' },
+      correlation: { note: 'https://relay.example/v2/ws?token=corr-secret' },
       consoleReport: true,
     })
 
@@ -72,12 +77,26 @@ describe('DiagnosticsRuntime', () => {
     expect(runtime.getSnapshot().hasEvidence).toBe(true)
 
     const bundle = runtime.export()
+    const serializedConsole = JSON.stringify(consoleErrors[0])
+    for (const secret of ['AgReadSecretKey', 'relay-secret-42', 'ipv6-secret', 'corr-secret', 'user:pass', 'token=adm']) {
+      expect(bundle).not.toContain(secret)
+      expect(serializedConsole).not.toContain(secret)
+      expect(JSON.stringify(runtime.lastFailure())).not.toContain(secret)
+    }
+
     const lines = bundle.trim().split('\n').map(line => JSON.parse(line) as Record<string, unknown>)
     expect(lines.map(line => line.line_type)).toEqual(['bundle_header', 'failure'])
     expect(lines[1]).toMatchObject({
       stage: 'join',
       operation: 'join.connect',
-      error: { name: 'Error', message: 'session failed', cause: { message: 'socket reset' } },
+      correlation: { note: 'https://relay.example/v2/ws' },
+      context: { endpoint: 'wss://[2001:db8::1]:8443/v2/ws' },
+      error: {
+        name: 'Error',
+        message: 'session failed on https://relay.example/base',
+        stack: expect.stringContaining('http://localhost:5173/src/ui/controller.ts:583:12'),
+        cause: { message: "URL constructor: 'https://windshare.top:bad/share' is not a valid URL." },
+      },
     })
 
     const file = createDiagnosticFile(bundle)

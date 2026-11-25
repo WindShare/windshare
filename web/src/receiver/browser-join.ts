@@ -1,5 +1,6 @@
 import { openShareDescriptor, type ShareDescriptor } from '../catalog/records'
 import type { Suite02CapabilityKey } from '../crypto/suite02-link'
+import { safeRelayIdentity } from '../network/relay-endpoint'
 import type { ProtocolTraceSource } from '../session/diagnostics'
 import { ReceiverSessionRuntime } from '../session/runtime'
 import { dialRelayReceiver } from '../transport/relay/receiver'
@@ -43,10 +44,11 @@ export function joinBrowserRelays(
         correlation: session === undefined ? {} : { protocolSessionId: session.protocolSessionIdentity },
         shareId: capability.shareId,
       })
+      const relayIdentity = safeRelayIdentity(relayBase)
       const relay = await dialRelayReceiver(relayBase, ownedCapability, {
         signal: attemptSignal,
-        receiveTrace: event => emitRelayDelivery(protocolTrace, event, relayBase, traceContext),
-        heartbeatTrace: event => emitRelayHeartbeat(protocolTrace, event, relayBase, traceContext),
+        receiveTrace: event => emitRelayDelivery(protocolTrace, event, relayIdentity, traceContext),
+        heartbeatTrace: event => emitRelayHeartbeat(protocolTrace, event, relayIdentity, traceContext),
       })
       try {
         const descriptor = await openShareDescriptor(relay.descriptorObject, ownedCapability, {

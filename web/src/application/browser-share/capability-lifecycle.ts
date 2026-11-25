@@ -26,6 +26,7 @@ export interface CapabilityJoinLease {
   readonly activate: () => void
   readonly handoff: <T>(operation: (input: string) => T) => T
   readonly publicError: (error: unknown) => string
+  readonly diagnosticError: (error: unknown) => unknown
   readonly release: () => void
 }
 
@@ -58,6 +59,10 @@ export class CapabilityInputLifecycle {
 
   publicError(error: unknown): string {
     return this.#format(error, this.#redactor)
+  }
+
+  diagnosticError(error: unknown): unknown {
+    return this.#redactor === undefined ? formatDiagnosticValue(error) : this.#redactor.value(error)
   }
 
   notify(milestone: SecurityMilestone): void {
@@ -118,6 +123,10 @@ class OwnedCapabilityJoinLease implements CapabilityJoinLease {
 
   publicError(error: unknown): string {
     return this.#formatError(error)
+  }
+
+  diagnosticError(error: unknown): unknown {
+    return this.#redactor.value(error)
   }
 
   release(): void {

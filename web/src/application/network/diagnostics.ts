@@ -1,6 +1,7 @@
 import type { DirectoryObservation } from '../../network/directory'
 import type { TraceEntry, TraceSource } from '../../diagnostics/runtime'
 import { formatDiagnosticText } from '../../security/diagnostic-formatter'
+import { sanitizeDiagnosticText } from '../../security/url-sanitizer'
 
 const MAX_TEXT = 2_048
 
@@ -23,7 +24,7 @@ export function networkObserver(trace: TraceSource<TraceEntry>): (event: Directo
       event: 'network_directory',
       payload: {
         operation_id: event.operationId,
-        mirror: event.mirror.slice(0, MAX_TEXT),
+        mirror: sanitizeDiagnosticText(event.mirror).slice(0, MAX_TEXT),
         tier: event.tier,
         transition: event.transition,
         ...(event.generation === undefined ? {} : { generation: event.generation }),

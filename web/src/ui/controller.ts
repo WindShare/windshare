@@ -580,7 +580,7 @@ export class ReceiverController {
     if (!joinedReplacementInstalled && previous !== undefined && this.#joined === previous) {
       this.#joinedObservation.observe(previous)
     }
-    this.#reportJoinFailure(error)
+    this.#reportJoinFailure(lease.diagnosticError(error))
     this.#traceJoin('failed')
     this.#fail(error, lease)
   }

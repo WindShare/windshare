@@ -275,7 +275,9 @@ export class DiagnosticsRuntime {
         runtime_run_id: this.runtimeRunId,
         stage: input.stage,
         ...(input.operation === undefined ? {} : { operation: input.operation }),
-        ...(input.correlation === undefined ? {} : { correlation: input.correlation }),
+        ...(input.correlation === undefined ? {} : {
+          correlation: formatDiagnosticValue(input.correlation, FAILURE_FORMAT_OPTIONS) as Readonly<Record<string, unknown>>,
+        }),
         ...(input.error === undefined ? {} : { error: formatDiagnosticValue(input.error, FAILURE_FORMAT_OPTIONS) }),
         ...(input.context === undefined ? {} : {
           context: formatDiagnosticValue(input.context, FAILURE_FORMAT_OPTIONS) as Readonly<Record<string, unknown>>,

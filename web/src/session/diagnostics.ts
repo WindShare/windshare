@@ -235,7 +235,7 @@ export type ConnectionRecoveryTraceEvent = Readonly<{
   generationId: number
   shareId?: string
   shareInstanceId?: string
-  relayBase?: string
+  relayIdentity?: string
   attempt: number
   phase: 'initial' | 'fast' | 'waiting'
   transition: 'attempt_started' | 'attempt_failed' | 'waiting' | 'connected' | 'terminal' | 'retry_requested'
@@ -251,7 +251,7 @@ export type RelayHeartbeatTraceEvent = Readonly<{
   generationId?: number
   shareId?: string
   shareInstanceId?: string
-  relayBase: string
+  relayIdentity: string
   round: bigint
   stage: 'probe' | 'acknowledged' | 'failed'
   bufferedBytes: number
@@ -262,7 +262,7 @@ export type RelayHeartbeatTraceEvent = Readonly<{
 export type RelayDeliveryTraceEvent = import('../contracts/relay-delivery-observation').ReceiveLedgerEvent & Readonly<{
   eventName: 'relay_delivery'
   correlation: ProtocolCorrelation
-  relayBase: string
+  relayIdentity: string
   shareId?: string
   shareInstanceId?: string
 }>

@@ -4,6 +4,7 @@ import { concatBytes, encodeBase64Url } from '../crypto/bytes'
 import { sha256 } from '../crypto/digest'
 import { type CryptoRuntime, defaultCryptoRuntime } from '../crypto/webcrypto'
 import { SUITE02_SHARE_ID_BYTES as RELAY_SHARE_ID_BYTES } from '../crypto/suite02-link'
+import { stripRawUrlCredentials } from '../security/url-sanitizer'
 
 export const RELAY_WEBSOCKET_PATH = '/v2/ws'
 export const RELAY_SHARE_ROUTE_QUERY = 'share_id'
@@ -239,6 +240,18 @@ export async function canonicalRelayEndpoint(
 }
 
 export function canonicalRelayIdentity(raw: string): string { return canonicalAddress(raw).identity }
+
+/**
+ * Returns the canonical query-free relay identity without throwing, stripping
+ * credentials from malformed or placeholder strings at diagnostic boundaries.
+ */
+export function safeRelayIdentity(raw: string): string {
+  try {
+    return canonicalRelayIdentity(raw)
+  } catch {
+    return stripRawUrlCredentials(raw)
+  }
+}
 
 export async function relayEndpointForShare(
   raw: string,

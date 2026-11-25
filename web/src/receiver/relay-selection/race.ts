@@ -1,3 +1,4 @@
+import { safeRelayIdentity } from '../../network/relay-endpoint'
 import { relayCandidates, type RelayCandidateSource, type RelayExpansionOptions } from './candidates'
 
 export interface FirstUsableRelayOptions {
@@ -7,11 +8,12 @@ export interface FirstUsableRelayOptions {
 }
 
 export class RelayEndpointFailure extends Error {
-  readonly relayBase: string
+  readonly relayIdentity: string
   constructor(relayBase: string, cause: unknown) {
-    super(`Relay endpoint ${relayBase} failed`, { cause })
+    const relayIdentity = safeRelayIdentity(relayBase)
+    super(`Relay endpoint ${relayIdentity} failed`, { cause })
     this.name = 'RelayEndpointFailure'
-    this.relayBase = relayBase
+    this.relayIdentity = relayIdentity
   }
 }
 

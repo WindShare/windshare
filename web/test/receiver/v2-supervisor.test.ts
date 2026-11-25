@@ -691,7 +691,7 @@ describe('v2 browser session factory descriptor continuity', () => {
       connectSession: async () => new FakeSession([4]) as unknown as ReceiverSessionRuntime,
     })
     await expect(factory.connectFresh(new AbortController().signal)).rejects.toMatchObject({
-      errors: [{ relayBase: 'stopped', cause: stopped }, { relayBase: 'recoverable', cause: expect.any(Error) }],
+      errors: [{ relayIdentity: 'stopped', cause: stopped }, { relayIdentity: 'recoverable', cause: expect.any(Error) }],
     })
     const next = await factory.connectFresh(new AbortController().signal)
     expect(next.relayBase).toBe('recoverable')

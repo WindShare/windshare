@@ -1,6 +1,7 @@
 import { encodeBase64Url } from '../../crypto/bytes'
 import type { ReceiveCounts } from '../../contracts/relay-delivery-observation'
 import type { TraceEntry } from '../../diagnostics/runtime'
+import { safeRelayIdentity } from '../../network/relay-endpoint'
 import { formatDiagnosticText } from '../../security/diagnostic-formatter'
 import type {
   ConnectionRecoveryTraceEvent,
@@ -216,7 +217,7 @@ function projectConnectionRecovery(event: ConnectionRecoveryTraceEvent): Readonl
     transition: event.transition,
     ...(event.shareId === undefined ? {} : { share_id: event.shareId.slice(0, TEXT_MAX_CHARS) }),
     ...(event.shareInstanceId === undefined ? {} : { share_instance_id: event.shareInstanceId.slice(0, TEXT_MAX_CHARS) }),
-    ...(event.relayBase === undefined ? {} : { relay_base: event.relayBase.slice(0, TEXT_MAX_CHARS) }),
+    ...(event.relayIdentity === undefined ? {} : { relay_identity: projectRelayIdentity(event.relayIdentity) }),
     ...(event.delayMilliseconds === undefined ? {} : { delay_ms: Math.max(0, Math.round(event.delayMilliseconds)) }),
     ...(event.waitReason === undefined ? {} : { wait_reason: event.waitReason }),
     ...(event.failure === undefined ? {} : { failure_detail: formatFailure(event.failure) }),
@@ -226,7 +227,7 @@ function projectConnectionRecovery(event: ConnectionRecoveryTraceEvent): Readonl
 function projectRelayHeartbeat(event: RelayHeartbeatTraceEvent): Readonly<Record<string, unknown>> {
   return {
     connection_id: String(event.connectionId),
-    relay_base: event.relayBase.slice(0, TEXT_MAX_CHARS),
+    relay_identity: projectRelayIdentity(event.relayIdentity),
     round: String(event.round),
     stage: event.stage,
     buffered_bytes: String(event.bufferedBytes),
@@ -242,7 +243,7 @@ function projectRelayDelivery(event: RelayDeliveryTraceEvent): Readonly<Record<s
   const progress = event.progress
   return {
     connection_id: event.connectionId,
-    relay_base: event.relayBase.slice(0, TEXT_MAX_CHARS),
+    relay_identity: projectRelayIdentity(event.relayIdentity),
     action: event.action,
     capacity: deliveryCounts(event.capacity),
     held: deliveryCounts(event.usage.held),
@@ -358,6 +359,19 @@ function deliveryCounts(counts: ReceiveCounts): Readonly<{ frames: string; encod
 
 function formatFailure(error: unknown): string {
   return formatDiagnosticText(error, FAILURE_DETAIL_FORMAT).slice(0, FAILURE_DETAIL_MAX_CHARS)
+}
+
+function projectRelayIdentity(value: string): string {
+  // Emitters pre-compute canonical `ws(s)://…/v2/ws` identities once per
+  // connection; skip URL reparsing on hot delivery traces when already clean.
+  const alreadyCanonical =
+    (value.startsWith('wss://') || value.startsWith('ws://')) &&
+    value.endsWith('/v2/ws') &&
+    !value.includes('?') &&
+    !value.includes('#') &&
+    !value.includes('@')
+  const sanitized = alreadyCanonical ? value : safeRelayIdentity(value)
+  return sanitized.slice(0, TEXT_MAX_CHARS)
 }
 
 function encodeNonZeroIdentity(

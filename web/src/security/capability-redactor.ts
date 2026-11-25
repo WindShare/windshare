@@ -140,7 +140,10 @@ export function capabilityRedactionValuesFromInput(
   pageUrl?: string,
 ): CapabilityRedactionValues {
   const trimmed = input.trim()
-  const result: CapabilityRedactionValues = { separateKey: trimmed }
+  const hashIndex = trimmed.indexOf('#')
+  const rawFragment = hashIndex !== -1 && hashIndex + 1 < trimmed.length
+    ? trimmed.slice(hashIndex)
+    : undefined
   try {
     const url = new URL(trimmed.includes('://') ? trimmed : `${pageUrl ?? ''}${trimmed}`)
     return Object.freeze({
@@ -149,7 +152,10 @@ export function capabilityRedactionValuesFromInput(
       separateKey: trimmed,
     })
   } catch {
-    return Object.freeze(result)
+    return Object.freeze({
+      ...(rawFragment === undefined ? {} : { fragment: rawFragment }),
+      separateKey: trimmed,
+    })
   }
 }
 

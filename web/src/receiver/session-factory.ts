@@ -1,6 +1,7 @@
 import { openShareDescriptor, type ShareDescriptor } from '../catalog/records'
 import { equalBytes } from '../crypto/bytes'
 import type { Suite02CapabilityKey } from '../crypto/suite02-link'
+import { safeRelayIdentity } from '../network/relay-endpoint'
 import type { ProtocolTraceSource } from '../session/diagnostics'
 import { ReceiverSessionRuntime, type ReceiverSessionOptions } from '../session/runtime'
 import {
@@ -176,14 +177,15 @@ export class BrowserSessionFactory implements ReceiverSessionFactory {
   async #dialValidatedRelay(relayBase: string, signal: AbortSignal,
     currentSession: () => ReceiverSessionRuntime | undefined,
   ): Promise<RelayReceiverConnection> {
+    const relayIdentity = safeRelayIdentity(relayBase)
     const relay = await this.#dialRelay(relayBase, this.#capability, {
       signal,
-      receiveTrace: event => emitRelayDelivery(this.#protocolTrace, event, relayBase, () => {
+      receiveTrace: event => emitRelayDelivery(this.#protocolTrace, event, relayIdentity, () => {
         const session = currentSession()
         return { correlation: session === undefined ? {} : { protocolSessionId: session.protocolSessionIdentity },
           shareId: this.#capability.shareId, shareInstanceId: this.#descriptor.shareInstanceId }
       }),
-      heartbeatTrace: event => emitRelayHeartbeat(this.#protocolTrace, event, relayBase, () => {
+      heartbeatTrace: event => emitRelayHeartbeat(this.#protocolTrace, event, relayIdentity, () => {
         const session = currentSession()
         return { correlation: session === undefined ? {} : { protocolSessionId: session.protocolSessionIdentity },
           shareId: this.#capability.shareId, shareInstanceId: this.#descriptor.shareInstanceId }

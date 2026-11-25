@@ -177,7 +177,7 @@ describe('relay endpoint failure isolation', () => {
       expect(supervisor.contentLaneCount(activation.routes)).toBe(1)
       expect(observed).toEqual([error])
       expect(trace).toHaveBeenCalledWith(expect.objectContaining({
-        eventName: 'connection_recovery', transition: 'terminal', relayBase: INVALID_RELAY, generationId: 1,
+        eventName: 'connection_recovery', transition: 'terminal', relayIdentity: 'wss://invalid.example/v2/ws', generationId: 1,
       }))
       await expect(supervisor.execute(undefined, async generation => generation.session.availableLaneIds()))
         .resolves.toMatchObject({ value: [1] })

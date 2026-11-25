@@ -1,3 +1,5 @@
+import { sanitizeDiagnosticText } from './url-sanitizer'
+
 /**
  * A deliberately small, side-effect-free formatter for values crossing a
  * diagnostic boundary. Error objects are not JSON data: their causes and
@@ -36,7 +38,12 @@ export function createRecursiveDiagnosticFormatter(
     options.maxStringCharacters,
     DEFAULT_MAXIMUM_STRING_CHARACTERS,
   )
-  const redactText = options.redactText ?? identity
+  const customRedactText = options.redactText
+  // Run exact capability redaction first so configured placeholders match
+  // complete URLs before structural sanitization strips remaining URL secrets.
+  const redactText = customRedactText === undefined
+    ? sanitizeDiagnosticText
+    : (input: string) => sanitizeDiagnosticText(customRedactText(input))
 
   const value = (input: unknown): unknown => {
     const seen = new WeakSet<object>()
@@ -297,8 +304,4 @@ function stringifyDiagnostic(value: unknown): string {
   } catch {
     return '"[unserializable diagnostic]"'
   }
-}
-
-function identity(value: string): string {
-  return value
 }

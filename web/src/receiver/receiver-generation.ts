@@ -16,6 +16,7 @@ import {
   type BlockRouteObservation,
 } from '../content/broker'
 import { RevisionService, SessionBlockLane } from '../content/session-services'
+import { safeRelayIdentity } from '../network/relay-endpoint'
 import type { ProtocolTraceSource } from '../session/diagnostics'
 import type { ReceiverSessionRuntime } from '../session/runtime'
 import type { LaneChange } from '../session/runtime-types'
@@ -172,7 +173,7 @@ export class ReceiverGenerationFactory {
             const phase = retry?.reason === 'bandwidth' ? 'waiting' : reconnectPhase(attempt, elapsed)
             const delay = Math.max(required, phase === 'waiting'
               ? waitingReconnectBackoff() : requireBackoff(options.backoffMilliseconds(attempt)))
-            observeRecovery(options.protocolTrace, { generationId, relayBase, shareInstanceId: options.descriptor.shareInstanceId,
+            observeRecovery(options.protocolTrace, { generationId, relayIdentity: safeRelayIdentity(relayBase), shareInstanceId: options.descriptor.shareInstanceId,
               correlation: { protocolSessionId: core.session.protocolSessionIdentity } },
             { attempt, phase, transition: 'waiting', delayMilliseconds: delay, failure: error,
                waitReason: retry?.reason ?? 'backoff' })
@@ -181,7 +182,7 @@ export class ReceiverGenerationFactory {
           },
           now: () => options.clock.now(),
           observe: (relayBase, observation) => observeRecovery(options.protocolTrace,
-            { generationId, relayBase, shareInstanceId: options.descriptor.shareInstanceId,
+            { generationId, relayIdentity: safeRelayIdentity(relayBase), shareInstanceId: options.descriptor.shareInstanceId,
               correlation: { protocolSessionId: core.session.protocolSessionIdentity } }, observation),
           failure: options.onRelayFailure,
         }),

@@ -46,7 +46,7 @@ describe('first usable relay', () => {
         return slow.promise
       }, close, { fatal: isShareRecoveryFailure })
     await expect(task).rejects.toMatchObject({
-      name: RelayEndpointFailure.name, relayBase: 'invalid', cause: failure,
+      name: RelayEndpointFailure.name, relayIdentity: 'invalid', cause: failure,
     })
     expect(stalledSignal?.aborted).toBe(true)
     slow.resolve('late-session')
@@ -217,5 +217,24 @@ describe('first usable relay', () => {
     expect(isTerminalRecoveryFailure(fullFailure)).toBe(true)
     expect(recovery.nextRetry()).toBeUndefined()
     expect(connect.mock.calls.map(([base]) => base)).toEqual(['official-a', 'official-b'])
+  })
+
+  it('strips relay query credentials from RelayEndpointFailure while preserving relay identity', () => {
+    const privateFailure = new RelayEndpointFailure(
+      'https://relay.example/base?token=admission-secret-123',
+      new Error('dial failed'),
+    )
+    expect(privateFailure.relayIdentity).toBe('wss://relay.example/base/v2/ws')
+    expect(privateFailure.message).toBe('Relay endpoint wss://relay.example/base/v2/ws failed')
+    expect(privateFailure.message).not.toContain('admission-secret-123')
+
+    const malformedFailure = new RelayEndpointFailure(
+      'https://user:pass@relay.example/base?token=secret#frag',
+      new Error('bad url'),
+    )
+    expect(malformedFailure.relayIdentity).toBe('https://relay.example/base')
+    expect(malformedFailure.message).not.toContain('pass')
+    expect(malformedFailure.message).not.toContain('secret')
+    expect(malformedFailure.message).not.toContain('frag')
   })
 })
