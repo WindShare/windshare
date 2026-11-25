@@ -127,7 +127,7 @@ describe('receiver runtime caller-owned lane admission', () => {
     const successor = new ScriptedChannel(b64ToBytes(lane.laneAckB64))
     const connectivity = new ReceiverConnectivity({
       session: runtime, lanes: new LaneSet(), nativePeerUsable: () => false,
-      createBlockLane: id => ({ id, fetchBlock: async () => { throw new Error('unexpected block request') } }),
+      createBlockLane: ({ laneId }) => ({ id: laneId, fetchBlock: async () => { throw new Error('unexpected block request') } }),
       onContentLaneDetached: removed => { if (removed.laneId === old.laneId) observe('content') },
     })
     try {

@@ -127,8 +127,8 @@ export class ReceiverGenerationFactory {
         session: core.session,
         lanes,
         relayLaneId: core.relayLaneId,
-        createBlockLane: (laneId) => new SessionBlockLane(
-          laneId,
+        createBlockLane: (lane) => new SessionBlockLane(
+          lane,
           core.session,
           revisionService,
         ),

@@ -36,7 +36,7 @@ it.each(['send', 'receive', 'retirement'] as const)('retries %s lane loss on the
   const dispatched = vi.fn()
   const lanes = new LaneSet({ onBlockDispatched: dispatched })
   const revisions = { leaseError: () => undefined } as unknown as RevisionService
-  lanes.add(new SessionBlockLane(1, runtime, revisions), 'application-relay')
+  lanes.add(new SessionBlockLane({ laneId: 1, laneEpoch: 0 }, runtime, revisions), 'application-relay')
   const descriptor = {
     shareInstance: SHARE.shareInstance, shareInstanceId: SHARE.shareInstanceId,
     fileId: id(30), fileIdText: 'file', fileRevision: id(31), fileRevisionText: 'revision',
@@ -83,6 +83,27 @@ it('keeps envelope validation failure fatal while sends are waiting', async () =
     expect(events).toContainEqual(expect.objectContaining({
       transition: 'detached', termination: expect.objectContaining({ kind: 'authenticated_failure' }),
     }))
+  } finally {
+    await runtime.close()
+  }
+})
+
+it('rejects a stale lane epoch on beginOperation and classifyCapacityWait', async () => {
+  const { runtime, channel } = runtimeFixture()
+  const original = new Error('timed out on superseded epoch')
+  const channelWithPressure = channel as unknown as {
+    capacityPressure?: { readonly remainingMilliseconds: number; readonly cleared: boolean; subscribeClearance(listener: () => void): () => void }
+  }
+  channelWithPressure.capacityPressure = {
+    remainingMilliseconds: 5_000, cleared: false, subscribeClearance: () => () => undefined,
+  }
+  try {
+    await expect(runtime.beginOperation(MESSAGE_KIND.listChildren, encodeBody([]), { laneId: 1, laneEpoch: 1 }))
+      .rejects.toMatchObject({ scope: 'lane', message: 'Requested lane is unavailable' })
+    expect(runtime.classifyCapacityWait(1, original, 1)).toBe(original)
+    expect(runtime.classifyCapacityWait(1, original, 0)).toMatchObject({
+      name: 'BandwidthWaitError', retryAfterMilliseconds: 5_000,
+    })
   } finally {
     await runtime.close()
   }

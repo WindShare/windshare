@@ -78,7 +78,7 @@ describe('content lane response waits', () => {
   })
 
   it('preserves immediate caller cancellation and never revives expired requests', async () => {
-    const queue = new BlockResponseQueue()
+    const queue = new BlockResponseQueue({ laneId: 7, laneEpoch: 3 })
     const controller = new AbortController()
     const waiting = queue.begin(controller.signal)
     const reason = new Error('user stopped receiving')
@@ -91,7 +91,10 @@ describe('content lane response waits', () => {
     const expired = queue.begin(new AbortController().signal)
     await vi.advanceTimersByTimeAsync(15_000)
     expired.progress()
-    expect(expired.signal.reason).toMatchObject({ phase: 'awaiting_first_fragment' })
+    expect(expired.signal.reason).toMatchObject({
+      phase: 'awaiting_first_fragment',
+      lane: { laneId: 7, laneEpoch: 3 },
+    })
     expired.close()
     expect(vi.getTimerCount()).toBe(0)
   })

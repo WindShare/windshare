@@ -642,7 +642,7 @@ function fixture(
     ...(options.policy === undefined ? {} : { policy: options.policy }),
     session: session as unknown as ReceiverSessionRuntime,
     lanes,
-    createBlockLane: (laneId) => new FakeLane(laneId),
+    createBlockLane: ({ laneId }) => new FakeLane(laneId),
     offers,
     randomBytes: options.randomBytes ?? ((length) => new Uint8Array(length).fill(identitySeed++)),
     nativePeerUsable: options.nativePeerUsable ?? (() => true),

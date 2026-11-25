@@ -634,7 +634,7 @@ describe('OPFS resume completion skip', () => {
           interruptedOnce = true
           yield Object.freeze({ offset: 0n, data: largePayload.subarray(0, 10) })
           throw new BlockLaneAttemptsError([
-            new BlockInactivityTimeoutError('receiving_fragments', 15_000, 0, { laneId: 1 }),
+            new BlockInactivityTimeoutError('receiving_fragments', 15_000, 0, { lane: { laneId: 1, laneEpoch: 0 } }),
           ])
         }
         yield* fixture.broker.readRange(desc, leaseId, span, options)

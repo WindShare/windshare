@@ -568,7 +568,7 @@ describe('v2 supervised stalled-recovery bounds', () => {
   it('bounds consecutive zero-progress inactivity recoveries and resets after progress', async () => {
     const stable = revision()
     const stall = () => new BlockLaneAttemptsError([
-      new BlockInactivityTimeoutError('awaiting_first_fragment', 15_000, 0, { laneId: 1 }),
+      new BlockInactivityTimeoutError('awaiting_first_fragment', 15_000, 0, { lane: { laneId: 1, laneEpoch: 0 } }),
     ])
     let reads = 0
     const fixture = generationFixture(1, stable, async function* (range) {

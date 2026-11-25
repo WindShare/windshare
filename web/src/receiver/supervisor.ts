@@ -1,7 +1,7 @@
 import {
   hasBlockInactivityTimeout, isTerminalRecoveryFailure, isShareRecoveryFailure,
   isLaneRecoveryFailure, isSessionFailure, latestRecoveryRetry, recoveryBandwidthWait,
-  recoveryRetry, RelayCooldownError, stalledBlockLaneIds,
+  recoveryRetry, RelayCooldownError, stalledBlockLanes,
 } from './recovery-failure'
 import {
   defaultReconnectBackoff, generationReconnectBackoff, reconnectPhase, requireBackoff,
@@ -281,14 +281,24 @@ export class ReceiverReconnectSupervisor implements ContentGenerationProvider {
     signal: AbortSignal | undefined,
   ): Promise<boolean> {
     if (!hasBlockInactivityTimeout(error)) return false
-    const attributed = stalledBlockLaneIds(error)
-    const targets = attributed.length > 0 ? attributed : managed.lanes.laneIds()
+    const attributed = stalledBlockLanes(error)
+    // Fall back to every admitted lane only when the timeout has no lane attribution;
+    // an attributed stale epoch must never widen into retiring healthy replacements.
+    const targets = attributed.length > 0
+      ? attributed
+      : managed.lanes.laneIds().flatMap((laneId) => {
+          const laneEpoch = managed.lanes.laneEpoch(laneId) ?? managed.session.laneEpoch?.(laneId)
+          return laneEpoch === undefined ? [] : [{ laneId, laneEpoch }]
+        })
     const retirements: Promise<void>[] = []
-    for (const laneId of targets) {
-      const epoch = managed.lanes.laneEpoch(laneId) ?? managed.session.laneEpoch?.(laneId)
-      if (epoch !== undefined) retirements.push(managed.session.retireLane(laneId, epoch))
+    for (const { laneId, laneEpoch } of targets) {
+      const currentEpoch = managed.lanes.laneEpoch(laneId) ?? managed.session.laneEpoch?.(laneId)
+      if (currentEpoch === laneEpoch) retirements.push(managed.session.retireLane(laneId, laneEpoch))
     }
-    if (retirements.length === 0) return false
+    if (retirements.length === 0) {
+      // Every attributed stalled lane has already detached or been replaced by a newer epoch.
+      return attributed.length > 0
+    }
     this.#traceConnection({ transition: 'retry_requested', failure: error })
     await awaitSettledOrAbort(retirements, signal)
     signal?.throwIfAborted()

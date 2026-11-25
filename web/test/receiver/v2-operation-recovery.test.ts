@@ -27,6 +27,9 @@ async function flush(): Promise<void> {
 
 it('finishes a catalog request on the surviving fourth lane without replacing the session', async () => {
   const { session, factory, supervisor, trace } = fixture()
+  for (const laneId of [2, 3, 4]) {
+    supervisor.currentGeneration()!.lanes.requests.add({ id: laneId, epoch: 1, route: 'application-relay' })
+  }
   const attempted: number[] = []
   const page = Uint8Array.of(7, 8, 9)
   Object.assign(session, { beginOperation: vi.fn(async () => {

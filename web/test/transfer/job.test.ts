@@ -829,7 +829,7 @@ describe('TransferJob resumable interruption handling', () => {
         readRange: async function* () {
           yield Object.freeze({ offset: 0n, data: new Uint8Array([1, 2, 3, 4]) })
           throw new BlockLaneAttemptsError([
-            new BlockInactivityTimeoutError('receiving_fragments', 15_000, 0, { laneId: 1 }),
+            new BlockInactivityTimeoutError('receiving_fragments', 15_000, 0, { lane: { laneId: 1, laneEpoch: 0 } }),
           ])
         },
       },

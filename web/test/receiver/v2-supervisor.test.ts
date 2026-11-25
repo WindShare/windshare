@@ -919,7 +919,7 @@ describe('wake detection and stalled-lane recovery loop', () => {
     expect(stalledGeneration.lanes.size).toBe(1)
 
     const stall = new BlockLaneAttemptsError([
-      new BlockInactivityTimeoutError('awaiting_first_fragment', 15_000, 0, { laneId: 1 }),
+      new BlockInactivityTimeoutError('awaiting_first_fragment', 15_000, 0, { lane: { laneId: 1, laneEpoch: 0 } }),
     ])
     const recovered = await supervisor.recover(stalledGeneration, stall, undefined)
     expect(recovered).toBe(true)
@@ -944,13 +944,93 @@ describe('wake detection and stalled-lane recovery loop', () => {
     expect(current.lanes.laneIds()).toEqual([1, 7])
 
     const stall = new BlockLaneAttemptsError([
-      new BlockInactivityTimeoutError('receiving_fragments', 15_000, 0, { laneId: 7 }),
+      new BlockInactivityTimeoutError('receiving_fragments', 15_000, 0, { lane: { laneId: 7, laneEpoch: 1 } }),
     ])
     const recovered = await supervisor.recover(current, stall, undefined)
     expect(recovered).toBe(true)
     expect(supervisor.generationId).toBe(1)
     expect(factory.connectFreshCalls).toBe(0)
     expect(current.lanes.laneIds()).toEqual([1])
+
+    activation.close()
+    await supervisor.close()
+  })
+
+  it('ignores a delayed inactivity timeout from an earlier epoch after a lane slot is reused and still permits retry', async () => {
+    const session = new FakeSession([1])
+    const factory = new FakeSessionFactory()
+    const traceEvents: unknown[] = []
+    const { supervisor } = supervisorFixture(
+      session, new TrackedRelay(1), factory, descriptor(), undefined,
+      { current: event => { if (event.eventName === 'connection_recovery') traceEvents.push(event) } },
+    )
+    const activation = supervisor.beginConnectivity('download')
+    expect(session.attach(7)).toBe(1)
+    await supervisor.execute(undefined, async generation => generation.connectivity.addRelayLane(7))
+    session.detach(7)
+    expect(session.attach(7)).toBe(2)
+    await supervisor.execute(undefined, async generation => generation.connectivity.addRelayLane(7))
+
+    const current = supervisor.currentGeneration()!
+    expect(current.lanes.laneIds()).toEqual([1, 7])
+    expect(current.lanes.laneEpoch(7)).toBe(2)
+
+    const staleTimeout = new BlockLaneAttemptsError([
+      new BlockInactivityTimeoutError('receiving_fragments', 15_000, 0, { lane: { laneId: 7, laneEpoch: 1 } }),
+    ])
+    const recovered = await supervisor.recover(current, staleTimeout, undefined)
+    expect(recovered).toBe(true)
+    expect(supervisor.generationId).toBe(1)
+    expect(current.lanes.laneIds()).toEqual([1, 7])
+    expect(current.lanes.laneEpoch(7)).toBe(2)
+    expect(session.laneEpoch(7)).toBe(2)
+    expect(traceEvents).toEqual([])
+
+    activation.close()
+    await supervisor.close()
+  })
+
+  it('retires only the still-live stalled lane when an error mixes a superseded epoch with an active stalled lane', async () => {
+    const session = new FakeSession([1])
+    const factory = new FakeSessionFactory()
+    const { supervisor } = supervisorFixture(session, new TrackedRelay(1), factory)
+    const activation = supervisor.beginConnectivity('download')
+    expect(session.attach(7)).toBe(1)
+    await supervisor.execute(undefined, async generation => generation.connectivity.addRelayLane(7))
+    session.detach(7)
+    expect(session.attach(7)).toBe(2)
+    await supervisor.execute(undefined, async generation => generation.connectivity.addRelayLane(7))
+
+    const current = supervisor.currentGeneration()!
+    const mixed = new BlockLaneAttemptsError([
+      new BlockInactivityTimeoutError('awaiting_first_fragment', 15_000, 0, { lane: { laneId: 7, laneEpoch: 1 } }),
+      new BlockInactivityTimeoutError('receiving_fragments', 15_000, 0, { lane: { laneId: 1, laneEpoch: 0 } }),
+    ])
+    const recovered = await supervisor.recover(current, mixed, undefined)
+    expect(recovered).toBe(true)
+    expect(supervisor.generationId).toBe(1)
+    expect(current.lanes.laneIds()).toEqual([7])
+    expect(current.lanes.laneEpoch(7)).toBe(2)
+
+    activation.close()
+    await supervisor.close()
+  })
+
+  it('falls back to retiring currently admitted lanes only when an inactivity timeout has no lane attribution', async () => {
+    const firstSession = new FakeSession([1])
+    const secondSession = new FakeSession([10])
+    const factory = new FakeSessionFactory()
+    factory.connectFreshImpl = async () => core(secondSession, new TrackedRelay(10))
+    const { supervisor } = supervisorFixture(firstSession, new TrackedRelay(1), factory)
+    const activation = supervisor.beginConnectivity('download')
+
+    const stalledGeneration = supervisor.currentGeneration()!
+    const unattributed = new BlockLaneAttemptsError([
+      new BlockInactivityTimeoutError('awaiting_first_fragment', 15_000, 0),
+    ])
+    expect(await supervisor.recover(stalledGeneration, unattributed, undefined)).toBe(true)
+    expect(supervisor.generationId).toBe(2)
+    expect(factory.connectFreshCalls).toBe(1)
 
     activation.close()
     await supervisor.close()

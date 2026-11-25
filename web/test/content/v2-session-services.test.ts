@@ -360,13 +360,21 @@ describe('v2 session block lane deadlines', () => {
       cancel: () => undefined,
     }
     let cancellations = 0
+    let observedBeginOptions: { readonly laneId?: number; readonly laneEpoch?: number } | undefined
+    let observedClassifyEpoch: number | undefined
     const session = {
-      beginOperation: async () => operation,
-      classifyCapacityWait: (_laneId: number, cause: unknown) => cause,
+      beginOperation: async (_kind: number, _body: Uint8Array, options?: { readonly laneId?: number; readonly laneEpoch?: number }) => {
+        observedBeginOptions = options
+        return operation
+      },
+      classifyCapacityWait: (_laneId: number, cause: unknown, laneEpoch?: number) => {
+        observedClassifyEpoch = laneEpoch
+        return cause
+      },
       cancelOperation: async () => { cancellations += 1 },
     } as unknown as ReceiverSessionRuntime
     const lane = new SessionBlockLane(
-      1,
+      { laneId: 1, laneEpoch: 2 },
       session,
       { leaseError: () => undefined } as never,
     )
@@ -380,10 +388,13 @@ describe('v2 session block lane deadlines', () => {
       name: 'BlockInactivityTimeoutError',
       phase: 'awaiting_first_fragment',
       scope: 'lane',
+      lane: { laneId: 1, laneEpoch: 2 },
     })
     await vi.advanceTimersByTimeAsync(15_000)
 
     await rejected
+    expect(observedBeginOptions).toMatchObject({ laneId: 1, laneEpoch: 2 })
+    expect(observedClassifyEpoch).toBe(2)
     expect(cancellations).toBe(1)
     lane.close()
   })
@@ -404,7 +415,7 @@ describe('v2 session block lane deadlines', () => {
       authenticatedReceivedProtocolError: blockReceivedProtocolError,
     } as unknown as ReceiverSessionRuntime
     const lane = new SessionBlockLane(
-      1,
+      { laneId: 1, laneEpoch: 0 },
       session,
       { leaseError: () => undefined } as never,
     )
@@ -464,7 +475,7 @@ describe('v2 session block lane deadlines', () => {
       cancelOperation: async () => undefined,
     } as unknown as ReceiverSessionRuntime
     const lane = new SessionBlockLane(
-      1,
+      { laneId: 1, laneEpoch: 0 },
       session,
       { leaseError: () => undefined } as never,
     )
@@ -499,7 +510,7 @@ describe('v2 session queued block responses', () => {
       classifyCapacityWait: (_laneId: number, cause: unknown) => cause,
       cancelOperation,
     } as unknown as ReceiverSessionRuntime
-    const lane = new SessionBlockLane(1, session,
+    const lane = new SessionBlockLane({ laneId: 1, laneEpoch: 0 }, session,
       { leaseError: () => undefined } as never)
     const descriptor = { ...revision, exactSize: 150_000n, geometry: new FileGeometry(150_000n, 150_000n) }
     const demand = { descriptor, leaseId: identity(6), localBlockIndex: 0n }
@@ -543,7 +554,7 @@ describe('v2 session block delivery and lease recovery', () => {
       cancelOperation: async () => { cancellations += 1 },
     } as unknown as ReceiverSessionRuntime
     const incomplete = new SessionBlockLane(
-      1,
+      { laneId: 1, laneEpoch: 0 },
       session,
       { leaseError: () => undefined } as never,
     )
@@ -584,7 +595,7 @@ describe('v2 session block delivery and lease recovery', () => {
       cancelOperation: async () => undefined,
     } as unknown as ReceiverSessionRuntime
     const invalid = new SessionBlockLane(
-      1,
+      { laneId: 1, laneEpoch: 0 },
       session,
       { leaseError: () => undefined } as never,
     )

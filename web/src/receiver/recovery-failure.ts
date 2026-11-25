@@ -2,7 +2,7 @@ import { BandwidthWaitError } from '../contracts/capacity'
 import { RelayEndpointFailure } from './relay-selection/race'
 import { BlockLaneAttemptsError } from '../content/broker'
 import { BlockInactivityTimeoutError } from '../content/scheduling/block-response-wait'
-import { SessionRuntimeError } from '../session/runtime-types'
+import { type SessionLaneIdentity, SessionRuntimeError } from '../session/runtime-types'
 import { RelayReceiverError } from '../transport/relay/receiver'
 import { RELAY_ERROR, RelayProtocolError } from '../transport/relay/protocol'
 import { SenderObjectError } from '../crypto/sender-object'
@@ -100,20 +100,23 @@ export function hasBlockInactivityTimeout(error: unknown, depth = 0): boolean {
   return false
 }
 
-export function stalledBlockLaneIds(error: unknown): readonly number[] {
-  const ids = new Set<number>()
-  collectStalledLaneIds(error, ids, 0)
-  return Object.freeze([...ids])
+export function stalledBlockLanes(error: unknown): readonly SessionLaneIdentity[] {
+  const lanes = new Map<string, SessionLaneIdentity>()
+  collectStalledLanes(error, lanes, 0)
+  return Object.freeze([...lanes.values()])
 }
 
-function collectStalledLaneIds(error: unknown, ids: Set<number>, depth: number): void {
+function collectStalledLanes(error: unknown, lanes: Map<string, SessionLaneIdentity>, depth: number): void {
   if (depth >= 8) return
   if (error instanceof BlockInactivityTimeoutError) {
-    if (error.laneId !== undefined) ids.add(error.laneId)
+    if (error.lane !== undefined) {
+      const key = `${error.lane.laneId}:${error.lane.laneEpoch}`
+      if (!lanes.has(key)) lanes.set(key, error.lane)
+    }
     return
   }
   if (error instanceof BlockLaneAttemptsError || error instanceof AggregateError) {
-    for (const cause of error.errors) collectStalledLaneIds(cause, ids, depth + 1)
+    for (const cause of error.errors) collectStalledLanes(cause, lanes, depth + 1)
   }
 }
 

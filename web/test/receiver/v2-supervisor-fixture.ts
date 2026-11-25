@@ -17,6 +17,8 @@ export class FakeSession {
   readonly protocolSessionIdentity: ProtocolSessionIdentity
   readonly #laneIds: Set<number>
   readonly #receiving: Set<number>
+  readonly #laneEpochs = new Map<number, number>()
+  readonly #lastEpochs = new Map<number, number>()
   readonly #listeners = new Set<(change: LaneChange) => void>()
   closeCalls = 0
   isClosed = false
@@ -31,6 +33,11 @@ export class FakeSession {
     this.protocolSessionIdentity = createProtocolSessionIdentity(this.keys.protocolSessionId)
     this.#laneIds = new Set(laneIds)
     this.#receiving = new Set(laneIds)
+    for (const laneId of laneIds) {
+      const epoch = laneId === this.initialLaneId ? this.keys.initialLaneEpoch : 1
+      this.#laneEpochs.set(laneId, epoch)
+      this.#lastEpochs.set(laneId, epoch)
+    }
   }
 
   get hasAttachedLanes(): boolean { return this.#receiving.size > 0 }
@@ -39,36 +46,46 @@ export class FakeSession {
     return [...this.#laneIds]
   }
 
+  laneEpoch(laneId: number): number | undefined {
+    return this.#laneEpochs.get(laneId)
+  }
+
   subscribeLaneChanges(listener: (change: LaneChange) => void): () => void {
     this.#listeners.add(listener)
     return () => this.#listeners.delete(listener)
   }
 
-  attach(laneId: number): void {
+  attach(laneId: number, laneEpoch?: number): number {
+    const nextEpoch = laneEpoch ?? (this.#lastEpochs.get(laneId) ?? 0) + 1
     this.#laneIds.add(laneId)
     this.#receiving.add(laneId)
-    this.#emit({ type: 'attached', laneId, laneEpoch: 1 })
+    this.#laneEpochs.set(laneId, nextEpoch)
+    this.#lastEpochs.set(laneId, nextEpoch)
+    this.#emit({ type: 'attached', laneId, laneEpoch: nextEpoch })
+    return nextEpoch
   }
 
   withdraw(laneId: number): void {
+    const epoch = this.#laneEpochs.get(laneId) ?? this.#lastEpochs.get(laneId) ?? (laneId === this.initialLaneId ? 0 : 1)
     this.#laneIds.delete(laneId)
-    this.#emit({ type: 'unavailable', laneId, laneEpoch: laneId === this.initialLaneId ? 0 : 1 })
+    this.#emit({ type: 'unavailable', laneId, laneEpoch: epoch })
   }
 
   detach(laneId: number, failure?: unknown): void {
+    const epoch = this.#laneEpochs.get(laneId) ?? this.#lastEpochs.get(laneId) ?? (laneId === this.initialLaneId ? 0 : 1)
     this.#laneIds.delete(laneId)
     this.#receiving.delete(laneId)
+    this.#laneEpochs.delete(laneId)
     this.#emit({
       type: 'detached',
       laneId,
-      laneEpoch: 1,
+      laneEpoch: epoch,
       ...(failure === undefined ? {} : { failure }),
     })
   }
 
   async retireLane(laneId: number, laneEpoch: number): Promise<void> {
-    const epoch = laneId === this.initialLaneId ? this.keys.initialLaneEpoch : 1
-    if (this.#laneIds.has(laneId) && epoch === laneEpoch) this.detach(laneId)
+    if (this.#laneEpochs.get(laneId) === laneEpoch) this.detach(laneId)
   }
 
   async close(): Promise<void> {

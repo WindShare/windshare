@@ -126,8 +126,10 @@ export class ReceiverSessionRuntime {
     return establishReceiver(options, (keys, instance, reader) => new ReceiverSessionRuntime(options, keys, instance, reader))
   }
 
-  classifyCapacityWait(laneId: number, cause: unknown): unknown {
-    return this.#lanes.get(laneId)?.classifyCapacityWait(cause) ?? cause
+  classifyCapacityWait(laneId: number, cause: unknown, laneEpoch?: number): unknown {
+    const lane = this.#lanes.get(laneId)
+    if (lane === undefined || (laneEpoch !== undefined && lane.epoch !== laneEpoch)) return cause
+    return lane.classifyCapacityWait(cause)
   }
 
   get initialLaneId(): number {
@@ -405,7 +407,7 @@ export class ReceiverSessionRuntime {
   async beginOperation(
     kind: MessageKind,
     canonicalBody: Uint8Array,
-    options: { readonly laneId?: number; readonly signal?: AbortSignal } = {},
+    options: { readonly laneId?: number; readonly laneEpoch?: number; readonly signal?: AbortSignal } = {},
   ): Promise<SessionOperation> {
     this.#requireOpen()
     options.signal?.throwIfAborted()
@@ -417,7 +419,7 @@ export class ReceiverSessionRuntime {
     try {
       const message = encodeMessage(kind, operation.id, requestBody)
       options.signal?.throwIfAborted()
-      const lane = this.#selectLane(options.laneId)
+      const lane = this.#selectLane(options.laneId, options.laneEpoch)
       this.#operationLanes.set(operation, lane.id)
       correlation = this.operationCorrelation(operation)
       operation.onSettled(() => this.#operationLanes.delete(operation))
@@ -630,7 +632,7 @@ export class ReceiverSessionRuntime {
     lane.observeAvailability()
   }
 
-  #selectLane(id?: number): SessionLane {
+  #selectLane(id?: number, epoch?: number): SessionLane {
     if (id === undefined) {
       const initial = this.#lanes.get(this.initialLaneId)
       if (initial?.available) return initial
@@ -639,7 +641,9 @@ export class ReceiverSessionRuntime {
       throw new SessionRuntimeError('lane', 'No session lane is available')
     }
     const lane = this.#lanes.get(id)
-    if (!lane?.available) throw new SessionRuntimeError('lane', 'Requested lane is unavailable')
+    if (!lane?.available || (epoch !== undefined && lane.epoch !== epoch)) {
+      throw new SessionRuntimeError('lane', 'Requested lane is unavailable')
+    }
     return lane
   }
 

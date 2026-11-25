@@ -10,6 +10,7 @@ import type {
   BlockTransportRoute,
 } from '../content/route-policy'
 import type { ReceiverSessionRuntime } from '../session/runtime'
+import type { SessionLaneIdentity } from '../session/runtime-types'
 import {
   createPeerPathIdentityValue,
   equalDiagnosticIdentities,
@@ -67,7 +68,7 @@ export interface ReceiverConnectivityOptions {
   readonly policy?: ConnectivityPolicy
   readonly session: ReceiverSessionRuntime
   readonly lanes: LaneSet
-  readonly createBlockLane: (laneId: number) => BlockLane
+  readonly createBlockLane: (lane: SessionLaneIdentity) => BlockLane
   readonly relayLaneId?: number
   readonly offers?: OfferChannelFactory
   readonly randomBytes?: (length: number) => Uint8Array
@@ -157,7 +158,7 @@ export class ReceiverConnectivity {
   readonly #policy: ConnectivityPolicy
   readonly #session: ReceiverSessionRuntime
   readonly #lanes: LaneSet
-  readonly #createBlockLane: (laneId: number) => BlockLane
+  readonly #createBlockLane: (lane: SessionLaneIdentity) => BlockLane
   readonly #offers: OfferChannelFactory
   readonly #randomBytes: ((length: number) => Uint8Array) | undefined
   readonly #nativePeerUsable: () => boolean
@@ -598,7 +599,7 @@ export class ReceiverConnectivity {
       return existing.laneEpoch === laneEpoch && existing.route === route
     }
     if (!this.#session.availableLaneIds().includes(laneId)) return false
-    this.#lanes.add(this.#createBlockLane(laneId), route, laneEpoch)
+    this.#lanes.add(this.#createBlockLane({ laneId, laneEpoch }), route, laneEpoch)
     this.#admitted.set(laneId, { laneEpoch, route })
     try {
       this.#onContentLaneAdmitted(Object.freeze({ laneId, laneEpoch, route }))

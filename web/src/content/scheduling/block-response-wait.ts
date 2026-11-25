@@ -1,4 +1,4 @@
-import { SessionRuntimeError } from '../../session/runtime-types'
+import { SessionRuntimeError, type SessionLaneIdentity } from '../../session/runtime-types'
 import { FRAGMENT_INACTIVITY_TIMEOUT_MILLISECONDS } from '../flow'
 import { linkAbortSignals } from './deadlines'
 
@@ -8,34 +8,36 @@ export class BlockInactivityTimeoutError extends SessionRuntimeError {
   readonly phase: BlockReceivePhase
   readonly waitedMilliseconds: number
   readonly queueProgress: number
-  readonly laneId?: number
+  readonly lane?: SessionLaneIdentity
 
   constructor(
     phase: BlockReceivePhase,
     waitedMilliseconds: number,
     queueProgress: number,
-    options?: ErrorOptions & Readonly<{ laneId?: number }>,
+    options?: ErrorOptions & Readonly<{ lane?: SessionLaneIdentity }>,
   ) {
     super('lane', `Block receive made no authenticated progress (${phase})`, options)
     this.name = 'BlockInactivityTimeoutError'
     this.phase = phase
     this.waitedMilliseconds = waitedMilliseconds
     this.queueProgress = queueProgress
-    if (options?.laneId !== undefined) this.laneId = options.laneId
+    if (options?.lane !== undefined) {
+      this.lane = Object.freeze({ laneId: options.lane.laneId, laneEpoch: options.lane.laneEpoch })
+    }
   }
 }
 
 /** One content lane's finite, ordered set of outstanding response waits. */
 export class BlockResponseQueue {
   readonly #pending = new Set<BlockResponseWait>()
-  readonly #laneId: number | undefined
+  readonly #lane: SessionLaneIdentity | undefined
 
-  constructor(laneId?: number) {
-    this.#laneId = laneId
+  constructor(lane?: SessionLaneIdentity) {
+    this.#lane = lane === undefined ? undefined : Object.freeze({ laneId: lane.laneId, laneEpoch: lane.laneEpoch })
   }
 
   begin(signal: AbortSignal): BlockResponseWait {
-    const wait = new BlockResponseWait(this.#pending, signal, this.#laneId)
+    const wait = new BlockResponseWait(this.#pending, signal, this.#lane)
     this.#pending.add(wait)
     return wait
   }
@@ -43,7 +45,7 @@ export class BlockResponseQueue {
 
 export class BlockResponseWait {
   readonly #pending: Set<BlockResponseWait>
-  readonly #laneId: number | undefined
+  readonly #lane: SessionLaneIdentity | undefined
   readonly #timeout = new AbortController()
   readonly #linked: ReturnType<typeof linkAbortSignals>
   readonly #started = performance.now()
@@ -53,9 +55,9 @@ export class BlockResponseWait {
   #reading = true
   #timer: ReturnType<typeof globalThis.setTimeout>
 
-  constructor(pending: Set<BlockResponseWait>, signal: AbortSignal, laneId?: number) {
+  constructor(pending: Set<BlockResponseWait>, signal: AbortSignal, lane?: SessionLaneIdentity) {
     this.#pending = pending
-    this.#laneId = laneId
+    this.#lane = lane
     this.#linked = linkAbortSignals(signal, this.#timeout.signal)
     this.#timer = globalThis.setTimeout(() => this.#checkDeadline(), FRAGMENT_INACTIVITY_TIMEOUT_MILLISECONDS)
   }
@@ -110,7 +112,7 @@ export class BlockResponseWait {
       this.#phase,
       performance.now() - this.#started,
       this.#queueProgress,
-      { ...options, ...(this.#laneId === undefined ? {} : { laneId: this.#laneId }) },
+      { ...options, ...(this.#lane === undefined ? {} : { lane: this.#lane }) },
     )
   }
 

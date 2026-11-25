@@ -13,6 +13,7 @@ import { MESSAGE_KIND, type SessionMessage } from '../session/message'
 import type { ReceiverSessionRuntime, SessionOperation } from '../session/runtime'
 import {
   OPERATION_CANCEL_REASON,
+  type SessionLaneIdentity,
   SessionRuntimeError,
 } from '../session/runtime-types'
 import type {
@@ -457,20 +458,22 @@ export class RevisionService {
 
 export class SessionBlockLane implements BlockLane {
   readonly id: number
+  readonly epoch: number
   readonly #session: ReceiverSessionRuntime
   readonly #revisions: RevisionService
   readonly #responses: BlockResponseQueue
   readonly #lifetime = new AbortController()
 
   constructor(
-    id: number,
+    lane: SessionLaneIdentity,
     session: ReceiverSessionRuntime,
     revisions: RevisionService,
   ) {
-    this.id = id
+    this.id = lane.laneId
+    this.epoch = lane.laneEpoch
     this.#session = session
     this.#revisions = revisions
-    this.#responses = new BlockResponseQueue(id)
+    this.#responses = new BlockResponseQueue(lane)
   }
 
   async fetchBlock(demand: BlockDemand, signal: AbortSignal, observer?: BlockReadObserver): Promise<BlockRecord> {
@@ -482,7 +485,7 @@ export class SessionBlockLane implements BlockLane {
       const operation = await this.#session.beginOperation(
         MESSAGE_KIND.requestBlocks,
         encodeBlockRequest(demand.leaseId, [demand.localBlockIndex]),
-        { laneId: this.id, signal: linked.signal },
+        { laneId: this.id, laneEpoch: this.epoch, signal: linked.signal },
       )
       const assembler = new FragmentAssembler(operation.id)
       return await this.#receiveBlock(operation, assembler, demand, linked.signal, bytes => {
@@ -544,7 +547,7 @@ export class SessionBlockLane implements BlockLane {
   ): Promise<never> {
     assembler.cancel()
     const failure = error instanceof BlockInactivityTimeoutError
-      ? this.#session.classifyCapacityWait(this.id, error) : error
+      ? this.#session.classifyCapacityWait(this.id, error, this.epoch) : error
     await this.#session.cancelOperation(
       operation,
       {

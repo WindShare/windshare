@@ -893,7 +893,7 @@ describe('FSA resume completion skip', () => {
           interrupted = true
           yield Object.freeze({ offset: 0n, data: payload.subarray(0, 6) })
           throw new BlockLaneAttemptsError([
-            new BlockInactivityTimeoutError('receiving_fragments', 15_000, 0, { laneId: 1 }),
+            new BlockInactivityTimeoutError('receiving_fragments', 15_000, 0, { lane: { laneId: 1, laneEpoch: 0 } }),
           ])
         }
         yield Object.freeze({ offset: span.start, data: payload.subarray(Number(span.start), Number(span.end)) })

@@ -7,7 +7,9 @@ import { CborError } from '../../src/protocol/cbor'
 import { TranscriptError } from '../../src/session/transcript'
 import { EnvelopeError } from '../../src/session/envelope'
 import { SessionRuntimeError } from '../../src/session/runtime-types'
-import { isShareRecoveryFailure, isTerminalRecoveryFailure, recoveryRetry } from '../../src/receiver/recovery-failure'
+import { BlockLaneAttemptsError } from '../../src/content/broker'
+import { BlockInactivityTimeoutError } from '../../src/content/scheduling/block-response-wait'
+import { isShareRecoveryFailure, isTerminalRecoveryFailure, recoveryRetry, stalledBlockLanes } from '../../src/receiver/recovery-failure'
 import { RelayEndpointFailure } from '../../src/receiver/relay-selection/race'
 
 function relayFailure(code: RelayErrorCode, retryAfterMilliseconds = 0) {
@@ -59,5 +61,18 @@ describe('receiver failure scope', () => {
     expect(recoveryRetry(new AggregateError([scoped, relayFailure(RELAY_ERROR.admission, 100)]), 10)).toEqual({
       retryAt: 110, reason: 'server',
     })
+  })
+
+  it('preserves distinct lane epochs while deduplicating exact stalled lane identities', () => {
+    const combined = new BlockLaneAttemptsError([
+      new BlockInactivityTimeoutError('awaiting_first_fragment', 15_000, 0, { lane: { laneId: 7, laneEpoch: 1 } }),
+      new BlockInactivityTimeoutError('receiving_fragments', 15_000, 0, { lane: { laneId: 7, laneEpoch: 1 } }),
+      new BlockInactivityTimeoutError('receiving_fragments', 15_000, 0, { lane: { laneId: 7, laneEpoch: 2 } }),
+      new BlockInactivityTimeoutError('awaiting_first_fragment', 15_000, 0),
+    ])
+    expect(stalledBlockLanes(combined)).toEqual([
+      { laneId: 7, laneEpoch: 1 },
+      { laneId: 7, laneEpoch: 2 },
+    ])
   })
 })
