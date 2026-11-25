@@ -11,7 +11,11 @@ pub use dialog::{
 pub use notice::account_status_summary;
 
 use crate::localization::Text;
-use windshare_host::{AccountRequest, AccountState, AccountView, Failure, Model};
+use windshare_host::{AccountAction, AccountRequest, AccountState, AccountView, Failure, Model};
+
+#[cfg(test)]
+#[path = "account_tests.rs"]
+mod tests;
 
 // Navigation selects a page. An open editor also owns the account it was opened for.
 pub type AccountPage = AccountScreen<()>;
@@ -126,6 +130,32 @@ impl AccountPage {
             Self::Email(_, _) => Text::AccountEmail,
         }
     }
+
+    pub(crate) const fn matches_pending_action(self, action: AccountAction) -> bool {
+        matches!(
+            (self, action),
+            (Self::Registration, AccountAction::Register)
+                | (Self::Login, AccountAction::Login)
+                | (Self::Credentials(()), AccountAction::Password)
+                | (Self::Nickname(()), AccountAction::Nickname)
+                | (
+                    Self::Email(EmailPurpose::Registration, EmailStep::Address),
+                    AccountAction::Email
+                )
+                | (
+                    Self::Email(EmailPurpose::Registration, EmailStep::Code),
+                    AccountAction::Verify
+                )
+                | (
+                    Self::Email(EmailPurpose::Profile(()), EmailStep::Address),
+                    AccountAction::RequestProfileEmail
+                )
+                | (
+                    Self::Email(EmailPurpose::Profile(()), EmailStep::Code),
+                    AccountAction::ConfirmProfileEmail
+                )
+        )
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -153,18 +183,114 @@ pub const fn can_register_account(view: &AccountView, busy: bool) -> bool {
         )
 }
 
-#[derive(Default)]
-pub struct AccountSettingsState {
-    pub inline_request_id: Option<String>,
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum AccountSettingsState {
+    #[default]
+    Idle,
+    /// Tracks an active or settled registration on the onboarding settings page.
+    Registration(String),
+    /// Retains an in-flight registration after the user dismissed its modal or
+    /// navigated away from Official Account settings so an unseen failure
+    /// surfaces once upon returning to check progress.
+    BackgroundRegistration(String),
+    /// Tracks an inline refresh started from the active account settings page.
+    Refresh(String),
 }
 
 impl AccountSettingsState {
     pub fn clear(&mut self) {
-        self.inline_request_id = None;
+        *self = Self::Idle;
+    }
+
+    pub fn track_registration(&mut self, request_id: Option<String>) {
+        *self = request_id.map_or(Self::Idle, Self::Registration);
+    }
+
+    pub fn track_refresh(&mut self, request_id: Option<String>) {
+        *self = request_id.map_or(Self::Idle, Self::Refresh);
+    }
+
+    pub const fn tracked_id(&self) -> Option<&str> {
+        match self {
+            Self::Idle => None,
+            Self::Registration(id) | Self::BackgroundRegistration(id) | Self::Refresh(id) => {
+                Some(id.as_str())
+            }
+        }
+    }
+
+    pub fn observe_overlay_dismissed(
+        &mut self,
+        model: &Model,
+        settings_visible: bool,
+    ) -> Option<&str> {
+        if let Some(id) = model.in_flight_registration_id() {
+            let next = if settings_visible {
+                Self::Registration(id.to_owned())
+            } else {
+                Self::BackgroundRegistration(id.to_owned())
+            };
+            if *self != next {
+                *self = next;
+                return self.tracked_id();
+            }
+            return None;
+        }
+        if settings_visible && matches!(self, Self::BackgroundRegistration(_)) {
+            return self.enter_settings(model);
+        }
+        None
+    }
+
+    pub fn enter_settings(&mut self, model: &Model) -> Option<&str> {
+        if let Some(id) = model.in_flight_registration_id() {
+            let next = Self::Registration(id.to_owned());
+            if *self != next {
+                *self = next;
+                return self.tracked_id();
+            }
+            return None;
+        }
+        if let Self::BackgroundRegistration(id) = std::mem::take(self) {
+            let onboarding = model
+                .account
+                .as_ref()
+                .is_some_and(|view| view.status.account.is_empty());
+            if onboarding
+                && matches!(
+                    &model.account_request,
+                    AccountRequest::Failed { id: failed_id, .. } if failed_id == &id
+                )
+            {
+                *self = Self::Registration(id);
+                return self.tracked_id();
+            }
+        }
+        *self = Self::Idle;
+        None
+    }
+
+    pub fn leave_settings(&mut self, model: &Model) -> Option<&str> {
+        if let Some(id) = model.in_flight_registration_id() {
+            let next = Self::BackgroundRegistration(id.to_owned());
+            if *self != next {
+                *self = next;
+                return self.tracked_id();
+            }
+            return None;
+        }
+        if !matches!(self, Self::BackgroundRegistration(_)) {
+            *self = Self::Idle;
+        }
+        None
     }
 
     pub fn inline_feedback(&self, model: &Model) -> Option<Result<Text, AccountFormError>> {
-        let tracked = self.inline_request_id.as_deref()?;
+        let view = model.account.as_ref()?;
+        let tracked = match (self, view.status.account.is_empty()) {
+            (Self::Registration(id), true) | (Self::Refresh(id), false) => id.as_str(),
+            _ => return None,
+        };
         match &model.account_request {
             AccountRequest::Failed { id, error } if id == tracked => {
                 Some(Err(AccountFormError::from(error.clone())))

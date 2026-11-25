@@ -10,7 +10,7 @@ use windshare_ui::{Button, Icon, Theme, Tone, column, row};
 pub(super) fn registration_panel_view(
     theme: Theme,
     view: &AccountView,
-    busy: bool,
+    registering: bool,
     visible: bool,
     create_button: Button,
     login_button: Button,
@@ -22,7 +22,7 @@ pub(super) fn registration_panel_view(
         AccountState::Registering {
             registration_permille,
         } => Some(registration_permille),
-        _ if busy => Some(0),
+        _ if registering => Some(0),
         _ => None,
     };
     if let Some(permille) = progress {

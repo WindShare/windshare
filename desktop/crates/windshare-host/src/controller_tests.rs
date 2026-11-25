@@ -206,7 +206,10 @@ fn account_and_setup_submissions_record_pending_and_local_failure_atomically() {
     let account_id = controller.account(AccountCommand::Refresh).unwrap();
     assert_eq!(
         controller.model().account_request,
-        AccountRequest::Pending { id: account_id }
+        AccountRequest::Pending {
+            id: account_id,
+            action: AccountAction::Refresh,
+        }
     );
     assert!(controller.model().account_busy());
     assert!(controller.model().has_unfinished_work());

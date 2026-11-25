@@ -1,8 +1,8 @@
 mod abi;
 mod account;
 pub use account::{
-    AccountCommand, AccountOutcome, AccountProfile, AccountRequest, AccountState, AccountStatus,
-    AccountView, Allowance, Nickname,
+    AccountAction, AccountCommand, AccountOutcome, AccountProfile, AccountRequest, AccountState,
+    AccountStatus, AccountView, Allowance, Nickname,
 };
 mod admission;
 mod connection;
@@ -206,6 +206,7 @@ impl Controller {
 
     pub fn account(&self, account: AccountCommand) -> Option<String> {
         let id = self.operation_id("account");
+        let action = account.kind();
         let mut queued = false;
         self.shared.update(|draft| {
             // Keep the model lock while recording the pending request so a fast
@@ -216,7 +217,10 @@ impl Controller {
             }) {
                 Ok(()) => {
                     queued = true;
-                    AccountRequest::Pending { id: id.clone() }
+                    AccountRequest::Pending {
+                        id: id.clone(),
+                        action,
+                    }
                 }
                 Err(message) => AccountRequest::Failed {
                     id: id.clone(),

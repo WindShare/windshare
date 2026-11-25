@@ -304,7 +304,7 @@ fn apply_command_error(
         Some(Command::Account { operation_id, .. }) => {
             if matches!(
                 &draft.read().account_request,
-                crate::AccountRequest::Pending { id } if id == &operation_id
+                crate::AccountRequest::Pending { id, .. } if id == &operation_id
             ) {
                 draft.write().account_request = crate::AccountRequest::Failed {
                     id: operation_id,

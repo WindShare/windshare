@@ -102,10 +102,11 @@ impl AccountDialog {
         let login = Button::new("registration-login", locale.text(Text::LoginExisting))
             .icon(Icon::Lock)
             .style(ButtonStyle::Quiet)
+            .disabled(self.busy(cx))
             .on_press(
                 cx.listener(|this, (), window, cx| this.open_page(AccountPage::Login, window, cx)),
             );
-        registration_panel_view(theme, view, self.busy(cx), true, create, login, cx)
+        registration_panel_view(theme, view, self.registering(cx), true, create, login, cx)
     }
 
     fn overview_body(&self, theme: Theme, cx: &Context<Self>) -> Div {

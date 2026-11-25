@@ -305,6 +305,7 @@ impl Desktop {
                         ),
                 )
         } else {
+            let registering = self.account_registering(cx);
             let visible = self.page == Page::Settings
                 && self.settings_section == SettingsSection::Account
                 && self.overlays.is_empty();
@@ -327,8 +328,9 @@ impl Desktop {
                 ButtonStyle::Quiet,
                 AccountPage::Login,
                 cx,
-            );
-            registration_panel_view(theme, view, busy, visible, create, login, cx)
+            )
+            .disabled(busy);
+            registration_panel_view(theme, view, registering, visible, create, login, cx)
         };
         column().gap(px(SECTION_GAP)).child(
             theme

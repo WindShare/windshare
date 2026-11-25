@@ -377,6 +377,17 @@ impl Model {
             || self.account.as_ref().is_some_and(crate::AccountView::busy)
     }
 
+    /// Returns the active request ID only while a registration command is in flight.
+    pub const fn in_flight_registration_id(&self) -> Option<&str> {
+        match &self.account_request {
+            crate::AccountRequest::Pending {
+                id,
+                action: crate::AccountAction::Register,
+            } => Some(id.as_str()),
+            _ => None,
+        }
+    }
+
     pub const fn setup_pending(&self) -> bool {
         self.setup_request.is_pending()
     }
@@ -550,7 +561,7 @@ impl Model {
     }
 
     fn reconcile_account_request(&mut self) {
-        let crate::AccountRequest::Pending { id } = &self.account_request else {
+        let crate::AccountRequest::Pending { id, .. } = &self.account_request else {
             return;
         };
         let Some(operation) = self

@@ -72,6 +72,7 @@ fn a_rejected_settings_submission_retains_its_own_failure() {
         let model = draft.write();
         model.account_request = crate::AccountRequest::Pending {
             id: "account:1".into(),
+            action: crate::AccountAction::Refresh,
         };
         model.setup_request = crate::SetupRequest::Pending {
             id: "setup:2".into(),

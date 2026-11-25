@@ -141,12 +141,44 @@ pub enum Allowance {
     Stale,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AccountAction {
+    Register,
+    Refresh,
+    Login,
+    Password,
+    Nickname,
+    RequestProfileEmail,
+    ConfirmProfileEmail,
+    Email,
+    Verify,
+    Revoke,
+}
+
+impl AccountAction {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Register => "register",
+            Self::Refresh => "refresh",
+            Self::Login => "login",
+            Self::Password => "password",
+            Self::Nickname => "nickname",
+            Self::RequestProfileEmail => "request_profile_email",
+            Self::ConfirmProfileEmail => "confirm_profile_email",
+            Self::Email => "email",
+            Self::Verify => "verify",
+            Self::Revoke => "revoke",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum AccountRequest {
     #[default]
     Idle,
     Pending {
         id: String,
+        action: AccountAction,
     },
     Succeeded {
         id: String,
@@ -161,7 +193,7 @@ impl AccountRequest {
     pub fn id(&self) -> Option<&str> {
         match self {
             Self::Idle => None,
-            Self::Pending { id } | Self::Succeeded { id } | Self::Failed { id, .. } => Some(id),
+            Self::Pending { id, .. } | Self::Succeeded { id } | Self::Failed { id, .. } => Some(id),
         }
     }
 
@@ -210,18 +242,22 @@ pub enum AccountCommand {
 }
 
 impl AccountCommand {
-    pub(crate) const fn action(&self) -> &'static str {
+    pub const fn kind(&self) -> AccountAction {
         match self {
-            Self::Register => "register",
-            Self::Refresh => "refresh",
-            Self::Login { .. } => "login",
-            Self::Password { .. } => "password",
-            Self::Nickname { .. } => "nickname",
-            Self::RequestProfileEmail { .. } => "request_profile_email",
-            Self::ConfirmProfileEmail { .. } => "confirm_profile_email",
-            Self::Email { .. } => "email",
-            Self::Verify { .. } => "verify",
-            Self::Revoke { .. } => "revoke",
+            Self::Register => AccountAction::Register,
+            Self::Refresh => AccountAction::Refresh,
+            Self::Login { .. } => AccountAction::Login,
+            Self::Password { .. } => AccountAction::Password,
+            Self::Nickname { .. } => AccountAction::Nickname,
+            Self::RequestProfileEmail { .. } => AccountAction::RequestProfileEmail,
+            Self::ConfirmProfileEmail { .. } => AccountAction::ConfirmProfileEmail,
+            Self::Email { .. } => AccountAction::Email,
+            Self::Verify { .. } => AccountAction::Verify,
+            Self::Revoke { .. } => AccountAction::Revoke,
         }
+    }
+
+    pub(crate) const fn action(&self) -> &'static str {
+        self.kind().as_str()
     }
 }

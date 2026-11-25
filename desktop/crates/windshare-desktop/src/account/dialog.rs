@@ -95,11 +95,14 @@ impl AccountDialog {
                 subscriptions.push(cx.observe_in(host, window, |this, host, window, cx| {
                     this.on_host_updated(&host, window, cx);
                 }));
-                let request = &host.read(cx).model().account_request;
-                request
-                    .is_pending()
-                    .then(|| request.id().map(str::to_owned))
-                    .flatten()
+                match &host.read(cx).model().account_request {
+                    AccountRequest::Pending { id, action }
+                        if initial_page.matches_pending_action(*action) =>
+                    {
+                        Some(id.clone())
+                    }
+                    _ => None,
+                }
             }
             AccountSource::Preview(_) => None,
         };
@@ -168,6 +171,15 @@ impl AccountDialog {
     pub fn busy(&self, cx: &App) -> bool {
         match &self.source {
             AccountSource::Native(host) => host.read(cx).model().account_busy(),
+            AccountSource::Preview(view) => view.busy(),
+        }
+    }
+
+    pub(super) fn registering(&self, cx: &App) -> bool {
+        match &self.source {
+            AccountSource::Native(host) => {
+                host.read(cx).model().in_flight_registration_id().is_some()
+            }
             AccountSource::Preview(view) => view.busy(),
         }
     }

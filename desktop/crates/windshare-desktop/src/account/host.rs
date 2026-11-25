@@ -27,6 +27,13 @@ impl Desktop {
         }
     }
 
+    pub(super) fn account_registering(&self, cx: &App) -> bool {
+        match &self.runtime {
+            Runtime::Native(session) => session.model(cx).in_flight_registration_id().is_some(),
+            Runtime::Preview(preview) => preview.account.busy(),
+        }
+    }
+
     pub(super) fn account_inline_feedback(
         &self,
         cx: &App,
@@ -135,9 +142,10 @@ impl Desktop {
             && let Runtime::Native(session) = &self.runtime
         {
             let host = session.host.clone();
-            self.account_ui.inline_request_id = host.update(cx, |host, cx| {
+            let request_id = host.update(cx, |host, cx| {
                 host.submit_account(AccountCommand::Register, cx)
             });
+            self.account_ui.track_registration(request_id);
             cx.notify();
         }
     }
@@ -154,10 +162,56 @@ impl Desktop {
             && let Runtime::Native(session) = &self.runtime
         {
             let host = session.host.clone();
-            self.account_ui.inline_request_id = host.update(cx, |host, cx| {
+            let request_id = host.update(cx, |host, cx| {
                 host.submit_account(AccountCommand::Refresh, cx)
             });
+            self.account_ui.track_refresh(request_id);
             cx.notify();
+        }
+    }
+
+    pub(crate) fn observe_account_overlay_dismissed(&mut self, cx: &App) {
+        let Runtime::Native(session) = &self.runtime else {
+            return;
+        };
+        let settings_visible = self.page == Page::Settings
+            && self.settings_section == SettingsSection::Account
+            && self.overlays.is_empty();
+        if let Some(request_id) = self
+            .account_ui
+            .observe_overlay_dismissed(session.model(cx), settings_visible)
+        {
+            tracing::info!(
+                event = "desktop.account_registration_observed",
+                session = std::process::id(),
+                request_id,
+                settings_visible,
+            );
+        }
+    }
+
+    pub(crate) fn sync_account_settings_route(&mut self, cx: &App) {
+        let Runtime::Native(session) = &self.runtime else {
+            self.account_ui.clear();
+            return;
+        };
+        let on_account_settings =
+            self.page == Page::Settings && self.settings_section == SettingsSection::Account;
+        let model = session.model(cx);
+        if on_account_settings {
+            if let Some(request_id) = self.account_ui.enter_settings(model) {
+                tracing::info!(
+                    event = "desktop.account_registration_attached",
+                    session = std::process::id(),
+                    request_id,
+                );
+            }
+        } else if let Some(request_id) = self.account_ui.leave_settings(model) {
+            tracing::info!(
+                event = "desktop.account_registration_backgrounded",
+                session = std::process::id(),
+                request_id,
+            );
         }
     }
 

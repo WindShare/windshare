@@ -281,6 +281,7 @@ impl Desktop {
             sequence: self.dialog_sequence,
             _subscription: subscription,
         });
+        self.observe_account_overlay_dismissed(cx);
     }
 
     pub fn close_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -290,6 +291,7 @@ impl Desktop {
         if let Overlay::SharingSetup(target, dialog) = &frame.content {
             self.handoff_setup_dialog(*target, dialog, cx);
         }
+        self.observe_account_overlay_dismissed(cx);
         let fallback = self
             .overlays
             .last()
@@ -323,7 +325,7 @@ impl Desktop {
         self.page = page;
         self.overlays.clear();
         self.network_ui.clear_transient();
-        self.account_ui.clear();
+        self.sync_account_settings_route(cx);
         self.observe_active_network_setup(cx);
         self.link_disclosure = LinkDisclosure::Summary;
         self.focus_task(window, cx);
@@ -357,11 +359,11 @@ impl Desktop {
         );
         self.settings_section = next;
         self.network_ui.clear_transient();
-        self.account_ui.clear();
         if self.page == Page::Settings {
             self.overlays.clear();
             self.refresh_settings_section(cx);
             self.observe_active_network_setup(cx);
+            self.sync_account_settings_route(cx);
         } else {
             self.navigate(Page::Settings, window, cx);
         }

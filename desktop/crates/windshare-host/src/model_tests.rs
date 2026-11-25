@@ -386,3 +386,59 @@ fn structured_share_failure_and_omissions_wire_contract_deserializes() {
     assert_eq!(omissions.samples[0].name, "remote.docx");
     assert_eq!(omissions.samples[0].reason, "cloud_placeholder");
 }
+
+#[test]
+fn in_flight_registration_id_tracks_only_pending_register_commands() {
+    let mut model = Model {
+        account_request: crate::AccountRequest::Pending {
+            id: "account:1".into(),
+            action: crate::AccountAction::Register,
+        },
+        ..Model::default()
+    };
+    assert_eq!(model.in_flight_registration_id(), Some("account:1"));
+
+    for action in [
+        crate::AccountAction::Login,
+        crate::AccountAction::Password,
+        crate::AccountAction::Nickname,
+        crate::AccountAction::Refresh,
+    ] {
+        model.account_request = crate::AccountRequest::Pending {
+            id: "account:2".into(),
+            action,
+        };
+        assert_eq!(model.in_flight_registration_id(), None, "{action:?}");
+    }
+
+    model.account_request = crate::AccountRequest::Pending {
+        id: "account:3".into(),
+        action: crate::AccountAction::Register,
+    };
+    let mut failed_snapshot = snapshot(1, vec![]);
+    failed_snapshot.account = Some(
+        serde_json::from_value(serde_json::json!({
+            "status": {
+                "active": true,
+                "state": "registration_required",
+                "allowance": "stale",
+                "remaining_bytes": 0
+            },
+            "operation": {
+                "id": "account:3",
+                "state": "failed",
+                "error": { "code": "rate_limited", "message": "try again later" }
+            }
+        }))
+        .unwrap(),
+    );
+    model.reconcile(failed_snapshot);
+    assert_eq!(model.in_flight_registration_id(), None);
+    assert_eq!(
+        model.account_request,
+        crate::AccountRequest::Failed {
+            id: "account:3".into(),
+            error: Failure::new("rate_limited", "try again later"),
+        }
+    );
+}
