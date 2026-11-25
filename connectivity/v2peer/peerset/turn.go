@@ -93,15 +93,14 @@ type turnManager struct {
 	settling  time.Time
 }
 
-func newTURNManager(s *ReceiverSession, r turnRuntime) *turnManager {
+func newTURNManager(s *ReceiverSession, r turnRuntime, laneSet *lanes.Set) *turnManager {
 	id := receiverSessionID(s.config.Lanes)
 	s.owner.mu.Lock()
 	pool := s.owner.slotPoolLocked(id)
 	s.owner.mu.Unlock()
 	config := s.config
 	var delivered func(session.LaneIdentity) bool
-	if owner, ok := config.Lanes.(interface{ LaneSet() *lanes.Set }); ok && owner.LaneSet() != nil {
-		laneSet := owner.LaneSet()
+	if laneSet != nil {
 		delivered = func(lane session.LaneIdentity) bool {
 			return laneSet.HasDelivered(lanes.Identity(lane))
 		}

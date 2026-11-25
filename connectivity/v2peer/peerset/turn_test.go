@@ -115,7 +115,7 @@ func newTURNFixture(t *testing.T) *turnFixture {
 	ctx, cancel := context.WithCancel(t.Context())
 	receiver := &ReceiverSession{owner: owner, ctx: ctx}
 	runtime := &turnTestRuntime{lanes: make(map[session.LaneIdentity]*turnTestLane), requests: make(chan p.TURNDemand, 16)}
-	manager := newTURNManager(receiver, runtime)
+	manager := newTURNManager(receiver, runtime, nil)
 	f := &turnFixture{t: t, origin: time.Now(), manager: manager, runtime: runtime, cancel: cancel, attempts: make(chan *testTURNAttempt, 8)}
 	var sequence atomic.Uint32
 	manager.negotiate = func(_ context.Context, binding v2signal.Binding, grant p.TURNGrant) (Attempt, error) {

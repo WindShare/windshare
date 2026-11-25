@@ -237,10 +237,7 @@ func TestExhaustedTURNContentRecoversAcrossRouteBlockedFetch(t *testing.T) {
 			requests: make(chan protocolsession.TURNDemand, 8),
 		}
 		receiver := &ReceiverSession{owner: owner, ctx: ctx, config: ReceiverConfig{Demand: ContentDemand}}
-		manager := newTURNManager(receiver, runtime)
-		manager.delivered = func(id session.LaneIdentity) bool {
-			return laneSet.HasDelivered(transferlanes.Identity(id))
-		}
+		manager := newTURNManager(receiver, runtime, laneSet)
 		receiver.turn = manager
 		defer func() { cancel(); manager.close(); receiver.work.Wait() }()
 

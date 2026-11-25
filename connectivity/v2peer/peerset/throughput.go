@@ -163,7 +163,9 @@ func (s *ReceiverSession) pathFinished(result Result) {
 		return
 	}
 	if result.Scope != protocolsession.PeerFailureSessionTerminal {
-		if s.allowTURN {
+		// Retain the session after the last direct path only while an active TURN
+		// manager still owns non-direct recovery on this session context.
+		if s.turn != nil {
 			return
 		}
 		s.owner.mu.Lock()

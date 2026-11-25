@@ -178,11 +178,13 @@ func (s *PeerSet) Open(ctx context.Context, config PathConfig) (*Path, error) {
 	}
 	var supply *transferlanes.RouteSupply
 	if config.Content != nil {
-		supply, err = config.Content.LaneSet().ExpectRoute(transferlanes.RouteDirect)
-		if err != nil {
-			cancel()
-			slot.Close()
-			return nil, err
+		if laneSet := config.Content.LaneSet(); laneSet != nil {
+			supply, err = laneSet.ExpectRoute(transferlanes.RouteDirect)
+			if err != nil {
+				cancel()
+				slot.Close()
+				return nil, err
+			}
 		}
 	}
 	s.sequence++

@@ -12,7 +12,6 @@ import (
 // generation. Closing an ICE attempt never closes the download job.
 type ReceiverSession struct {
 	turn        *turnManager
-	allowTURN   bool
 	mu          sync.Mutex
 	owner       *PeerSet
 	config      ReceiverConfig
@@ -28,15 +27,18 @@ type ReceiverSession struct {
 
 func OpenReceiverSession(parent context.Context, config Config, receiver ReceiverConfig) (*ReceiverSession, error) {
 	owner, err := New(config)
-	if err != nil || receiver.Factory == nil {
+	if err != nil || parent == nil || receiver.Factory == nil {
 		return nil, ErrConfig
 	}
 	ctx, cancel := context.WithCancel(parent)
 	s := &ReceiverSession{owner: owner, config: receiver, ctx: ctx, cancel: cancel, ready: make(chan struct{}), done: make(chan struct{})}
-	if owner, ok := receiver.Lanes.(interface{ LaneSet() *transferlanes.Set }); ok && owner.LaneSet() != nil {
-		s.allowTURN = owner.LaneSet().AllowsRoute(transferlanes.RouteTURN)
-		if controls, ok := receiver.Lanes.(turnRuntime); ok && s.allowTURN {
-			s.turn = newTURNManager(s, controls)
+	var laneSet *transferlanes.Set
+	if lanes, ok := receiver.Lanes.(interface{ LaneSet() *transferlanes.Set }); ok {
+		laneSet = lanes.LaneSet()
+	}
+	if laneSet != nil && laneSet.AllowsRoute(transferlanes.RouteTURN) {
+		if controls, ok := receiver.Lanes.(turnRuntime); ok {
+			s.turn = newTURNManager(s, controls, laneSet)
 		}
 	}
 	s.attachControls()
@@ -52,8 +54,8 @@ func OpenReceiverSession(parent context.Context, config Config, receiver Receive
 		}
 		return nil, err
 	}
-	if lanes, ok := receiver.Lanes.(interface{ LaneSet() *transferlanes.Set }); ok {
-		s.work.Go(func() { s.runContentControl(lanes.LaneSet()) })
+	if laneSet != nil {
+		s.work.Go(func() { s.runContentControl(laneSet) })
 	}
 	go func() {
 		<-ctx.Done()
