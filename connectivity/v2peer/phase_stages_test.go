@@ -3,6 +3,7 @@ package v2peer
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -501,4 +502,232 @@ func (session *blockingAnswerPeerSession) SendPeerControl(
 		return protocolsession.OperationDeliver, ctx.Err()
 	}
 	return session.testPeerSession.SendPeerControl(ctx, op, kind, body)
+}
+
+type uncanceledTestParent struct {
+	done      <-chan struct{}
+	doneCalls atomic.Int32
+}
+
+func (parent *uncanceledTestParent) Deadline() (time.Time, bool) { return time.Time{}, false }
+func (parent *uncanceledTestParent) Done() <-chan struct{} {
+	parent.doneCalls.Add(1)
+	return parent.done
+}
+func (parent *uncanceledTestParent) Err() error    { return nil }
+func (parent *uncanceledTestParent) Value(any) any { return nil }
+
+type failingStageTimerSource struct {
+	inner     *recordingReceiverPhaseTimerSource
+	failPhase PeerAttemptPhase
+	err       error
+}
+
+func (source *failingStageTimerSource) NewPeerPhaseTimer(
+	phase PeerAttemptPhase,
+	duration time.Duration,
+) (PeerPhaseTimer, error) {
+	if phase == source.failPhase {
+		return nil, source.err
+	}
+	return source.inner.NewPeerPhaseTimer(phase, duration)
+}
+
+func TestNativeObservedStagesDoNotLeakIntermediateContexts(t *testing.T) {
+	t.Run("terminate after establishing", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			parent := &uncanceledTestParent{done: make(chan struct{})}
+			timers := newRecordingReceiverPhaseTimerSource()
+			lifecycle := newPeerPhaseLifecycle(timers, DefaultPeerNegotiationBudget, DefaultPeerAdmissionBudget)
+			lifecycle.staged = true
+
+			ctx, err := lifecycle.beginNegotiation(parent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			preparation := receiveTest(t, timers.created)
+			synctest.Wait()
+			doneCallsAfterBegin := parent.doneCalls.Load()
+
+			lifecycle.observeICE(pion.ICEConnectionStateChecking)
+			checking := receiveTest(t, timers.created)
+			lifecycle.observeICE(pion.ICEConnectionStateConnected)
+			establishing := receiveTest(t, timers.created)
+			synctest.Wait()
+
+			if !preparation.timer.stopped.Load() || !checking.timer.stopped.Load() || establishing.timer.stopped.Load() {
+				t.Fatalf("stage timer stop states = (%t, %t, %t), want (true, true, false)",
+					preparation.timer.stopped.Load(), checking.timer.stopped.Load(), establishing.timer.stopped.Load())
+			}
+			if ctx.Err() != nil {
+				t.Fatalf("stage transition canceled negotiation context: %v", context.Cause(ctx))
+			}
+			if got := parent.doneCalls.Load(); got != doneCallsAfterBegin {
+				t.Fatalf("observeICE attached intermediate child contexts to parent: Done() calls %d -> %d",
+					doneCallsAfterBegin, got)
+			}
+
+			lifecycle.terminate(context.Canceled)
+			if !errors.Is(context.Cause(ctx), context.Canceled) || !establishing.timer.stopped.Load() {
+				t.Fatalf("terminate did not release negotiation deadline: cause=%v stopped=%t",
+					context.Cause(ctx), establishing.timer.stopped.Load())
+			}
+		})
+	})
+
+	t.Run("admission after establishing", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			parent := &uncanceledTestParent{done: make(chan struct{})}
+			timers := newRecordingReceiverPhaseTimerSource()
+			lifecycle := newPeerPhaseLifecycle(timers, DefaultPeerNegotiationBudget, DefaultPeerAdmissionBudget)
+			lifecycle.staged = true
+
+			ctx, err := lifecycle.beginNegotiation(parent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			receiveTest(t, timers.created)
+			lifecycle.observeICE(pion.ICEConnectionStateChecking)
+			receiveTest(t, timers.created)
+			lifecycle.observeICE(pion.ICEConnectionStateConnected)
+			establishing := receiveTest(t, timers.created)
+
+			admissionCtx, started, err := lifecycle.beginAdmission(parent)
+			if err != nil || !started {
+				t.Fatalf("beginAdmission = (%v, %t, %v)", admissionCtx, started, err)
+			}
+			if !errors.Is(context.Cause(ctx), context.Canceled) || !establishing.timer.stopped.Load() {
+				t.Fatalf("beginAdmission left negotiation active: cause=%v stopped=%t",
+					context.Cause(ctx), establishing.timer.stopped.Load())
+			}
+			admission := receiveTest(t, timers.created)
+			lifecycle.terminate(context.Canceled)
+			if !errors.Is(context.Cause(admissionCtx), context.Canceled) || !admission.timer.stopped.Load() {
+				t.Fatalf("terminate left admission active: cause=%v stopped=%t",
+					context.Cause(admissionCtx), admission.timer.stopped.Load())
+			}
+		})
+	})
+
+	t.Run("timer error cancels negotiation without leak", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			parent := &uncanceledTestParent{done: make(chan struct{})}
+			boom := errors.New("stage timer unavailable")
+			inner := newRecordingReceiverPhaseTimerSource()
+			timers := &failingStageTimerSource{
+				inner:     inner,
+				failPhase: PeerAttemptPhaseEstablishing,
+				err:       boom,
+			}
+			lifecycle := newPeerPhaseLifecycle(timers, DefaultPeerNegotiationBudget, DefaultPeerAdmissionBudget)
+			lifecycle.staged = true
+
+			ctx, err := lifecycle.beginNegotiation(parent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			receiveTest(t, inner.created)
+			lifecycle.observeICE(pion.ICEConnectionStateChecking)
+			checking := receiveTest(t, inner.created)
+
+			lifecycle.observeICE(pion.ICEConnectionStateConnected)
+			if !checking.timer.stopped.Load() {
+				t.Fatal("failed stage transition did not stop previous timer")
+			}
+			if !errors.Is(context.Cause(ctx), ErrConfig) || !errors.Is(context.Cause(ctx), boom) {
+				t.Fatalf("failed stage transition cause = %v, want ErrConfig + %v", context.Cause(ctx), boom)
+			}
+			if _, started, err := lifecycle.beginAdmission(parent); started || err != nil {
+				t.Fatalf("terminal lifecycle admitted after timer failure: started=%t err=%v", started, err)
+			}
+		})
+	})
+}
+
+type syncPhaseTimer struct {
+	fire chan time.Time
+}
+
+func (timer *syncPhaseTimer) C() <-chan time.Time { return timer.fire }
+func (timer *syncPhaseTimer) Stop()               {}
+
+type recordedSyncPhaseTimer struct {
+	phase PeerAttemptPhase
+	fire  chan time.Time
+}
+
+type syncPhaseTimerSource struct {
+	created chan recordedSyncPhaseTimer
+}
+
+func newSyncPhaseTimerSource() *syncPhaseTimerSource {
+	return &syncPhaseTimerSource{created: make(chan recordedSyncPhaseTimer, 8)}
+}
+
+func (source *syncPhaseTimerSource) NewPeerPhaseTimer(
+	phase PeerAttemptPhase,
+	_ time.Duration,
+) (PeerPhaseTimer, error) {
+	timer := &syncPhaseTimer{fire: make(chan time.Time)}
+	source.created <- recordedSyncPhaseTimer{phase: phase, fire: timer.fire}
+	return timer, nil
+}
+
+func TestNativeObservedStageAdvanceIgnoresRacingRetiredTimer(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		timers := newSyncPhaseTimerSource()
+		lifecycle := newPeerPhaseLifecycle(timers, DefaultPeerNegotiationBudget, DefaultPeerAdmissionBudget)
+		lifecycle.staged = true
+
+		ctx, err := lifecycle.beginNegotiation(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer lifecycle.terminate(context.Canceled)
+		preparation := receiveTest(t, timers.created)
+
+		// Synchronize on the unbuffered timer channel while holding lifecycle.mu
+		// so the retired timer goroutine has already won select <-timer.C() but
+		// observes the superseded generation inside deadlineFired.
+		lifecycle.mu.Lock()
+		preparation.fire <- time.Now()
+		lifecycle.observeICELocked(pion.ICEConnectionStateChecking)
+		lifecycle.mu.Unlock()
+		checking := receiveTest(t, timers.created)
+		synctest.Wait()
+
+		if ctx.Err() != nil {
+			t.Fatalf("racing Preparation timer canceled Checking stage: %v", context.Cause(ctx))
+		}
+		select {
+		case exp := <-lifecycle.expirationEvents():
+			t.Fatalf("racing Preparation timer emitted stale expiration: %+v", exp)
+		default:
+		}
+
+		lifecycle.mu.Lock()
+		checking.fire <- time.Now()
+		lifecycle.observeICELocked(pion.ICEConnectionStateConnected)
+		lifecycle.mu.Unlock()
+		establishing := receiveTest(t, timers.created)
+		synctest.Wait()
+
+		if ctx.Err() != nil {
+			t.Fatalf("racing Checking timer canceled Establishing stage: %v", context.Cause(ctx))
+		}
+		select {
+		case exp := <-lifecycle.expirationEvents():
+			t.Fatalf("racing Checking timer emitted stale expiration: %+v", exp)
+		default:
+		}
+
+		establishing.fire <- time.Now()
+		receiveTest(t, ctx.Done())
+		if !errors.Is(context.Cause(ctx), ErrPeerNegotiationTimeout) {
+			t.Fatalf("Establishing timeout cause = %v, want ErrPeerNegotiationTimeout", context.Cause(ctx))
+		}
+		if exp := receiveTest(t, lifecycle.expirationEvents()); exp.phase != PeerAttemptPhaseEstablishing {
+			t.Fatalf("expiration phase = %q, want %q", exp.phase, PeerAttemptPhaseEstablishing)
+		}
+	})
 }

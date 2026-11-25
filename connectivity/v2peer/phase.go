@@ -140,25 +140,30 @@ type peerPhaseDeadline struct {
 	stopOnce sync.Once
 }
 
-func (deadline *peerPhaseDeadline) stop(cause error) {
+func (deadline *peerPhaseDeadline) stopTimer() {
 	if deadline == nil {
 		return
 	}
 	deadline.stopOnce.Do(func() {
 		close(deadline.stopped)
 		deadline.timer.Stop()
-		if cause == nil {
-			cause = context.Canceled
-		}
-		deadline.cancel(cause)
 	})
+}
+
+func (deadline *peerPhaseDeadline) stop(cause error) {
+	if deadline == nil {
+		return
+	}
+	deadline.stopTimer()
+	if cause == nil {
+		cause = context.Canceled
+	}
+	deadline.cancel(cause)
 }
 
 type peerPhaseLifecycle struct {
 	staged            bool
 	stage             PeerAttemptPhase
-	negotiationParent context.Context
-	negotiationCancel context.CancelCauseFunc
 	mu                sync.Mutex
 	timers            PeerPhaseTimerSource
 	negotiationBudget time.Duration
@@ -196,14 +201,12 @@ func (lifecycle *peerPhaseLifecycle) beginNegotiation(
 		phase, budget = PeerAttemptPhasePreparation, PeerSignalingPreparationBudget
 	}
 	lifecycle.stage = phase
-	lifecycle.negotiationParent = parent
 	ctx, err := lifecycle.armLocked(parent, phase, budget)
 	if err != nil {
 		lifecycle.state = peerPhaseTerminal
 		return nil, err
 	}
 	lifecycle.state = peerPhaseNegotiating
-	lifecycle.negotiationCancel = lifecycle.deadline.cancel
 	return ctx, nil
 }
 
@@ -362,29 +365,38 @@ func (lifecycle *peerPhaseLifecycle) expire(
 	return true, false
 }
 
-func (lifecycle *peerPhaseLifecycle) deadlineFired(expiration peerPhaseExpiration) {
+func (lifecycle *peerPhaseLifecycle) deadlineFired(expiration peerPhaseExpiration) bool {
 	lifecycle.mu.Lock()
 	defer lifecycle.mu.Unlock()
 	if expiration.generation != lifecycle.generation || lifecycle.deadline == nil {
-		return
+		return false
 	}
-	lifecycle.pendingExpiration = expiration
-	lifecycle.expirationOwned = false
 	if expiration.phase != PeerAttemptPhaseAdmission {
-		if lifecycle.staged && lifecycle.negotiationCancel != nil {
-			lifecycle.negotiationCancel(expiration.cause)
+		if lifecycle.state != peerPhaseNegotiating {
+			return false
 		}
-		return
+		lifecycle.pendingExpiration = expiration
+		lifecycle.expirationOwned = false
+		lifecycle.deadline.cancel(expiration.cause)
+		return true
 	}
 	switch lifecycle.state {
 	case peerPhaseAdmissionWaiting:
+		lifecycle.pendingExpiration = expiration
 		lifecycle.state = peerPhaseTerminal
 		lifecycle.expirationOwned = true
+		lifecycle.deadline.cancel(expiration.cause)
+		return true
 	case peerPhaseAdmissionSettling:
 		// The timer may cancel I/O, but authenticated settlement retains the
 		// public outcome once its synchronous gate has won.
+		lifecycle.pendingExpiration = expiration
+		lifecycle.expirationOwned = false
+		lifecycle.deadline.cancel(expiration.cause)
+		return true
 	default:
 		lifecycle.pendingExpiration = peerPhaseExpiration{}
+		return false
 	}
 }
 
@@ -455,7 +467,30 @@ func (lifecycle *peerPhaseLifecycle) armLocked(
 	if err != nil {
 		return nil, err
 	}
-	timer, cancel := deadline.timer, deadline.cancel
+	lifecycle.installDeadlineLocked(phase, deadline)
+	return ctx, nil
+}
+
+func (lifecycle *peerPhaseLifecycle) armStageTimerLocked(
+	phase PeerAttemptPhase,
+	budget time.Duration,
+	cancel context.CancelCauseFunc,
+) error {
+	timer, err := lifecycle.newTimerLocked(phase, budget)
+	if err != nil {
+		return err
+	}
+	lifecycle.installDeadlineLocked(phase, &peerPhaseDeadline{
+		timer: timer, cancel: cancel, stopped: make(chan struct{}),
+	})
+	return nil
+}
+
+func (lifecycle *peerPhaseLifecycle) installDeadlineLocked(
+	phase PeerAttemptPhase,
+	deadline *peerPhaseDeadline,
+) {
+	timer := deadline.timer
 	lifecycle.generation++
 	lifecycle.pendingExpiration = peerPhaseExpiration{}
 	lifecycle.expirationOwned = false
@@ -466,8 +501,12 @@ func (lifecycle *peerPhaseLifecycle) armLocked(
 	go func() {
 		select {
 		case <-timer.C():
-			lifecycle.deadlineFired(expiration)
-			cancel(expiration.cause)
+			// Generation ownership is checked under lifecycle.mu so a retired
+			// stage timer that raced with observeICE cannot cancel the shared
+			// negotiation context.
+			if !lifecycle.deadlineFired(expiration) {
+				return
+			}
 			select {
 			case lifecycle.expirations <- expiration:
 			case <-deadline.stopped:
@@ -475,7 +514,22 @@ func (lifecycle *peerPhaseLifecycle) armLocked(
 		case <-deadline.stopped:
 		}
 	}()
-	return ctx, nil
+}
+
+func (lifecycle *peerPhaseLifecycle) newTimerLocked(
+	phase PeerAttemptPhase,
+	budget time.Duration,
+) (PeerPhaseTimer, error) {
+	if lifecycle.timers == nil || !validPeerPhaseBudgets(
+		lifecycle.negotiationBudget, lifecycle.admissionBudget,
+	) {
+		return nil, ErrConfig
+	}
+	timer, err := lifecycle.timers.NewPeerPhaseTimer(phase, budget)
+	if err != nil || timer == nil {
+		return nil, errors.Join(ErrConfig, err)
+	}
+	return timer, nil
 }
 
 func (lifecycle *peerPhaseLifecycle) newDeadlineLocked(
@@ -483,14 +537,12 @@ func (lifecycle *peerPhaseLifecycle) newDeadlineLocked(
 	phase PeerAttemptPhase,
 	budget time.Duration,
 ) (context.Context, *peerPhaseDeadline, error) {
-	if parent == nil || lifecycle.timers == nil || !validPeerPhaseBudgets(
-		lifecycle.negotiationBudget, lifecycle.admissionBudget,
-	) {
+	if parent == nil {
 		return nil, nil, ErrConfig
 	}
-	timer, err := lifecycle.timers.NewPeerPhaseTimer(phase, budget)
-	if err != nil || timer == nil {
-		return nil, nil, errors.Join(ErrConfig, err)
+	timer, err := lifecycle.newTimerLocked(phase, budget)
+	if err != nil {
+		return nil, nil, err
 	}
 	ctx, cancel := context.WithCancelCause(parent)
 	return ctx, &peerPhaseDeadline{timer: timer, cancel: cancel, stopped: make(chan struct{})}, nil
@@ -577,11 +629,16 @@ func (owner *ownedPeerDataChannel) teardownSnapshot() peerTransportTeardown {
 	}
 }
 
-// Advancing an observed stage stops its timer without canceling ongoing signal
-// I/O. Every later expiration still cancels the original negotiation context.
+// Advancing an observed stage replaces only the active stage timer while
+// retaining the single negotiation context for ongoing signaling I/O. Every
+// later expiration still cancels that original negotiation context.
 func (lifecycle *peerPhaseLifecycle) observeICE(state pion.ICEConnectionState) {
 	lifecycle.mu.Lock()
 	defer lifecycle.mu.Unlock()
+	lifecycle.observeICELocked(state)
+}
+
+func (lifecycle *peerPhaseLifecycle) observeICELocked(state pion.ICEConnectionState) {
 	if !lifecycle.staged || lifecycle.state != peerPhaseNegotiating || lifecycle.pendingExpiration.generation != 0 {
 		return
 	}
@@ -596,17 +653,13 @@ func (lifecycle *peerPhaseLifecycle) observeICE(state pion.ICEConnectionState) {
 		return
 	}
 	previous := lifecycle.deadline
-	previous.stopOnce.Do(func() { close(previous.stopped); previous.timer.Stop() })
+	previous.stopTimer()
 	lifecycle.deadline = nil
-	_, err := lifecycle.armLocked(lifecycle.negotiationParent, phase, budget)
-	if err != nil {
-		lifecycle.negotiationCancel(err)
+	if err := lifecycle.armStageTimerLocked(phase, budget, previous.cancel); err != nil {
+		previous.stop(err)
 		lifecycle.state = peerPhaseTerminal
 		return
 	}
-	nextCancel := lifecycle.deadline.cancel
-	originalCancel := lifecycle.negotiationCancel
-	lifecycle.deadline.cancel = func(cause error) { originalCancel(cause); nextCancel(cause) }
 	lifecycle.stage = phase
 }
 func observePeerICE(peer any, lifecycle *peerPhaseLifecycle) {
