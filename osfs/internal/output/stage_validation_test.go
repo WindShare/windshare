@@ -793,3 +793,83 @@ func TestInvalidStagePreflightsDestinationCollision(t *testing.T) {
 		t.Fatalf("foreign destination file altered: %q %v", got, err)
 	}
 }
+
+func TestSmallFileCommitCollisionSkipsPartialWhenStageCannotBeSampled(t *testing.T) {
+	ctx := context.Background()
+	const (
+		seed      byte = 0x91
+		totalSize      = 16 * 1024
+	)
+	expected := makePatternPayload(totalSize, seed)
+	root := t.TempDir()
+	auth, err := New(Config{RootPath: root, CreateRoot: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := auth.BindDestination(ctx); err != nil {
+		t.Fatal(err)
+	}
+	sel := testSelectionSpec(t, seed)
+	lookup, err := auth.SelectOperation(ctx, sel, receivecontract.AutomaticOperation())
+	if err != nil || lookup.Kind() != LookupCreateReady {
+		t.Fatalf("select = (%v, %v)", lookup.Kind(), err)
+	}
+	art, err := receivecontract.NewResultRootDirectoryTree(receivecontract.NewSyntheticSelectionResultRoot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, err := auth.CreateOperation(ctx, lookup, art)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, _ := op.ReceiveIntent()
+	session, err := auth.OpenOperation(ctx, op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootAdm := testAdmitRoot(t, session, intent, seed+1)
+	file := testMaterializationFile(t, session, intent, seed+2, "small-unsampled.bin", totalSize, rootAdm)
+	start, err := session.BeginFile(ctx, file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawTx, _, ok := start.Transaction()
+	if !ok {
+		t.Fatal("expected small file transaction")
+	}
+	if err := rawTx.WriteRange(ctx, 0, expected); err != nil {
+		t.Fatal(err)
+	}
+	tx := rawTx.(*fileTransaction)
+	tx.mu.Lock()
+	if _, _, err := tx.prepareStageForPublishLocked(ctx, false); err != nil {
+		tx.mu.Unlock()
+		t.Fatal(err)
+	}
+	// Simulate an inability to reopen .part right after Close() during a small-file
+	// commit collision: settleCommitCollisionLocked must not persist a zero-fp partial.
+	if err := removeChild(op.opDir, tx.partName, false); err != nil {
+		tx.mu.Unlock()
+		t.Fatal(err)
+	}
+	settled, err := tx.settleCommitCollisionLocked(false)
+	tx.mu.Unlock()
+	if err != nil || settled.Kind() != transfer.FileCollision {
+		t.Fatalf("settleCommitCollisionLocked = (%v, %v), want FileCollision", settled.Kind(), err)
+	}
+	canonicalPath := file.MaterializationRelativePath().String()
+	if _, hasPartial := op.journal.lookupPartial(canonicalPath); hasPartial {
+		t.Fatal("unsampled small-file collision unexpectedly wrote a zero-fingerprint partial")
+	}
+	if _, err := session.PauseTree(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := auth.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	inv, err := ListOperations(ctx, root)
+	if err != nil || inv.Status() != RecoveryListReady || len(inv.Summaries()) != 1 {
+		t.Fatalf("inventory after unsampled small-file collision = (%+v, %v), want healthy journal", inv, err)
+	}
+}

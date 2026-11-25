@@ -368,12 +368,13 @@ func (s *Session) reconcilePublishingFile(
 	if partErr != nil {
 		return transfer.FileStart{}, wrapFileFault(ctx, transferfault.OutputStateIO, "inspect staged file", partErr)
 	}
-	if partKind == EntryAbsent {
+	if partKind == EntryAbsent && pub.BlockedReason == 0 {
 		return s.reconcilePublishedWithoutStage(ctx, file, binding, parentDir, physLeaf, pub)
 	}
 
-	// Stage still exists (interrupted before rename completed): check source
-	// lineage before resuming publication with zero re-download.
+	// Stage still exists (interrupted before rename completed), or the publishing
+	// entry was previously blocked before rename: check source lineage before
+	// resuming publication with zero re-download.
 	prevEvidence := content.RevisionSourceEvidence{
 		FileRevision:   pub.Revision,
 		ExactSize:      pub.ExactSize,
@@ -381,31 +382,17 @@ func (s *Session) reconcilePublishingFile(
 	}
 	comparison := content.CompareRevisionMetadata(prevEvidence, desc.SourceEvidence())
 	if !comparison.AllowsReuse() {
-		fullSet, _ := fullRangeSet(pub.ExactSize)
-		return s.handleRevisionMismatch(file, partialEntry{
-			FileID:        pub.FileID,
-			Path:          pub.Path,
-			Revision:      pub.Revision,
-			Metadata:      pub.Metadata,
-			ExactSize:     pub.ExactSize,
-			PartName:      pub.PartName,
-			Ranges:        fullSet.Ranges(),
-			CheckpointGen: pub.CheckpointGen,
-		}, prevEvidence, comparison)
+		return s.handleRevisionMismatch(file, prevEvidence, comparison, pub.ExactSize, func() {
+			pub.BlockedReason = transfer.ItemBlockRevisionConflict
+			_ = s.op.journal.recordPublishing(pub, true)
+		})
 	}
 
-	partFile, openErr := openChildFile(s.op.opDir, pub.PartName, os.O_RDWR, publicFileMode)
-	if openErr != nil {
-		return transfer.FileStart{}, wrapFileFault(ctx, transferfault.OutputStateIO, "reopen publishing staged file", openErr)
-	}
-	validStage := false
-	if info, statErr := partFile.Stat(); statErr == nil && info.Mode().IsRegular() && uint64(max(info.Size(), 0)) == pub.ExactSize {
-		if fp, fpErr := samplePublicationFingerprint(partFile, pub.ExactSize); fpErr == nil && fp == pub.Fingerprint {
-			validStage = true
-		}
+	partFile, validStage, err := s.openValidatedPublishingStage(ctx, pub)
+	if err != nil {
+		return transfer.FileStart{}, err
 	}
 	if !validStage {
-		_ = partFile.Close()
 		occupied, statErr := destinationOccupied(ctx, parentDir, physLeaf)
 		if statErr != nil {
 			return transfer.FileStart{}, statErr
@@ -424,9 +411,10 @@ func (s *Session) reconcilePublishingFile(
 		return start, err
 	}
 
-	if pub.Revision != desc.FileRevision() {
+	if pub.Revision != desc.FileRevision() || pub.BlockedReason != 0 {
 		pub.Revision = desc.FileRevision()
 		pub.Metadata = desc.SourceMetadata()
+		pub.BlockedReason = 0
 		_ = s.op.journal.recordPublishing(pub, true)
 	}
 	fullSet, err := fullRangeSet(pub.ExactSize)
@@ -440,16 +428,34 @@ func (s *Session) reconcilePublishingFile(
 	)
 }
 
+func (s *Session) openValidatedPublishingStage(ctx context.Context, pub publishingEntry) (*os.File, bool, error) {
+	partFile, err := openChildFile(s.op.opDir, pub.PartName, os.O_RDWR, publicFileMode)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, wrapFileFault(ctx, transferfault.OutputStateIO, "reopen publishing staged file", err)
+	}
+	info, statErr := partFile.Stat()
+	if statErr == nil && info.Mode().IsRegular() && uint64(max(info.Size(), 0)) == pub.ExactSize {
+		if fp, fpErr := samplePublicationFingerprint(partFile, pub.ExactSize); fpErr == nil && fp == pub.Fingerprint {
+			return partFile, true, nil
+		}
+	}
+	_ = partFile.Close()
+	return nil, false, nil
+}
+
 func (s *Session) handleRevisionMismatch(
 	file transfer.MaterializationFile,
-	partial partialEntry,
 	prevEvidence content.RevisionSourceEvidence,
 	comparison content.RevisionComparisonEvidence,
+	retainedBytes uint64,
+	persistBlocked func(),
 ) (transfer.FileStart, error) {
 	desc := file.Descriptor()
 	target := file.Target()
 	canonicalPath := file.MaterializationRelativePath().String()
-	retainedBytes := rangeTotalBytes(partial.Ranges)
 
 	if comparison.Comparison == content.RevisionComparisonUnavailable {
 		emitTrace(s.authority.diagnostics, traceEvent{
@@ -460,7 +466,7 @@ func (s *Session) handleRevisionMismatch(
 			intentDigest:     s.intent.Digest(),
 			sessionID:        s.sessionID,
 			fileID:           desc.FileID(),
-			previousRevision: partial.Revision,
+			previousRevision: prevEvidence.FileRevision,
 			currentRevision:  desc.FileRevision(),
 			recoveryReason:   comparison.Reason,
 			retainedBytes:    retainedBytes,
@@ -468,8 +474,7 @@ func (s *Session) handleRevisionMismatch(
 		srcFault, _ := transferfault.NewSource(transferfault.ScopeFileLocal, transferfault.SourceUnavailable)
 		return transfer.FileStart{}, transferfault.Wrap(srcFault, errors.New("revision comparison evidence unavailable"))
 	}
-	partial.BlockedReason = transfer.ItemBlockRevisionConflict
-	_ = s.op.journal.recordPartial(partial, true)
+	persistBlocked()
 	emitTrace(s.authority.diagnostics, traceEvent{
 		component:          "file",
 		operation:          "recover_file",
@@ -624,7 +629,10 @@ func (s *Session) resumePartialFile(
 	}
 	comparison := content.CompareRevisionMetadata(prevEvidence, desc.SourceEvidence())
 	if !comparison.AllowsReuse() {
-		return s.handleRevisionMismatch(file, partial, prevEvidence, comparison)
+		return s.handleRevisionMismatch(file, prevEvidence, comparison, rangeTotalBytes(partial.Ranges), func() {
+			partial.BlockedReason = transfer.ItemBlockRevisionConflict
+			_ = s.op.journal.recordPartial(partial, true)
+		})
 	}
 
 	persistedSet, rangeErr := content.NewRangeSet(partial.Ranges)

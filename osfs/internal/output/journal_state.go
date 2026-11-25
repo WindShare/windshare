@@ -109,6 +109,7 @@ type publishingEntry struct {
 	ExactSize     uint64
 	PartName      string
 	CheckpointGen uint64
+	BlockedReason transfer.ItemBlockReason
 	Fingerprint   [stageFingerprintBytes]byte
 }
 
@@ -233,6 +234,12 @@ func (s *journalState) applyPartial(rec journalRecord) error {
 	if rec.Path == "" || rec.PartName == "" {
 		return fmt.Errorf("%w: invalid partial record", errJournalCorrupt)
 	}
+	// Non-empty staged partials must carry a verified range fingerprint;
+	// validatePartialStage rejects zero fingerprints on resume, so accepting
+	// one here would clobber recoverable progress with an unusable record.
+	if len(rec.Ranges) > 0 && fp == ([stageFingerprintBytes]byte{}) {
+		return fmt.Errorf("%w: partial record missing stage fingerprint", errJournalCorrupt)
+	}
 	delete(s.publishing, rec.Path)
 	s.partials[rec.Path] = partialEntry{
 		FileID:        fid,
@@ -270,6 +277,7 @@ func (s *journalState) applyPublishing(rec journalRecord) error {
 		ExactSize:     rec.ExactSize,
 		PartName:      rec.PartName,
 		CheckpointGen: rec.CheckpointGen,
+		BlockedReason: transfer.ItemBlockReason(rec.BlockedReason),
 		Fingerprint:   fp,
 	}
 	return nil
@@ -411,6 +419,7 @@ func publishingToRecord(entry publishingEntry) journalRecord {
 		ExactSize:     entry.ExactSize,
 		PartName:      entry.PartName,
 		CheckpointGen: entry.CheckpointGen,
+		BlockedReason: uint16(entry.BlockedReason),
 		Fingerprint:   hex.EncodeToString(entry.Fingerprint[:]),
 	}
 }

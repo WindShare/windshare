@@ -293,11 +293,12 @@ func TestJournalCompactionAndRedownloadAndShareStopped(t *testing.T) {
 	// Force journal compaction by appending > journalCompactMinLines partial updates.
 	fid := testID16[catalog.FileID](0x55)
 	rev := testID16[content.FileRevision](0x56)
+	fp := [stageFingerprintBytes]byte{0x57}
 	for i := uint64(1); i <= uint64(journalCompactMinLines+10); i++ {
 		if err := op.journal.recordPartial(partialEntry{
 			FileID: fid, Path: "windshare-selection/big.bin", Revision: rev,
 			ExactSize: 1000, PartName: "big.part", Ranges: []content.Range{{Offset: 0, End: i}},
-			CheckpointGen: i,
+			CheckpointGen: i, Fingerprint: fp,
 		}, false); err != nil {
 			t.Fatal(err)
 		}

@@ -632,3 +632,286 @@ func TestSingleFileLayoutLostReceiptReconcilesViaLookupDelivery(t *testing.T) {
 		t.Fatalf("single-file LookupDelivery reconcile = (%+v, %v, %v)", delivery, found, err)
 	}
 }
+
+func TestLargeFileCommitCollisionKeepsPublishingIntactWithoutDowngrade(t *testing.T) {
+	ctx := context.Background()
+	const seed byte = 0xb1
+	root := t.TempDir()
+	auth, err := New(Config{RootPath: root, CreateRoot: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := auth.BindDestination(ctx); err != nil {
+		t.Fatal(err)
+	}
+	sel := testSelectionSpec(t, seed)
+	lookup, err := auth.SelectOperation(ctx, sel, receivecontract.AutomaticOperation())
+	if err != nil || lookup.Kind() != LookupCreateReady {
+		t.Fatalf("select = (%v, %v)", lookup.Kind(), err)
+	}
+	art, err := receivecontract.NewResultRootDirectoryTree(receivecontract.NewSyntheticSelectionResultRoot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, err := auth.CreateOperation(ctx, lookup, art)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, _ := op.ReceiveIntent()
+	session, err := auth.OpenOperation(ctx, op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootAdm := testAdmitRoot(t, session, intent, seed+1)
+	payload := makeLargeTestPayload(SmallFileThreshold)
+	f := testMaterializationFile(t, session, intent, seed+2, "large-collide.bin", uint64(len(payload)), rootAdm)
+	start, err := session.BeginFile(ctx, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, _, ok := start.Transaction()
+	if !ok {
+		t.Fatal("expected large file transaction")
+	}
+	if err := tx.WriteRange(ctx, 0, payload); err != nil {
+		t.Fatal(err)
+	}
+
+	res, _ := intent.MaterializationPlan().DestinationReservation()
+	finalPath := filepath.Join(root, res.PhysicalName(), "large-collide.bin")
+	foreign := []byte("occupied-before-commit")
+	if err := os.WriteFile(finalPath, foreign, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Durable-publish collision must keep the already-recorded publishing entry
+	// intact without appending a partial downgrade.
+	op.journal.appendHook = func(kind string) error {
+		if kind == "partial" {
+			return errors.New("unexpected partial downgrade on durable-publish collision")
+		}
+		return nil
+	}
+	settled, err := tx.Commit(ctx)
+	op.journal.appendHook = nil
+	if err != nil || settled.Kind() != transfer.FileCollision {
+		t.Fatalf("commit on collision = (%v, %v), want FileCollision", settled.Kind(), err)
+	}
+	canonicalPath := f.MaterializationRelativePath().String()
+	pub, hasPub := op.journal.lookupPublishing(canonicalPath)
+	if !hasPub || pub.Fingerprint == ([stageFingerprintBytes]byte{}) {
+		t.Fatalf("publishing entry lost after collision: hasPub=%t fp=%x", hasPub, pub.Fingerprint)
+	}
+	if _, hasPartial := op.journal.lookupPartial(canonicalPath); hasPartial {
+		t.Fatal("durable-publish collision unexpectedly wrote a partial entry")
+	}
+	if _, err := session.PauseTree(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := auth.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Clear the colliding file and verify retry publishes with zero re-download.
+	if err := os.Remove(finalPath); err != nil {
+		t.Fatal(err)
+	}
+	reopen, err := New(Config{RootPath: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopen.Close()
+	if err := reopen.BindDestination(ctx); err != nil {
+		t.Fatal(err)
+	}
+	reLookup, err := reopen.SelectOperation(ctx, sel, receivecontract.AutomaticOperation())
+	if err != nil || reLookup.Kind() != LookupReopened {
+		t.Fatalf("reopen = (%v, %v)", reLookup.Kind(), err)
+	}
+	reIntent, _ := reLookup.Operation().ReceiveIntent()
+	reSession, err := reopen.OpenOperation(ctx, reLookup.Operation())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reRoot := testAdmitRoot(t, reSession, reIntent, seed+1)
+	reFile := testMaterializationFile(t, reSession, reIntent, seed+2, "large-collide.bin", uint64(len(payload)), reRoot)
+	reStart, err := reSession.BeginFile(ctx, reFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reTx, durable, ok := reStart.Transaction()
+	if !ok || rangeTotalBytes(durable.Ranges().Ranges()) != uint64(len(payload)) {
+		t.Fatalf("reopened collision stage = (ok=%t, bytes=%d), want %d", ok, rangeTotalBytes(durable.Ranges().Ranges()), len(payload))
+	}
+	published, err := reTx.Commit(ctx)
+	if err != nil || published.Kind() != transfer.FilePublished {
+		t.Fatalf("retry commit = (%v, %v)", published.Kind(), err)
+	}
+	if provenance, hasProv := published.PublicationProvenance(); !hasProv || provenance != transfer.FileResumed {
+		t.Fatalf("provenance = (%v, %t), want FileResumed", provenance, hasProv)
+	}
+	if got, err := os.ReadFile(finalPath); err != nil || !bytes.Equal(got, payload) {
+		t.Fatalf("published content mismatch: err=%v len=%d", err, len(got))
+	}
+}
+
+func TestPublishingRevisionConflictPreservesStageAndResumesWhenSourceMatches(t *testing.T) {
+	ctx := context.Background()
+	const seed byte = 0xb9
+	root := t.TempDir()
+	auth, err := New(Config{RootPath: root, CreateRoot: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := auth.BindDestination(ctx); err != nil {
+		t.Fatal(err)
+	}
+	sel := testSelectionSpec(t, seed)
+	lookup, err := auth.SelectOperation(ctx, sel, receivecontract.AutomaticOperation())
+	if err != nil || lookup.Kind() != LookupCreateReady {
+		t.Fatalf("select = (%v, %v)", lookup.Kind(), err)
+	}
+	art, err := receivecontract.NewResultRootDirectoryTree(receivecontract.NewSyntheticSelectionResultRoot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, err := auth.CreateOperation(ctx, lookup, art)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, _ := op.ReceiveIntent()
+	session, err := auth.OpenOperation(ctx, op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootAdm := testAdmitRoot(t, session, intent, seed+1)
+	payload := makeLargeTestPayload(SmallFileThreshold)
+	fileID := testID16[catalog.FileID](seed + 2)
+	origRev := testID16[content.FileRevision](seed + 3)
+	origFile := testMaterializationFileWithIDs(t, session.(*Session), intent, fileID, origRev, "drift-pub.bin", uint64(len(payload)), rootAdm)
+	start, err := session.BeginFile(ctx, origFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, _, _ := start.Transaction()
+	if err := tx.WriteRange(ctx, 0, payload); err != nil {
+		t.Fatal(err)
+	}
+	res, _ := intent.MaterializationPlan().DestinationReservation()
+	finalPath := filepath.Join(root, res.PhysicalName(), "drift-pub.bin")
+	if err := os.WriteFile(finalPath, []byte("occupy"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if settled, err := tx.Commit(ctx); err != nil || settled.Kind() != transfer.FileCollision {
+		t.Fatalf("initial commit collision = (%v, %v)", settled.Kind(), err)
+	}
+	if _, err := session.PauseTree(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := auth.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(finalPath); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reopen 1: source drifts -> must keep publishing entry with BlockedReason
+	// instead of clobbering it with a zero-fingerprint partial.
+	reopen1, err := New(Config{RootPath: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reopen1.BindDestination(ctx); err != nil {
+		t.Fatal(err)
+	}
+	lookup1, err := reopen1.SelectOperation(ctx, sel, receivecontract.AutomaticOperation())
+	if err != nil || lookup1.Kind() != LookupReopened {
+		t.Fatalf("reopen1 = (%v, %v)", lookup1.Kind(), err)
+	}
+	op1 := lookup1.Operation()
+	intent1, _ := op1.ReceiveIntent()
+	session1, err := reopen1.OpenOperation(ctx, op1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root1 := testAdmitRoot(t, session1, intent1, seed+1)
+	driftedFile := testMaterializationFileWithIDs(
+		t, session1.(*Session), intent1, fileID, testID16[content.FileRevision](seed+9),
+		"drift-pub.bin", uint64(len(payload))+4096, root1,
+	)
+	blockedStart, err := session1.BeginFile(ctx, driftedFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settled, immediate := blockedStart.ImmediateSettlement()
+	_, reason, blocked := settled.ItemBlock()
+	if !immediate || settled.Kind() != transfer.FileItemBlocked || !blocked || reason != transfer.ItemBlockRevisionConflict {
+		t.Fatalf("drifted publishing start = (immediate=%t, kind=%v, reason=%v), want ItemBlockRevisionConflict", immediate, settled.Kind(), reason)
+	}
+	canonicalPath := driftedFile.MaterializationRelativePath().String()
+	pub1, hasPub := op1.journal.lookupPublishing(canonicalPath)
+	if !hasPub || pub1.BlockedReason != transfer.ItemBlockRevisionConflict || pub1.Fingerprint == ([stageFingerprintBytes]byte{}) {
+		t.Fatalf("blocked publishing entry = (%+v, %t), want BlockedReason=RevisionConflict with valid fp", pub1, hasPub)
+	}
+	if _, hasPartial := op1.journal.lookupPartial(canonicalPath); hasPartial {
+		t.Fatal("publishing revision conflict unexpectedly clobbered publishing with partial")
+	}
+	if _, err := session1.PauseTree(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := reopen1.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Recovery inventory must report the blocked publishing file as blocked, not resumable.
+	inv, err := ListOperations(ctx, root)
+	if err != nil || inv.Status() != RecoveryListReady || len(inv.Summaries()) != 1 {
+		t.Fatalf("inventory = (%+v, %v), want 1 ready summary", inv, err)
+	}
+	summary := inv.Summaries()[0]
+	if summary.State() != RecoveryOperationIncomplete || len(summary.Items()) != 1 ||
+		summary.Items()[0].State() != RecoveryItemBlocked ||
+		summary.Items()[0].BlockReason() != RecoveryItemBlockRevisionConflict {
+		t.Fatalf("blocked publishing summary = %+v items=%+v, want incomplete with BlockedRevisionConflict", summary, summary.Items())
+	}
+
+	// Reopen 2: source matches original revision again -> must unblock and reuse
+	// 100% of the completed stage instead of deleting .part and restarting from 0.
+	reopen2, err := New(Config{RootPath: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopen2.Close()
+	if err := reopen2.BindDestination(ctx); err != nil {
+		t.Fatal(err)
+	}
+	lookup2, err := reopen2.SelectOperation(ctx, sel, receivecontract.AutomaticOperation())
+	if err != nil || lookup2.Kind() != LookupReopened {
+		t.Fatalf("reopen2 = (%v, %v)", lookup2.Kind(), err)
+	}
+	intent2, _ := lookup2.Operation().ReceiveIntent()
+	session2, err := reopen2.OpenOperation(ctx, lookup2.Operation())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := session2.(transfer.DeliveryHistory).LookupDelivery(ctx, fileID, canonicalPath); err != nil || found {
+		t.Fatalf("LookupDelivery unexpectedly matched blocked publishing: found=%t err=%v", found, err)
+	}
+	root2 := testAdmitRoot(t, session2, intent2, seed+1)
+	restoredFile := testMaterializationFileWithIDs(t, session2.(*Session), intent2, fileID, origRev, "drift-pub.bin", uint64(len(payload)), root2)
+	resumedStart, err := session2.BeginFile(ctx, restoredFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reTx, durable, ok := resumedStart.Transaction()
+	if !ok || rangeTotalBytes(durable.Ranges().Ranges()) != uint64(len(payload)) {
+		t.Fatalf("restored publishing start = (ok=%t, bytes=%d), want %d", ok, rangeTotalBytes(durable.Ranges().Ranges()), len(payload))
+	}
+	published, err := reTx.Commit(ctx)
+	if err != nil || published.Kind() != transfer.FilePublished {
+		t.Fatalf("commit restored publishing = (%v, %v)", published.Kind(), err)
+	}
+	if got, err := os.ReadFile(finalPath); err != nil || !bytes.Equal(got, payload) {
+		t.Fatalf("published content mismatch: err=%v len=%d", err, len(got))
+	}
+}

@@ -412,7 +412,7 @@ func (tx *fileTransaction) Commit(ctx context.Context) (transfer.FileSettlement,
 
 	renameErr := renameFileNoReplace(tx.session.op.opDir, tx.partName, tx.parentDir, tx.physLeaf, false)
 	if errors.Is(renameErr, ErrNamespaceCollision) || errors.Is(renameErr, fs.ErrExist) {
-		return tx.settleCommitCollisionLocked()
+		return tx.settleCommitCollisionLocked(durablePublish)
 	}
 	if renameErr != nil {
 		return transfer.FileSettlement{}, wrapFileFault(ctx, transferfault.OutputStateIO, "publish file", renameErr)
@@ -490,45 +490,51 @@ func sampleCollisionStageFingerprint(
 	partName string,
 	exactSize uint64,
 	ranges []content.Range,
-) [stageFingerprintBytes]byte {
+) ([stageFingerprintBytes]byte, bool) {
 	if len(ranges) == 0 {
-		return [stageFingerprintBytes]byte{}
+		return [stageFingerprintBytes]byte{}, true
 	}
 	f, err := openChildFile(opDir, partName, os.O_RDONLY, 0)
 	if err != nil {
-		return [stageFingerprintBytes]byte{}
+		return [stageFingerprintBytes]byte{}, false
 	}
 	defer f.Close()
 	if verifyStagedFileSize(f, exactSize) != nil {
-		return [stageFingerprintBytes]byte{}
+		return [stageFingerprintBytes]byte{}, false
 	}
 	fp, err := sampleStageRangesFingerprint(f, ranges)
-	if err != nil {
-		return [stageFingerprintBytes]byte{}
+	if err != nil || fp == ([stageFingerprintBytes]byte{}) {
+		return [stageFingerprintBytes]byte{}, false
 	}
-	return fp
+	return fp, true
 }
 
-func (tx *fileTransaction) settleCommitCollisionLocked() (transfer.FileSettlement, error) {
+func (tx *fileTransaction) settleCommitCollisionLocked(durablePublish bool) (transfer.FileSettlement, error) {
 	// Preserve .part in .windshare-tmp/<opID>/ so retry or discard stays safe.
-	ranges := tx.accepted.Ranges()
-	fp := sampleCollisionStageFingerprint(tx.session.op.opDir, tx.partName, tx.exactSize, ranges)
-	nextGen := tx.persistedGen + 1
-	desc := tx.binding.Descriptor()
-	if err := tx.session.op.journal.recordPartial(partialEntry{
-		FileID:        desc.FileID(),
-		Path:          tx.canonicalPath,
-		Revision:      desc.FileRevision(),
-		Metadata:      desc.SourceMetadata(),
-		ExactSize:     tx.exactSize,
-		PartName:      tx.partName,
-		Ranges:        ranges,
-		CheckpointGen: nextGen,
-		Fingerprint:   fp,
-	}, true); err == nil {
-		tx.persistedGen = nextGen
-		tx.persisted = tx.accepted
-		tx.unpersistedBytes = 0
+	// Durable-publish files already persisted a verified publishing record before
+	// rename; keep it intact rather than reopening .part and risking a downgrade
+	// to partial on a transient post-close I/O or AV lock error.
+	if !durablePublish {
+		ranges := tx.accepted.Ranges()
+		if fp, ok := sampleCollisionStageFingerprint(tx.session.op.opDir, tx.partName, tx.exactSize, ranges); ok {
+			nextGen := tx.persistedGen + 1
+			desc := tx.binding.Descriptor()
+			if err := tx.session.op.journal.recordPartial(partialEntry{
+				FileID:        desc.FileID(),
+				Path:          tx.canonicalPath,
+				Revision:      desc.FileRevision(),
+				Metadata:      desc.SourceMetadata(),
+				ExactSize:     tx.exactSize,
+				PartName:      tx.partName,
+				Ranges:        ranges,
+				CheckpointGen: nextGen,
+				Fingerprint:   fp,
+			}, true); err == nil {
+				tx.persistedGen = nextGen
+				tx.persisted = tx.accepted
+				tx.unpersistedBytes = 0
+			}
+		}
 	}
 	settlement, err := transfer.NewTransactionCollisionFileSettlement(tx.binding)
 	if err != nil {

@@ -163,7 +163,7 @@ func (s *Session) LookupDelivery(
 	entry, ok := s.op.journal.lookupDelivered(fileID, canonical)
 	if !ok {
 		pub, hasPub := s.op.journal.lookupPublishing(canonical)
-		if !hasPub || pub.FileID != fileID {
+		if !hasPub || pub.FileID != fileID || pub.BlockedReason != 0 {
 			return transfer.HistoricalDelivery{}, false, nil
 		}
 		reconciled, err := s.tryReconcilePublishingByPath(ctx, pub)

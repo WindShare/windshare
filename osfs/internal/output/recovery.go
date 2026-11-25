@@ -244,45 +244,7 @@ func inspectOperationDir(opID receivecontract.OperationID, opDir *Dir) (Recovery
 		}, true
 	}
 
-	items := make([]RecoveryItem, 0, len(state.partials)+len(state.publishing)+len(state.delivered))
-	hasResumable := len(state.delivered) > 0 || len(state.publishing) > 0
-	for _, p := range state.partials {
-		if p.BlockedReason != 0 {
-			items = append(items, RecoveryItem{
-				canonicalPath: p.Path,
-				state:         RecoveryItemBlocked,
-				blockReason:   projectItemBlockReason(p.BlockedReason),
-			})
-			continue
-		}
-		if len(p.Ranges) > 0 {
-			hasResumable = true
-			items = append(items, RecoveryItem{
-				canonicalPath: p.Path,
-				state:         RecoveryItemResumable,
-			})
-		} else {
-			items = append(items, RecoveryItem{
-				canonicalPath: p.Path,
-				state:         RecoveryItemIncomplete,
-			})
-		}
-	}
-	for _, p := range state.publishing {
-		items = append(items, RecoveryItem{
-			canonicalPath: p.Path,
-			state:         RecoveryItemResumable,
-		})
-	}
-	for _, d := range state.delivered {
-		items = append(items, RecoveryItem{
-			canonicalPath: d.Path,
-			state:         RecoveryItemPublished,
-		})
-	}
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].canonicalPath < items[j].canonicalPath
-	})
+	items, hasResumable := projectJournalRecoveryItems(state)
 
 	opState := RecoveryOperationIncomplete
 	attention := AttentionNone
@@ -310,6 +272,58 @@ func inspectOperationDir(opID receivecontract.OperationID, opDir *Dir) (Recovery
 		attention:       attention,
 		items:           items,
 	}, true
+}
+
+func projectJournalRecoveryItems(state journalState) ([]RecoveryItem, bool) {
+	items := make([]RecoveryItem, 0, len(state.partials)+len(state.publishing)+len(state.delivered))
+	hasResumable := len(state.delivered) > 0
+	for _, p := range state.partials {
+		if p.BlockedReason != 0 {
+			items = append(items, RecoveryItem{
+				canonicalPath: p.Path,
+				state:         RecoveryItemBlocked,
+				blockReason:   projectItemBlockReason(p.BlockedReason),
+			})
+			continue
+		}
+		if len(p.Ranges) > 0 {
+			hasResumable = true
+			items = append(items, RecoveryItem{
+				canonicalPath: p.Path,
+				state:         RecoveryItemResumable,
+			})
+		} else {
+			items = append(items, RecoveryItem{
+				canonicalPath: p.Path,
+				state:         RecoveryItemIncomplete,
+			})
+		}
+	}
+	for _, p := range state.publishing {
+		if p.BlockedReason != 0 {
+			items = append(items, RecoveryItem{
+				canonicalPath: p.Path,
+				state:         RecoveryItemBlocked,
+				blockReason:   projectItemBlockReason(p.BlockedReason),
+			})
+			continue
+		}
+		hasResumable = true
+		items = append(items, RecoveryItem{
+			canonicalPath: p.Path,
+			state:         RecoveryItemResumable,
+		})
+	}
+	for _, d := range state.delivered {
+		items = append(items, RecoveryItem{
+			canonicalPath: d.Path,
+			state:         RecoveryItemPublished,
+		})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].canonicalPath < items[j].canonicalPath
+	})
+	return items, hasResumable
 }
 
 func projectItemBlockReason(reason transfer.ItemBlockReason) RecoveryItemBlockReason {

@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
@@ -578,5 +580,118 @@ func TestOpenTaskJournalToleratesCompactionFailureWhenFileStaysOpen(t *testing.T
 	reopened := reopenReusableRangesForTest(t, root, sel, seed, fileName, totalSize)
 	if got := rangeTotalBytes(reopened); got != 2*partSize {
 		t.Fatalf("reusable bytes after fallback append = %d, want %d", got, 2*partSize)
+	}
+}
+
+func TestJournalRejectsZeroFingerprintNonEmptyPartialWithoutClobberingPublishing(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	const seed byte = 0xe1
+	auth, err := New(Config{RootPath: root, CreateRoot: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := auth.BindDestination(ctx); err != nil {
+		t.Fatal(err)
+	}
+	sel := testSelectionSpec(t, seed)
+	lookup, err := auth.SelectOperation(ctx, sel, receivecontract.AutomaticOperation())
+	if err != nil || lookup.Kind() != LookupCreateReady {
+		t.Fatalf("select = (%v, %v)", lookup.Kind(), err)
+	}
+	art, err := receivecontract.NewResultRootDirectoryTree(receivecontract.NewSyntheticSelectionResultRoot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, err := auth.CreateOperation(ctx, lookup, art)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, _ := op.ReceiveIntent()
+	fid := testID16[catalog.FileID](seed + 2)
+	rev := testID16[content.FileRevision](seed + 3)
+	pubFP := [stageFingerprintBytes]byte{0xab}
+	const filePath = "windshare-selection/guarded.bin"
+
+	if err := op.journal.recordPublishing(publishingEntry{
+		FileID: fid, Path: filePath, Revision: rev,
+		ExactSize: 1024, PartName: "guarded.part", CheckpointGen: 2, Fingerprint: pubFP,
+	}, true); err != nil {
+		t.Fatal(err)
+	}
+
+	// Non-empty partial without a fingerprint must be rejected, rolled back, and
+	// leave the existing publishing record intact.
+	err = op.journal.recordPartial(partialEntry{
+		FileID: fid, Path: filePath, Revision: rev,
+		ExactSize: 1024, PartName: "guarded.part",
+		Ranges: []content.Range{{Offset: 0, End: 1024}}, CheckpointGen: 3,
+	}, true)
+	if !errors.Is(err, errJournalCorrupt) {
+		t.Fatalf("zero-fp non-empty recordPartial = %v, want errJournalCorrupt", err)
+	}
+	if pub, ok := op.journal.lookupPublishing(filePath); !ok || pub.Fingerprint != pubFP {
+		t.Fatalf("publishing clobbered after rejected partial: (%+v, %t)", pub, ok)
+	}
+	if _, hasPartial := op.journal.lookupPartial(filePath); hasPartial {
+		t.Fatal("rejected partial was applied to journal state")
+	}
+
+	// Empty-range partials (0-byte files / pre-write checkpoints) remain valid with a zero fingerprint.
+	if err := op.journal.recordPartial(partialEntry{
+		FileID: testID16[catalog.FileID](seed + 4), Path: "windshare-selection/empty.bin", Revision: rev,
+		ExactSize: 0, PartName: "empty.part", CheckpointGen: 1,
+	}, true); err != nil {
+		t.Fatalf("empty-range recordPartial failed: %v", err)
+	}
+	if err := auth.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reopening the rolled-back state.log must succeed with publishing preserved.
+	opPath := filepath.Join(root, ControlDirName, hex.EncodeToString(intent.OperationID().Bytes()))
+	opDir, err := openDirHandle(opPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, _, err := readJournalState(opDir)
+	if err != nil {
+		_ = opDir.Close()
+		t.Fatalf("readJournalState after rejected partial rollback = %v", err)
+	}
+	if pub, ok := state.publishing[filePath]; !ok || pub.Fingerprint != pubFP {
+		_ = opDir.Close()
+		t.Fatalf("reopened publishing = (%+v, %t), want preserved fp", pub, ok)
+	}
+
+	// A persisted non-empty partial record missing fp must be rejected on replay.
+	badLine, err := encodeJournalLine(partialToRecord(partialEntry{
+		FileID: fid, Path: filePath, Revision: rev,
+		ExactSize: 1024, PartName: "guarded.part",
+		Ranges: []content.Range{{Offset: 0, End: 512}}, CheckpointGen: 4,
+	}))
+	if err != nil {
+		_ = opDir.Close()
+		t.Fatal(err)
+	}
+	journalPath := filepath.Join(opPath, journalFileName)
+	f, err := os.OpenFile(journalPath, os.O_WRONLY|os.O_APPEND, privateFileMode)
+	if err != nil {
+		_ = opDir.Close()
+		t.Fatal(err)
+	}
+	if _, err := f.Write(badLine); err != nil {
+		_ = f.Close()
+		_ = opDir.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		_ = opDir.Close()
+		t.Fatal(err)
+	}
+	_, _, replayErr := readJournalState(opDir)
+	_ = opDir.Close()
+	if !errors.Is(replayErr, errJournalCorrupt) {
+		t.Fatalf("readJournalState on persisted zero-fp non-empty partial = %v, want errJournalCorrupt", replayErr)
 	}
 }
