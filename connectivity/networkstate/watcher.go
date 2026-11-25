@@ -23,12 +23,15 @@ type WatcherConfig struct {
 // pollFlight tracks one in-flight OS sample shared across concurrent waiters.
 // The flight owner writes the settled outcome fields before closing done,
 // establishing a happens-before edge for waiters without holding w.mu on read.
+// resetGap is guarded by w.mu and defers monitor poll-gap clearing until this
+// flight finishes when the polling loop is idle or goes idle mid-sample.
 type pollFlight struct {
 	done      chan struct{}
 	snapshot  Snapshot
 	polledAt  time.Time
 	succeeded bool
 	err       error
+	resetGap  bool
 }
 
 // Watcher owns one host-wide polling cadence and fans out immutable generation
@@ -124,8 +127,7 @@ func (w *Watcher) poll(ctx context.Context, nowFn func() time.Time) (Snapshot, b
 				return w.Current(), false, ctx.Err()
 			}
 		}
-		flight := &pollFlight{done: make(chan struct{})}
-		w.polling = flight
+		flight := w.startPollLocked()
 		w.mu.Unlock()
 
 		defer w.releasePoll(flight)
@@ -204,9 +206,12 @@ func (w *Watcher) Close() {
 	}
 	w.closed = true
 	cancel := w.loopCancel
-	w.loopActive = false
-	w.loopCancel = nil
-	w.loopDone = nil
+	if w.loopActive {
+		w.loopActive = false
+		w.loopCancel = nil
+		w.loopDone = nil
+		w.resetPollGapLocked()
+	}
 	for id, ch := range w.subscribers {
 		close(ch)
 		delete(w.subscribers, id)
@@ -229,6 +234,7 @@ func (w *Watcher) unsubscribe(id uint64) {
 		w.loopCancel = nil
 		w.loopDone = nil
 		w.draining = done
+		w.resetPollGapLocked()
 	}
 	w.mu.Unlock()
 	if cancel != nil {
@@ -279,15 +285,38 @@ func (w *Watcher) claimPoll(ctx context.Context) (*pollFlight, error) {
 				return nil, ctx.Err()
 			}
 		}
-		flight := &pollFlight{done: make(chan struct{})}
-		w.polling = flight
+		flight := w.startPollLocked()
 		w.mu.Unlock()
 		return flight, nil
 	}
 }
 
+func (w *Watcher) startPollLocked() *pollFlight {
+	flight := &pollFlight{
+		done:     make(chan struct{}),
+		resetGap: !w.loopActive,
+	}
+	w.polling = flight
+	return flight
+}
+
+// resetPollGapLocked clears the monitor's resume-gap baseline when active
+// polling stops. If a sample is in flight, clearing is deferred to releasePoll
+// so the settling sample cannot repopulate lastPoll without making loop
+// teardown block on unrelated callers.
+func (w *Watcher) resetPollGapLocked() {
+	if w.polling != nil {
+		w.polling.resetGap = true
+		return
+	}
+	w.monitor.ResetPollGap()
+}
+
 func (w *Watcher) releasePoll(flight *pollFlight) {
 	w.mu.Lock()
+	if !w.loopActive || flight.resetGap {
+		w.monitor.ResetPollGap()
+	}
 	w.polling = nil
 	close(flight.done)
 	w.mu.Unlock()
@@ -340,16 +369,12 @@ func (w *Watcher) run(ctx context.Context, prev <-chan struct{}, done chan struc
 		case <-prev:
 		}
 	}
-	defer func() {
-		// Wait for any in-flight poll before clearing the resume gap so a
-		// concurrent sample cannot repopulate lastPoll after the loop goes idle.
-		flight, _ := w.claimPoll(context.Background())
-		w.monitor.ResetPollGap()
-		w.releasePoll(flight)
-	}()
 
 	if initialPoll || prev != nil {
 		w.initialPoll(ctx)
+	}
+	if ctx.Err() != nil {
+		return
 	}
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
@@ -388,8 +413,7 @@ func (w *Watcher) initialPoll(ctx context.Context) {
 				return
 			}
 		}
-		flight := &pollFlight{done: make(chan struct{})}
-		w.polling = flight
+		flight := w.startPollLocked()
 		w.mu.Unlock()
 
 		defer w.releasePoll(flight)
