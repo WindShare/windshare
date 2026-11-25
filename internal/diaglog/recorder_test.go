@@ -133,6 +133,42 @@ func TestRotatingRecorderRotatesAndReportsStorageErrors(t *testing.T) {
 	}
 }
 
+func TestRotatingRecorderCountsDroppedOnWriteAndRotationFailure(t *testing.T) {
+	t.Run("write failure counts failing record and subsequent records", func(t *testing.T) {
+		recorder, err := OpenRotating(t.TempDir(), "write-fail")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := recorder.file.Close(); err != nil {
+			t.Fatal(err)
+		}
+		recorder.Record("first", nil)
+		recorder.Record("second", nil)
+		if err := recorder.Close(); err == nil {
+			t.Fatal("closed file write succeeded unexpectedly")
+		}
+		if got := recorder.dropped.Load(); got != 2 {
+			t.Fatalf("dropped = %d, want 2", got)
+		}
+	})
+
+	t.Run("rotation failure counts failing record", func(t *testing.T) {
+		recorder, err := OpenRotating(t.TempDir(), "rotate-fail")
+		if err != nil {
+			t.Fatal(err)
+		}
+		recorder.size = maximumRotatingBytes
+		recorder.directory = filepath.Join(t.TempDir(), "bad\x00path")
+		recorder.Record("trigger-rotate", nil)
+		if err := recorder.Close(); err == nil {
+			t.Fatal("invalid rotation succeeded unexpectedly")
+		}
+		if got := recorder.dropped.Load(); got != 1 {
+			t.Fatalf("dropped = %d, want 1", got)
+		}
+	})
+}
+
 func TestRunRecorderWritesSequencedJSONLAndSummaryWithSingleDroppedCounter(t *testing.T) {
 	dir := t.TempDir()
 	exactPath := filepath.Join(dir, "trace.ndjson")

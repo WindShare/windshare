@@ -402,3 +402,48 @@ func TestTURNDialNetResolveAddrPrefersIPv4ForWildcardNetworks(t *testing.T) {
 		})
 	}
 }
+
+func TestTURNPeerConnectionRoutesICEDiagnosticsThroughProviderLogger(t *testing.T) {
+	relay, err := iceconfig.NewTURNRelay([]string{"turn:192.0.2.1:3478?transport=tcp"}, "user", "pass")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hooks := defaultTURNDialHooks()
+	hooks.dialContext = func(context.Context, string, net.Addr, string) (net.Conn, error) {
+		return nil, errors.New("turn dial refused")
+	}
+	diagnostics := make(chan Event, 8)
+	identity := AttemptConfig{
+		ProtocolSessionID: [16]byte{1},
+		PeerPathID:        [16]byte{2},
+		AttemptID:         [16]byte{3},
+		Observe: func(event Event) {
+			if event.Milestone == "provider_diagnostic" {
+				select {
+				case diagnostics <- event:
+				default:
+				}
+			}
+		},
+	}
+	conn, err := newTURNPeerConnection(context.Background(), pion.Configuration{}, relay, identity, hooks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeWithin(t, conn)
+	startTURNGathering(t, conn)
+
+	select {
+	case event := <-diagnostics:
+		if event.ProtocolSessionID != identity.ProtocolSessionID ||
+			event.PeerPathID != identity.PeerPathID ||
+			event.AttemptID != identity.AttemptID ||
+			event.Diagnostic == nil ||
+			event.Diagnostic.Scope != "ice" ||
+			event.Diagnostic.Message == "" {
+			t.Fatalf("unexpected TURN ICE diagnostic: %+v", event)
+		}
+	case <-time.After(turnCancelTestTimeout):
+		t.Fatal("TURN peer connection did not emit ICE diagnostic through providerLoggerFactory")
+	}
+}

@@ -207,3 +207,31 @@ func TestHostStartRoutesRelayEnrollmentThroughEngine(t *testing.T) {
 		t.Fatalf("device_name = %q, want %q", gotName, wantName)
 	}
 }
+
+func TestHostRecordsDiagnosticStreamDropsOnClose(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("LOCALAPPDATA", root)
+	t.Setenv("XDG_CACHE_HOME", root)
+	t.Setenv("WINDSHARE_CONFIG", filepath.Join(root, "missing-settings.json"))
+	t.Setenv("WINDSHARE_TRACE", "1")
+
+	host, err := Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.diagnostics.Sink().Lost("test_source", 5)
+	if err := host.Close(); err != nil {
+		t.Fatal(err)
+	}
+	matches, err := filepath.Glob(filepath.Join(host.Endpoint.LogDirectory, "host-*.jsonl"))
+	if err != nil || len(matches) == 0 {
+		t.Fatalf("host log missing: %v %v", matches, err)
+	}
+	data, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `{"event":"host.log_closed","dropped":5}`) {
+		t.Fatalf("host.log_closed lost diagnostic stream drops: %s", data)
+	}
+}

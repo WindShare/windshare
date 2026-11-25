@@ -308,10 +308,18 @@ func (r *Recorder) writeRotating() {
 				r.err = r.rotate()
 			}
 		}
-		if r.err == nil {
-			var n int
-			n, r.err = r.file.Write(record)
-			r.size += n
+		if r.err != nil {
+			r.dropped.Add(1)
+			continue
+		}
+		n, err := r.file.Write(record)
+		r.size += n
+		if err != nil || n != len(record) {
+			if err == nil {
+				err = io.ErrShortWrite
+			}
+			r.err = err
+			r.dropped.Add(1)
 		}
 	}
 	if r.file != nil {

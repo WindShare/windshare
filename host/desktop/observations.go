@@ -23,16 +23,16 @@ func (a *Application) observe(operationID string, task shareTask) {
 	events := task.Observations()
 	// Arm before querying; a commit racing the query closes this generation.
 	changed := task.Changes()
-	finished := task.Snapshot().Result != nil
+	result := task.Snapshot().Result
 	a.snapshot()
-	for !finished || events != nil {
-		if finished {
+	for result == nil || events != nil {
+		if result != nil {
 			changed = nil
 		}
 		select {
 		case <-changed:
 			changed = task.Changes()
-			finished = task.Snapshot().Result != nil
+			result = task.Snapshot().Result
 			a.snapshot()
 		case record, ok := <-events:
 			if !ok {
@@ -41,6 +41,9 @@ func (a *Application) observe(operationID string, task shareTask) {
 				a.logObservation(operationID, record)
 			}
 		}
+	}
+	if result != nil && a.deps.addDropped != nil {
+		a.deps.addDropped(result.Observations.CapacityDropped)
 	}
 }
 

@@ -54,6 +54,7 @@ type dependencies struct {
 	setup                 func(context.Context, SetupInput, func(relaysetup.Progress)) (SetupResult, error)
 	cancelSetup           func(context.Context, string) error
 	log                   func(string, any)
+	addDropped            func(uint64)
 	senderTrace           *senderTrace
 }
 

@@ -111,7 +111,7 @@ func Start() (*Host, error) {
 			}
 			return task, nil
 		},
-		close: application.Close, load: relayconfig.Load, log: log.Record,
+		close: application.Close, load: relayconfig.Load, log: log.Record, addDropped: log.AddDropped,
 		setup:       setup.run,
 		cancelSetup: setup.cancel,
 		senderTrace: trace,
@@ -154,7 +154,8 @@ func (h *Host) recordDiagnostics() {
 
 func (h *Host) stopDiagnostics() {
 	if h.diagnostics != nil {
-		h.diagnostics.Close()
+		completion := h.diagnostics.Close()
+		h.log.AddDropped(completion.CapacityDropped)
 	}
 	<-h.diagnosticDone
 }

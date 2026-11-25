@@ -8,6 +8,7 @@ import (
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/connectivity/v2peer/peerset"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/downloadmetrics"
 	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/receivercontinuation"
@@ -76,7 +77,7 @@ func runAttempt(ctx context.Context, input preparedRequest, deps Dependencies, r
 		return
 	}
 	active.demandContent()
-	result := runWithSleepInhibition(deps.SleepInhibitor, func() transfer.JobResult {
+	result := runWithSleepInhibition(deps.SleepInhibitor, deps.Control.Diagnostics, func() transfer.JobResult {
 		return a.runTransferJob(ctx, prepared.job, observation, active.observeContent)
 	})
 	active.continuation.Close()
@@ -135,13 +136,34 @@ func (active *receiveOperation) settleAttempt(ctx context.Context, settlement *S
 	return completed
 }
 
-func runWithSleepInhibition(inhibitor SleepInhibitor, fn func() transfer.JobResult) transfer.JobResult {
-	if inhibitor != nil {
-		if release, err := inhibitor.InhibitSleep(receiveSleepInhibitReason); err == nil && release != nil {
-			defer release()
-		}
+func runWithSleepInhibition(inhibitor SleepInhibitor, sink diagnostics.Sink, fn func() transfer.JobResult) transfer.JobResult {
+	if inhibitor == nil {
+		return fn()
+	}
+	release, err := inhibitor.InhibitSleep(receiveSleepInhibitReason)
+	if err != nil {
+		emitReceiveSleepInhibit(sink, "acquire_failed", "failure", err.Error())
+		return fn()
+	}
+	if release != nil {
+		emitReceiveSleepInhibit(sink, "acquired", "", "")
+		defer func() {
+			release()
+			emitReceiveSleepInhibit(sink, "released", "reason", "transfer_finished")
+		}()
 	}
 	return fn()
+}
+
+func emitReceiveSleepInhibit(sink diagnostics.Sink, transition, detailKey, detailValue string) {
+	if !sink.Enabled() {
+		return
+	}
+	fields := diagnostics.Fields{"transition": diagnostics.Text(transition)}
+	if detailKey != "" {
+		fields[detailKey] = diagnostics.Text(detailValue)
+	}
+	sink.Emit(diagnostics.New("receive_sleep_inhibit", fields))
 }
 
 func (a *runner) runTransferJob(ctx context.Context, job *transfer.TransferJob, observation getObservation, observeSelection func(transfer.ReceiveProgressSnapshot)) transfer.JobResult {

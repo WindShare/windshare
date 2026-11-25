@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"strconv"
 
+	"github.com/pion/logging"
 	"github.com/pion/transport/v5"
 	"github.com/pion/transport/v5/stdnet"
 	pion "github.com/pion/webrtc/v4"
@@ -60,14 +61,16 @@ func newTURNPeerConnection(ctx context.Context, base pion.Configuration, relay i
 	}
 	base.ICEServers = []pion.ICEServer{{URLs: urls, Username: user, Credential: password, CredentialType: pion.ICECredentialTypePassword}}
 	base.ICETransportPolicy = pion.ICETransportPolicyRelay
+	c := &Connection{request: identity, beforeClose: cancelDial, release: func() {}}
 	var settings pion.SettingEngine
 	settings.SetNet(dialNet)
+	settings.LoggerFactory = providerLoggerFactory{LoggerFactory: logging.NewDefaultLoggerFactory(), observe: c.observeDiagnostic}
 	pc, err := pion.NewAPI(pion.WithSettingEngine(settings)).NewPeerConnection(base)
 	if err != nil {
 		cancelDial()
 		return nil, err
 	}
-	c := &Connection{PeerConnection: pc, request: identity, beforeClose: cancelDial, release: func() {}}
+	c.PeerConnection = pc
 	c.OnICEConnectionStateChange(nil)
 	c.OnConnectionStateChange(nil)
 	pc.SCTP().Transport().ICETransport().OnSelectedCandidatePairChange(c.observeSelectedPair)

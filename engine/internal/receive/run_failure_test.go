@@ -131,3 +131,87 @@ func TestReceiveRejectsNonCanonicalSelectionAsInvalidInputBeforeIO(t *testing.T)
 		})
 	}
 }
+
+type fakeReceiveSleepInhibitor struct {
+	err      error
+	released int
+}
+
+func (f *fakeReceiveSleepInhibitor) InhibitSleep(string) (func(), error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return func() { f.released++ }, nil
+}
+
+func TestRunWithSleepInhibitionRecordsDiagnosticTransitions(t *testing.T) {
+	t.Run("acquire failure is recorded without blocking transfer", func(t *testing.T) {
+		stream, err := diagnostics.NewStream(8, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		inhibitor := &fakeReceiveSleepInhibitor{err: errors.New("os assertion unavailable")}
+		expected := transfer.JobResult{Outcome: transfer.DirectTreeOutcomeSuccess}
+
+		got := runWithSleepInhibition(inhibitor, stream.Sink(), func() transfer.JobResult { return expected })
+		stream.Close()
+
+		if got.Outcome != expected.Outcome {
+			t.Fatalf("outcome = %v, want %v", got.Outcome, expected.Outcome)
+		}
+		var records []diagnostics.Record
+		for rec := range stream.Records() {
+			if rec.Name() == "receive_sleep_inhibit" {
+				records = append(records, rec)
+			}
+		}
+		if len(records) != 1 ||
+			records[0].Payload().Get("transition").Text() != "acquire_failed" ||
+			records[0].Payload().Get("failure").Text() != "os assertion unavailable" {
+			t.Fatalf("unexpected sleep inhibit diagnostics: %+v", records)
+		}
+	})
+
+	t.Run("acquired and released transitions wrap transfer execution", func(t *testing.T) {
+		stream, err := diagnostics.NewStream(8, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		inhibitor := &fakeReceiveSleepInhibitor{}
+		expected := transfer.JobResult{Outcome: transfer.DirectTreeOutcomeSuccess}
+
+		got := runWithSleepInhibition(inhibitor, stream.Sink(), func() transfer.JobResult {
+			if inhibitor.released != 0 {
+				t.Fatal("sleep inhibition released before transfer completed")
+			}
+			return expected
+		})
+		stream.Close()
+
+		if got.Outcome != expected.Outcome || inhibitor.released != 1 {
+			t.Fatalf("outcome=%v released=%d", got.Outcome, inhibitor.released)
+		}
+		var transitions []string
+		var releaseReason string
+		for rec := range stream.Records() {
+			if rec.Name() == "receive_sleep_inhibit" {
+				transitions = append(transitions, rec.Payload().Get("transition").Text())
+				if reason := rec.Payload().Get("reason"); reason.Present() {
+					releaseReason = reason.Text()
+				}
+			}
+		}
+		if len(transitions) != 2 || transitions[0] != "acquired" || transitions[1] != "released" || releaseReason != "transfer_finished" {
+			t.Fatalf("transitions=%v releaseReason=%q", transitions, releaseReason)
+		}
+	})
+
+	t.Run("disabled sink ignores acquire failure without blocking transfer", func(t *testing.T) {
+		inhibitor := &fakeReceiveSleepInhibitor{err: errors.New("denied")}
+		expected := transfer.JobResult{Outcome: transfer.DirectTreeOutcomeSuccess}
+		got := runWithSleepInhibition(inhibitor, diagnostics.Sink{}, func() transfer.JobResult { return expected })
+		if got.Outcome != expected.Outcome {
+			t.Fatalf("outcome = %v, want %v", got.Outcome, expected.Outcome)
+		}
+	})
+}

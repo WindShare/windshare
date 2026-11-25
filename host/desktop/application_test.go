@@ -10,20 +10,22 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/link"
+	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relayprofile"
 )
 
 type fakeShare struct {
-	id       engine.TaskID
-	mu       sync.Mutex
-	state    engine.ShareSnapshot
-	events   chan engine.Observation
-	changed  chan struct{}
-	done     chan struct{}
-	reason   engine.StopReason
-	finished bool
+	id               engine.TaskID
+	mu               sync.Mutex
+	state            engine.ShareSnapshot
+	events           chan engine.Observation
+	changed          chan struct{}
+	done             chan struct{}
+	reason           engine.StopReason
+	finished         bool
+	observationDrops uint64
 }
 
 func (f *fakeShare) ID() engine.TaskID                       { return f.id }
@@ -82,7 +84,11 @@ func (f *fakeShare) finish() {
 	if f.reason == engine.ShareStopped {
 		outcome = engine.OutcomeStopped
 	}
-	f.state.Result = &engine.TaskResult[engine.ShareResult]{StopReason: f.reason, Outcome: outcome}
+	f.state.Result = &engine.TaskResult[engine.ShareResult]{
+		StopReason:   f.reason,
+		Outcome:      outcome,
+		Observations: observationstream.Completion{CapacityDropped: f.observationDrops},
+	}
 	close(f.events)
 	close(f.done)
 	f.signal()
@@ -245,5 +251,23 @@ func TestClosingRejectsCreationAndBadCommands(t *testing.T) {
 		if a.execute(req).Error == nil {
 			t.Fatalf("accepted %+v", req)
 		}
+	}
+}
+
+func TestApplicationReportsTaskObservationCapacityDropsOnce(t *testing.T) {
+	a, task, _ := fixture(t)
+	var dropped atomic.Uint64
+	a.deps.addDropped = func(count uint64) { dropped.Add(count) }
+	task.observationDrops = 7
+
+	a.execute(createRequest())
+	admitted(t, a)
+	task.finish()
+	awaitShare(t, a, "operation", func(s Share) bool { return s.Result != nil })
+	if err := a.close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := dropped.Load(); got != 7 {
+		t.Fatalf("reported observation drops = %d, want 7", got)
 	}
 }

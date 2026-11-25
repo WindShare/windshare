@@ -47,7 +47,18 @@ type providerLogger struct {
 	observe func(Diagnostic)
 }
 
+// Late packets arriving while an ICE connection or shared UDP mux is closing
+// trigger io.ErrClosedPipe in upstream pion/ice (logged via Warnf in v4.4+
+// and Errorf in earlier revisions); downgrade routine shutdown drops here.
+func isClosedPipeWriteDrop(message string) bool {
+	return strings.Contains(message, "Failed to write packet:") && strings.Contains(message, io.ErrClosedPipe.Error())
+}
+
 func (l providerLogger) Warn(message string) {
+	if isClosedPipeWriteDrop(message) {
+		l.Trace(message)
+		return
+	}
 	l.observe(Diagnostic{Scope: l.scope, Severity: "warning", Message: message})
 	l.LeveledLogger.Warn(message)
 }
@@ -55,9 +66,7 @@ func (l providerLogger) Warnf(format string, args ...any) {
 	l.Warn(fmt.Sprintf(format, args...))
 }
 func (l providerLogger) Error(message string) {
-	// Late packets arriving while a shared UDP mux connection is closing trigger
-	// io.ErrClosedPipe in upstream pion/ice; downgrade routine shutdown drops here.
-	if strings.Contains(message, "Failed to write packet:") && strings.Contains(message, io.ErrClosedPipe.Error()) {
+	if isClosedPipeWriteDrop(message) {
 		l.Trace(message)
 		return
 	}

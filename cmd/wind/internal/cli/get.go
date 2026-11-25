@@ -51,6 +51,9 @@ func (a *App) runReceive(ctx context.Context, command receiveCommand, args []str
 	}
 	runtime, err := a.newCommandRuntime(commandGet, request.observation)
 	if err != nil {
+		if !errors.Is(err, errUserTraceOpen) {
+			a.writeCompleteLine("%s: command observation could not start", command)
+		}
 		return ExitFailure
 	}
 	defer runtime.Close()
