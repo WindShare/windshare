@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import type {
   RestorePlatform,
   SafeNameRestoreExportResult,
@@ -274,11 +274,16 @@ function AvailableRestoreBody({ operationId, actions, busy, platform, onPlatform
   const [exportState, setExportState] = useState<KeyedExport | null>(null)
   const [feedback, setFeedback] = useState<KeyedFeedback | null>(null)
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
-  const loadSeqRef = useRef(0)
-  const startedKeyRef = useRef<string | null>(null)
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   const requestKey = `${operationId}:${platform}`
+
+  // Action ports are non-reactive; wrapping them prevents unrelated parent re-renders
+  // (such as 10Hz download progress updates) from restarting IndexedDB plan scans.
+  const prepareRestore = useEffectEvent((id: string, targetPlatform: RestorePlatform) =>
+    actions.prepare(id, targetPlatform),
+  )
+  const mapRestoreError = useEffectEvent((error: unknown) => actions.mapError(error))
 
   useEffect(() => () => {
     if (copyTimerRef.current !== undefined) clearTimeout(copyTimerRef.current)
@@ -286,23 +291,20 @@ function AvailableRestoreBody({ operationId, actions, busy, platform, onPlatform
 
   useEffect(() => {
     if (!isOpen) return
-    const attemptKey = `${requestKey}:${reloadToken}`
-    if (startedKeyRef.current === attemptKey) return
-    startedKeyRef.current = attemptKey
-    const seq = ++loadSeqRef.current
-    void actions.prepare(operationId, platform).then(
+    let cancelled = false
+    const key = `${operationId}:${platform}`
+    void prepareRestore(operationId, platform).then(
       prepared => {
-        if (loadSeqRef.current === seq) setLoadResult({ key: requestKey, outcome: { kind: 'ready', prepared } })
+        if (!cancelled) setLoadResult({ key, outcome: { kind: 'ready', prepared } })
       },
       error => {
-        if (loadSeqRef.current === seq) setLoadResult({ key: requestKey, outcome: { kind: 'error', failure: actions.mapError(error) } })
+        if (!cancelled) setLoadResult({ key, outcome: { kind: 'error', failure: mapRestoreError(error) } })
       },
     )
     return () => {
-      loadSeqRef.current += 1
-      if (startedKeyRef.current === attemptKey) startedKeyRef.current = null
+      cancelled = true
     }
-  }, [isOpen, operationId, platform, actions, requestKey, reloadToken])
+  }, [isOpen, operationId, platform, reloadToken])
 
   if (!isOpen) return null
 
