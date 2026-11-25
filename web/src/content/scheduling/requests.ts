@@ -5,6 +5,7 @@ const INITIAL_DIRECT_RESPONSE_MILLISECONDS = 25
 const INITIAL_RELAY_RESPONSE_MILLISECONDS = 250
 const MINIMUM_RESPONSE_MILLISECONDS = 1
 const RESPONSE_SAMPLE_WEIGHT = 0.25
+const RESPONSE_SAMPLE_LIFETIME_MILLISECONDS = 30_000
 const MAXIMUM_OPERATION_WINDOW_RETRIES = 3
 
 export type LaneRequestKind = 'open_revisions' | 'list_children' | 'renew_lease' | 'release_lease'
@@ -25,12 +26,16 @@ export interface RequestSchedulingObservation {
   readonly route: BlockTransportRoute
   readonly expectedMilliseconds: number
   readonly pendingRequests: number
-  readonly transition: 'dispatched' | 'completed' | 'failed' | 'cancelled'
+  readonly transition: 'dispatched' | 'completed' | 'retried' | 'failed' | 'cancelled'
   readonly elapsedMilliseconds: number
+}
+interface ResponseSample {
+  readonly milliseconds: number
+  readonly at: number
 }
 interface RequestState {
   lane: RequestLane
-  readonly response: Map<LaneRequestKind, number>
+  readonly response: Map<LaneRequestKind, ResponseSample>
   pending: number
   failed: boolean
 }
@@ -79,8 +84,9 @@ export class LaneRequests {
   ): Promise<T> {
     const signal = AbortSignal.any([this.#lifetime.signal, ...(request.signal === undefined ? [] : [request.signal])])
     let windowRetries = 0
+    const retriedStates = new Set<RequestState>()
     while (true) {
-      const reservation = await this.#reserve(request, signal)
+      const reservation = await this.#reserve(request, signal, retriedStates)
       try {
         signal.throwIfAborted()
         request.routes?.assertActive()
@@ -88,9 +94,16 @@ export class LaneRequests {
         if (this.#states.get(state.lane.id) !== state || !(request.routes?.allows(state.lane.route) ?? true)) continue
         // Validate and invoke in the same turn: detach or policy changes cannot
         // invalidate an idle reservation between its last check and dispatch.
-        return await this.#execute(request, signal, reservation, operation)
+        return await this.#execute(
+          request,
+          signal,
+          reservation,
+          operation,
+          windowRetries < MAXIMUM_OPERATION_WINDOW_RETRIES,
+        )
       } catch (error) {
         if (!signal.aborted && error instanceof OperationRetryError && windowRetries < MAXIMUM_OPERATION_WINDOW_RETRIES) {
+          retriedStates.add(reservation.state)
           windowRetries += 1
           continue
         }
@@ -106,6 +119,7 @@ export class LaneRequests {
     signal: AbortSignal,
     reservation: { state: RequestState; expectedMilliseconds: number },
     operation: (route: { readonly laneId: number; readonly signal: AbortSignal }) => Promise<T>,
+    canRetryWindow: boolean,
   ): Promise<T> {
     const { state, expectedMilliseconds } = reservation
     const started = this.#now()
@@ -122,14 +136,25 @@ export class LaneRequests {
       signal.throwIfAborted()
       request.routes?.assertActive()
       const value = await operation({ laneId: state.lane.id, signal })
-      const elapsed = Math.max(MINIMUM_RESPONSE_MILLISECONDS, this.#now() - started)
-      const previous = state.response.get(request.kind)
-      state.response.set(request.kind, previous === undefined || elapsed > previous
-        ? elapsed : previous + RESPONSE_SAMPLE_WEIGHT * (elapsed - previous))
+      const now = this.#now()
+      const elapsed = Math.max(MINIMUM_RESPONSE_MILLISECONDS, now - started)
+      this.#recordResponse(state, request.kind, elapsed, now)
       state.failed = false
       observe('completed')
       return value
     } catch (error) {
+      if (!signal.aborted && error instanceof OperationRetryError) {
+        const now = this.#now()
+        const elapsed = Math.max(MINIMUM_RESPONSE_MILLISECONDS, now - started)
+        // A replay-window decline proves the carrier stayed alive, so never
+        // latch state.failed; only raise the latency sample when real delay
+        // exceeded the lane's current estimate, decaying after sample expiry.
+        if (elapsed > this.#responseMilliseconds(state, request.kind, now)) {
+          state.response.set(request.kind, { milliseconds: elapsed, at: now })
+        }
+        observe(canRetryWindow ? 'retried' : 'failed')
+        throw error
+      }
       if (!signal.aborted && error instanceof SessionRuntimeError && error.scope === 'lane') state.failed = true
       observe(signal.aborted ? 'cancelled' : 'failed')
       throw error
@@ -141,16 +166,22 @@ export class LaneRequests {
     this.#states.clear()
   }
 
-  async #reserve(request: LaneRequest, signal: AbortSignal): Promise<{ state: RequestState; expectedMilliseconds: number }> {
+  async #reserve(
+    request: LaneRequest,
+    signal: AbortSignal,
+    retriedStates: ReadonlySet<RequestState>,
+  ): Promise<{ state: RequestState; expectedMilliseconds: number }> {
     while (true) {
       signal.throwIfAborted()
       request.routes?.assertActive()
+      const now = this.#now()
       const states = [...this.#states.values()].filter(state => request.routes?.allows(state.lane.route) ?? true)
       states.sort((left, right) => Number(left.failed) - Number(right.failed) ||
-        this.#cost(left, request.kind) - this.#cost(right, request.kind) || left.lane.id - right.lane.id)
+        Number(retriedStates.has(left)) - Number(retriedStates.has(right)) ||
+        this.#cost(left, request.kind, now) - this.#cost(right, request.kind, now) || left.lane.id - right.lane.id)
       const state = states[0]
       if (state !== undefined) {
-        const expectedMilliseconds = this.#cost(state, request.kind)
+        const expectedMilliseconds = this.#cost(state, request.kind, now)
         state.pending += 1
         return { state, expectedMilliseconds }
       }
@@ -178,9 +209,27 @@ export class LaneRequests {
     }
   }
 
-  #cost(state: RequestState, kind: LaneRequestKind): number {
-    const response = state.response.get(kind) ?? (state.lane.route === 'direct'
-      ? INITIAL_DIRECT_RESPONSE_MILLISECONDS : INITIAL_RELAY_RESPONSE_MILLISECONDS)
+  #recordResponse(state: RequestState, kind: LaneRequestKind, elapsed: number, now: number): void {
+    const previous = state.response.get(kind)
+    const fresh = previous !== undefined && now - previous.at < RESPONSE_SAMPLE_LIFETIME_MILLISECONDS
+    const milliseconds = !fresh || elapsed > previous.milliseconds
+      ? elapsed
+      : previous.milliseconds + RESPONSE_SAMPLE_WEIGHT * (elapsed - previous.milliseconds)
+    state.response.set(kind, { milliseconds, at: now })
+  }
+
+  #responseMilliseconds(state: RequestState, kind: LaneRequestKind, now: number): number {
+    const sample = state.response.get(kind)
+    if (sample !== undefined && now - sample.at < RESPONSE_SAMPLE_LIFETIME_MILLISECONDS) {
+      return sample.milliseconds
+    }
+    return state.lane.route === 'direct'
+      ? INITIAL_DIRECT_RESPONSE_MILLISECONDS
+      : INITIAL_RELAY_RESPONSE_MILLISECONDS
+  }
+
+  #cost(state: RequestState, kind: LaneRequestKind, now: number): number {
+    const response = this.#responseMilliseconds(state, kind, now)
     const queuedContent = state.lane.content?.estimateQueueMilliseconds() ?? 0
     return response * (state.pending + 1) + queuedContent
   }

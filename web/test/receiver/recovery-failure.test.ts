@@ -6,10 +6,17 @@ import { StaleShareInstanceError } from '../../src/receiver/session-factory'
 import { CborError } from '../../src/protocol/cbor'
 import { TranscriptError } from '../../src/session/transcript'
 import { EnvelopeError } from '../../src/session/envelope'
-import { SessionRuntimeError } from '../../src/session/runtime-types'
+import { OperationRetryError, SessionRuntimeError } from '../../src/session/runtime-types'
 import { BlockLaneAttemptsError } from '../../src/content/broker'
 import { BlockInactivityTimeoutError } from '../../src/content/scheduling/block-response-wait'
-import { isShareRecoveryFailure, isTerminalRecoveryFailure, recoveryRetry, stalledBlockLanes } from '../../src/receiver/recovery-failure'
+import {
+  isLaneRecoveryFailure,
+  isShareRecoveryFailure,
+  isTerminalRecoveryFailure,
+  recoveryRetry,
+  stalledBlockLanes,
+} from '../../src/receiver/recovery-failure'
+import { isRecoverableTransferInterruption } from '../../src/transfer/fault'
 import { RelayEndpointFailure } from '../../src/receiver/relay-selection/race'
 
 function relayFailure(code: RelayErrorCode, retryAfterMilliseconds = 0) {
@@ -74,5 +81,14 @@ describe('receiver failure scope', () => {
       { laneId: 7, laneEpoch: 1 },
       { laneId: 7, laneEpoch: 2 },
     ])
+  })
+
+  it('keeps OperationRetryError distinct from lane faults while preserving recoverability', () => {
+    const retry = new OperationRetryError()
+    expect(retry).not.toBeInstanceOf(SessionRuntimeError)
+    expect(isLaneRecoveryFailure(retry)).toBe(true)
+    expect(isRecoverableTransferInterruption(retry)).toBe(true)
+    expect(isTerminalRecoveryFailure(retry)).toBe(false)
+    expect(isShareRecoveryFailure(retry)).toBe(false)
   })
 })

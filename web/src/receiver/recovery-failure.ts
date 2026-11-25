@@ -2,7 +2,7 @@ import { BandwidthWaitError } from '../contracts/capacity'
 import { RelayEndpointFailure } from './relay-selection/race'
 import { BlockLaneAttemptsError } from '../content/broker'
 import { BlockInactivityTimeoutError } from '../content/scheduling/block-response-wait'
-import { type SessionLaneIdentity, SessionRuntimeError } from '../session/runtime-types'
+import { OperationRetryError, type SessionLaneIdentity, SessionRuntimeError } from '../session/runtime-types'
 import { RelayReceiverError } from '../transport/relay/receiver'
 import { RELAY_ERROR, RelayProtocolError } from '../transport/relay/protocol'
 import { SenderObjectError } from '../crypto/sender-object'
@@ -87,7 +87,8 @@ export function recoveryRetry(error: unknown, now: number, depth = 0): RecoveryR
 }
 
 export function isLaneRecoveryFailure(error: unknown): boolean {
-  return error instanceof BandwidthWaitError || error instanceof BlockLaneAttemptsError ||
+  return error instanceof BandwidthWaitError || error instanceof OperationRetryError ||
+    error instanceof BlockLaneAttemptsError ||
     (error instanceof SessionRuntimeError && error.scope === 'lane')
 }
 

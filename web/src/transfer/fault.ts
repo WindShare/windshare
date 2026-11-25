@@ -13,7 +13,7 @@ import {
 } from '../receiver/recovery-failure'
 import { RelayEndpointFailure } from '../receiver/relay-selection/race'
 import { LaneAdmissionTransportError } from '../session/lane-admission'
-import { SessionHandshakeTimeoutError, SessionRuntimeError } from '../session/runtime-types'
+import { OperationRetryError, SessionHandshakeTimeoutError, SessionRuntimeError } from '../session/runtime-types'
 import { RelayHeartbeatError } from '../transport/relay/heartbeat'
 import { RelayReceiverError } from '../transport/relay/receiver'
 import {
@@ -283,6 +283,7 @@ function isTransientLaneOrTransportError(error: unknown): boolean {
   if (error instanceof SessionRuntimeError) return error.scope === 'lane'
   if (error instanceof DOMException && error.name === 'TimeoutError') return true
   return error instanceof BandwidthWaitError ||
+    error instanceof OperationRetryError ||
     error instanceof RelayHeartbeatError ||
     error instanceof SessionHandshakeTimeoutError ||
     error instanceof LaneAdmissionTransportError ||

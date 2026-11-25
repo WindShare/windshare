@@ -9,6 +9,8 @@ const DIRECT_ID = 2
 const RELAY_ID = 1
 const DIRECT_MS = 2
 const RELAY_MS = 1000
+const RELAY_RETRY_MS = 200
+const RESPONSE_SAMPLE_LIFETIME_MS = 30_000
 const CONTENT_BLOCK_BYTES = 1024
 const ALL_ROUTES: BlockRouteEligibility = {
   active: true, allows: () => true, assertActive: () => undefined, subscribe: () => () => undefined,
@@ -182,23 +184,75 @@ describe('latency-sensitive request routing', () => {
     requests.close()
   })
 
-  it('retries OperationRetryError onto a healthier lane and caps repeated retries', async () => {
-    const requests = router()
+  it('retries OperationRetryError onto an untried lane without permanently demoting direct', async () => {
+    const observed: RequestSchedulingObservation[] = []
+    const requests = router(observed)
     const triedLanes: number[] = []
-    const recovered = await requests.run({ kind: 'list_children' }, async route => {
+    const recoveredTask = requests.run({ kind: 'list_children' }, route => {
       triedLanes.push(route.laneId)
-      if (triedLanes.length === 1) throw new OperationRetryError()
-      return route.laneId
+      if (triedLanes.length === 1) return Promise.reject(new OperationRetryError())
+      return reply(route.laneId)
     })
+    await vi.advanceTimersByTimeAsync(RELAY_MS)
+    expect(await recoveredTask).toBe(RELAY_ID)
     expect(triedLanes).toEqual([DIRECT_ID, RELAY_ID])
-    expect(recovered).toBe(RELAY_ID)
+    expect(observed).toMatchObject([
+      { sequence: 1, laneId: DIRECT_ID, transition: 'dispatched' },
+      { sequence: 1, laneId: DIRECT_ID, transition: 'retried' },
+      { sequence: 2, laneId: RELAY_ID, transition: 'dispatched' },
+      { sequence: 2, laneId: RELAY_ID, transition: 'completed' },
+    ])
 
+    // Direct stayed healthy and must remain preferred over the slower relay for subsequent RPCs.
+    expect(await requests.run({ kind: 'list_children' }, async route => route.laneId)).toBe(DIRECT_ID)
+    expect(await requests.run({ kind: 'open_revisions' }, async route => route.laneId)).toBe(DIRECT_ID)
+
+    observed.length = 0
     let attempts = 0
     await expect(requests.run({ kind: 'list_children' }, async () => {
       attempts += 1
       throw new OperationRetryError()
     })).rejects.toBeInstanceOf(OperationRetryError)
     expect(attempts).toBe(4)
+    expect(observed.filter(value => value.transition !== 'dispatched').map(value => value.transition))
+      .toEqual(['retried', 'retried', 'retried', 'failed'])
+    expect(await requests.run({ kind: 'list_children' }, async route => route.laneId)).toBe(DIRECT_ID)
+    requests.close()
+  })
+
+  it('retries OperationRetryError in place on a sole healthy lane', async () => {
+    const requests = new LaneRequests({ now: Date.now })
+    requests.add({ id: DIRECT_ID, epoch: 1, route: 'direct' })
+    let attempts = 0
+    const recovered = await requests.run({ kind: 'open_revisions' }, async route => {
+      attempts += 1
+      if (attempts < 3) throw new OperationRetryError()
+      return route.laneId
+    })
+    expect(attempts).toBe(3)
+    expect(recovered).toBe(DIRECT_ID)
+    requests.close()
+  })
+
+  it('yields temporarily after a delayed OperationRetryError and recovers when the sample expires', async () => {
+    const requests = router()
+    const triedLanes: number[] = []
+    const pendingRetry = requests.run({ kind: 'list_children' }, route => {
+      triedLanes.push(route.laneId)
+      if (triedLanes.length === 1) {
+        return new Promise<number>((_, reject) => setTimeout(() => reject(new OperationRetryError()), RELAY_MS))
+      }
+      return new Promise<number>(resolve => setTimeout(() => resolve(route.laneId), RELAY_RETRY_MS))
+    })
+    await vi.advanceTimersByTimeAsync(RELAY_MS + RELAY_RETRY_MS)
+    expect(await pendingRetry).toBe(RELAY_ID)
+    expect(triedLanes).toEqual([DIRECT_ID, RELAY_ID])
+    expect(await requests.run({ kind: 'list_children' }, async route => route.laneId)).toBe(RELAY_ID)
+    expect(await requests.run({ kind: 'open_revisions' }, async route => route.laneId)).toBe(DIRECT_ID)
+
+    // Advance past direct's delayed-retry sample lifetime while relay's newer sample is still fresh.
+    await vi.advanceTimersByTimeAsync(RESPONSE_SAMPLE_LIFETIME_MS - RELAY_RETRY_MS)
+    expect(await requests.run({ kind: 'list_children' }, async route => route.laneId)).toBe(DIRECT_ID)
     requests.close()
   })
 

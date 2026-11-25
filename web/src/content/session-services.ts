@@ -13,6 +13,7 @@ import { MESSAGE_KIND, type SessionMessage } from '../session/message'
 import type { ReceiverSessionRuntime, SessionOperation } from '../session/runtime'
 import {
   OPERATION_CANCEL_REASON,
+  OperationRetryError,
   type SessionLaneIdentity,
   SessionRuntimeError,
 } from '../session/runtime-types'
@@ -653,7 +654,8 @@ function awaitLeaseRelease(cleanup: Promise<void>, signal: AbortSignal): Promise
 }
 
 function isRetryableLeaseLaneFailure(error: unknown): boolean {
-  return error instanceof SessionRuntimeError && error.scope === 'lane'
+  return error instanceof OperationRetryError ||
+    (error instanceof SessionRuntimeError && error.scope === 'lane')
 }
 
 function isProtocolContentFailure(error: unknown): boolean {

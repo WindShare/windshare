@@ -624,6 +624,7 @@ function retryableLaneFailures(error: unknown): readonly unknown[] {
 }
 
 function isRetryableLaneFailure(error: unknown): boolean {
-  return error instanceof BandwidthWaitError || (error instanceof SessionRuntimeError && error.scope === 'lane') ||
+  return error instanceof BandwidthWaitError || error instanceof OperationRetryError ||
+    (error instanceof SessionRuntimeError && error.scope === 'lane') ||
     (error instanceof DOMException && error.name === 'AbortError')
 }

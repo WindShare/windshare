@@ -92,12 +92,14 @@ export class SessionRuntimeError extends Error {
 /**
  * Raised when the sender declines to admit a delayed request that fell behind
  * its replay window and instructs the receiver to reissue it with a fresh ID.
+ * Not a SessionRuntimeError('lane'): the carrier stayed healthy, so generic
+ * lane-failure handlers must not automatically demote or retire it.
  */
-export class OperationRetryError extends SessionRuntimeError {
+export class OperationRetryError extends Error {
   readonly reason: number
 
   constructor(reason = 1, options?: ErrorOptions) {
-    super('lane', 'Operation fell behind the sender replay window and must be retried', options)
+    super('Operation fell behind the sender replay window and must be retried', options)
     this.name = 'OperationRetryError'
     this.reason = reason
   }
