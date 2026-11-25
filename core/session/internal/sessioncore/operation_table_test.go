@@ -234,21 +234,21 @@ func TestOperationTablePreemptiveCancelAndContinuationRollback(t *testing.T) {
 	}
 	releaseOffer(false)
 	cand2 := operationMessageForTest(t, protocolsession.MessagePeerCandidate, id2, []byte{0xf6})
-	disp, undo, relCont, err := table.AdmitOutboundContinuation(op2.ID(), cand2)
-	if err != nil || disp != protocolsession.OperationDeliver || undo == nil {
-		t.Fatalf("first outbound continuation: disp=%d err=%v", disp, err)
+	disp, lease, err := table.AdmitOutboundContinuation(op2.ID(), cand2)
+	if err != nil || disp != protocolsession.OperationDeliver || lease == nil || lease.undo == nil {
+		t.Fatalf("first outbound continuation: disp=%d lease=%v err=%v", disp, lease, err)
 	}
-	undo()
-	relCont(false)
-	disp, _, relCont2, err := table.AdmitOutboundContinuation(op2.ID(), cand2)
-	if err != nil || disp != protocolsession.OperationDeliver {
-		t.Fatalf("retry after undo: disp=%d err=%v", disp, err)
+	lease.rollback()
+	lease.release()
+	disp, lease2, err := table.AdmitOutboundContinuation(op2.ID(), cand2)
+	if err != nil || disp != protocolsession.OperationDeliver || lease2 == nil {
+		t.Fatalf("retry after undo: disp=%d lease=%v err=%v", disp, lease2, err)
 	}
-	relCont2(true)
+	lease2.release()
 	// Exact duplicate after commit is dropped idempotently.
-	disp, _, _, err = table.AdmitOutboundContinuation(op2.ID(), cand2)
-	if err != nil || disp != protocolsession.OperationDrop {
-		t.Fatalf("duplicate after commit: disp=%d err=%v", disp, err)
+	disp, lease3, err := table.AdmitOutboundContinuation(op2.ID(), cand2)
+	if err != nil || disp != protocolsession.OperationDrop || lease3 != nil {
+		t.Fatalf("duplicate after commit: disp=%d lease=%v err=%v", disp, lease3, err)
 	}
 }
 

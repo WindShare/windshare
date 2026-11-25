@@ -173,36 +173,55 @@ func (table *operationTable) RollbackUnsentRequest(id protocolsession.OperationI
 	}
 }
 
+type outboundContinuationLease struct {
+	record          *operationRecord
+	undo            func()
+	releaseInFlight func(bool)
+}
+
+func (lease *outboundContinuationLease) rollback() {
+	if lease != nil && lease.undo != nil {
+		lease.undo()
+	}
+}
+
+func (lease *outboundContinuationLease) release() {
+	if lease != nil && lease.releaseInFlight != nil {
+		lease.releaseInFlight(false)
+	}
+}
+
 // AdmitOutboundContinuation validates and records one receiver-side continuation
-// (such as PeerCandidate) for an active operation.
+// (such as PeerCandidate) for an active operation and returns a lease pinning
+// retention across retry attempts.
 func (table *operationTable) AdmitOutboundContinuation(
 	id protocolsession.OperationID,
 	message protocolsession.Message,
-) (protocolsession.OperationDisposition, func(), func(bool), error) {
+) (protocolsession.OperationDisposition, *outboundContinuationLease, error) {
 	if table == nil || id.IsZero() {
-		return protocolsession.OperationDrop, nil, nil, session.ErrOperationMissing
+		return protocolsession.OperationDrop, nil, session.ErrOperationMissing
 	}
 	table.mu.Lock()
 	defer table.mu.Unlock()
 	if table.terminal {
-		return protocolsession.OperationDrop, nil, nil, protocolsession.ErrSessionTerminated
+		return protocolsession.OperationDrop, nil, protocolsession.ErrSessionTerminated
 	}
 	active := table.active[id]
 	if active == nil {
-		return protocolsession.OperationDrop, nil, nil, nil
+		return protocolsession.OperationDrop, nil, nil
 	}
 	if err := protocolsession.ValidateKindDirection(protocolsession.DirectionReceiverToSender, message.Kind()); err != nil {
-		return protocolsession.OperationDrop, nil, nil, err
+		return protocolsession.OperationDrop, nil, err
 	}
 	if !protocolsession.MessageAllowedForOperation(active.requestKind, message.Kind()) {
-		return protocolsession.OperationDrop, nil, nil, protocolsession.ErrUnexpectedOperation
+		return protocolsession.OperationDrop, nil, protocolsession.ErrUnexpectedOperation
 	}
 	if err := table.validatePeerAttemptLocked(active, protocolsession.DirectionReceiverToSender, message); err != nil {
-		return protocolsession.OperationDrop, nil, nil, err
+		return protocolsession.OperationDrop, nil, err
 	}
 	drop, rawUndo, err := table.admitActiveContinuationLocked(active, protocolsession.DirectionReceiverToSender, message)
 	if err != nil || drop {
-		return protocolsession.OperationDrop, nil, nil, err
+		return protocolsession.OperationDrop, nil, err
 	}
 	active.inFlight++
 	var undo func()
@@ -216,7 +235,11 @@ func (table *operationTable) AdmitOutboundContinuation(
 			})
 		}
 	}
-	return protocolsession.OperationDeliver, undo, table.makeInFlightReleaser(active), nil
+	return protocolsession.OperationDeliver, &outboundContinuationLease{
+		record:          active,
+		undo:            undo,
+		releaseInFlight: table.makeInFlightReleaser(active),
+	}, nil
 }
 
 type outboundResponseLease struct {

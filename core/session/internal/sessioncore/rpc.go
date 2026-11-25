@@ -344,39 +344,41 @@ func (client *Requests) SendContinuation(
 		client.enqueueBestEffortCancel(call, message)
 		return protocolsession.OperationDeliver, nil
 	}
-	disposition, undo, releaseInFlight, err := client.runtime.operations.AdmitOutboundContinuation(op.ID(), message)
+	disposition, lease, err := client.runtime.operations.AdmitOutboundContinuation(op.ID(), message)
 	if err != nil {
 		return protocolsession.OperationDrop, err
 	}
-	if disposition == protocolsession.OperationDrop {
+	if disposition == protocolsession.OperationDrop || lease == nil {
 		// Exact continuation replay or already-retired op is an idempotent drop.
 		return protocolsession.OperationDrop, nil
 	}
-	return client.deliverContinuation(ctx, call, message, undo, releaseInFlight)
+	return client.deliverContinuation(ctx, call, message, lease)
 }
 
 func (client *Requests) deliverContinuation(
 	ctx context.Context,
 	call *Call,
 	message protocolsession.Message,
-	undo func(),
-	releaseInFlight func(bool),
+	lease *outboundContinuationLease,
 ) (protocolsession.OperationDisposition, error) {
+	defer lease.release()
 	var retryCause error
 	for attempt := range 2 {
 		selected, laneErr := client.continuationLane(call)
 		if laneErr != nil {
-			rollbackContinuation(undo, releaseInFlight)
+			lease.rollback()
 			return protocolsession.OperationDrop, errors.Join(retryCause, laneErr)
 		}
-		onDone := continuationDoneHook(attempt, releaseInFlight)
-		sendErr := selected.writer.SendControl(ctx, message, onDone)
+		// Each SendControl gets its own unconditional pin so a caller
+		// cancel-in-flight that later fails pre-acceptance still unpins the op.
+		attemptPin := client.runtime.operations.pinInFlight(lease.record)
+		sendErr := selected.writer.SendControl(ctx, message, attemptPin)
 		if sendErr == nil {
-			releaseInFlight(true)
 			return protocolsession.OperationDeliver, nil
 		}
 		if !protocolsession.IsNotSent(sendErr) {
-			// Uncertain send: keep continuation recorded and let onDone release pin.
+			// Uncertain send: keep continuation recorded while attemptPin holds
+			// retention until laneWriter settles the in-flight frame.
 			return protocolsession.OperationDeliver, protocolsession.MarkSendUncertain(rpcDeliveryError(
 				client.runtime, errContinuationNotDelivered, errors.Join(retryCause, sendErr),
 			))
@@ -386,37 +388,17 @@ func (client *Requests) deliverContinuation(
 			retryCause = sendErr
 			continue
 		}
-		rollbackContinuation(undo, releaseInFlight)
+		lease.rollback()
 		return protocolsession.OperationDrop, rpcDeliveryError(
 			client.runtime, errContinuationNotDelivered, errors.Join(retryCause, sendErr),
 		)
 	}
-	rollbackContinuation(undo, releaseInFlight)
+	lease.rollback()
 	return protocolsession.OperationDrop, errors.Join(retryCause, errContinuationNotDelivered)
 }
 
 func (client *Requests) canRetryContinuation(ctx context.Context, attempt int, sendErr error) bool {
 	return attempt == 0 && ctx.Err() == nil && client.runtime.ctx.Err() == nil && retryableLaneFailure(sendErr)
-}
-
-func continuationDoneHook(attempt int, releaseInFlight func(bool)) func(bool) {
-	if attempt != 0 {
-		return releaseInFlight
-	}
-	// On a retryable pre-send refusal we keep the pin across the retry and
-	// release it only once the final attempt settles.
-	return func(deliveredOrUncertain bool) {
-		if deliveredOrUncertain {
-			releaseInFlight(true)
-		}
-	}
-}
-
-func rollbackContinuation(undo func(), releaseInFlight func(bool)) {
-	if undo != nil {
-		undo()
-	}
-	releaseInFlight(false)
 }
 
 func (client *Requests) continuationLane(call *Call) (selectedLane, error) {

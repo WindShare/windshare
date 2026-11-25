@@ -302,9 +302,18 @@ func newContinuationReplayFixtureWithContinuations(
 	operationByte byte,
 	continuations protocolsession.OperationContinuationClassifier,
 ) *continuationReplayFixture {
+	return newContinuationReplayFixtureWithOptions(t, operationByte, protocolsession.OperationLimits{}, continuations)
+}
+
+func newContinuationReplayFixtureWithOptions(
+	t *testing.T,
+	operationByte byte,
+	limits protocolsession.OperationLimits,
+	continuations protocolsession.OperationContinuationClassifier,
+) *continuationReplayFixture {
 	t.Helper()
 	runtime, preferredChannel := newUnstartedRuntimeWithContinuations(
-		t, protocolsession.RoleReceiver, protocolsession.OperationLimits{}, nil, continuations,
+		t, protocolsession.RoleReceiver, limits, nil, continuations,
 	)
 	preferred, err := runtime.lanes.selectLane(&runtime.initial)
 	if err != nil {
@@ -571,6 +580,155 @@ func TestRPCContinuationMixedNotSentThenUncertainClearsNotSentEvidence(t *testin
 	}
 	if !errors.Is(sendErr, pretransportErr) || !errors.Is(sendErr, uncertainErr) {
 		t.Fatalf("mixed continuation lost attempt causes: %v", sendErr)
+	}
+}
+
+type blockingFailingContinuationChannel struct {
+	protocolsession.FrameChannel
+	enteredOnce sync.Once
+	entered     chan struct{}
+	release     chan struct{}
+	err         error
+}
+
+func (c *blockingFailingContinuationChannel) Send(_ context.Context, _ framechannel.Frame) error {
+	c.enteredOnce.Do(func() { close(c.entered) })
+	<-c.release
+	return c.err
+}
+
+func (c *blockingFailingContinuationChannel) SendTerminal(ctx context.Context, frame framechannel.Frame) error {
+	return c.Send(ctx, frame)
+}
+
+func TestRPCContinuationCancelInFlightPreAcceptanceFailureReleasesPin(t *testing.T) {
+	tests := []struct {
+		name      string
+		opByte    byte
+		wireFault func(t *testing.T, fixture *continuationReplayFixture) (entered <-chan struct{}, release func())
+	}{
+		{
+			name:   "seal failure",
+			opByte: 109,
+			wireFault: func(t *testing.T, fixture *continuationReplayFixture) (<-chan struct{}, func()) {
+				blocker := &continuationBlockingFailingSealer{
+					entered: make(chan struct{}),
+					release: make(chan struct{}),
+					err:     errors.New("in-flight candidate seal failed"),
+				}
+				fixture.replacePreferredWriter(t, blocker)
+				var once sync.Once
+				release := func() { once.Do(func() { close(blocker.release) }) }
+				t.Cleanup(release)
+				return blocker.entered, release
+			},
+		},
+		{
+			name:   "pre-acceptance sendFrame rejection",
+			opByte: 110,
+			wireFault: func(t *testing.T, fixture *continuationReplayFixture) (<-chan struct{}, func()) {
+				blockingCh := &blockingFailingContinuationChannel{
+					FrameChannel: fixture.preferred.channel,
+					entered:      make(chan struct{}),
+					release:      make(chan struct{}),
+					err:          framechannel.RejectSend(errors.New("pre-acceptance channel rejection")),
+				}
+				fixture.runtime.lanes.mu.Lock()
+				preferredLane := fixture.runtime.lanes.active[fixture.preferred.identity.ID]
+				sealer := preferredLane.sealer
+				fixture.runtime.lanes.mu.Unlock()
+				writer, err := newLaneWriter(blockingCh, sealer)
+				if err != nil {
+					t.Fatal(err)
+				}
+				fixture.runtime.lanes.mu.Lock()
+				preferredLane.writer = writer
+				fixture.runtime.lanes.mu.Unlock()
+				fixture.preferred.writer = writer
+				var once sync.Once
+				release := func() { once.Do(func() { close(blockingCh.release) }) }
+				t.Cleanup(release)
+				return blockingCh.entered, release
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newContinuationReplayFixtureWithOptions(
+				t,
+				tc.opByte,
+				protocolsession.OperationLimits{MaxActive: 4, MaxRecentTombstones: 1},
+				continuationReplayClassifier{},
+			)
+			entered, release := tc.wireFault(t, fixture)
+			startContinuationReplayWriter(t, fixture.preferred.writer)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			resultCh := make(chan continuationSendResult, 1)
+			go func() {
+				disposition, err := fixture.rpc.SendContinuation(
+					ctx, fixture.call, protocolsession.MessagePeerCandidate, []byte{0xf6},
+				)
+				resultCh <- continuationSendResult{disposition: disposition, err: err}
+			}()
+
+			select {
+			case <-entered:
+			case <-time.After(continuationReplayTestTimeout):
+				t.Fatal("continuation did not enter writeInFlight delivery")
+			}
+			cancel()
+
+			select {
+			case sent := <-resultCh:
+				if sent.disposition != protocolsession.OperationDeliver ||
+					!errors.Is(sent.err, context.Canceled) || protocolsession.IsNotSent(sent.err) {
+					t.Fatalf("cancel-in-flight continuation = (disp=%d, err=%v), want uncertain canceled delivery",
+						sent.disposition, sent.err)
+				}
+			case <-time.After(continuationReplayTestTimeout):
+				t.Fatal("canceled in-flight continuation did not return")
+			}
+
+			op1 := fixture.call.Operation()
+			if transitioned, err := fixture.runtime.operations.CancelOperation(op1.ID()); err != nil || !transitioned {
+				t.Fatalf("cancel op1 = (%t, %v)", transitioned, err)
+			}
+
+			// Admit and retire a second pinned op so tombstones exceed MaxRecentTombstones=1.
+			// While op1's in-flight write is still running, op1 must remain pinned.
+			op2ID := op1.ID() + 10
+			op2Msg, err := protocolsession.NewMessage(protocolsession.MessageListChildren, &op2ID, []byte{0xa0})
+			if err != nil {
+				t.Fatal(err)
+			}
+			op2, _, _, releaseOp2, err := fixture.runtime.operations.AdmitOutboundRequest(op2Msg, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer releaseOp2(false)
+			if transitioned, err := fixture.runtime.operations.CancelOperation(op2.ID()); err != nil || !transitioned {
+				t.Fatalf("cancel op2 = (%t, %v)", transitioned, err)
+			}
+			if !op1.IsCurrent() || !op2.IsCurrent() || fixture.runtime.operations.TombstoneCount() != 2 {
+				t.Fatalf("in-flight op1 was unpinned early: op1Current=%t op2Current=%t tombstones=%d",
+					op1.IsCurrent(), op2.IsCurrent(), fixture.runtime.operations.TombstoneCount())
+			}
+
+			// Let the in-flight write fail pre-acceptance (onDone(false)); attemptPin
+			// must still release and evict the overflowing op1 tombstone.
+			release()
+			select {
+			case <-fixture.preferred.writer.Done():
+			case <-time.After(continuationReplayTestTimeout):
+				t.Fatal("preferred writer did not settle after pre-acceptance failure")
+			}
+			if op1.IsCurrent() || !op2.IsCurrent() || fixture.runtime.operations.TombstoneCount() != 1 {
+				t.Fatalf("op1 leaked inFlight pin after pre-acceptance failure: op1Current=%t op2Current=%t tombstones=%d",
+					op1.IsCurrent(), op2.IsCurrent(), fixture.runtime.operations.TombstoneCount())
+			}
+		})
 	}
 }
 
