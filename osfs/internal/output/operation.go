@@ -655,6 +655,8 @@ func ensureAuthorityRef(ctrlDir *Dir, random io.Reader) (receivecontract.Authori
 				return ref, nil
 			}
 		}
+	} else if errors.Is(err, ErrUnsafeNamespace) {
+		return receivecontract.AuthorityRef{}, err
 	}
 	for range maxIdentityAttempts {
 		var raw [receivecontract.AuthorityRefBytes]byte

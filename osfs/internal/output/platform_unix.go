@@ -100,23 +100,41 @@ func openChildFile(parent *Dir, name string, flags int, mode fs.FileMode) (*os.F
 	if err := validName(name); err != nil {
 		return nil, err
 	}
-	fd, err := unix.Openat(int(parent.handle.Fd()), name, flags|unix.O_NOFOLLOW|unix.O_CLOEXEC, uint32(mode))
+	// Open existing entries non-blocking so a FIFO inside .windshare-tmp or the
+	// destination cannot wedge openat(2) before fstat rejects non-regular files.
+	// O_CREATE|O_EXCL can only create a fresh regular file, avoiding the extra
+	// fcntl toggle on the per-file staging hot path.
+	exclusiveCreate := flags&(os.O_CREATE|os.O_EXCL) == os.O_CREATE|os.O_EXCL
+	openFlags := flags | unix.O_NOFOLLOW | unix.O_CLOEXEC
+	clearNonblock := !exclusiveCreate && flags&unix.O_NONBLOCK == 0
+	if clearNonblock {
+		openFlags |= unix.O_NONBLOCK
+	}
+	fd, err := unix.Openat(int(parent.handle.Fd()), name, openFlags, uint32(mode))
 	runtime.KeepAlive(parent.handle)
+	childPath := filepath.Join(parent.path, name)
 	if err != nil {
 		if isNativeNameRefusal(err) {
 			return nil, errors.Join(ErrNameRejected, err)
 		}
-		if errors.Is(err, unix.ELOOP) {
+		if errors.Is(err, unix.ELOOP) || errors.Is(err, unix.EISDIR) || errors.Is(err, unix.ENXIO) {
 			return nil, errors.Join(ErrUnsafeNamespace, err)
 		}
-		return nil, &os.PathError{Op: "openat", Path: filepath.Join(parent.path, name), Err: err}
+		return nil, &os.PathError{Op: "openat", Path: childPath, Err: err}
 	}
-	f := os.NewFile(uintptr(fd), filepath.Join(parent.path, name))
-	info, err := f.Stat()
-	if err != nil || !info.Mode().IsRegular() {
-		return nil, errors.Join(ErrUnsafeNamespace, err, f.Close())
+	var st unix.Stat_t
+	if statErr := unix.Fstat(fd, &st); statErr != nil || st.Mode&unix.S_IFMT != unix.S_IFREG {
+		return nil, errors.Join(ErrUnsafeNamespace, statErr, unix.Close(fd))
 	}
-	return f, nil
+	if clearNonblock {
+		// Restore blocking mode before os.NewFile so Go does not treat the
+		// regular file as caller-configured non-blocking (which registers it in
+		// Darwin's kqueue netpoller and can surface EAGAIN on network mounts).
+		if nonblockErr := unix.SetNonblock(fd, false); nonblockErr != nil {
+			return nil, errors.Join(&os.PathError{Op: "fcntl", Path: childPath, Err: nonblockErr}, unix.Close(fd))
+		}
+	}
+	return os.NewFile(uintptr(fd), childPath), nil
 }
 
 func openJournalHeaderFile(opDir *Dir) (*os.File, error) {
