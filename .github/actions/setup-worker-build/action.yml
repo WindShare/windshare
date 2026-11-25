@@ -1,0 +1,51 @@
+name: Set up worker-build
+description: Restore or install the pinned Rust Workers builder.
+
+inputs:
+  version:
+    description: Exact worker-build crate version.
+    required: false
+    default: '0.8.7'
+
+runs:
+  using: composite
+  steps:
+    - name: Identify the runner image
+      id: image
+      shell: bash
+      run: |
+        if [[ "$RUNNER_OS" != Linux && "$RUNNER_OS" != macOS ]]; then
+          echo "worker-build setup requires a Unix runner (got $RUNNER_OS)" >&2
+          exit 1
+        fi
+        echo "image_os=${ImageOS:-${RUNNER_OS:-unknown}}" >> "$GITHUB_OUTPUT"
+
+    # The standalone executable depends on the runner ABI and tool version.
+    - name: Restore worker-build
+      id: cache
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ runner.temp }}/worker-build/bin
+        key: worker-build-v1-${{ steps.image.outputs.image_os }}-${{ runner.arch }}-${{ inputs.version }}
+
+    - name: Install worker-build
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        RUSTUP_TOOLCHAIN: stable
+        VERSION: ${{ inputs.version }}
+      run: cargo +stable install worker-build --version "$VERSION" --locked --root "$RUNNER_TEMP/worker-build"
+
+    - name: Expose worker-build on PATH
+      shell: bash
+      run: |
+        test -x "$RUNNER_TEMP/worker-build/bin/worker-build"
+        echo "$RUNNER_TEMP/worker-build/bin" >> "$GITHUB_PATH"
+
+    # Save before Worker tests so later runs can reuse a successful install.
+    - name: Save worker-build
+      if: steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ runner.temp }}/worker-build/bin
+        key: ${{ steps.cache.outputs.cache-primary-key }}

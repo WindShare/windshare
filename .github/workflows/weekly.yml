@@ -34,6 +34,13 @@ jobs:
           cache-dependency-path: go.sum
       - name: Prepare Rust native relay toolchain
         run: rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@v2
+        with: &relay-native-debug-reader
+          workspaces: relay-rust -> .target
+          cache-bin: false
+          shared-key: relay-native-debug
+          save-if: false
+          cmd-format: rustup run stable {0}
       - name: Run integration packages
         run: go test -count=1 ./integration/...
 
@@ -52,6 +59,8 @@ jobs:
           cache-dependency-path: go.sum
       - name: Prepare Rust native relay toolchain
         run: rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@v2
+        with: *relay-native-debug-reader
       - name: Run integration packages
         run: go test -count=1 ./integration/...
 
@@ -70,6 +79,8 @@ jobs:
           cache-dependency-path: go.sum
       - name: Prepare Rust native relay toolchain
         run: rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@v2
+        with: *relay-native-debug-reader
       - name: Run process and relay-cut suites
         run: go test -count=1 ./e2e -run '^TestLong'
       - name: Run catalog scale suites
@@ -122,12 +133,14 @@ jobs:
           cache-dependency-path: go.sum
       - name: Prepare Rust native relay toolchain
         run: rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@v2
+        with: *relay-native-debug-reader
       - uses: pnpm/action-setup@v6
         with:
           version: latest
       - uses: actions/setup-node@v7
         with:
-          node-version: latest
+          node-version: 24
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
       - name: Install frozen web dependencies
@@ -154,12 +167,14 @@ jobs:
           cache-dependency-path: go.sum
       - name: Prepare Rust native relay toolchain
         run: rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@v2
+        with: *relay-native-debug-reader
       - uses: pnpm/action-setup@v6
         with:
           version: latest
       - uses: actions/setup-node@v7
         with:
-          node-version: latest
+          node-version: 24
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
       - name: Install frozen web dependencies
@@ -181,6 +196,8 @@ jobs:
     name: Managed TURN Worker browser route (Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@v7
         with:
@@ -197,14 +214,13 @@ jobs:
           workspaces: relay-rust -> .target
           cache-bin: false
           cmd-format: rustup run stable {0}
-      - name: Install Worker builder
-        run: cargo +stable install worker-build --version 0.8.7 --locked
+      - uses: ./.github/actions/setup-worker-build
       - uses: pnpm/action-setup@v6
         with:
           version: latest
       - uses: actions/setup-node@v7
         with:
-          node-version: lts/*
+          node-version: 24
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
       - name: Install frozen web dependencies
@@ -247,7 +263,7 @@ jobs:
           version: latest
       - uses: actions/setup-node@v7
         with:
-          node-version: latest
+          node-version: 24
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
       - name: Install frozen web dependencies
@@ -274,12 +290,14 @@ jobs:
           cache-dependency-path: go.sum
       - name: Prepare Rust native relay toolchain
         run: rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@v2
+        with: *relay-native-debug-reader
       - uses: pnpm/action-setup@v6
         with:
           version: latest
       - uses: actions/setup-node@v7
         with:
-          node-version: latest
+          node-version: 24
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
       - name: Install frozen web dependencies
@@ -302,7 +320,7 @@ jobs:
   windows-browser:
     name: Browser and process smoke (Windows)
     runs-on: windows-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
         with:
@@ -314,18 +332,24 @@ jobs:
           cache-dependency-path: go.sum
       - name: Prepare Rust native relay toolchain
         run: rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@v2
+        with: *relay-native-debug-reader
       - uses: pnpm/action-setup@v6
         with:
           version: latest
       - uses: actions/setup-node@v7
         with:
-          node-version: latest
+          node-version: 24
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
       - name: Install frozen web dependencies
         run: pnpm -C web install --frozen-lockfile
       - name: Install Chromium runtime
         run: pnpm -C web exec playwright install chromium
+      # Build with the browser fixture's Cargo profile before its setup timeout starts.
+      - name: Build the native relay for browser smoke
+        working-directory: relay-rust
+        run: rustup run stable cargo build --locked -p windshare-relay-native --bin relay-native
       - name: Run the Windows browser and process smoke
         run: pnpm -C web test:browser:smoke
 
@@ -346,10 +370,7 @@ jobs:
       - name: Prepare Rust native relay toolchain
         run: rustup toolchain install stable --profile minimal
       - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: relay-rust -> .target
-          cache-bin: false
-          cmd-format: rustup run stable {0}
+        with: *relay-native-debug-reader
       - name: Prepare standalone Linux relay build
         run: |
           rustup target add --toolchain stable x86_64-unknown-linux-musl
@@ -385,10 +406,7 @@ jobs:
       - name: Prepare Rust native relay toolchain
         run: rustup toolchain install stable --profile minimal
       - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: relay-rust -> .target
-          cache-bin: false
-          cmd-format: rustup run stable {0}
+        with: *relay-native-debug-reader
       - name: Set up cached govulncheck
         uses: ./.github/actions/setup-govulncheck
       - name: Certify the exact weekly root artifact on NTFS

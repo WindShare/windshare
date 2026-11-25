@@ -28,15 +28,16 @@ one build to Cloudflare and mainland hosts. The steps below cover private relays
    | Secret | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account ID |
    | Secret | `WINDSHARE_OWNER_PASSWORD` | Console password, at least 16 characters |
    | Secret | `CLOUDFLARE_WORKER_NAME` | Stable lowercase name, at most 55 characters |
-   | Variable | `CLOUDFLARE_RELAY_ENABLED` | `true` |
+   | Variable, optional | `CLOUDFLARE_RELAY_ENABLED` | Set to `true` for automatic deployment of relay or frontend changes on `main` |
    | Variable, optional | `CLOUDFLARE_DEPLOYMENT_MODE` | `full` (default), `relay-only`, or `frontend` |
    | Variable, optional | `CLOUDFLARE_TURN_ENABLED` | `true` (default) or `false`; manages Cloudflare TURN for `full` and `relay-only` |
    | Secret, optional pair | `CLOUDFLARE_RELAY_DOMAIN` | Relay hostname, e.g. `share.example.com` |
    | Secret, optional pair | `CLOUDFLARE_ZONE_ID` | That hostname's zone ID |
    | Secret, optional | `CLOUDFLARE_CONSOLE_DOMAIN` | Console hostname in the same zone; defaults to `console.<relay-hostname>` |
 
-3. Enable Actions and run the deployment workflow on `main`. Find the addresses in
-   the Cloudflare dashboard under the Worker's **Domains & Routes**. For workers.dev,
+3. Enable Actions, open **Deploy private relay**, select `main` and click **Run workflow**.
+   Manual deployment works with automatic updates disabled. Find the addresses in the
+   Cloudflare dashboard under the Worker's **Domains & Routes**. For workers.dev,
    the workflow creates `<name>-console`, bound to the relay Worker.
    Custom domains route both hostnames to one Worker with managed DNS/TLS.
 4. [Install or rebuild WindShare](../installation.md) from the deployed source revision,
@@ -60,9 +61,9 @@ their onboarding output. Receiver links never contain access keys; receivers nee
 
 ## Updates and access management
 
-Sync the fork's `main` branch. Relay/frontend changes trigger deployment; documentation-only
-changes do not. Manual reruns are supported. Keep the account, Worker name and both hostnames
-stable. Updates preserve the `SHARES` and `ACCESS` SQLite namespaces and permanent STOP state.
+With automatic updates enabled, syncing relay or frontend changes to the fork's `main`
+branch triggers deployment. Keep the account, Worker name and both hostnames stable.
+Updates preserve the `SHARES` and `ACCESS` SQLite namespaces and permanent STOP state.
 Failed uploads can be retried with the same settings. Unmanaged names or changed storage
 bindings fail explicitly instead of replacing another deployment.
 
@@ -72,6 +73,6 @@ Optionally stop that credential's existing shares on this relay; this also block
 Established direct transfers remain independent. Losing a client key requires enrolling again.
 
 Switch `CLOUDFLARE_DEPLOYMENT_MODE` and rerun to move between `full` and `relay-only`.
-Both modes retain access and share storage. `CLOUDFLARE_RELAY_ENABLED=false` disables automatic
-updates; it does not stop the service. This deployment targets personal, light use within
+Both modes retain access and share storage. The deployed service keeps running when
+automatic updates are disabled. This deployment targets personal, light use within
 Cloudflare's service quotas.

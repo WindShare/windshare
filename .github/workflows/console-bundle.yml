@@ -31,12 +31,14 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_REF"
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
       - uses: pnpm/action-setup@v6
         with:
           package_json_file: consoles/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: consoles/pnpm-lock.yaml
       - run: pnpm -C consoles install --frozen-lockfile
       - name: Typecheck consoles and run bundle verifier tests
         run: |

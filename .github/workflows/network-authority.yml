@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
+      - .github/actions/setup-worker-build/**
       - .github/workflows/console-bundle.yml
       - consoles/network/**
       - consoles/ui/**
@@ -25,6 +26,7 @@ on:
       - .github/workflows/network-authority.yml
   push:
     branches: [main]
+    # PRs exercise the Worker setup action. Linux hygiene runs the helper tests on every push to main.
     paths:
       - .github/workflows/network-authority.yml
       - scripts/deploy/network-authority.py
@@ -60,6 +62,8 @@ jobs:
     name: Verify authority Worker
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@v7
         with:
@@ -69,14 +73,20 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-      - run: rustup target add wasm32-unknown-unknown
+          cache: npm
+          cache-dependency-path: relay-rust/crates/relay-cloudflare/package-lock.json
+      - name: Install Rust Wasm toolchain
+        run: rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: relay-rust -> .target
-      - name: Install pinned Worker tools
-        run: |
-          cargo install worker-build --version 0.8.7 --locked
-          npm ci --prefix relay-rust/crates/relay-cloudflare
+          cache-bin: false
+          shared-key: network-authority-verify
+          cmd-format: rustup run stable {0}
+      - uses: ./.github/actions/setup-worker-build
+      - name: Install pinned Wrangler
+        working-directory: relay-rust/crates/relay-cloudflare
+        run: npm ci
       - name: Verify authority Worker boundary flows
         working-directory: relay-rust/crates/network-authority
         run: node tests/run.mjs
@@ -89,6 +99,8 @@ jobs:
     environment: network-authority
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@v7
         with:
@@ -96,11 +108,20 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-      - name: Install pinned deployment tools
-        run: |
-          rustup target add wasm32-unknown-unknown
-          cargo install worker-build --version 0.8.7 --locked
-          npm ci --prefix relay-rust/crates/relay-cloudflare
+          cache: npm
+          cache-dependency-path: relay-rust/crates/relay-cloudflare/package-lock.json
+      - name: Install Rust Wasm toolchain
+        run: rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: relay-rust -> .target
+          cache-bin: false
+          shared-key: network-authority-deploy
+          cmd-format: rustup run stable {0}
+      - uses: ./.github/actions/setup-worker-build
+      - name: Install pinned Wrangler
+        working-directory: relay-rust/crates/relay-cloudflare
+        run: npm ci
       - name: Deploy certified generation
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

@@ -87,9 +87,11 @@ jobs:
       - name: Prepare Rust native relay toolchain
         run: rustup toolchain install stable --profile minimal
       - uses: Swatinem/rust-cache@v2
-        with:
+        with: &relay-native-debug-reader
           workspaces: relay-rust -> .target
           cache-bin: false
+          shared-key: relay-native-debug
+          save-if: false
           cmd-format: rustup run stable {0}
       - name: Set up cached govulncheck
         uses: ./.github/actions/setup-govulncheck
@@ -196,10 +198,7 @@ jobs:
       - name: Prepare Rust native relay toolchain
         run: rustup toolchain install stable --profile minimal
       - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: relay-rust -> .target
-          cache-bin: false
-          cmd-format: rustup run stable {0}
+        with: *relay-native-debug-reader
       - name: Set up cached govulncheck
         uses: ./.github/actions/setup-govulncheck
       - name: Verify native-output helper contract

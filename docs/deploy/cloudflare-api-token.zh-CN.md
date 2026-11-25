@@ -84,9 +84,9 @@
 
 ## 6. 继续部署
 
-Token 配置完成。回到[部署指南](cloudflare-relay.md#first-deployment)，填写其余 Secrets 和 Variables，然后运行 **Deploy private relay**。默认同时部署前端和中转；只需中转时，设置 `CLOUDFLARE_DEPLOYMENT_MODE=relay-only`。
+按[部署指南](cloudflare-relay.md#first-deployment)补齐仓库密钥。默认同时部署前端和中转。只需中转时，将仓库变量 `CLOUDFLARE_DEPLOYMENT_MODE` 设为 `relay-only`。
 
-保存 Token 本身不会启动部署。其余设置齐全后，在仓库的 **Actions → Deploy private relay → Run workflow** 中选择 `main`，再点击 **Run workflow**。
+首次部署时，打开 **Actions → Deploy private relay → Run workflow**，选择 `main`，再点击 **Run workflow**。需要在同步 `main` 的中转或前端变更时自动部署，再将可选仓库变量 `CLOUDFLARE_RELAY_ENABLED` 设为 `true`。
 
 ## 遇到问题时
 
