@@ -157,7 +157,10 @@ impl Desktop {
                 self.apply_preview_account_edit(edit.clone(), window, cx);
             }
             AccountDialogEvent::Close => self.close_overlay(window, cx),
-            AccountDialogEvent::PageChanged => {}
+            AccountDialogEvent::PageChanged | AccountDialogEvent::FocusChanged => {
+                let focus = dialog.read(cx).focus_target(cx);
+                window.focus(&focus, cx);
+            }
         }
         cx.notify();
     }

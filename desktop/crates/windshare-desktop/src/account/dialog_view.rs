@@ -98,14 +98,12 @@ impl AccountDialog {
         .icon(Icon::Arrow)
         .style(ButtonStyle::Primary)
         .disabled(!self.can_register(cx))
-        .on_press(cx.listener(|this, (), window, cx| this.register(window, cx)));
+        .on_press(cx.listener(|this, (), _, cx| this.register(cx)));
         let login = Button::new("registration-login", locale.text(Text::LoginExisting))
             .icon(Icon::Lock)
             .style(ButtonStyle::Quiet)
             .disabled(self.busy(cx))
-            .on_press(
-                cx.listener(|this, (), window, cx| this.open_page(AccountPage::Login, window, cx)),
-            );
+            .on_press(cx.listener(|this, (), _, cx| this.open_page(AccountPage::Login, cx)));
         registration_panel_view(theme, view, self.registering(cx), true, create, login, cx)
     }
 
@@ -123,8 +121,8 @@ impl AccountDialog {
         .style(ButtonStyle::Secondary)
         .compact()
         .disabled(self.busy(cx) || locked)
-        .on_press(cx.listener(|this, (), window, cx| {
-            this.open_page(AccountPage::Nickname(()), window, cx);
+        .on_press(cx.listener(|this, (), _, cx| {
+            this.open_page(AccountPage::Nickname(()), cx);
         }));
         let copy = Button::new(
             "copy-account-uid",
@@ -241,7 +239,7 @@ impl AccountDialog {
             .icon(submit_icon)
             .style(ButtonStyle::Primary)
             .disabled(!can_submit)
-            .on_press(cx.listener(|this, (), window, cx| this.submit(window, cx))),
+            .on_press(cx.listener(|this, (), _, cx| this.submit(cx))),
         );
         if let AccountPage::Email(purpose, EmailStep::Code) = self.page() {
             actions = actions.child(
@@ -249,8 +247,8 @@ impl AccountDialog {
                     .icon(Icon::Refresh)
                     .style(ButtonStyle::Quiet)
                     .disabled(busy)
-                    .on_press(cx.listener(move |this, (), window, cx| {
-                        this.open_page(AccountPage::Email(purpose, EmailStep::Address), window, cx);
+                    .on_press(cx.listener(move |this, (), _, cx| {
+                        this.open_page(AccountPage::Email(purpose, EmailStep::Address), cx);
                     })),
             );
         }
@@ -309,9 +307,9 @@ impl AccountDialog {
             Alternative::Close => {
                 button.on_press(cx.listener(|_, (), _, cx| cx.emit(AccountDialogEvent::Close)))
             }
-            Alternative::Open(page) => button.on_press(
-                cx.listener(move |this, (), window, cx| this.open_page(page, window, cx)),
-            ),
+            Alternative::Open(page) => {
+                button.on_press(cx.listener(move |this, (), _, cx| this.open_page(page, cx)))
+            }
         })
     }
 }

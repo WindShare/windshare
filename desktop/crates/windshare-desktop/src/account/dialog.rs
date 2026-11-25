@@ -27,6 +27,7 @@ pub enum AccountDialogEvent {
     PreviewEdit(PreviewAccountEdit),
     Close,
     PageChanged,
+    FocusChanged,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -66,7 +67,7 @@ impl AccountDialog {
         origin: AccountOrigin,
         initial_error: Option<AccountFormError>,
         overlay_scope: FocusHandle,
-        window: &mut Window,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let locale = language(cx);
@@ -84,17 +85,19 @@ impl AccountDialog {
                 }),
             ];
         for input in [&nickname, &username, &password, &email, &code] {
-            subscriptions.push(
-                cx.subscribe_in(input, window, |this, _, event, window, cx| match event {
-                    InputEvent::Submit => this.submit(window, cx),
+            subscriptions.push(cx.subscribe_in(
+                input,
+                window,
+                |this, _, event, _, cx| match event {
+                    InputEvent::Submit => this.submit(cx),
                     InputEvent::Changed => cx.notify(),
-                }),
-            );
+                },
+            ));
         }
         let in_flight_id = match &source {
             AccountSource::Native(host) => {
-                subscriptions.push(cx.observe_in(host, window, |this, host, window, cx| {
-                    this.on_host_updated(&host, window, cx);
+                subscriptions.push(cx.observe(host, |this, host, cx| {
+                    this.on_host_updated(&host, cx);
                 }));
                 match &host.read(cx).model().account_request {
                     AccountRequest::Pending { id, action }
@@ -199,7 +202,7 @@ impl AccountDialog {
             .is_some_and(|target| target != &view.status.account)
     }
 
-    pub fn field_focus(&self, cx: &App) -> Option<FocusHandle> {
+    fn field_focus(&self, cx: &App) -> Option<FocusHandle> {
         let input = match self.page {
             AccountScreen::Login | AccountScreen::Credentials(_) => &self.username,
             AccountScreen::Nickname(_) => &self.nickname,
@@ -272,17 +275,11 @@ impl AccountDialog {
         }
     }
 
-    pub(super) fn open_page(
-        &mut self,
-        page: AccountPage,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn open_page(&mut self, page: AccountPage, cx: &mut Context<Self>) {
         if self.busy(cx) || !self.apply_page(page, cx) {
             return;
         }
-        let focus = self.focus_target(cx);
-        window.focus(&focus, cx);
+        // Desktop owns overlay focus so only the active top dialog can move window focus.
         cx.emit(AccountDialogEvent::PageChanged);
         cx.notify();
     }
@@ -340,18 +337,19 @@ impl AccountDialog {
         true
     }
 
-    pub(super) fn register(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn register(&mut self, cx: &mut Context<Self>) {
         if !self.can_register(cx) {
             return;
         }
         self.page = AccountScreen::Registration;
         self.feedback = None;
         self.dispatch_command(AccountCommand::Register, cx);
-        window.focus(&self.overlay_scope, cx);
+        // The primary button leaves the tree while the account is being created.
+        cx.emit(AccountDialogEvent::FocusChanged);
         cx.notify();
     }
 
-    pub(super) fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn submit(&mut self, cx: &mut Context<Self>) {
         if !self.can_submit(cx) {
             return;
         }
@@ -367,7 +365,7 @@ impl AccountDialog {
         self.dispatch_command(command, cx);
         // The primary button leaves the tree while the account is being created.
         if registering {
-            window.focus(&self.overlay_scope, cx);
+            cx.emit(AccountDialogEvent::FocusChanged);
         }
         cx.notify();
     }
@@ -481,12 +479,7 @@ impl AccountDialog {
         cx.notify();
     }
 
-    fn on_host_updated(
-        &mut self,
-        host: &Entity<HostStore>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn on_host_updated(&mut self, host: &Entity<HostStore>, cx: &mut Context<Self>) {
         let (previous_model, model) = {
             let store = host.read(cx);
             (
@@ -498,7 +491,6 @@ impl AccountDialog {
             return;
         };
         let previous_page = self.page();
-        let previous_field = self.field_focus(cx);
         let mut completed_toast = None;
         if self.target_changed(view) {
             self.close_stale_edit(cx);
@@ -527,25 +519,34 @@ impl AccountDialog {
                 self.reconcile_page(view, cx);
             }
         }
-        let next_field = self.field_focus(cx);
-        if previous_field != next_field {
-            let focus = self.focus_target(cx);
-            window.focus(&focus, cx);
-        }
-        if previous_page != AccountPage::Overview && self.page() == AccountPage::Overview {
-            if let Some(message) = completed_toast {
-                cx.emit(AccountDialogEvent::Completed(Some(message)));
-            } else {
-                let had_no_account = previous_model
-                    .account
-                    .as_ref()
-                    .is_some_and(|prev| prev.status.account.is_empty());
-                if self.feedback.is_none() && had_no_account && !view.status.account.is_empty() {
-                    cx.emit(AccountDialogEvent::Completed(None));
-                }
-            }
+        if let Some(event) =
+            self.host_update_event(previous_page, &previous_model, view, completed_toast)
+        {
+            cx.emit(event);
         }
         cx.notify();
+    }
+
+    fn host_update_event(
+        &self,
+        previous_page: AccountPage,
+        previous_model: &windshare_host::Model,
+        view: &AccountView,
+        completed_toast: Option<Text>,
+    ) -> Option<AccountDialogEvent> {
+        if previous_page != AccountPage::Overview && self.page() == AccountPage::Overview {
+            if let Some(message) = completed_toast {
+                return Some(AccountDialogEvent::Completed(Some(message)));
+            }
+            let had_no_account = previous_model
+                .account
+                .as_ref()
+                .is_some_and(|prev| prev.status.account.is_empty());
+            if self.feedback.is_none() && had_no_account && !view.status.account.is_empty() {
+                return Some(AccountDialogEvent::Completed(None));
+            }
+        }
+        (self.page() != previous_page).then_some(AccountDialogEvent::PageChanged)
     }
 
     fn reconcile_page(&mut self, view: &AccountView, cx: &mut Context<Self>) {
