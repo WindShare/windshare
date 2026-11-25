@@ -132,9 +132,6 @@ function pausedTask(
     completedFiles: options.canSavePartial ? 1n : 0n,
     completedBytes: options.canSavePartial ? 512n : 0n,
     retainedBytes: 512n,
-    discoveredFiles: 2n,
-    discoveredBytes: 1024n,
-    discoveryComplete: true,
   })
   return makeRetainedTask({
     taskId,

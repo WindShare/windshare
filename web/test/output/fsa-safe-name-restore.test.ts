@@ -636,8 +636,7 @@ describe('FSA two-step safe-name extension preservation and fallback', () => {
       artifact: { kind: 'original-file', name: 'other.pdf', singleFileId: 'fid-other' },
       backend: 'fsa',
       lifecycle: transitionReceiveState(initialReceiveState('other-paused-task'), {
-        kind: 'paused', reason: 'user', completedFiles: 0n, completedBytes: 0n,
-        retainedBytes: 0n, discoveredFiles: 0n, discoveredBytes: 0n, discoveryComplete: false,
+        kind: 'paused', reason: 'user', completedFiles: 0n, completedBytes: 0n, retainedBytes: 0n,
       }),
       target: {
         kind: 'fsa',
@@ -650,7 +649,6 @@ describe('FSA two-step safe-name extension preservation and fallback', () => {
           fingerprint: { size: 0, lastModified: 0 },
         },
       },
-      discoveryComplete: false,
       updatedAt: Date.now() - 5_000,
     })
 
@@ -779,8 +777,7 @@ describe('writeFSARestoreArtifact concurrency, user-activation order, and POSIX 
     const paused = {
       ...saved,
       lifecycle: transitionReceiveState(initialReceiveState('export-task'), {
-        kind: 'paused', reason: 'user', completedFiles: 1n, completedBytes: 4n,
-        retainedBytes: 4n, discoveredFiles: 2n, discoveredBytes: 8n, discoveryComplete: true,
+        kind: 'paused', reason: 'user', completedFiles: 1n, completedBytes: 4n, retainedBytes: 4n,
       }),
     }
     await memory.putTask(paused)
@@ -990,8 +987,7 @@ describe('WorkspaceTask live observation and TaskPresentation safeNameRestore st
     const pausedNeedsAction = presentTask(taskFixture({
       backend: 'fsa',
       lifecycle: transitionReceiveState(initialReceiveState('t1'), {
-        kind: 'paused', reason: 'permission-needed', completedFiles: 1n, completedBytes: 4n,
-        retainedBytes: 4n, discoveredFiles: 2n, discoveredBytes: 8n, discoveryComplete: true,
+        kind: 'paused', reason: 'permission-needed', completedFiles: 1n, completedBytes: 4n, retainedBytes: 4n,
       }),
       safeRenamed: one,
     }), 'en')
@@ -1076,7 +1072,7 @@ describe('WorkspaceTask live observation and TaskPresentation safeNameRestore st
           artifact: { kind: 'directory-tree', name: 'Root' }, backend: 'fsa',
           lifecycle: transitionReceiveState(initialReceiveState('live-runner'), { kind: 'saved', savedFiles: 1n, savedBytes: 4n }),
           target: { kind: 'fsa', parentHandle: { name: 'Downloads' } as FileSystemDirectoryHandle, reservedName: 'Root', collisionIndex: 0, singleFile: false, reservedAtMs: 0 },
-          safeRenamed: updatedSummary, discoveryComplete: true, updatedAt: Date.now(),
+          safeRenamed: updatedSummary, updatedAt: Date.now(),
         }),
         rollbackUnactivated: async () => undefined,
         close: async () => undefined,

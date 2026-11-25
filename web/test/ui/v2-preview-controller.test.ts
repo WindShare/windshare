@@ -596,7 +596,6 @@ describe('single-photo blob reuse, preview picker isolation, and workspace task 
       artifact: store.tasks.get(redownloadTaskId)?.artifact,
       backend: 'portable',
       target: store.tasks.get(redownloadTaskId)?.target,
-      discoveryComplete: true,
       display: { destinationLabel: { kind: 'browser-downloads' } },
       lifecycle: { kind: 'download-started', retained: false, fileName: entry.name },
     })
@@ -923,7 +922,6 @@ describe('preview fresh download, modal task failure routing, and shareScope vis
       backend: 'opfs',
       lifecycle: { kind: 'download-started', taskId: 'task-a', generation: 2n, retained: true, fileName: fileA.name },
       target: { kind: 'opfs', objectName: 'task-a.part', fileName: fileA.name, isZip: false, allocatedLength: 8n, sealedSize: 8n },
-      discoveryComplete: true,
       updatedAt: 1,
     })
 

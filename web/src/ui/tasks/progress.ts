@@ -13,10 +13,13 @@ export function presentTaskProgress(facts: TaskFacts, language: Language = 'en')
   if (progress === null || (paused && progress.transferJobId === '')) return retainedProgress(facts, language)
   const materialized = paused ? facts.lifecycle.retainedBytes : progress.materializedBytes
   const completedFiles = paused ? Number(facts.lifecycle.completedFiles) : progress.completedFiles
+  // A resumed run restarts progressive discovery from zero; suppress its partial
+  // discovery total when re-pausing before it catches up to durable local progress.
+  const coversPaused = !paused || progressCoversPausedState(progress, facts.lifecycle)
+  const exact = progress.discovery === 'complete' && coversPaused
   const files = ` · ${t.completedFiles(completedFiles)}`
-  const details = progressDetails(facts, language)
-  const percentage = exactPercentage(facts, materialized)
-  const exact = progress.discovery === 'complete'
+  const details = progressDetails(facts, coversPaused, language)
+  const percentage = exact ? exactPercentage(facts, materialized) : null
   const total = exact ? ` / ${formatBytes(progress.discoveredBytes)}` : ''
   const amount = formatBytes(materialized) + total
   const coverage = paused ? t.retainedBytes(amount) : t.receivedBytes(amount)
@@ -33,6 +36,15 @@ export function presentTaskProgress(facts: TaskFacts, language: Language = 'en')
     label: `${coverage}${ratio}${files}`,
     details: Object.freeze(details),
   })
+}
+
+function progressCoversPausedState(
+  progress: NonNullable<TaskFacts['progress']>,
+  state: Extract<TaskFacts['lifecycle'], { kind: 'paused' }>,
+): boolean {
+  return BigInt(progress.discoveredFiles) >= state.completedFiles &&
+    progress.discoveredBytes >= state.completedBytes &&
+    progress.discoveredBytes >= state.retainedBytes
 }
 
 function retainedProgress(facts: TaskFacts, language: Language): TaskProgressPresentation | null {
@@ -66,20 +78,24 @@ function exactPercentage(facts: TaskFacts, materialized: bigint): number | null 
 function discoveryStatus(facts: TaskFacts, language: Language): string | null {
   const t = receiverCopy[language].progress
   const progress = facts.progress
-  if (progress?.discovery === 'open') return t.calculating(progress.discoveredFiles)
+  if (progress?.discovery === 'open') {
+    return facts.lifecycle.kind === 'paused' ? null : t.calculating(progress.discoveredFiles)
+  }
   return progress?.discovery === 'failed' ? t.countFailed : null
 }
 
 function maximum(left: bigint, right: bigint): bigint { return left > right ? left : right }
 
-function progressDetails(facts: TaskFacts, language: Language): string[] {
+function progressDetails(facts: TaskFacts, coversPaused: boolean, language: Language): string[] {
   const t = receiverCopy[language].progress
   const progress = facts.progress
   const details: string[] = []
   if (progress !== null) {
-    details.push(progress.discovery === 'complete'
-      ? t.total(progress.discoveredFiles, formatBytes(progress.discoveredBytes))
-      : t.atLeast(progress.discoveredFiles, formatBytes(progress.discoveredBytes)))
+    if (coversPaused) {
+      details.push(progress.discovery === 'complete'
+        ? t.total(progress.discoveredFiles, formatBytes(progress.discoveredBytes))
+        : t.atLeast(progress.discoveredFiles, formatBytes(progress.discoveredBytes)))
+    }
     const completedBytes = facts.lifecycle.kind === 'paused'
       ? facts.lifecycle.completedBytes
       : progress.completedBytes

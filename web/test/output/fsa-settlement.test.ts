@@ -129,9 +129,6 @@ describe('FSA settlement against persisted IndexedDB file state', () => {
       completedFiles: 2n,
       completedBytes: 10n,
       retainedBytes: 12n,
-      discoveredFiles: 3n,
-      discoveredBytes: 20n,
-      discoveryComplete: false,
     })
     expect(repaused.safeRenamed?.count).toBe(1)
     expect(traces).toContainEqual(expect.objectContaining({
@@ -177,7 +174,7 @@ describe('FSA settlement against persisted IndexedDB file state', () => {
     },
     {
       label: 'job-level failure with zero per-file failure counters',
-      result: settled('failed', { error: new Error('markDiscoveryComplete failed') }),
+      result: settled('failed', { error: new Error('job-level output failure') }),
       expectedReason: 'failures',
       expectedFailedFiles: 0n,
     },
@@ -392,7 +389,6 @@ describe('FSA settlement against persisted IndexedDB file state', () => {
 
     expect(summarizeStoredTaskFiles(rows)).toEqual({
       fileCount: 2n,
-      totalBytes: 30n,
       completedFiles: 1n,
       completedBytes: 10n,
       retainedBytes: 15n,

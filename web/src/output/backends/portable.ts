@@ -61,7 +61,6 @@ export function createCompletedPortableRecord(input: Readonly<{
     lifecycle: started,
     target: Object.freeze({ kind: 'portable', fileName: input.task.artifact.name }),
     ...(display === undefined ? {} : { display }),
-    discoveryComplete: true,
     updatedAt: now,
   })
 }
@@ -122,7 +121,6 @@ export function openPortableSession(input: OpenPortableSessionInput): OutputSess
     lifecycle: downloading,
     target: Object.freeze({ kind: 'portable', fileName: input.task.artifact.name }),
     ...(display === undefined ? {} : { display }),
-    discoveryComplete: false,
     updatedAt: Date.now(),
   })
 
@@ -241,7 +239,6 @@ class PortableSessionHandle implements OutputSessionHandle {
       ...this.#baseRecord,
       lifecycle: started,
       ...(sourceOmittedEntries === undefined ? {} : { sourceOmittedEntries }),
-      discoveryComplete: true,
       updatedAt: Date.now(),
     })
     await this.#persistHistory(record)

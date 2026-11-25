@@ -25,7 +25,7 @@ function makeLifecycle(kind: ReceiveLifecycleState['kind']): ReceiveLifecycleSta
     case 'paused':
       return transitionReceiveState(base, {
         kind: 'paused', reason: 'user', completedFiles: 1n, completedBytes: 8n,
-        retainedBytes: 8n, discoveredFiles: 2n, discoveredBytes: 16n, discoveryComplete: true,
+        retainedBytes: 8n,
       })
     case 'saved':
       return transitionReceiveState(base, { kind: 'saved', savedFiles: 1n, savedBytes: 8n })

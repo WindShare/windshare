@@ -66,7 +66,6 @@ function makeLifecycle(
       return transitionReceiveState(base, {
         kind: 'paused', reason: 'user',
         completedFiles: 0n, completedBytes: 0n, retainedBytes: 1n,
-        discoveredFiles: 1n, discoveredBytes: entry.expectedSize, discoveryComplete: true,
       }, createdAt)
     case 'downloading':
       return transitionReceiveState(base, { kind: 'downloading' }, createdAt)
@@ -100,7 +99,6 @@ function makeOpfsRecord(
       ...(lifecycleKind === 'ready-to-save' ? { sealedSize: entry.expectedSize } : {}),
     },
     display: { objectLabel: entry.name, createdAtMilliseconds: createdAt },
-    discoveryComplete: true,
     updatedAt: createdAt,
   }
 }

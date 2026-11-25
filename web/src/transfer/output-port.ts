@@ -87,6 +87,5 @@ export interface TransferOutputSession {
    */
   checkCompleted?(fileId: string, signal: AbortSignal): Promise<CompletedOutputFile | undefined>
   openFile(request: TransferFileRequest, signal: AbortSignal): Promise<TransferOutputFile>
-  markDiscoveryComplete?(): Promise<void>
   safeRenamedSummary?(): SafeRenamedSummary | undefined
 }

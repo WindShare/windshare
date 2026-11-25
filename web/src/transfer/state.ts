@@ -85,9 +85,6 @@ export type ReceiveLifecycleState =
       completedFiles: bigint
       completedBytes: bigint
       retainedBytes: bigint
-      discoveredFiles: bigint
-      discoveredBytes: bigint
-      discoveryComplete: boolean
     }>
   | Readonly<ReceiveStateBase & { kind: 'ready-to-save'; size: bigint; fileName: string }>
   | Readonly<ReceiveStateBase & { kind: 'download-started'; retained: boolean; fileName: string }>

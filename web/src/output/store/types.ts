@@ -80,7 +80,6 @@ export interface ReceiveTaskRecord {
   readonly safeRenamedDirectories?: readonly SafeRenamedDirectoryRecord[]
   readonly sourceOmittedEntries?: bigint
   readonly sourceRevisionFailures?: SourceRevisionFailures
-  readonly discoveryComplete: boolean
   readonly updatedAt: number
 }
 
@@ -133,7 +132,6 @@ export function fromRangeTuples(tuples: readonly CompletedRangeTuple[]): readonl
 
 export interface StoredTaskFileSummary {
   readonly fileCount: bigint
-  readonly totalBytes: bigint
   readonly completedFiles: bigint
   readonly completedBytes: bigint
   readonly retainedBytes: bigint
@@ -143,7 +141,6 @@ export interface StoredTaskFileSummary {
 /** Summarizes durable per-file rows in IndexedDB, excluding ZIP directory placeholders. */
 export function summarizeStoredTaskFiles(files: readonly ReceiveFileRecord[]): StoredTaskFileSummary {
   let fileCount = 0n
-  let totalBytes = 0n
   let completedFiles = 0n
   let completedBytes = 0n
   let retainedBytes = 0n
@@ -151,7 +148,6 @@ export function summarizeStoredTaskFiles(files: readonly ReceiveFileRecord[]): S
   for (const file of files) {
     if (file.zipEntry?.kind === 'directory') continue
     fileCount += 1n
-    totalBytes += file.size
     retainedBytes += completedTuplesBytes(file.completedRanges)
     if (file.status === 'completed') {
       completedFiles += 1n
@@ -162,7 +158,6 @@ export function summarizeStoredTaskFiles(files: readonly ReceiveFileRecord[]): S
   }
   return Object.freeze({
     fileCount,
-    totalBytes,
     completedFiles,
     completedBytes,
     retainedBytes,

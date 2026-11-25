@@ -105,7 +105,6 @@ export async function openNewFSASession(input: Readonly<{
           lifecycle: downloading,
           target,
           ...(display === undefined ? {} : { display }),
-          discoveryComplete: false,
           updatedAt: Date.now(),
         })
         // Persist inside the reservation lock so concurrent opens observe freshly claimed names
@@ -325,12 +324,6 @@ class FSASessionHandle implements OutputSessionHandle {
         ? { checkCompleted: (fileId: string, signal: AbortSignal) => this.#checkCompleted(fileId, signal) }
         : {}),
       openFile: (request: TransferFileRequest, signal: AbortSignal) => this.#openFile(request, signal),
-      markDiscoveryComplete: async () => {
-        this.#outputTouched = true
-        const record = Object.freeze({ ...this.#record, discoveryComplete: true, updatedAt: Date.now() })
-        await this.#store.putTask(record)
-        this.#record = record
-      },
       safeRenamedSummary: () => this.#safeNames.summary(),
     })
   }
@@ -365,7 +358,6 @@ class FSASessionHandle implements OutputSessionHandle {
     let nextRecord = applySafeRenamedFields(Object.freeze({
       ...baseRecord,
       lifecycle: nextLifecycle,
-      discoveryComplete: result.discoveryComplete || this.#record.discoveryComplete,
       ...(sourceOmittedEntries === undefined ? {} : { sourceOmittedEntries }),
       ...(result.sourceRevisionFailures === undefined
         ? {}

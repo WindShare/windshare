@@ -99,7 +99,7 @@ export function openNewOPFSSession(
     ...(task.display === undefined ? {} : {
       display: { ...task.display, destinationLabel: { kind: 'browser-downloads' } },
     }),
-    discoveryComplete: false, updatedAt: Date.now(),
+    updatedAt: Date.now(),
   }
   return openOPFSSession(input, record, false)
 }
@@ -298,7 +298,6 @@ class OPFSSessionHandle implements OutputSessionHandle {
   #closingIO: Promise<void> | undefined
   #outputTouched = false
   #rolledBack = false
-  #taskWriteTail: Promise<unknown> = Promise.resolve()
 
   constructor(input: Readonly<{
     record: ReceiveTaskRecord
@@ -347,14 +346,6 @@ class OPFSSessionHandle implements OutputSessionHandle {
         checkCompleted: (fileId: string, signal: AbortSignal) => this.#checkCompleted(fileId, signal),
       } : {}),
       openFile: (request: TransferFileRequest, signal: AbortSignal) => this.#openFile(request, signal),
-      markDiscoveryComplete: () => this.#serializeTaskWrite(async () => {
-        this.#outputTouched = true
-        // Single-file commit may already have promoted this task to `ready-to-save`.
-        if (this.#record.discoveryComplete || this.#record.lifecycle.kind !== 'downloading') return
-        const updated = Object.freeze({ ...this.#record, discoveryComplete: true, updatedAt: Date.now() })
-        await this.#store.putTask(updated)
-        this.#record = updated
-      }),
     })
   }
 
@@ -387,13 +378,11 @@ class OPFSSessionHandle implements OutputSessionHandle {
       size = await this.#zip!.finalize()
     } catch (error) {
       await this.#closeIO()
-      await this.#taskWriteTail
       const pauseReason = storagePauseReason(error)
       if (pauseReason !== undefined) return this.#settleIncomplete('paused', { ...result, pauseReason, error })
       return this.#settleIncomplete('failed', { ...result, error })
     }
     await this.#closeIO()
-    await this.#taskWriteTail
     return this.#publishCompleted(size, result)
   }
 
@@ -402,7 +391,6 @@ class OPFSSessionHandle implements OutputSessionHandle {
   ): Promise<Readonly<{ files: readonly ReceiveFileRecord[]; truncatedLength?: bigint }>> {
     if (this.#zip === undefined || status === 'paused' || status === 'completed') {
       await this.#closeIO()
-      await this.#taskWriteTail
       return { files: await this.#store.listTaskFiles(this.taskId) }
     }
     try {
@@ -411,7 +399,6 @@ class OPFSSessionHandle implements OutputSessionHandle {
       return truncatedLength === undefined ? { files } : { files, truncatedLength }
     } finally {
       await this.#closeIO()
-      await this.#taskWriteTail
     }
   }
 
@@ -507,7 +494,6 @@ class OPFSSessionHandle implements OutputSessionHandle {
       ...baseRecord,
       target,
       lifecycle: nextLifecycle,
-      discoveryComplete: result.discoveryComplete || this.#record.discoveryComplete,
       ...(sourceOmittedEntries === undefined ? {} : { sourceOmittedEntries }),
       ...(result.sourceRevisionFailures === undefined
         ? {}
@@ -619,36 +605,34 @@ class OPFSSessionHandle implements OutputSessionHandle {
       // Coordinator flushes the truncated SyncAccessHandle BEFORE atomically sealing both the
       // file row and task record in one IndexedDB transaction so a crash before settle() still
       // leaves a locally exportable `ready-to-save` task instead of an online-only `paused` task.
-      return this.#io.checkpoint('opfs-file-completed', () =>
-        this.#serializeTaskWrite(async () => {
-          const currentTarget = this.#record.target as OPFSTargetRecord
-          const target: OPFSTargetRecord = Object.freeze({
-            ...currentTarget,
-            allocatedLength: request.exactSize,
-            sealedSize: request.exactSize,
-          })
-          const now = Date.now()
-          const readyTask: ReceiveTaskRecord = Object.freeze({
-            ...this.#record,
-            target,
-            lifecycle: transitionReceiveState(this.#record.lifecycle, {
-              kind: 'ready-to-save',
-              size: request.exactSize,
-              fileName: target.fileName,
-              contentWarning: null,
-            }, now),
-            discoveryComplete: true,
-            updatedAt: now,
-          })
-          await this.#store.putTaskAndFile(readyTask, row)
-          this.#record = readyTask
-          emitOutputTrace(this.#diagnostics?.trace, 'publication', {
-            backend: 'origin_private',
-            task_id: this.taskId,
-            transition: 'ready_to_save',
-            sealed_bytes: String(request.exactSize),
-          })
-        }))
+      return this.#io.checkpoint('opfs-file-completed', async () => {
+        const currentTarget = this.#record.target as OPFSTargetRecord
+        const target: OPFSTargetRecord = Object.freeze({
+          ...currentTarget,
+          allocatedLength: request.exactSize,
+          sealedSize: request.exactSize,
+        })
+        const now = Date.now()
+        const readyTask: ReceiveTaskRecord = Object.freeze({
+          ...this.#record,
+          target,
+          lifecycle: transitionReceiveState(this.#record.lifecycle, {
+            kind: 'ready-to-save',
+            size: request.exactSize,
+            fileName: target.fileName,
+            contentWarning: null,
+          }, now),
+          updatedAt: now,
+        })
+        await this.#store.putTaskAndFile(readyTask, row)
+        this.#record = readyTask
+        emitOutputTrace(this.#diagnostics?.trace, 'publication', {
+          backend: 'origin_private',
+          task_id: this.taskId,
+          transition: 'ready_to_save',
+          sealed_bytes: String(request.exactSize),
+        })
+      })
     }
 
     return Object.freeze({
@@ -694,12 +678,6 @@ class OPFSSessionHandle implements OutputSessionHandle {
       })
       return undefined
     }
-  }
-
-  #serializeTaskWrite<T>(write: () => Promise<T>): Promise<T> {
-    const result = this.#taskWriteTail.then(write)
-    this.#taskWriteTail = result.catch(() => undefined)
-    return result
   }
 
   #closeIO(): Promise<void> {

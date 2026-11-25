@@ -345,32 +345,12 @@ describe('OPFS object ownership and recovery', () => {
     expect(new Uint8Array(await f.downloads[0]!.blob.arrayBuffer())).toEqual(bytes)
   })
 
-  it('keeps committed single-file OPFS ready-to-save across late pause and concurrent discovery completion', async () => {
+  it('keeps committed single-file OPFS ready-to-save across a late pause settlement', async () => {
     const f = fixture(single)
     const session = await f.open()
     const file = await session.transferOutput.openFile(fileRequest, new AbortController().signal)
     await file.writeAt(0n, bytes)
-
-    const putTaskSpy = vi.spyOn(f.memory, 'putTask')
-    let atomicCommitStarted!: () => void
-    const commitStarted = new Promise<void>(resolve => { atomicCommitStarted = resolve })
-    let releaseAtomicCommit!: () => void
-    const atomicCommitGate = new Promise<void>(resolve => { releaseAtomicCommit = resolve })
-    const originalPutTaskAndFile = f.memory.putTaskAndFile.bind(f.memory)
-    vi.spyOn(f.memory, 'putTaskAndFile').mockImplementationOnce(async (task, row) => {
-      atomicCommitStarted()
-      await atomicCommitGate
-      await originalPutTaskAndFile(task, row)
-    })
-
-    const committing = file.commit([byteRange(0n, 4n)])
-    await commitStarted
-    const marking = session.transferOutput.markDiscoveryComplete?.()
-    releaseAtomicCommit()
-    await Promise.all([committing, marking])
-
-    // Concurrent markDiscoveryComplete must serialize after commit and skip redundant writes.
-    expect(putTaskSpy).not.toHaveBeenCalled()
+    await file.commit([byteRange(0n, 4n)])
     expect((await f.store.getTask(taskId))?.lifecycle.kind).toBe('ready-to-save')
 
     const settled = await session.settle({ ...completion, status: 'paused', pauseReason: 'user' })
@@ -381,29 +361,54 @@ describe('OPFS object ownership and recovery', () => {
     await saveRetainedOPFSTask(settled, f.store, f.env, f.windowPort)
     expect(f.downloads).toHaveLength(1)
     expect(new Uint8Array(await f.downloads[0]!.blob.arrayBuffer())).toEqual(bytes)
+  })
 
-    // Reverse race: markDiscoveryComplete starts first and stays in-flight while commit runs.
-    const f2 = fixture(single)
-    const session2 = await f2.open()
-    const file2 = await session2.transferOutput.openFile(fileRequest, new AbortController().signal)
-    await file2.writeAt(0n, bytes)
-    let discoveryStarted!: () => void
-    const discoveryRunning = new Promise<void>(resolve => { discoveryStarted = resolve })
-    let releaseDiscovery!: () => void
-    const discoveryGate = new Promise<void>(resolve => { releaseDiscovery = resolve })
-    const originalPutTask = f2.memory.putTask.bind(f2.memory)
-    vi.spyOn(f2.memory, 'putTask').mockImplementationOnce(async record => {
-      discoveryStarted()
-      await discoveryGate
-      await originalPutTask(record)
+  it('preserves durable completed counts when a resumed OPFS ZIP re-pauses mid-discovery', async () => {
+    const f = fixture(zip)
+    const run1 = await f.open()
+    const fileA = await run1.transferOutput.openFile(
+      { fileId: 'f-a', path: ['a.bin'], sourcePath: ['a.bin'], revision: 'r1', exactSize: 4n },
+      new AbortController().signal,
+    )
+    await fileA.writeAt(0n, bytes)
+    await fileA.commit([byteRange(0n, 4n)])
+    const fileB = await run1.transferOutput.openFile(
+      { fileId: 'f-b', path: ['b.bin'], sourcePath: ['b.bin'], revision: 'r2', exactSize: 8n },
+      new AbortController().signal,
+    )
+    await fileB.writeAt(0n, bytes.slice(0, 2))
+    await fileB.pause([byteRange(0n, 2n)])
+    const paused = await run1.settle({
+      ...completion,
+      status: 'paused',
+      pauseReason: 'user',
+      completedFiles: 1n,
+      completedBytes: 4n,
+      discoveredFiles: 2n,
+      discoveredBytes: 12n,
     })
-    const marking2 = session2.transferOutput.markDiscoveryComplete?.()
-    await discoveryRunning
-    const committing2 = file2.commit([byteRange(0n, 4n)])
-    releaseDiscovery()
-    await Promise.all([marking2, committing2])
-    await session2.close()
-    expect((await f2.store.getTask(taskId))?.lifecycle.kind).toBe('ready-to-save')
+    await run1.close()
+
+    const run2 = await reopenOPFSSession({ ...f, task: paused })
+    const repaused = await run2.settle({
+      ...completion,
+      status: 'paused',
+      pauseReason: 'interrupted',
+      completedFiles: 0n,
+      completedBytes: 0n,
+      discoveredFiles: 0n,
+      discoveredBytes: 0n,
+      discoveryComplete: false,
+    })
+    await run2.close()
+
+    expect(repaused.lifecycle).toMatchObject({
+      kind: 'paused',
+      reason: 'interrupted',
+      completedFiles: 1n,
+      completedBytes: 4n,
+      retainedBytes: 6n,
+    })
   })
 })
 
@@ -602,7 +607,7 @@ describe('OPFS cross-tab reopen and export authority', () => {
 
     const newerPaused = Object.freeze({
       ...olderPaused,
-      discoveryComplete: true,
+      sourceOmittedEntries: 3n,
       lifecycle: Object.freeze({ ...olderPaused.lifecycle, generation: olderPaused.lifecycle.generation + 2n }),
     })
     const joined = { descriptor: { shareInstanceId: 's' } } as unknown as JoinedBrowserShare
@@ -623,9 +628,9 @@ describe('OPFS cross-tab reopen and export authority', () => {
       return record
     })
     const reopened = await reopenRetainedTask(retainedEnv, taskId, () => joined)
-    expect(reopened.task.discoveryComplete).toBe(true)
+    expect(reopened.task.sourceOmittedEntries).toBe(3n)
     expect(reopened.task.lifecycle.generation).toBe(newerPaused.lifecycle.generation + 1n)
-    expect((await originalGetTask(taskId))?.discoveryComplete).toBe(true)
+    expect((await originalGetTask(taskId))?.sourceOmittedEntries).toBe(3n)
     await reopened.session.close()
     vi.mocked(f.memory.getTask).mockRestore()
 

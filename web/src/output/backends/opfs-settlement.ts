@@ -62,8 +62,7 @@ export function isPersistedCompletedRecord(
   return lifecycle === record.lifecycle &&
     current.sealedSize === target.sealedSize &&
     current.allocatedLength === target.allocatedLength &&
-    sourceOmittedEntries === record.sourceOmittedEntries &&
-    record.discoveryComplete
+    sourceOmittedEntries === record.sourceOmittedEntries
 }
 
 export function completedOPFSTaskRecord(
@@ -77,7 +76,6 @@ export function completedOPFSTaskRecord(
     ...record,
     target,
     lifecycle,
-    discoveryComplete: true,
     updatedAt,
   }
   if (sourceOmittedEntries === undefined) delete copy.sourceOmittedEntries
@@ -263,9 +261,6 @@ export function nextOPFSIncompleteLifecycle(
       completedFiles: input.storedCompletedFiles,
       completedBytes: input.storedCompletedBytes,
       retainedBytes: input.retainedBytes,
-      discoveredFiles: result.discoveredFiles,
-      discoveredBytes: result.discoveredBytes,
-      discoveryComplete: result.discoveryComplete,
       contentWarning: warning,
     })
   }

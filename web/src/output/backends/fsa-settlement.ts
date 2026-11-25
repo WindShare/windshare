@@ -45,9 +45,6 @@ export function nextFSALifecycle(
       completedFiles: stored.completedFiles,
       completedBytes: stored.completedBytes,
       retainedBytes: stored.retainedBytes,
-      discoveredFiles: result.discoveredFiles > stored.fileCount ? result.discoveredFiles : stored.fileCount,
-      discoveredBytes: result.discoveredBytes > stored.totalBytes ? result.discoveredBytes : stored.totalBytes,
-      discoveryComplete: result.discoveryComplete,
       contentWarning: warning,
     })
   }

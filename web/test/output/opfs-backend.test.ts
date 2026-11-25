@@ -729,7 +729,7 @@ describe('OPFS abandoned and failed output', () => {
     await session.close()
     const [task] = await loadRetainedTasks({ store, windowPort })
     expect(task?.lifecycle).toMatchObject({
-      kind: 'paused', reason: 'interrupted', completedFiles: 0n, discoveredFiles: 0n, retainedBytes: 0n,
+      kind: 'paused', reason: 'interrupted', completedFiles: 0n, retainedBytes: 0n,
     })
     expect(task?.canSavePartial).toBe(false)
   })

@@ -393,10 +393,9 @@ describe('transfer output settlement', () => {
     const catalog = { ...fixture.catalog, page: async (...args: Parameters<CatalogClient['page']>) => ({
       ...await fixture.catalog.page(...args), entries: [{ kind: 'directory', id: id(12), idText: 'child', name: 'Photos' }],
     }) } as unknown as CatalogClient
-    const markDiscoveryComplete = vi.fn()
     const job = new TransferJob({
       ...fixture, catalog, selection,
-      output: { sessionId: 'directory', capabilities: resumable, openFile: vi.fn(), markDiscoveryComplete,
+      output: { sessionId: 'directory', capabilities: resumable, openFile: vi.fn(),
         ensureDirectory: async () => { throw cause },
       },
     })
@@ -404,40 +403,6 @@ describe('transfer output settlement', () => {
       status: 'paused', pauseReason: 'permission-needed', discoveryComplete: false, failedDirectories: 0n,
     })
     expect(job.progress()).toMatchObject({ discovery: 'open', failedDirectories: 0 })
-    expect(markDiscoveryComplete).not.toHaveBeenCalled()
-  })
-
-  it.each(['quota', 'database', 'database-after-pause'] as const)('retires active workers when discovery persistence fails with %s', async mode => {
-    const waiting = gate()
-    const cause = mode === 'quota' ? new DOMException('No storage', 'QuotaExceededError') : new Error('Database unavailable')
-    const pause = vi.fn<TransferOutputFile['pause']>(async () => undefined)
-    const abort = vi.fn<TransferOutputFile['abort']>(async () => undefined)
-    const job = new TransferJob({
-      ...makeShareFixture([movie]), selection,
-      broker: { readRange: async function* (_desc, _lease, _span, options) {
-        yield { offset: 0n, data: new Uint8Array(4) }
-        waiting.resolve()
-        await waitForAbort(options!.signal!)
-      } },
-      output: { sessionId: 'catalog', capabilities: resumable, openFile: async () => outputFile({ pause, abort }),
-        markDiscoveryComplete: async () => {
-          await waiting.promise
-          if (mode === 'database-after-pause') job.pause()
-          throw cause
-        },
-      },
-    })
-    const result = await job.run()
-    expect(result).toMatchObject({ discoveryComplete: false, failedDirectories: 0n, error: cause })
-    if (mode === 'quota') {
-      expect(result).toMatchObject({ status: 'paused', pauseReason: 'storage-full' })
-      expect(pause).toHaveBeenCalledExactlyOnceWith([byteRange(0n, 4n)])
-      expect(job.progress().discovery).toBe('open')
-    } else {
-      expect(result.status).toBe('failed')
-      if (mode === 'database') expect(abort).toHaveBeenCalledOnce()
-      expect(job.progress().discovery).toBe('failed')
-    }
   })
 
   it('keeps unabsorbed write-policy SecurityError file-local instead of pausing the whole job for folder permission', async () => {

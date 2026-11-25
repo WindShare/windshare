@@ -231,7 +231,7 @@ export class TransferJob {
 
     try {
       await this.#runDiscoveryLoop(active, maxWorkers)
-      await this.#finalizeDiscovery()
+      this.#finalizeDiscovery()
     } catch (error) {
       this.#handleDiscoveryError(error)
     } finally {
@@ -314,21 +314,11 @@ export class TransferJob {
     this.#abortAllOrNothing()
   }
 
-  async #finalizeDiscovery(): Promise<void> {
+  #finalizeDiscovery(): void {
     if (!this.#abort.signal.aborted && !this.#discoveryFailed) {
-      try {
-        await this.#options.output.markDiscoveryComplete?.()
-      } catch (error) {
-        // A worker cannot repair a failed write of the session's discovery result.
-        if (!this.#handleOutputFailure(error)) this.#failJob(error)
-        if (this.#exit?.kind === 'failed') this.#tracker.observeDiscoverySettled('failed')
-        return
-      }
       this.#discoveryComplete = true
       this.#tracker.observeDiscoverySettled('complete')
-      return
-    }
-    if (this.#discoveryFailed) {
+    } else if (this.#discoveryFailed) {
       this.#tracker.observeDiscoverySettled('failed')
     }
   }

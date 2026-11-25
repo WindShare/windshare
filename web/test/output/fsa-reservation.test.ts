@@ -229,8 +229,7 @@ describe('FSA reservation claim lifecycle', () => {
     expect(retainsFSAReservationClaim(base)).toBe(true)
     expect(retainsFSAReservationClaim(transitionReceiveState(base, { kind: 'downloading' }))).toBe(true)
     expect(retainsFSAReservationClaim(transitionReceiveState(base, {
-      kind: 'paused', reason: 'user', completedFiles: 0n, completedBytes: 0n,
-      retainedBytes: 0n, discoveredFiles: 0n, discoveredBytes: 0n, discoveryComplete: false,
+      kind: 'paused', reason: 'user', completedFiles: 0n, completedBytes: 0n, retainedBytes: 0n,
     }))).toBe(true)
     expect(retainsFSAReservationClaim(transitionReceiveState(base, {
       kind: 'failed', reason: 'cancelled', cleanupPending: true,
@@ -418,8 +417,7 @@ describe('FSA reservation claim lifecycle', () => {
       artifact: { kind: 'directory-tree', name: 'Photos' },
       backend: 'fsa',
       lifecycle: transitionReceiveState(initialReceiveState('stale-task'), {
-        kind: 'paused', reason: 'user', completedFiles: 0n, completedBytes: 0n,
-        retainedBytes: 0n, discoveredFiles: 0n, discoveredBytes: 0n, discoveryComplete: false,
+        kind: 'paused', reason: 'user', completedFiles: 0n, completedBytes: 0n, retainedBytes: 0n,
       }),
       target: {
         kind: 'fsa',
@@ -429,7 +427,6 @@ describe('FSA reservation claim lifecycle', () => {
         singleFile: false,
         reservedAtMs: Date.now() - 10_000,
       },
-      discoveryComplete: false,
       updatedAt: Date.now() - 10_000,
     })
 

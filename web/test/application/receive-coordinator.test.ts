@@ -86,7 +86,6 @@ describe('receive admission and coordinator', () => {
     const pausedOpfs = transitionReceiveState(base, {
       kind: 'paused', reason: 'user',
       completedFiles: 2n, completedBytes: 20n, retainedBytes: 20n,
-      discoveredFiles: 5n, discoveredBytes: 50n, discoveryComplete: true,
     })
     expect(actionsForState(pausedOpfs, 'opfs', true)).toEqual(['continue', 'save-partial', 'discard'])
 
@@ -674,7 +673,6 @@ describe('single-file quick download planning and activation ownership', () => {
           backend: 'portable',
           lifecycle: transitionReceiveState(input.task.lifecycle, { kind: 'download-started', retained: false, fileName: fileB.name }),
           target: { kind: 'portable', fileName: fileB.name },
-          discoveryComplete: true,
           updatedAt: Date.now(),
         }),
         rollbackUnactivated: vi.fn(async () => undefined),
@@ -747,7 +745,6 @@ describe('single-file fresh download, errors, and local blob handoff', () => {
       }),
       target: { kind: 'opfs', objectName: 'opfs-ready.part', fileName: file.name, isZip: false, allocatedLength: 4n, sealedSize: 4n },
       display: { objectLabel: file.name, createdAtMilliseconds: 5_000 },
-      discoveryComplete: true,
       updatedAt: 5_000,
     }
     const pausedRecord: ReceiveTaskRecord = {
@@ -760,11 +757,9 @@ describe('single-file fresh download, errors, and local blob handoff', () => {
       lifecycle: transitionReceiveState(initialReceiveState('paused-task'), {
         kind: 'paused', reason: 'user',
         completedFiles: 0n, completedBytes: 0n, retainedBytes: 2n,
-        discoveredFiles: 1n, discoveredBytes: 4n, discoveryComplete: true,
       }),
       target: { kind: 'opfs', objectName: 'paused.part', fileName: file.name, isZip: false, allocatedLength: 4n },
       display: { objectLabel: file.name, createdAtMilliseconds: 9_000 },
-      discoveryComplete: true,
       updatedAt: 9_000,
     }
     await store.putTask(readyRecord)
@@ -982,7 +977,6 @@ describe('single-file fresh download, errors, and local blob handoff', () => {
       taskId,
       shareInstance: 'share-1',
       backend: 'portable',
-      discoveryComplete: true,
       target: { kind: 'portable', fileName: 'photo.png' },
       display: {
         objectLabel: 'photo.png',
@@ -1084,9 +1078,6 @@ describe('FSA discard permission fallback', () => {
       completedFiles: 0n,
       completedBytes: 0n,
       retainedBytes: 4n,
-      discoveredFiles: 1n,
-      discoveredBytes: 8n,
-      discoveryComplete: true,
     })
     const failedFsaLifecycle = transitionReceiveState(initialReceiveState('fsa-failed'), {
       kind: 'failed',
@@ -1105,9 +1096,6 @@ describe('FSA discard permission fallback', () => {
       completedFiles: 0n,
       completedBytes: 0n,
       retainedBytes: 4n,
-      discoveredFiles: 1n,
-      discoveredBytes: 8n,
-      discoveryComplete: true,
     })
 
     // Default actions prioritize discard only while FSA disk entries remain; clean failed tasks use forget directly.
@@ -1136,7 +1124,6 @@ describe('FSA discard permission fallback', () => {
         singleFile: false,
         reservedAtMs: 1_000,
       },
-      discoveryComplete: true,
       updatedAt: 2_000,
     }
     const opfsRecord: ReceiveTaskRecord = {
@@ -1148,7 +1135,6 @@ describe('FSA discard permission fallback', () => {
       backend: 'opfs',
       lifecycle: pausedOpfsLifecycle,
       target: { kind: 'opfs', objectName: 'opfs-paused.part', fileName: 'Album.zip', isZip: true, allocatedLength: 8n },
-      discoveryComplete: true,
       updatedAt: 1_000,
     }
     await store.putTask(fsaRecord)
@@ -1263,7 +1249,6 @@ describe('FSA discard permission fallback', () => {
         singleFile: false,
         reservedAtMs: 1_000,
       },
-      discoveryComplete: true,
       updatedAt: 2_000,
     })
     await store.putFile({

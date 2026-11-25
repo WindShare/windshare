@@ -43,9 +43,6 @@ describe('receive lifecycle state model', () => {
       completedFiles: 1n,
       completedBytes: 512n,
       retainedBytes: 512n,
-      discoveredFiles: 2n,
-      discoveredBytes: 1_024n,
-      discoveryComplete: true,
     }, t0 + 3_100)
     expect(isResumableReceiveState(paused)).toBe(true)
     expect(isActiveReceiveState(paused)).toBe(false)

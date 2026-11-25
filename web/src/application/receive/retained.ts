@@ -394,15 +394,13 @@ async function normalizeAbandonedTask(
 async function readCheckpointCounts(record: ReceiveTaskRecord, store: ReceiveStore) {
   const files = await store.listTaskFiles(record.taskId)
   const {
-    fileCount: discoveredFiles,
-    totalBytes: discoveredBytes,
     completedFiles,
     completedBytes,
     retainedBytes,
   } = summarizeStoredTaskFiles(files)
   return {
     files,
-    counts: { completedFiles, completedBytes, retainedBytes, discoveredFiles, discoveredBytes, discoveryComplete: record.discoveryComplete },
+    counts: { completedFiles, completedBytes, retainedBytes },
   }
 }
 

@@ -384,8 +384,6 @@ export async function restoreReopenedTaskRecord(
   store: Pick<ReceiveStore, 'listTaskFiles' | 'putTask'>,
 ): Promise<ReceiveTaskRecord> {
   const {
-    fileCount: discoveredFiles,
-    totalBytes: discoveredBytes,
     completedFiles,
     completedBytes,
     retainedBytes,
@@ -398,9 +396,6 @@ export async function restoreReopenedTaskRecord(
         completedFiles,
         completedBytes,
         retainedBytes,
-        discoveredFiles,
-        discoveredBytes,
-        discoveryComplete: prior.discoveryComplete,
       })
   const restored: ReceiveTaskRecord = Object.freeze({ ...prior, lifecycle })
   await store.putTask(restored)

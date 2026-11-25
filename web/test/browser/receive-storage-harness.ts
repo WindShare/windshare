@@ -32,7 +32,6 @@ export async function verifyUnifiedStore(databaseName: string) {
       backend: 'opfs',
       lifecycle: initialReceiveState(taskId),
       target: { kind: 'opfs', objectName: `${taskId}.part`, fileName: 'hello.txt', isZip: false, allocatedLength: 0n },
-      discoveryComplete: false,
       updatedAt: Date.now(),
     })
     await store.putFile({

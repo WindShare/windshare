@@ -111,8 +111,8 @@ function pausedTask(f: ReturnType<typeof fixture>) {
       },
     },
     lifecycle: transitionReceiveState(initialReceiveState('resuming'), { kind: 'paused', reason: 'user',
-      completedFiles: 0n, completedBytes: 0n, retainedBytes: 0n, discoveredFiles: 1n, discoveredBytes: 8n, discoveryComplete: false }),
-    discoveryComplete: false, updatedAt: 0,
+      completedFiles: 0n, completedBytes: 0n, retainedBytes: 0n }),
+    updatedAt: 0,
   }
 }
 
