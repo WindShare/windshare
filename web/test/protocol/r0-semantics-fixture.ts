@@ -1,13 +1,5 @@
 import { loadVectorFile, type VectorCase } from '../vectors'
 
-export interface ConnectionSizeCase {
-  readonly files: string
-  readonly bytes: string
-  readonly terminal: boolean
-  readonly failed: boolean
-  readonly class: string
-}
-
 export interface CheckpointCut {
   readonly cut: string
   readonly newGenerationSelectable: boolean
@@ -15,12 +7,9 @@ export interface CheckpointCut {
 
 export interface SemanticsVector extends VectorCase {
   readonly values?: Readonly<Record<string, string>>
-  readonly cases?: readonly ConnectionSizeCase[] | readonly CheckpointCut[]
+  readonly cases?: readonly CheckpointCut[]
   readonly cuts?: readonly CheckpointCut[]
   readonly order?: readonly string[]
-  readonly publishOnlyAfter?: readonly string[]
-  readonly preCommitCrashVisible?: boolean
-  readonly explicitStopUsesCrashGrace?: boolean
 }
 
 export type ReceiveLifecycleTerminalStateName =
@@ -62,16 +51,6 @@ export const semantics = [
   ...loadVectorFile(new URL('../../../core/testvectors/v2-semantics.json', import.meta.url)).cases,
   ...loadVectorFile(new URL('../fixtures/output/semantics.json', import.meta.url)).cases,
 ] as SemanticsVector[]
-
-export function classifyConnectionSize(value: ConnectionSizeCase): string {
-  if (BigInt(value.files) >= 30n || BigInt(value.bytes) >= 8n << 20n) {
-    return 'large'
-  }
-  if (!value.terminal || value.failed) {
-    return 'unknown'
-  }
-  return 'small'
-}
 
 const RECEIVE_TERMINAL_STATES = new Set<string>([
   'published',

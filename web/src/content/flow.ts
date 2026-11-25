@@ -17,7 +17,6 @@ export const FRAGMENT_HEADER_BYTES = 44
 export const FRAGMENT_PAYLOAD_BYTES = 65_448
 export const MAXIMUM_FRAGMENTS = 128
 export const FRAGMENT_INACTIVITY_TIMEOUT_MILLISECONDS = 15_000
-export const FRAGMENT_TOMBSTONE_MILLISECONDS = 30_000
 export const LEASE_TTL_MILLISECONDS = 120_000
 export const LEASE_RENEW_AFTER_MILLISECONDS = 60_000
 export const REVISION_RETRY_MINIMUM_MILLISECONDS = 1
@@ -47,7 +46,7 @@ export interface RevisionFailure {
 }
 
 export type FragmentAssemblyResult =
-  | Readonly<{ status: 'duplicate' | 'tombstoned' }>
+  | Readonly<{ status: 'duplicate' }>
   | Readonly<{ status: 'accepted'; receivedBytes: number }>
   | Readonly<{ status: 'complete'; receivedBytes: number; object: Uint8Array<ArrayBuffer> }>
 
@@ -58,6 +57,9 @@ export class FragmentInactivityError extends Error {
   }
 }
 
+// Owns in-flight reassembly for one active block operation. Cross-operation
+// late-fragment suppression belongs solely to OperationRouter, so the assembler
+// retains no post-cancel tombstones.
 export class FragmentAssembler {
   readonly #operationId: bigint
   readonly #now: () => number
@@ -68,10 +70,10 @@ export class FragmentAssembler {
   #received = 0
   #receivedFragments = 0
   #lastProgressAt = 0
-  #cancelledAt: number | undefined
+  #cancelled = false
 
   // Use monotonic time so OS sleep or NTP calendar adjustments cannot falsely
-  // trigger fragment reassembly inactivity timeouts or tombstone expiry.
+  // trigger fragment reassembly inactivity timeouts.
   constructor(operationId: bigint, now: () => number = () => performance.now()) {
     if (typeof operationId !== 'bigint' || operationId < 1n || operationId > 0xffff_ffff_ffff_ffffn) {
       throw new CborError('fragment operation ID must be a nonzero uint64')
@@ -81,13 +83,10 @@ export class FragmentAssembler {
   }
 
   async accept(plaintext: Uint8Array): Promise<FragmentAssemblyResult> {
-    const now = this.#now()
-    if (this.#cancelledAt !== undefined) {
-      if (now - this.#cancelledAt <= FRAGMENT_TOMBSTONE_MILLISECONDS) {
-        return Object.freeze({ status: 'tombstoned' })
-      }
-      throw new CborError('Fragment arrived after its cancellation tombstone expired')
+    if (this.#cancelled) {
+      throw new Error('Block fragment assembler is cancelled')
     }
+    const now = this.#now()
     const fragment = decodeFragment(plaintext)
     if (fragment.operationId !== this.#operationId) {
       throw new CborError('Fragment belongs to another operation')
@@ -128,7 +127,7 @@ export class FragmentAssembler {
   }
 
   cancel(): void {
-    this.#cancelledAt ??= this.#now()
+    this.#cancelled = true
     this.#fragments = []
     this.#received = 0
     this.#receivedFragments = 0

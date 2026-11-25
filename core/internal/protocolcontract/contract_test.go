@@ -17,12 +17,22 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/fxamacker/cbor/v2"
+
+	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/content/records"
+	"github.com/windshare/windshare/core/framechannel"
+	"github.com/windshare/windshare/core/session/contentflow"
+	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
-// This package is deliberately test-only. R0 needs one executable source for
-// normative bytes without exposing a provisional production codec before R1.
+// This package is deliberately test-only. It generates cross-runtime wire
+// protocol vectors and binds shared protocol limits directly to core
+// production constants so runtime-local budgets stay out of shared vectors and
+// wire-level changes cannot silently drift.
 var update = flag.Bool("update", false, "regenerate R0 v2 contract vectors")
 
 const (
@@ -34,71 +44,36 @@ const (
 	senderObjectWireVersion             = 3
 	suite                               = 2
 	chunkSize                           = 1 << 20
-	minChunkSize                        = 1 << 10
-	maxChunkSize                        = 4 << 20
-	maxFrameBytes                       = 64 << 10
-	maxOperationPlaintext               = 65492
-	maxFragmentPayload                  = 65448
-	maxBlockRecordBytes                 = 4194816
-	maxCatalogPageBytes                 = 60 << 10
-	maxCatalogPageEntries               = 256
-	maxDirectoryEntries                 = 1 << 20
-	maxSelectedRoots                    = 4096
-	maxSelectedRootNameBytes            = 1 << 20
-	maxDescriptorBytes                  = 16 << 10
-	maxFileBytes                 uint64 = 1<<53 - 1
-	leaseTTLSeconds                     = 120
-	leaseRenewWindowSeconds             = 60
-	leaseMaximumSeconds                 = 2 * 60 * 60
-	revisionGraceSeconds                = 120
-	fragmentTimeoutSeconds              = 15
-	fragmentTombstoneSeconds            = 30
-	maxOpenBatch                        = 64
-	maxInitialRangesPerFile             = 256
-	maxInitialRangesPerOpen             = 1024
-	maxBlockRequestIndices              = 256
-	scanConcurrencySession              = 4
-	scanConcurrencyShare                = 16
-	scanConcurrencyProcess              = 64
-	scanWorkSession                     = 1 << 20
-	scanWorkShare                       = 4 << 20
-	scanWorkProcess                     = 16 << 20
-	committedEntriesShare               = 4 << 20
-	committedEntriesProcess             = 16 << 20
-	catalogMemorySession                = 16 << 20
-	catalogMemoryShare                  = 64 << 20
-	catalogMemoryProcess                = 512 << 20
-	catalogSpillShare            uint64 = 2 << 30
-	catalogSpillProcess          uint64 = 16 << 30
-	activeLeasesSession                 = 32
-	activeLeasesShare                   = 256
-	activeLeasesProcess                 = 1024
-	activeLanesSession                  = 16
-	activeLanesShare                    = 256
-	activeLanesProcess                  = 1024
-	sealedCacheShare                    = 256 << 20
-	sealedCacheProcess           uint64 = 2 << 30
-	receiverCacheSession                = 128 << 20
-	receiverCacheProcess                = 1 << 30
-	reassemblySession                   = 64 << 20
-	reassemblyShare                     = 256 << 20
-	reassemblyProcess                   = 1 << 30
-	reassemblyRecordsSession            = 16
-	reassemblyRecordsShare              = 64
-	reassemblyRecordsProcess            = 256
-	controlQueueFrames                  = 256
-	controlQueueBytes                   = 4 << 20
-	dataQueueFrames                     = 1024
-	dataQueueBytes                      = 64 << 20
-	maxDataFairnessBurst                = 8
+	minChunkSize                        = catalog.MinChunkSize
+	maxChunkSize                        = catalog.MaxChunkSize
+	maxFrameBytes                       = framechannel.MaxFrameSize
+	maxOperationPlaintext               = protocolsession.MaxEnvelopePlaintextBytes
+	maxFragmentPayload                  = contentflow.MaxFragmentPayloadBytes
+	maxBlockRecordBytes                 = records.MaxBlockRecordObjectBytes
+	maxCatalogPageBytes                 = catalog.MaxCatalogPayloadBytes
+	maxCatalogPageEntries               = catalog.MaxCatalogPageEntries
+	maxDirectoryEntries                 = catalog.MaxDirectoryEntries
+	maxSelectedRoots                    = catalog.MaxSelectedRoots
+	maxSelectedRootNameBytes            = catalog.MaxSelectedRootNamesBytes
+	maxDescriptorBytes                  = catalog.MaxDescriptorObjectBytes
+	maxFileBytes                 uint64 = catalog.MaxFileSize
+	leaseTTLSeconds                     = int(content.LeaseTTL / time.Second)
+	leaseRenewWindowSeconds             = int(content.LeaseRenewWindow / time.Second)
+	leaseMaximumSeconds                 = int(content.MaxLeaseLifetime / time.Second)
+	revisionGraceSeconds                = int(content.RevisionResumeGrace / time.Second)
+	fragmentTimeoutSeconds              = int(contentflow.FragmentInactivityTimeout / time.Second)
+	maxOpenBatch                        = content.MaxOpenRevisionBatch
+	maxInitialRangesPerFile             = content.MaxInitialRangesPerFile
+	maxInitialRangesPerOpen             = content.MaxInitialRangesPerRequest
+	maxBlockRequestIndices              = content.MaxRequestedBlockIndices
+	logicalLanesSession                 = protocolsession.DefaultMaxLogicalLanes
 	senderCrashGraceSeconds             = 60
 	relayChallengeSeconds               = 30
 	joinStartingSeconds                 = 5
-	clientHelloReplaySeconds            = 300
-	operationReplayWindow               = 65536
-	applicationRelaySeconds             = 8
+	clientHelloReplaySeconds            = int(protocolsession.ClientHelloReplayTTL / time.Second)
+	operationReplayWindow               = protocolsession.OperationReplayWindow
 	relaySessionTombstoneSeconds        = 60
-	maxOpaqueCiphertextBytes            = 64 << 10
+	maxOpaqueCiphertextBytes            = framechannel.MaxFrameSize
 	sessionCodeSenderStopped            = 0x1008
 	v2RelayWebSocketPath                = "/v2/ws"
 
@@ -271,7 +246,7 @@ func buildVectorFiles(t *testing.T) []vectorFile {
 		{Version: 1, Kind: "v2-session-controls", Description: "Authenticated reachability session control messages with envelope authentication.", Cases: sessionControlCases(t, f)},
 		{Version: 1, Kind: "v2-fragment", Description: "Authenticated BLOCK_FRAGMENT fixed layout and allocation limits.", Cases: fragmentCases(f, block)},
 		{Version: 1, Kind: "name-collision-v1", Description: "Deterministic collision names preserve extensions when a complete stem scalar fits; otherwise the full name is shortened on UTF-8 scalar boundaries.", Cases: buildNameCollisionVectorCases(t)},
-		{Version: 1, Kind: "v2-semantics", Description: "R0 resource, operation-final, selection/timing, ZIP member, lifecycle and crash-commit state contracts.", Cases: semanticCases(t)},
+		{Version: 1, Kind: "v2-semantics", Description: "Cross-runtime wire protocol limits, error domains, relay route lifecycle, and session operation/sequence contracts.", Cases: semanticCases(t)},
 	}
 }
 
@@ -780,8 +755,8 @@ func singleFragmentCase(f *fixture, block []byte) any {
 		"payloadLength": fmt.Sprint(len(block)), "fragmentPlaintextB64": b64(fragment),
 		"maxFrameBytes": maxFrameBytes, "maxOperationPlaintextBytes": maxOperationPlaintext,
 		"maxFragmentPayloadBytes": maxFragmentPayload, "maxBlockRecordBytes": maxBlockRecordBytes,
-		"fragmentTimeoutSeconds": fragmentTimeoutSeconds, "tombstoneSeconds": fragmentTombstoneSeconds,
-		"mutationsRejected": []string{"operation-id", "record-id", "index", "count", "total-length", "payload-length", "last-flag", "conflicting-duplicate"},
+		"fragmentTimeoutSeconds": fragmentTimeoutSeconds,
+		"mutationsRejected":      []string{"operation-id", "record-id", "index", "count", "total-length", "payload-length", "last-flag", "conflicting-duplicate"},
 	}
 }
 

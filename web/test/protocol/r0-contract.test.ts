@@ -6,8 +6,30 @@ import {
 
 import { decode, encode, rfc8949EncodeOptions } from 'cborg'
 import { describe, expect, it } from 'vitest'
-import { EnvelopeOpener } from '../../src/session/envelope'
+import {
+  CATALOG_DIRECTORY_ENTRIES,
+  CATALOG_PAGE_ENTRIES,
+  MAX_CATALOG_PAYLOAD_BYTES,
+  MAXIMUM_CHUNK_BYTES,
+  MINIMUM_CHUNK_BYTES,
+} from '../../src/catalog/records'
+import {
+  FRAGMENT_INACTIVITY_TIMEOUT_MILLISECONDS,
+  FRAGMENT_PAYLOAD_BYTES,
+  LEASE_RENEW_AFTER_MILLISECONDS,
+  LEASE_TTL_MILLISECONDS,
+  MAXIMUM_OPEN_BATCH,
+  MAXIMUM_REQUESTED_BLOCKS,
+} from '../../src/content/flow'
+import { MAX_FRAME_BYTES } from '../../src/contracts/channel'
+import { DESCRIPTOR_OBJECT_BYTES } from '../../src/crypto/sender-object'
+import { ENVELOPE_MAXIMUM_BYTES, EnvelopeOpener } from '../../src/session/envelope'
 import { canonicalRelayEndpoint } from '../../src/transport/relay/endpoint'
+import {
+  RELAY_ERROR,
+  RELAY_MAX_DESCRIPTOR_BYTES,
+  RELAY_MAX_OPAQUE_CIPHERTEXT_BYTES,
+} from '../../src/transport/relay/protocol'
 
 import { loadVectorFile, type VectorCase } from '../vectors'
 import {
@@ -193,7 +215,6 @@ interface FragmentVector extends VectorCase {
   readonly maxFragmentPayloadBytes: number
   readonly maxBlockRecordBytes: number
   readonly fragmentTimeoutSeconds: number
-  readonly tombstoneSeconds: number
   readonly mutationsRejected: readonly string[]
 }
 
@@ -667,9 +688,11 @@ describe('R0 resource and state-machine contract', () => {
     expect(fragment.maxFragmentPayloadBytes + FRAGMENT_HEADER_BYTES).toBe(
       fragment.maxOperationPlaintextBytes,
     )
-    expect(fragment.maxBlockRecordBytes).toBe(4 * 1024 * 1024 + 512)
-    expect(fragment.fragmentTimeoutSeconds).toBe(15)
-    expect(fragment.tombstoneSeconds).toBe(30)
+    expect(fragment.maxFrameBytes).toBe(MAX_FRAME_BYTES)
+    expect(fragment.maxFrameBytes).toBe(ENVELOPE_MAXIMUM_BYTES)
+    expect(fragment.maxFragmentPayloadBytes).toBe(FRAGMENT_PAYLOAD_BYTES)
+    expect(fragment.maxBlockRecordBytes).toBe(MAXIMUM_CHUNK_BYTES + 512)
+    expect(fragment.fragmentTimeoutSeconds).toBe(FRAGMENT_INACTIVITY_TIMEOUT_MILLISECONDS / 1_000)
     expect(
       validSingleFragment(
         encoded,
@@ -759,72 +782,35 @@ describe('R0 resource and state-machine contract', () => {
     )
 
     const limits = semantics.find((value) => value.name === 'frozen-limits')?.values
+    expect(DESCRIPTOR_OBJECT_BYTES).toBe(RELAY_MAX_DESCRIPTOR_BYTES)
     expect(limits).toEqual({
-      activeLanesProcess: '1024',
-      activeLanesSession: '16',
-      activeLanesShare: '256',
-      activeLeasesProcess: '1024',
-      activeLeasesSession: '32',
-      activeLeasesShare: '256',
-      applicationRelaySeconds: '8',
-      catalogMemoryProcess: '536870912',
-      catalogMemorySession: '16777216',
-      catalogMemoryShare: '67108864',
-      catalogSpillProcess: '17179869184',
-      catalogSpillShare: '2147483648',
       clientHelloReplaySeconds: '300',
-      committedEntriesProcess: '16777216',
-      committedEntriesShare: '4194304',
-      controlQueueBytes: '4194304',
-      controlQueueFrames: '256',
-      dataQueueBytes: '67108864',
-      dataQueueFrames: '1024',
       joinStartingSeconds: '5',
       leaseMaximumSeconds: '7200',
-      leaseRenewWindowSeconds: '60',
-      leaseTTLSeconds: '120',
+      leaseRenewWindowSeconds: String(LEASE_RENEW_AFTER_MILLISECONDS / 1_000),
+      leaseTTLSeconds: String(LEASE_TTL_MILLISECONDS / 1_000),
       logicalLanesSession: '16',
-      maxBlockRequestIndices: '256',
-      maxCatalogPageBytes: '61440',
-      maxCatalogPageEntries: '256',
-      maxChunkBytes: '4194304',
-      maxDataFairnessBurst: '8',
-      maxDescriptorBytes: '16384',
-      maxDirectoryEntries: '1048576',
-      maxFileBytes: '9007199254740991',
-      maxFrameBytes: '65536',
+      maxBlockRequestIndices: String(MAXIMUM_REQUESTED_BLOCKS),
+      maxCatalogPageBytes: String(MAX_CATALOG_PAYLOAD_BYTES),
+      maxCatalogPageEntries: String(CATALOG_PAGE_ENTRIES),
+      maxChunkBytes: String(MAXIMUM_CHUNK_BYTES),
+      maxDescriptorBytes: String(DESCRIPTOR_OBJECT_BYTES),
+      maxDirectoryEntries: String(CATALOG_DIRECTORY_ENTRIES),
+      maxFileBytes: String(Number.MAX_SAFE_INTEGER),
+      maxFrameBytes: String(MAX_FRAME_BYTES),
       maxInitialRangesPerFile: '256',
       maxInitialRangesPerOpen: '1024',
-      maxOpaqueCiphertextBytes: '65536',
-      maxOpenBatch: '64',
+      maxOpaqueCiphertextBytes: String(RELAY_MAX_OPAQUE_CIPHERTEXT_BYTES),
+      maxOpenBatch: String(MAXIMUM_OPEN_BATCH),
       maxSelectedRootNameBytes: '1048576',
       maxSelectedRoots: '4096',
-      minChunkBytes: '1024',
+      minChunkBytes: String(MINIMUM_CHUNK_BYTES),
       operationReplayWindow: '65536',
-      reassemblyOperation: '4194816',
-      reassemblyProcess: '1073741824',
-      reassemblyRecordsProcess: '256',
-      reassemblyRecordsSession: '16',
-      reassemblyRecordsShare: '64',
-      reassemblySession: '67108864',
-      reassemblyShare: '268435456',
-      receiverCacheProcess: '1073741824',
-      receiverCacheSession: '134217728',
+      reassemblyOperation: String(MAXIMUM_CHUNK_BYTES + 512),
       relayChallengeSeconds: '30',
       relaySessionTombstoneSeconds: '60',
       revisionGraceSeconds: '120',
-      scanConcurrencyProcess: '64',
-      scanConcurrencySession: '4',
-      scanConcurrencyShare: '16',
-      scanWorkProcess: '16777216',
-      scanWorkSession: '1048576',
-      scanWorkShare: '4194304',
-      sealedCacheProcess: '2147483648',
-      sealedCacheShare: '268435456',
       senderCrashGraceSeconds: '60',
-      stableHandlesProcess: '1024',
-      stableHandlesSession: '32',
-      stableHandlesShare: '256',
     })
 
     const errorDomains = semantics.find((value) => value.name === 'error-domains') as
@@ -888,20 +874,20 @@ describe('R0 resource and state-machine contract', () => {
     expect(semantics.find((value) => value.name === 'relay-registration-errors')).toEqual({
       name: 'relay-registration-errors',
       codes: {
-        malformed: 1,
-        'unsupported-mode': 2,
-        'share-id-collision': 3,
-        'already-registered': 4,
-        'challenge-expired': 5,
-        'invalid-proof': 6,
-        'descriptor-invalid': 7,
-        'not-found': 8,
-        starting: 9,
-        admission: 10,
-        stopped: 11,
-        'resume-stale': 12,
-        'access-denied': 13,
-        'access-unavailable': 14,
+        malformed: RELAY_ERROR.malformed,
+        'unsupported-mode': RELAY_ERROR.unsupportedMode,
+        'share-id-collision': RELAY_ERROR.shareIdCollision,
+        'already-registered': RELAY_ERROR.alreadyRegistered,
+        'challenge-expired': RELAY_ERROR.challengeExpired,
+        'invalid-proof': RELAY_ERROR.invalidProof,
+        'descriptor-invalid': RELAY_ERROR.descriptorInvalid,
+        'not-found': RELAY_ERROR.notFound,
+        starting: RELAY_ERROR.starting,
+        admission: RELAY_ERROR.admission,
+        stopped: RELAY_ERROR.stopped,
+        'resume-stale': RELAY_ERROR.resumeStale,
+        'access-denied': RELAY_ERROR.accessDenied,
+        'access-unavailable': RELAY_ERROR.accessUnavailable,
       },
     })
   })

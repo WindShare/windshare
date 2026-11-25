@@ -142,6 +142,19 @@ describe('v2 fragment inactivity accounting', () => {
       vi.useRealTimers()
     }
   })
+
+  it('rejects fragments after cancel instead of keeping a post-cancel tombstone', async () => {
+    const operationId = 14n
+    const fragments = fragmentRecord(
+      operationId,
+      new Uint8Array(FRAGMENT_PAYLOAD_BYTES + 1).fill(0x34),
+    )
+    const assembler = new FragmentAssembler(operationId, () => 0)
+
+    await expect(assembler.accept(fragments[0]!)).resolves.toMatchObject({ status: 'accepted' })
+    assembler.cancel()
+    await expect(assembler.accept(fragments[1]!)).rejects.toThrow(/cancelled/i)
+  })
 })
 
 afterEach(() => vi.useRealTimers())

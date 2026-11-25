@@ -1,30 +1,12 @@
 {
   "version": 1,
   "kind": "v2-semantics",
-  "description": "R0 resource, operation-final, selection/timing, ZIP member, lifecycle and crash-commit state contracts.",
+  "description": "Cross-runtime wire protocol limits, error domains, relay route lifecycle, and session operation/sequence contracts.",
   "cases": [
     {
       "name": "frozen-limits",
       "values": {
-        "activeLanesProcess": "1024",
-        "activeLanesSession": "16",
-        "activeLanesShare": "256",
-        "activeLeasesProcess": "1024",
-        "activeLeasesSession": "32",
-        "activeLeasesShare": "256",
-        "applicationRelaySeconds": "8",
-        "catalogMemoryProcess": "536870912",
-        "catalogMemorySession": "16777216",
-        "catalogMemoryShare": "67108864",
-        "catalogSpillProcess": "17179869184",
-        "catalogSpillShare": "2147483648",
         "clientHelloReplaySeconds": "300",
-        "committedEntriesProcess": "16777216",
-        "committedEntriesShare": "4194304",
-        "controlQueueBytes": "4194304",
-        "controlQueueFrames": "256",
-        "dataQueueBytes": "67108864",
-        "dataQueueFrames": "1024",
         "joinStartingSeconds": "5",
         "leaseMaximumSeconds": "7200",
         "leaseRenewWindowSeconds": "60",
@@ -34,7 +16,6 @@
         "maxCatalogPageBytes": "61440",
         "maxCatalogPageEntries": "256",
         "maxChunkBytes": "4194304",
-        "maxDataFairnessBurst": "8",
         "maxDescriptorBytes": "16384",
         "maxDirectoryEntries": "1048576",
         "maxFileBytes": "9007199254740991",
@@ -48,29 +29,10 @@
         "minChunkBytes": "1024",
         "operationReplayWindow": "65536",
         "reassemblyOperation": "4194816",
-        "reassemblyProcess": "1073741824",
-        "reassemblyRecordsProcess": "256",
-        "reassemblyRecordsSession": "16",
-        "reassemblyRecordsShare": "64",
-        "reassemblySession": "67108864",
-        "reassemblyShare": "268435456",
-        "receiverCacheProcess": "1073741824",
-        "receiverCacheSession": "134217728",
         "relayChallengeSeconds": "30",
         "relaySessionTombstoneSeconds": "60",
         "revisionGraceSeconds": "120",
-        "scanConcurrencyProcess": "64",
-        "scanConcurrencySession": "4",
-        "scanConcurrencyShare": "16",
-        "scanWorkProcess": "16777216",
-        "scanWorkSession": "1048576",
-        "scanWorkShare": "4194304",
-        "sealedCacheProcess": "2147483648",
-        "sealedCacheShare": "268435456",
-        "senderCrashGraceSeconds": "60",
-        "stableHandlesProcess": "1024",
-        "stableHandlesSession": "32",
-        "stableHandlesShare": "256"
+        "senderCrashGraceSeconds": "60"
       }
     },
     {
@@ -210,109 +172,6 @@
       ]
     },
     {
-      "byteLimitExclusive": "8388608",
-      "cases": [
-        {
-          "bytes": "8388607",
-          "class": "small",
-          "failed": false,
-          "files": "29",
-          "terminal": true
-        },
-        {
-          "bytes": "0",
-          "class": "large",
-          "failed": false,
-          "files": "30",
-          "terminal": true
-        },
-        {
-          "bytes": "8388608",
-          "class": "large",
-          "failed": false,
-          "files": "1",
-          "terminal": true
-        },
-        {
-          "bytes": "0",
-          "class": "large",
-          "failed": false,
-          "files": "30",
-          "terminal": false
-        },
-        {
-          "bytes": "8388608",
-          "class": "large",
-          "failed": true,
-          "files": "1",
-          "terminal": true
-        },
-        {
-          "bytes": "0",
-          "class": "unknown",
-          "failed": false,
-          "files": "0",
-          "terminal": false
-        },
-        {
-          "bytes": "0",
-          "class": "unknown",
-          "failed": true,
-          "files": "0",
-          "terminal": true
-        },
-        {
-          "bytes": "0",
-          "class": "small",
-          "failed": false,
-          "files": "0",
-          "terminal": true
-        }
-      ],
-      "fileLimitExclusive": "30",
-      "name": "connection-size-classification"
-    },
-    {
-      "allowedTransitions": [
-        "unknown-\u003enone",
-        "unknown-\u003esingle-file",
-        "unknown-\u003etree"
-      ],
-      "finalProofImmutable": true,
-      "name": "artifact-shape-proof",
-      "noneRequires": [
-        "complete-negative-evidence"
-      ],
-      "proofs": [
-        {
-          "byte": 1,
-          "proof": "unknown"
-        },
-        {
-          "byte": 2,
-          "proof": "none"
-        },
-        {
-          "byte": 3,
-          "proof": "single-file"
-        },
-        {
-          "byte": 4,
-          "proof": "tree"
-        }
-      ],
-      "singleFileRequires": [
-        "one-authenticated-file",
-        "frozen-rule-exclusion",
-        "empty-unsettled-targets"
-      ],
-      "treeForcingFacts": [
-        "authenticated-selected-directory",
-        "explicit-empty-directory",
-        "second-authenticated-file"
-      ]
-    },
-    {
       "name": "operation-final-matrix",
       "operations": [
         {
@@ -411,110 +270,6 @@
         7
       ],
       "name": "lane-epoch-acceptance"
-    },
-    {
-      "name": "catalog-transaction",
-      "preCommitCrashVisible": false,
-      "publishOnlyAfter": [
-        "pages",
-        "node-records",
-        "terminal",
-        "budget-charge",
-        "spill-flush",
-        "atomic-commit"
-      ]
-    },
-    {
-      "name": "stable-source-platforms",
-      "platforms": [
-        {
-          "mechanism": "deny-share-write-handle+volume-file-id",
-          "platform": "windows-local-ntfs-refs",
-          "supported": true
-        },
-        {
-          "mechanism": "device+inode+size+mtime-ns+ctime-ns",
-          "platform": "linux-local-regular",
-          "supported": true
-        },
-        {
-          "mechanism": "device+inode+size+mtime-ns+ctime-ns",
-          "platform": "darwin-local-regular",
-          "supported": true
-        },
-        {
-          "mechanism": "unsupported-stability",
-          "platform": "other-network-pseudo",
-          "supported": false
-        }
-      ]
-    },
-    {
-      "crashGraceSeconds": "60",
-      "explicitStopEffects": [
-        "reject-join",
-        "signed-session-terminal",
-        "cancel-scan-revision-lanes",
-        "cancel-uncommitted-upload",
-        "challenged-signed-stop",
-        "cleanup-staging"
-      ],
-      "explicitStopUsesCrashGrace": false,
-      "name": "offline-lifecycle",
-      "states": [
-        "preparing",
-        "live-only",
-        "offline-uploading",
-        "offline-committed",
-        "stopping",
-        "stopped"
-      ],
-      "transitions": [
-        {
-          "event": "registered",
-          "from": "preparing",
-          "to": "live-only"
-        },
-        {
-          "event": "stop",
-          "from": "preparing",
-          "to": "stopping"
-        },
-        {
-          "event": "begin-offline",
-          "from": "live-only",
-          "to": "offline-uploading"
-        },
-        {
-          "event": "stop",
-          "from": "live-only",
-          "to": "stopping"
-        },
-        {
-          "event": "commit-ack",
-          "from": "offline-uploading",
-          "to": "offline-committed"
-        },
-        {
-          "event": "stop",
-          "from": "offline-uploading",
-          "to": "stopping"
-        },
-        {
-          "event": "cleanup-complete",
-          "from": "stopping",
-          "to": "stopped"
-        },
-        {
-          "event": "sender-exit",
-          "from": "offline-committed",
-          "to": "offline-committed"
-        }
-      ],
-      "unexpectedDisconnectStates": [
-        "live-only",
-        "offline-uploading"
-      ]
     }
   ]
 }

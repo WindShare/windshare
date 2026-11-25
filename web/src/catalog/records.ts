@@ -92,7 +92,7 @@ export interface CatalogPage {
   readonly entries: readonly CatalogEntry[]
   readonly omittedCount: bigint
   readonly objectCommitment: Uint8Array<ArrayBuffer>
-  /** Exact canonical payload bytes charged to catalog spill. */
+  /** Exact canonical payload bytes charged to the catalog memory budget. */
   readonly encodedBytes: number
 }
 
