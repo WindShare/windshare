@@ -56,7 +56,7 @@ func testSenderTURNRenewal(t *testing.T, cancelFirst bool) {
 		DataChannels:    DataChannelAdapterFunc(func(*pion.DataChannel) (PeerDataChannel, error) { return newTestPeerChannel(), nil }),
 	})
 	opened := make(chan *testTURNPeer, 1)
-	factory.turnPeers = func(nativepeer.AttemptRequest, p.TURNGrant) (turnPeerConnection, error) {
+	factory.turnPeers = func(context.Context, nativepeer.AttemptRequest, p.TURNGrant) (turnPeerConnection, error) {
 		peer := &testTURNPeer{newReceiverTestPeerConnection()}
 		opened <- peer
 		return peer, nil

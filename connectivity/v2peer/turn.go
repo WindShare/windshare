@@ -16,14 +16,14 @@ type turnPeerConnection interface {
 	ReceiverPeerConnection
 }
 
-type turnPeerFactory func(nativepeer.AttemptRequest, p.TURNGrant) (turnPeerConnection, error)
+type turnPeerFactory func(context.Context, nativepeer.AttemptRequest, p.TURNGrant) (turnPeerConnection, error)
 
-func openTURNPeer(request nativepeer.AttemptRequest, g p.TURNGrant) (turnPeerConnection, error) {
+func openTURNPeer(ctx context.Context, request nativepeer.AttemptRequest, g p.TURNGrant) (turnPeerConnection, error) {
 	relay, err := iceconfig.NewTURNRelay(g.URLs, g.Username, g.Password)
 	if err != nil {
 		return nil, err
 	}
-	peer, err := pionpeer.NewTURNPeerConnection(request.Configuration, relay, pionpeer.AttemptConfig{
+	peer, err := pionpeer.NewTURNPeerConnection(ctx, request.Configuration, relay, pionpeer.AttemptConfig{
 		ProtocolSessionID: request.ProtocolSessionID, PeerPathID: request.Binding.PeerPathID, AttemptID: request.Binding.AttemptID,
 	})
 	if err != nil {
@@ -42,7 +42,7 @@ func (a *peerAttempt) openTURN(ctx context.Context, request nativepeer.AttemptRe
 	if !ok {
 		return nil, turnsession.ErrUnknownGrant
 	}
-	return a.config.factory.turnPeers(request, g)
+	return a.config.factory.turnPeers(ctx, request, g)
 }
 func (f *ReceiverFactory) StartTURNBinding(ctx context.Context, signaling ReceiverSignaling, lanes ReceiverLaneSession, binding v2signal.Binding, g p.TURNGrant) (*ReceiverAttempt, error) {
 	if f == nil || binding.Purpose != v2signal.TURNRelay || !g.Valid() {

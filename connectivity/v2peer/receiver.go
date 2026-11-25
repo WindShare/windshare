@@ -299,7 +299,7 @@ func (factory *ReceiverFactory) startBinding(parent context.Context, signaling R
 			return fail(capacityErr, nil, nil)
 		}
 		release = permit
-		peer, err = factory.turnPeers(request, *grant)
+		peer, err = factory.turnPeers(phaseContext, request, *grant)
 		grantID = grant.GrantID
 	case factory.peerConnections != nil:
 		peer, err = factory.peerConnections.NewReceiverPeerConnection(phaseContext, request)

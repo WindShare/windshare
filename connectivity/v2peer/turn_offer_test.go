@@ -65,7 +65,7 @@ func testQueuedTURNOffer(t *testing.T, remaining time.Duration) {
 		TURNCapacity: capacity, TURNProvider: renewalTestProvider{now: clock.Now}, Now: clock.Now,
 	})
 	opened := make(chan p.TURNGrant, 1)
-	factory.turnPeers = func(_ nativepeer.AttemptRequest, g p.TURNGrant) (turnPeerConnection, error) {
+	factory.turnPeers = func(_ context.Context, _ nativepeer.AttemptRequest, g p.TURNGrant) (turnPeerConnection, error) {
 		opened <- g
 		return &testTURNPeer{newReceiverTestPeerConnection()}, nil
 	}

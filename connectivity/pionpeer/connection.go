@@ -63,6 +63,7 @@ type Event struct {
 type Connection struct {
 	*pion.PeerConnection
 	lease       *socketauthority.Lease
+	beforeClose func()
 	release     func()
 	request     AttemptConfig
 	mapped      []MappedEndpoint
@@ -239,6 +240,9 @@ func (c *Connection) Close() error {
 		c.closed = true
 		c.candidates.replace(nil)
 		c.candidateMu.Unlock()
+		if c.beforeClose != nil {
+			c.beforeClose()
+		}
 		c.closeErr = c.PeerConnection.Close()
 		c.release()
 		c.closeErr = errors.Join(c.closeErr, c.lease.Close())
