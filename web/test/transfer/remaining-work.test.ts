@@ -66,7 +66,7 @@ describe('transfer job remaining-work observation', () => {
       broker: observeBroker(firstCalls, 3),
       output: {
         sessionId: 'job-1',
-        capabilities: { maxConcurrentFiles: 2, resumable: true },
+        capabilities: { maxConcurrentFiles: 2, resumable: true, partialOutput: true },
         openFile: async () => outputFile({}),
       },
       onProgress: progress => {
@@ -81,7 +81,7 @@ describe('transfer job remaining-work observation', () => {
       broker: observeBroker(secondCalls, 3),
       output: {
         sessionId: 'job-2',
-        capabilities: { maxConcurrentFiles: 2, resumable: true },
+        capabilities: { maxConcurrentFiles: 2, resumable: true, partialOutput: true },
         openFile: async () => outputFile({}),
       },
       onProgress: progress => {
@@ -179,7 +179,7 @@ describe('transfer job remaining-work observation', () => {
         },
         output: {
           sessionId: 'two-files-in-flight',
-          capabilities: { maxConcurrentFiles: 2, resumable: true },
+          capabilities: { maxConcurrentFiles: 2, resumable: true, partialOutput: true },
           openFile: async () => outputFile({}),
         },
         onProgress: progress => {

@@ -15,7 +15,7 @@ import { gate, id, makeShareFixture, outputFile } from './share-fixture'
 const selection = new SelectionPolicy(true).snapshot()
 const movie = { seed: 10, name: 'movie.bin', bytes: new Uint8Array(8) }
 const song = { seed: 11, name: 'song.bin', bytes: new Uint8Array(8) }
-const resumable = { maxConcurrentFiles: 2, resumable: true }
+const resumable = { maxConcurrentFiles: 2, resumable: true, partialOutput: true }
 const live = () => new AbortController().signal
 
 function waitForAbort(signal: AbortSignal): Promise<never> {
@@ -377,7 +377,7 @@ describe('transfer output settlement', () => {
     const abort = vi.fn<TransferOutputFile['abort']>(async () => undefined)
     const job = new TransferJob({
       ...makeShareFixture([movie, song]), selection,
-      output: { sessionId: 'portable', capabilities: { resumable: false, maxConcurrentFiles: 1 },
+      output: { sessionId: 'portable', capabilities: { resumable: false, partialOutput: false, maxConcurrentFiles: 1 },
         openFile: async req => outputFile(req.path[0] === song.name
           ? { pause, abort, commit: async () => { throw cause } } : {}),
       },

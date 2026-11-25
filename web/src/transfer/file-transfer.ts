@@ -45,6 +45,7 @@ export interface FileTransferContext {
   readonly trackWrite?: (file: ActiveFileWrite | undefined) => void
   readonly onUncheckpointedWrite?: () => void
   readonly onOutputFailure?: (error: unknown) => void
+  readonly onMemberFailure?: () => void
   readonly onInitialCoverage?: (bytes: bigint) => void
   readonly onObjectBytes?: (bytes: number) => void
   readonly onWriteCoverageChange?: (delta: bigint) => void
@@ -60,7 +61,7 @@ export type TransferPause = Readonly<{
 
 export type TransferExit =
   | TransferPause
-  | Readonly<{ kind: 'stopped' | 'detached' }>
+  | Readonly<{ kind: 'stopped' | 'detached' | 'aborted' }>
   | Readonly<{ kind: 'failed'; error: unknown }>
 
 export type SingleFileTransferOutcome = TransferExit
@@ -129,7 +130,10 @@ async function attemptSingleFileTransfer(
 
     opened = await openRevisionWithBackoff(ctx, file.entry.id)
     const readmissionFailure = verifyReadmittedRevision(state.reopenedFrom, opened.descriptor)
-    if (readmissionFailure !== undefined) return readmissionFailure
+    if (readmissionFailure !== undefined) {
+      ctx.onMemberFailure?.()
+      return readmissionFailure
+    }
 
     const desc = opened.descriptor
     const revisionText = encodeBase64Url(desc.fileRevision)
@@ -174,7 +178,10 @@ function retryDiscardedPublication(
   ctx.onWriteCoverageChange?.(-discardedBytes)
   const exit = ctx.getExit()
   if (exit !== undefined) return exit
-  if (ctx.signal.aborted || !ctx.output.capabilities.resumable || state.retriedPublication) return { kind: 'failed', error }
+  if (ctx.signal.aborted || !ctx.output.capabilities.resumable || state.retriedPublication) {
+    ctx.onMemberFailure?.()
+    return { kind: 'failed', error }
+  }
   return {
     kind: 'retry',
     next: { ...state, attemptIndex: state.attemptIndex + 1, retriedPublication: true, reopenedFrom: revision },
@@ -308,12 +315,12 @@ async function handleFileError(
   state: FileTransferAttemptState,
 ): Promise<AttemptResult> {
   const exit = ctx.getExit()
-  if (exit !== undefined && exit.kind !== 'paused') return abortFile(writer, error, exit)
-  if (error instanceof TransferStopError) return abortFile(writer, error, { kind: 'stopped' })
-  if (isSourceChangedError(error)) return abortFile(writer, error, { kind: 'source-changed' })
-  if (exit?.sharedOutputFailure !== undefined) return abortFile(writer, exit.sharedOutputFailure, exit)
+  if (exit !== undefined && exit.kind !== 'paused') return abortFile(ctx, writer, error, exit)
+  if (error instanceof TransferStopError) return abortFile(ctx, writer, error, { kind: 'stopped' })
+  if (isSourceChangedError(error)) return abortFile(ctx, writer, error, { kind: 'source-changed' })
+  if (exit?.sharedOutputFailure !== undefined) return abortFile(ctx, writer, exit.sharedOutputFailure, exit)
   if (active?.failure !== undefined || error instanceof TransferFaultError || storagePauseReason(error) !== undefined) {
-    return abortFile(writer, error, outputFailureOutcome(ctx, error))
+    return abortFile(ctx, writer, error, outputFailureOutcome(ctx, error))
   }
 
   const pauseReason = exit?.reason ?? (error instanceof TransferPauseError ? error.reason : undefined)
@@ -324,13 +331,13 @@ async function handleFileError(
       await active?.checkpointForRetry()
       return { kind: 'retry', next }
     } catch (cause) {
-      return abortFile(writer, cause, outputFailureOutcome(ctx, cause))
+      return abortFile(ctx, writer, cause, outputFailureOutcome(ctx, cause))
     }
   }
   if (ctx.output.capabilities.resumable && !ctx.signal.aborted && isRecoverableTransferInterruption(error)) {
     return pauseFile(ctx, writer, active, error, 'interrupted')
   }
-  return abortFile(writer, error, terminalFileOutcome(error))
+  return abortFile(ctx, writer, error, terminalFileOutcome(error))
 }
 
 function terminalFileOutcome(error: unknown): SingleFileTransferOutcome {
@@ -350,11 +357,22 @@ function outputFailureOutcome(ctx: FileTransferContext, error: unknown): Transfe
   return ctx.output.capabilities.resumable && reason !== undefined ? { kind: 'paused', reason } : { kind: 'failed', error }
 }
 
+function isMemberFailureOutcome(outcome: SingleFileTransferOutcome): boolean {
+  return outcome.kind === 'source-changed' ||
+    outcome.kind === 'source-unavailable' ||
+    outcome.kind === 'source-busy' ||
+    outcome.kind === 'failed'
+}
+
 async function abortFile(
+  ctx: FileTransferContext,
   writer: TransferOutputFile | undefined,
   cause: unknown,
   outcome: SingleFileTransferOutcome,
 ): Promise<SingleFileTransferOutcome> {
+  // Notify the job before aborting the writer or awaiting lease release so all-or-nothing
+  // outputs cannot race sibling discovery/directory calls against a newly tainted writer.
+  if (isMemberFailureOutcome(outcome)) ctx.onMemberFailure?.()
   try { await writer?.abort(cause) } catch { /* Cleanup cannot replace the cause that retired this writer. */ }
   return outcome
 }
@@ -366,12 +384,12 @@ async function pauseFile(
   error: unknown,
   reason: ReceivePauseReason,
 ): Promise<SingleFileTransferOutcome> {
-  if (active === undefined) return abortFile(writer, error, { kind: 'paused', reason })
+  if (active === undefined) return abortFile(ctx, writer, error, { kind: 'paused', reason })
   try {
     await active.pause(error)
     return { kind: 'paused', reason }
   } catch (cause) {
-    return abortFile(writer, cause, outputFailureOutcome(ctx, cause))
+    return abortFile(ctx, writer, cause, outputFailureOutcome(ctx, cause))
   }
 }
 

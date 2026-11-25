@@ -9,7 +9,7 @@ import { gate, id, makeShareFixture, outputFile } from './share-fixture'
 
 const file = { seed: 45, name: 'photo.bin', bytes: Uint8Array.of(1, 2, 3, 4, 5, 6, 7, 8) }
 const selection = new SelectionPolicy(true).snapshot()
-const capabilities = { resumable: true, maxConcurrentFiles: 1 }
+const capabilities = { resumable: true, partialOutput: true, maxConcurrentFiles: 1 }
 const metadata = (seed: number) => encodeBase64Url(new Uint8Array(32).fill(seed))
 const discardedPublish = () => new RetryableFilePublishError(new DOMException('Swap close failed', 'InvalidStateError'))
 

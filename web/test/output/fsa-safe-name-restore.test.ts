@@ -1062,7 +1062,7 @@ describe('WorkspaceTask live observation and TaskPresentation safeNameRestore st
         backend: 'fsa',
         transferOutput: {
           sessionId: 'live-runner',
-          capabilities: { maxConcurrentFiles: 4, resumable: true },
+          capabilities: { maxConcurrentFiles: 4, resumable: true, partialOutput: true },
           openFile: async () => { throw new Error('unused') },
           safeRenamedSummary: () => initialSummary,
         },

@@ -168,7 +168,7 @@ describe('source omission propagation across transfer, backends, and retained hi
     const share = makeOmittedTreeShare()
     const makeNoopOutput = () => ({
       sessionId: 'noop',
-      capabilities: { maxConcurrentFiles: 2, resumable: false },
+      capabilities: { maxConcurrentFiles: 2, resumable: false, partialOutput: false },
       openFile: async () => ({
         completedRanges: [],
         writeAt: async () => undefined,

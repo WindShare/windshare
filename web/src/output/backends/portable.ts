@@ -171,8 +171,9 @@ class PortableSessionHandle implements OutputSessionHandle {
         // Sequential streaming ZIP writes one member at a time to avoid extra buffering.
         maxConcurrentFiles: 1,
         resumable: false,
+        partialOutput: false,
       }),
-      ...(isZip ? { ensureDirectory: (req: TransferDirectoryRequest) => this.#ensureDir(req) } : {}),
+      ...(isZip ? { ensureDirectory: (req: TransferDirectoryRequest, signal: AbortSignal) => this.#ensureDir(req, signal) } : {}),
       openFile: (request: TransferFileRequest, signal: AbortSignal) => this.#openFile(request, signal),
     })
   }
@@ -261,7 +262,8 @@ class PortableSessionHandle implements OutputSessionHandle {
     }
   }
 
-  async #ensureDir(request: TransferDirectoryRequest): Promise<void> {
+  async #ensureDir(request: TransferDirectoryRequest, signal: AbortSignal): Promise<void> {
+    signal.throwIfAborted()
     const zipPath = resolveZipEntryPath(this.#baseRecord.artifact, request.path)
     if (zipPath === undefined) return
     this.#zip?.addDirectory(zipPath, request.modifiedTimeMilliseconds)

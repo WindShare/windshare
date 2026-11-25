@@ -43,6 +43,7 @@ describe('transfer discovery and job execution', () => {
       capabilities: {
         maxConcurrentFiles: 2,
         resumable: true,
+        partialOutput: true,
         periodicCheckpoint: { intervalBytes: 4n, intervalMilliseconds: 60_000 },
       },
       openFile: async (req: TransferFileRequest): Promise<TransferOutputFile> => ({
@@ -107,7 +108,7 @@ describe('transfer discovery and job execution', () => {
     let checkpointCalls = 0
     const output: TransferOutputSession = {
       sessionId: 'sess-pause',
-      capabilities: { maxConcurrentFiles: 1, resumable: true },
+      capabilities: { maxConcurrentFiles: 1, resumable: true, partialOutput: true },
       openFile: async (): Promise<TransferOutputFile> => ({
         completedRanges: [],
         writeAt: async () => { jobRef.current?.pause('user') },
@@ -150,7 +151,7 @@ describe('transfer discovery and job execution', () => {
 
     const output: TransferOutputSession = {
       sessionId: 'sess-no-periodic',
-      capabilities: { maxConcurrentFiles: 1, resumable: true },
+      capabilities: { maxConcurrentFiles: 1, resumable: true, partialOutput: true },
       openFile: async (): Promise<TransferOutputFile> => ({
         completedRanges: [],
         writeAt: async (offset, data) => { target.set(data, Number(offset)) },
@@ -189,6 +190,7 @@ describe('transfer discovery and job execution', () => {
         capabilities: {
           maxConcurrentFiles: 1,
           resumable: true,
+          partialOutput: true,
           periodicCheckpoint: { intervalBytes: 1_000n, intervalMilliseconds: 10_000 },
         },
         openFile: async (): Promise<TransferOutputFile> => ({
@@ -422,7 +424,7 @@ describe('transfer job resume completion skip', () => {
 
     const output: TransferOutputSession = {
       sessionId: 'sess-skip-completed',
-      capabilities: { maxConcurrentFiles: 2, resumable: true },
+      capabilities: { maxConcurrentFiles: 2, resumable: true, partialOutput: true },
       checkCompleted: async fileId => {
         const size = completed.get(fileId)
         return size === undefined ? undefined : { size }
@@ -575,7 +577,7 @@ describe('reopened revision readmission', () => {
 
     const output: TransferOutputSession = {
       sessionId: 'sess-reopen-progress',
-      capabilities: { maxConcurrentFiles: 1, resumable: true },
+      capabilities: { maxConcurrentFiles: 1, resumable: true, partialOutput: true },
       openFile: async (req: TransferFileRequest): Promise<TransferOutputFile> => ({
         completedRanges: savedRanges,
         ...(savedRevision === undefined ? {} : { savedRevision }),
@@ -655,7 +657,7 @@ describe('reopened revision readmission', () => {
       },
       output: {
         sessionId: 'sess-stalled',
-        capabilities: { maxConcurrentFiles: 1, resumable: true },
+        capabilities: { maxConcurrentFiles: 1, resumable: true, partialOutput: true },
         openFile: async (): Promise<TransferOutputFile> => ({
           completedRanges: [],
           writeAt: async () => undefined,
@@ -691,7 +693,7 @@ describe('reopened revision readmission', () => {
       },
       output: {
         sessionId: 'sess-non-resumable',
-        capabilities: { maxConcurrentFiles: 1, resumable: false },
+        capabilities: { maxConcurrentFiles: 1, resumable: false, partialOutput: false },
         openFile: async (): Promise<TransferOutputFile> => ({
           completedRanges: [],
           writeAt: async () => undefined,
@@ -720,7 +722,7 @@ describe('reopened revision readmission', () => {
       },
       output: {
         sessionId: 'sess-changed',
-        capabilities: { maxConcurrentFiles: 1, resumable: true },
+        capabilities: { maxConcurrentFiles: 1, resumable: true, partialOutput: true },
         openFile: async (): Promise<TransferOutputFile> => ({
           completedRanges: [],
           writeAt: async () => undefined,
@@ -751,7 +753,7 @@ describe('reopened revision readmission', () => {
       },
       output: {
         sessionId: 'sess-unavailable',
-        capabilities: { maxConcurrentFiles: 1, resumable: true },
+        capabilities: { maxConcurrentFiles: 1, resumable: true, partialOutput: true },
         openFile: async (): Promise<TransferOutputFile> => ({
           completedRanges: [],
           writeAt: async () => undefined,
@@ -791,7 +793,7 @@ describe('reopened revision readmission', () => {
       },
       output: {
         sessionId: 'sess-quota',
-        capabilities: { maxConcurrentFiles: 1, resumable: true },
+        capabilities: { maxConcurrentFiles: 1, resumable: true, partialOutput: true },
         openFile: async (): Promise<TransferOutputFile> => ({
           completedRanges: [],
           writeAt: async () => undefined,
@@ -835,7 +837,7 @@ describe('TransferJob resumable interruption handling', () => {
       },
       output: {
         sessionId: 'sess-interrupted',
-        capabilities: { maxConcurrentFiles: 1, resumable: true },
+        capabilities: { maxConcurrentFiles: 1, resumable: true, partialOutput: true },
         openFile: async (): Promise<TransferOutputFile> => ({
           completedRanges: [],
           writeAt: async () => undefined,
@@ -872,7 +874,7 @@ describe('TransferJob resumable interruption handling', () => {
       revisions: { open },
       output: {
         sessionId: 'denied',
-        capabilities: { maxConcurrentFiles: 1, resumable: true },
+        capabilities: { maxConcurrentFiles: 1, resumable: true, partialOutput: true },
         openFile: async () => outputFile({}),
       },
     }).run()
@@ -902,7 +904,7 @@ describe('TransferJob resumable interruption handling', () => {
       },
       output: {
         sessionId: 'sess-zero-interrupted',
-        capabilities: { maxConcurrentFiles: 1, resumable: true },
+        capabilities: { maxConcurrentFiles: 1, resumable: true, partialOutput: true },
         openFile: async () => outputFile({
           pause: async () => { zeroPauseCalls += 1 },
           abort: async () => { zeroAbortCalls += 1 },
@@ -929,7 +931,7 @@ describe('TransferJob resumable interruption handling', () => {
       },
       output: {
         sessionId: 'sess-portable-interrupted',
-        capabilities: { maxConcurrentFiles: 1, resumable: false },
+        capabilities: { maxConcurrentFiles: 1, resumable: false, partialOutput: false },
         openFile: async () => outputFile({ abort: async () => { portableAborts += 1 } }),
       },
     }).run()
@@ -953,7 +955,7 @@ describe('TransferJob resumable interruption handling', () => {
       },
       output: {
         sessionId: 'sess-share-stopped',
-        capabilities: { maxConcurrentFiles: 1, resumable: true },
+        capabilities: { maxConcurrentFiles: 1, resumable: true, partialOutput: true },
         openFile: async () => outputFile({ abort: async () => { stoppedAborts += 1 } }),
       },
     }).run()
@@ -972,7 +974,7 @@ describe('TransferJob resumable interruption handling', () => {
       broker: { readRange: async function* () { yield { offset: 0n, data: new Uint8Array(0) } } },
       output: {
         sessionId: 'sess-discovery-interrupted',
-        capabilities: { maxConcurrentFiles: 1, resumable: true },
+        capabilities: { maxConcurrentFiles: 1, resumable: true, partialOutput: true },
         openFile: async () => { throw new Error('unused') },
       },
     }).run()
@@ -1076,7 +1078,7 @@ describe('TransferJob resumable interruption handling', () => {
       },
       output: {
         sessionId: 'sess-oversized-dir',
-        capabilities: { maxConcurrentFiles: 1, resumable: true },
+        capabilities: { maxConcurrentFiles: 1, resumable: true, partialOutput: true },
         openFile: async (file): Promise<TransferOutputFile> => ({
           completedRanges: [],
           writeAt: async () => undefined,
@@ -1133,7 +1135,7 @@ describe('TransferJob resumable interruption handling', () => {
       },
       output: {
         sessionId: 'sess-saturated-cache',
-        capabilities: { maxConcurrentFiles: 1, resumable: true },
+        capabilities: { maxConcurrentFiles: 1, resumable: true, partialOutput: true },
         openFile: async (): Promise<TransferOutputFile> => ({
           completedRanges: [],
           writeAt: async () => undefined,

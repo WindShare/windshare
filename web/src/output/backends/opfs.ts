@@ -329,6 +329,7 @@ class OPFSSessionHandle implements OutputSessionHandle {
       capabilities: Object.freeze({
         maxConcurrentFiles: OPFS_MAX_CONCURRENT_FILES,
         resumable: true,
+        partialOutput: true,
         periodicCheckpoint: Object.freeze({
           intervalBytes: OPFS_CHECKPOINT_INTERVAL_BYTES,
           intervalMilliseconds: OPFS_CHECKPOINT_INTERVAL_MS,

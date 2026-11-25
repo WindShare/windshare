@@ -209,6 +209,14 @@ export class TransferJob {
     this.#abort.abort(error)
   }
 
+  #abortAllOrNothing(): void {
+    if (this.#options.output.capabilities.partialOutput || this.#exit !== undefined) return
+    // All-or-nothing outputs discard all buffered bytes once any member fails, so stop
+    // remaining discovery and workers immediately while keeping the originating status.
+    this.#exit = { kind: 'aborted' }
+    this.#abort.abort(new DOMException('All-or-nothing output aborted after failure', 'AbortError'))
+  }
+
   progress(): TransferProgress {
     return this.#tracker.snapshot()
   }
@@ -303,6 +311,7 @@ export class TransferJob {
     this.#failedDirectories += 1n
     this.#recordFailure(error)
     this.#tracker.observeDirectoryFailed()
+    this.#abortAllOrNothing()
   }
 
   async #finalizeDiscovery(): Promise<void> {
@@ -336,6 +345,7 @@ export class TransferJob {
     this.#discoveryFailed = true
     this.#recordFailure(error)
     this.#tracker.observeDiscoverySettled('failed')
+    this.#abortAllOrNothing()
   }
 
   async #runFile(file: DiscoveredFile): Promise<void> {
@@ -352,6 +362,7 @@ export class TransferJob {
       signal: this.#abort.signal,
       getExit: () => this.#exit,
       onOutputFailure: error => this.#handleOutputFailure(error),
+      onMemberFailure: () => this.#abortAllOrNothing(),
       ...(this.#options.onUncheckpointedWrite === undefined ? {} : { onUncheckpointedWrite: this.#options.onUncheckpointedWrite }),
       ...(this.#options.output.capabilities.resumable ? { trackWrite } : {}),
       onInitialCoverage: bytes => this.#tracker.observeInitialCoverage(bytes),
@@ -378,6 +389,7 @@ export class TransferJob {
         this.pause(outcome.reason)
         return
       case 'detached':
+      case 'aborted':
         return
       case 'stopped':
         this.stop()
@@ -388,6 +400,7 @@ export class TransferJob {
         this.#tracker.observeFileFailed()
         this.#recordSourceFailure(file, 'source-changed')
         this.#recordMissing({ path: file.relativePath, reason: 'source-changed' })
+        this.#abortAllOrNothing()
         return
       case 'source-unavailable':
         this.#failedFiles += 1n
@@ -396,6 +409,7 @@ export class TransferJob {
         this.#tracker.observeFileFailed()
         this.#recordSourceFailure(file, 'source-unavailable')
         this.#recordMissing({ path: file.relativePath, reason: 'source-unavailable' })
+        this.#abortAllOrNothing()
         return
       case 'source-busy':
         this.#failedFiles += 1n
@@ -404,6 +418,7 @@ export class TransferJob {
         this.#tracker.observeFileFailed()
         this.#recordSourceFailure(file, 'source-busy')
         this.#recordMissing({ path: file.relativePath, reason: 'source-busy' })
+        this.#abortAllOrNothing()
         return
       case 'failed':
         this.#failedFiles += 1n
@@ -412,6 +427,7 @@ export class TransferJob {
         this.#recordMissing(outcome.error instanceof FileDestinationConflictError
           ? { path: file.relativePath, reason: 'destination-conflict', destinationPath: outcome.error.destinationPath }
           : { path: file.relativePath, reason: 'file-failed' })
+        this.#abortAllOrNothing()
         return
     }
   }
@@ -496,13 +512,13 @@ export class TransferJob {
     if (this.#failedFiles === 0n && this.#failedDirectories === 0n && !this.#discoveryFailed) {
       return 'completed'
     }
-    if (this.#completedFiles > 0n) return 'partial'
+    if (this.#canProducePartial()) return 'partial'
     if (this.#sourceChangedCount > 0n) return 'source-changed'
     return this.#allFailuresSourceBusy() ? 'source-busy' : 'failed'
   }
 
   #canProducePartial(): boolean {
-    return this.#options.output.capabilities.resumable && this.#completedFiles > 0n
+    return this.#options.output.capabilities.partialOutput && this.#completedFiles > 0n
   }
 
   #allFailuresSourceBusy(): boolean {

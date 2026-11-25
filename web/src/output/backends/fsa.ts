@@ -320,6 +320,7 @@ class FSASessionHandle implements OutputSessionHandle {
         // so only explicit cuts and sufficiently large outage checkpoints justify reopening.
         maxConcurrentFiles: FSA_MAX_CONCURRENT_FILES,
         resumable: true,
+        partialOutput: true,
       }),
       ensureDirectory: (request: TransferDirectoryRequest, signal: AbortSignal) => this.#ensureDirectory(request, signal),
       ...(this.#files.completedAtOpen.size > 0

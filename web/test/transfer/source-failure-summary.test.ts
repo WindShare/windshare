@@ -50,7 +50,7 @@ describe('TransferJob source revision failure summary', () => {
       },
       output: {
         sessionId: 'sess-mixed-source-failures',
-        capabilities: { maxConcurrentFiles: 1, resumable: true },
+        capabilities: { maxConcurrentFiles: 1, resumable: true, partialOutput: true },
         openFile: async () => outputFile({}),
       },
     }).run()
@@ -93,7 +93,7 @@ describe('TransferJob source revision failure summary', () => {
       },
       output: {
         sessionId: 'sess-mixed-capped-source-failures',
-        capabilities: { maxConcurrentFiles: 1, resumable: true },
+        capabilities: { maxConcurrentFiles: 1, resumable: true, partialOutput: true },
         openFile: async () => outputFile({}),
       },
     }).run()
@@ -127,7 +127,7 @@ describe('TransferJob source revision failure summary', () => {
       },
       output: {
         sessionId: 'sess-unavailable-capped',
-        capabilities: { maxConcurrentFiles: 1, resumable: true },
+        capabilities: { maxConcurrentFiles: 1, resumable: true, partialOutput: true },
         openFile: async () => outputFile({}),
       },
     }).run()
@@ -161,7 +161,7 @@ describe('TransferJob source revision failure summary', () => {
       },
       output: {
         sessionId: 'sess-source-busy',
-        capabilities: { maxConcurrentFiles: 1, resumable: true },
+        capabilities: { maxConcurrentFiles: 1, resumable: true, partialOutput: true },
         openFile: async () => outputFile({}),
       },
     }).run()
@@ -187,7 +187,7 @@ describe('TransferJob source revision failure summary', () => {
       revisions: { open: async () => { throw remoteRevisionError(REVISION_CODE_BUSY) } },
       output: {
         sessionId: 'sess-single-busy',
-        capabilities: { maxConcurrentFiles: 1, resumable: true },
+        capabilities: { maxConcurrentFiles: 1, resumable: true, partialOutput: true },
         openFile: async () => outputFile({}),
       },
     }).run()
@@ -214,7 +214,7 @@ describe('TransferJob source revision failure summary', () => {
       },
       output: {
         sessionId: 'sess-changed-busy-mixed',
-        capabilities: { maxConcurrentFiles: 1, resumable: true },
+        capabilities: { maxConcurrentFiles: 1, resumable: true, partialOutput: true },
         openFile: async () => outputFile({}),
       },
     }).run()
@@ -232,7 +232,7 @@ describe('TransferJob source revision failure summary', () => {
       },
       output: {
         sessionId: 'sess-unavailable-busy-mixed',
-        capabilities: { maxConcurrentFiles: 1, resumable: true },
+        capabilities: { maxConcurrentFiles: 1, resumable: true, partialOutput: true },
         openFile: async () => outputFile({}),
       },
     }).run()

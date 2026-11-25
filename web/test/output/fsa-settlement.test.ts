@@ -579,7 +579,7 @@ describe('TransferJob partialReason and FSA terminal directory cleanup', () => {
       broker,
       output: {
         sessionId: 'portable-stop',
-        capabilities: { maxConcurrentFiles: 1, resumable: false },
+        capabilities: { maxConcurrentFiles: 1, resumable: false, partialOutput: false },
         openFile: async () => ({
           completedRanges: [],
           writeAt: async () => undefined,

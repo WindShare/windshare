@@ -71,7 +71,7 @@ describe('TransferJob recoverable remote budget exhaustion', () => {
         },
         output: {
           sessionId: 'sess-capacity-pause',
-          capabilities: { maxConcurrentFiles: 1, resumable: true },
+          capabilities: { maxConcurrentFiles: 1, resumable: true, partialOutput: true },
           openFile: async () => outputFile({}),
         },
       }).run()
@@ -103,7 +103,7 @@ describe('TransferJob recoverable remote budget exhaustion', () => {
         revisions: { open: async () => { throw capacityBusyError(30_000) } },
         output: {
           sessionId: 'sess-capacity-portable',
-          capabilities: { maxConcurrentFiles: 1, resumable: false },
+          capabilities: { maxConcurrentFiles: 1, resumable: false, partialOutput: false },
           openFile: async () => outputFile({}),
         },
       }).run()
@@ -141,7 +141,7 @@ describe('TransferJob recoverable remote budget exhaustion', () => {
       },
       output: {
         sessionId: 'sess-lease-progress',
-        capabilities: { maxConcurrentFiles: 1, resumable: true },
+        capabilities: { maxConcurrentFiles: 1, resumable: true, partialOutput: true },
         openFile: async () => outputFile({
           completedRanges: savedRanges,
           writeAt: async (offset, data) => { disk.set(data, Number(offset)) },
@@ -185,7 +185,7 @@ describe('TransferJob recoverable remote budget exhaustion', () => {
       },
       output: {
         sessionId: 'sess-lease-pause',
-        capabilities: { maxConcurrentFiles: 1, resumable: true },
+        capabilities: { maxConcurrentFiles: 1, resumable: true, partialOutput: true },
         openFile: async () => outputFile({
           completedRanges: savedRanges,
           checkpoint: async ranges => {
@@ -218,7 +218,7 @@ describe('TransferJob recoverable remote budget exhaustion', () => {
       },
       output: {
         sessionId: 'sess-lease-portable',
-        capabilities: { maxConcurrentFiles: 1, resumable: false },
+        capabilities: { maxConcurrentFiles: 1, resumable: false, partialOutput: false },
         openFile: async () => outputFile({ abort }),
       },
     }).run()

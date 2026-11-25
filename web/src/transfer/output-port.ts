@@ -60,6 +60,14 @@ export interface TransferOutputCapabilities {
    */
   readonly resumable: boolean
   /**
+   * True when completed files survive another member's failure or a user stop
+   * and can be delivered as a partial result (FSA folder writes and OPFS
+   * progressive ZIP). False for all-or-nothing outputs (Portable in-memory
+   * downloads), which discard buffered bytes unless every selected entry
+   * completes and therefore halt immediately on the first member failure.
+   */
+  readonly partialOutput: boolean
+  /**
    * Optional mid-file periodic checkpoint schedule.
    * Only backends with cheap in-place flushing (e.g. OPFS SyncAccessHandle)
    * should advertise this; copy-on-reopen streams like FSA commit on `pause()`,
