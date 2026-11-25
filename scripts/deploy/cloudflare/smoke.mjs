@@ -1,37 +1,80 @@
-// Opt-in live check: owns two randomly named Workers and deletes only those names.
+// Opt-in live check: owns two randomly named Workers and their TURN key, deleting only those names.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { randomUUID, randomBytes } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, rmdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { cloudflareClient } from './cloudflare.mjs';
+import { CloudflareRequestError, cloudflareClient } from './cloudflare.mjs';
 import { FULL_DEPLOYMENT, RELAY_ONLY_DEPLOYMENT } from './configuration.mjs';
+import { STATE_BINDING } from './deployment.mjs';
+import { turnKeyName, turnKeyPrefix } from './turn.mjs';
 
-const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
-const wrangler = join(repositoryRoot, 'relay-rust/crates/relay-cloudflare/node_modules/wrangler/bin/wrangler.js');
-const workerName = 'windshare-actions-test-' + randomUUID().replaceAll('-', '').slice(0, 12);
-const directory = await mkdtemp(join(tmpdir(), 'windshare-deploy-smoke-'));
-const stateFile = join(directory, 'share.json');
-const savedConfig = join(directory, 'saved-config.json');
-const outputDirectory = join(directory, 'addresses');
 const REQUEST_TIMEOUT_MS = 30_000;
-const env = { ...process.env, CLOUDFLARE_WORKER_NAME: workerName, WINDSHARE_DEPLOYMENT_OUTPUT: outputDirectory,
-  WINDSHARE_CONFIG: savedConfig, WINDSHARE_OWNER_PASSWORD: randomBytes(32).toString('base64url'),
-  CI: 'true', WRANGLER_SEND_METRICS: 'false', CLOUDFLARE_DEPLOYMENT_MODE: FULL_DEPLOYMENT,
-  CLOUDFLARE_RELAY_DOMAIN: '', CLOUDFLARE_CONSOLE_DOMAIN: '', CLOUDFLARE_ZONE_ID: '' };
-const paths = [stateFile, savedConfig, join(outputDirectory, 'deployment.json')];
 
-function command(program, args, input, capture = false) {
-  const result = spawnSync(program, args, {
-    cwd: repositoryRoot, env, windowsHide: true, timeout: 20 * 60 * 1000,
-    stdio: [input === undefined ? 'ignore' : 'pipe', capture ? 'pipe' : 'inherit', 'inherit'],
-    input, encoding: 'utf8',
-  });
-  assert.ok(!result.error && result.status === 0, program + ' failed (exit ' + result.status + ')');
-  return result.stdout;
+function deploymentIdFromSettings(settings) {
+  const binding = settings?.bindings?.find(item => item.name === STATE_BINDING && item.type === 'plain_text');
+  if (typeof binding?.text !== 'string') return undefined;
+  try {
+    const state = JSON.parse(binding.text);
+    return typeof state?.deploymentId === 'string' && state.deploymentId.length > 0 ? state.deploymentId : undefined;
+  } catch {
+    return undefined;
+  }
 }
+
+export async function cleanupSmokeResources({ workerName, ownedKeyName, client, deleteWorker }) {
+  const failures = [];
+  let workerSettings = null;
+  let workerLookupFailed = false;
+  try {
+    workerSettings = await client(workerName).settings();
+  } catch (error) {
+    workerLookupFailed = true;
+    failures.push(error);
+  }
+
+  const deploymentId = ownedKeyName ? undefined : deploymentIdFromSettings(workerSettings);
+  const exactKeyName = ownedKeyName ?? (deploymentId ? turnKeyName(workerName, deploymentId) : undefined);
+
+  // Only inspect account-level TURN keys when this run may have reached provisionTURN
+  // (report already read, relay Worker uploaded, or Worker lookup failed).
+  if (exactKeyName || workerSettings !== null || workerLookupFailed) {
+    // Prefix fallback is safe only because smoke.mjs allocates a fresh per-run random workerName.
+    const prefix = turnKeyPrefix(workerName);
+    const isOwned = key => (exactKeyName ? key.name === exactKeyName : key.name.startsWith(prefix));
+    let keys = [];
+    try {
+      keys = await client(workerName).turnKeys();
+    } catch (error) {
+      if (!(error instanceof CloudflareRequestError && error.status === 403)) failures.push(error);
+    }
+    for (const key of keys.filter(isOwned)) {
+      try {
+        await client(workerName).deleteTURNKey(key.uid);
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+  }
+
+  try {
+    if (await client(workerName + '-console').settings()) deleteWorker(workerName + '-console');
+  } catch (error) {
+    failures.push(error);
+  }
+  if (workerSettings !== null) {
+    try {
+      deleteWorker(workerName);
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length) throw new AggregateError(failures, 'Owned smoke resource cleanup failed');
+}
+
 async function verifyHosting(deployment) {
   const request = path => fetch(new URL(path, deployment.endpoint), {
     headers: { 'Sec-Fetch-Mode': 'navigate' }, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS), redirect: 'error',
@@ -50,12 +93,13 @@ async function verifyHosting(deployment) {
   assert.equal(consolePage.status, 200);
   assert.match(consolePage.headers.get('Content-Security-Policy'), /frame-ancestors 'none'/);
 }
-async function createCredential(deployment) {
+
+async function createCredential(deployment, ownerPassword) {
   const post = (path, body, cookie = '') => fetch(deployment.consoleUrl + '/api/' + path, {
     method: 'POST', headers: { Origin: deployment.consoleUrl, 'Content-Type': 'application/json', Cookie: cookie },
     body: JSON.stringify(body), signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS), redirect: 'error',
   });
-  const login = await post('login', { password: env.WINDSHARE_OWNER_PASSWORD });
+  const login = await post('login', { password: ownerPassword });
   assert.equal(login.status, 200);
   const created = await post('credentials', { name: 'Deployment smoke' }, login.headers.get('Set-Cookie').split(';')[0]);
   assert.equal(created.status, 201);
@@ -70,10 +114,10 @@ async function verifyTURN(deployment, credential, cookie, bindingFixture) {
   const issue = () => fetch(deployment.endpoint + '/v2/turn/credentials', { method: 'POST', redirect: 'error',
     headers: { Authorization: 'Bearer ' + credential.configuration.access_key }, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
   // The companion's service binding and public receptor can roll out at different times.
-  for (let i=0;i<20;i++) {
-    const status=await fetch(deployment.consoleUrl+'/api/session',{headers:{Cookie:cookie}});
+  for (let i = 0; i < 20; i++) {
+    const status = await fetch(deployment.consoleUrl + '/api/session', { headers: { Cookie: cookie } });
     if ((await status.json()).capabilities?.managed_turn === true) break;
-    await new Promise(resolve=>setTimeout(resolve,1000));
+    await new Promise(resolve => setTimeout(resolve, 1000));
   }
   assert.equal((await toggle(false)).status, 200);
   assert.equal(await discover(), true);
@@ -94,85 +138,117 @@ async function verifyTURN(deployment, credential, cookie, bindingFixture) {
   return true;
 }
 
-let attempted = false;
-let ownedKeyName;
-const client = name => cloudflareClient({ accountId: env.CLOUDFLARE_ACCOUNT_ID, workerName: name, apiToken: env.CLOUDFLARE_API_TOKEN });
-try {
-  assert.equal(await client(workerName).settings(), null);
-  assert.equal(await client(workerName + '-console').settings(), null);
-  await mkdir(outputDirectory);
-  attempted = true;
-  const run = () => command(process.execPath, ['scripts/deploy/cloudflare/run.mjs']);
-  run();
-  const before = JSON.parse(await readFile(join(outputDirectory, 'deployment.json'), 'utf8'));
-  await verifyHosting(before);
-  ownedKeyName = 'windshare-' + workerName + '-' + before.deploymentId.slice(0, 8);
-  const { credential, cookie } = await createCredential(before);
-  const discovery = async () => (await (await fetch(before.endpoint + '/.well-known/windshare')).json()).managed_turn === true;
-  const bindingFixture = !await discovery() && process.env.WINDSHARE_SMOKE_TURN_BINDING === 'true';
-  if (bindingFixture) {
-    await client(workerName).putSecret('TURN_KEY', JSON.stringify({key_id:'test/invalid',api_token:randomBytes(24).toString('hex')}));
-    for (let attempt=0; attempt<12 && !await discovery(); attempt++) await new Promise(resolve=>setTimeout(resolve, 1000));
-    assert.equal(await discovery(), true);
+async function runSmoke() {
+  const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
+  const wrangler = join(repositoryRoot, 'relay-rust/crates/relay-cloudflare/node_modules/wrangler/bin/wrangler.js');
+  const workerName = 'windshare-actions-test-' + randomUUID().replaceAll('-', '').slice(0, 12);
+  const directory = await mkdtemp(join(tmpdir(), 'windshare-deploy-smoke-'));
+  const stateFile = join(directory, 'share.json');
+  const savedConfig = join(directory, 'saved-config.json');
+  const outputDirectory = join(directory, 'addresses');
+  const env = { ...process.env, CLOUDFLARE_WORKER_NAME: workerName, WINDSHARE_DEPLOYMENT_OUTPUT: outputDirectory,
+    WINDSHARE_CONFIG: savedConfig, WINDSHARE_OWNER_PASSWORD: randomBytes(32).toString('base64url'),
+    CI: 'true', WRANGLER_SEND_METRICS: 'false', CLOUDFLARE_DEPLOYMENT_MODE: FULL_DEPLOYMENT,
+    CLOUDFLARE_RELAY_DOMAIN: '', CLOUDFLARE_CONSOLE_DOMAIN: '', CLOUDFLARE_ZONE_ID: '' };
+  const paths = [stateFile, savedConfig, join(outputDirectory, 'deployment.json')];
+
+  function command(program, args, input, capture = false) {
+    const result = spawnSync(program, args, {
+      cwd: repositoryRoot, env, windowsHide: true, timeout: 20 * 60 * 1000,
+      stdio: [input === undefined ? 'ignore' : 'pipe', capture ? 'pipe' : 'inherit', 'inherit'],
+      input, encoding: 'utf8',
+    });
+    assert.ok(!result.error && result.status === 0, program + ' failed (exit ' + result.status + ')');
+    return result.stdout;
   }
-  const managedTURN = await verifyTURN(before, credential, cookie, bindingFixture);
-  const keys = async () => (await client(workerName).turnKeys()).filter(key => key.name === ownedKeyName).map(key => key.uid);
-  const originalKeys = managedTURN ? await keys() : [];
-  if (managedTURN) assert.equal(originalKeys.length, 1);
-  command('go', ['run', './cmd/wind', 'relay', 'add', credential.configuration.url, '--access-key', credential.configuration.access_key]);
-  command('go', ['run', './cmd/wind', 'relay', 'frontend', before.frontendUrl]);
-  const imported = JSON.parse(await readFile(savedConfig, 'utf8'));
-  assert.equal(imported.profiles[0].url, before.endpoint);
-  assert.equal(imported.profiles[0].managed_turn === true, managedTURN || bindingFixture);
-  if (managedTURN || bindingFixture) {
-    env.WINDSHARE_TURN_SMOKE_CONFIG = savedConfig;
-    env.WINDSHARE_TURN_SMOKE_SOURCE = managedTURN ? 'managed' : 'local';
-    command(process.execPath, ['web/node_modules/@playwright/test/cli.js', 'test', 'v2-parallel-turn.network.spec.ts', '--config', 'web/playwright.network.config.ts',
-      '--project', 'chromium', '--grep', 'isolated Cloudflare Worker']);
-  }
-  env.WINDSHARE_RELAY_ACCESS_KEY = imported.profiles[0].access_key;
-  const probe = phase => command('go', ['run', './relay-rust/tests/_goclient',
-    '-endpoint', before.endpoint + '/v2/ws', '-deployment-phase', phase, '-deployment-state', stateFile]);
-  probe('prepare');
-  for (const mode of [RELAY_ONLY_DEPLOYMENT, FULL_DEPLOYMENT]) {
-    env.CLOUDFLARE_DEPLOYMENT_MODE = mode;
-    env.WINDSHARE_OWNER_PASSWORD = randomBytes(32).toString('base64url');
-    run();
-    const after = JSON.parse(await readFile(join(outputDirectory, 'deployment.json'), 'utf8'));
-    assert.deepEqual(after, { ...before, mode, frontendUrl: mode === FULL_DEPLOYMENT ? before.endpoint : null });
-    await verifyHosting(after);
-    if (managedTURN || bindingFixture) {
-      if (managedTURN) assert.deepEqual(await keys(), originalKeys);
-      assert.equal(await discovery(), true);
-      assert((await client(workerName).settings()).bindings.some(b => b.name === 'TURN_KEY' && b.type === 'secret_text'));
-    }
-    probe('verify');
-  }
-  console.log(JSON.stringify({ event: 'smoke_passed', workerName, managedTURN, bindingFixture, ...before }));
-} finally {
+
+  let attempted = false;
+  let ownedKeyName;
+  const client = name => cloudflareClient({ accountId: env.CLOUDFLARE_ACCOUNT_ID, workerName: name, apiToken: env.CLOUDFLARE_API_TOKEN });
   try {
-    if (attempted) {
-      const failures = [];
-      if (ownedKeyName) {
-        try {
-          const owned = (await client(workerName).turnKeys()).filter(key => key.name === ownedKeyName);
-          for (const key of owned) await client(workerName).deleteTURNKey(key.uid);
-        } catch (error) {
-          if (!error.message.includes('HTTP 403')) failures.push(error);
-        }
-      }
-      for (const name of [workerName + '-console', workerName]) {
-        try {
-          if (await client(name).settings()) command(process.execPath, [wrangler, 'delete', name, '--config', 'relay-rust/crates/relay-cloudflare/wrangler.toml']);
-        }
-        catch (error) { failures.push(error); }
-      }
-      if (failures.length) throw new AggregateError(failures, 'Owned smoke resource cleanup failed');
+    assert.equal(await client(workerName).settings(), null);
+    assert.equal(await client(workerName + '-console').settings(), null);
+    await mkdir(outputDirectory);
+    attempted = true;
+    const run = () => command(process.execPath, ['scripts/deploy/cloudflare/run.mjs']);
+    run();
+    const before = JSON.parse(await readFile(join(outputDirectory, 'deployment.json'), 'utf8'));
+    // Record ownership before live probing so an initial hosting probe failure still deletes the key.
+    if (typeof before?.deploymentId === 'string' && before.deploymentId.length > 0) {
+      ownedKeyName = turnKeyName(workerName, before.deploymentId);
     }
+    await verifyHosting(before);
+    assert.ok(ownedKeyName, 'Deployment report is missing deploymentId.');
+    const { credential, cookie } = await createCredential(before, env.WINDSHARE_OWNER_PASSWORD);
+    const discovery = async () => (await (await fetch(before.endpoint + '/.well-known/windshare')).json()).managed_turn === true;
+    const bindingFixture = !await discovery() && process.env.WINDSHARE_SMOKE_TURN_BINDING === 'true';
+    if (bindingFixture) {
+      await client(workerName).putSecret('TURN_KEY', JSON.stringify({ key_id: 'test/invalid', api_token: randomBytes(24).toString('hex') }));
+      for (let attempt = 0; attempt < 12 && !await discovery(); attempt++) await new Promise(resolve => setTimeout(resolve, 1000));
+      assert.equal(await discovery(), true);
+    }
+    const managedTURN = await verifyTURN(before, credential, cookie, bindingFixture);
+    const keys = async () => (await client(workerName).turnKeys()).filter(key => key.name === ownedKeyName).map(key => key.uid);
+    const originalKeys = managedTURN ? await keys() : [];
+    if (managedTURN) assert.equal(originalKeys.length, 1);
+    command('go', ['run', './cmd/wind', 'relay', 'add', credential.configuration.url, '--access-key', credential.configuration.access_key]);
+    command('go', ['run', './cmd/wind', 'relay', 'frontend', before.frontendUrl]);
+    const imported = JSON.parse(await readFile(savedConfig, 'utf8'));
+    assert.equal(imported.profiles[0].url, before.endpoint);
+    assert.equal(imported.profiles[0].managed_turn === true, managedTURN || bindingFixture);
+    if (managedTURN || bindingFixture) {
+      env.WINDSHARE_TURN_SMOKE_CONFIG = savedConfig;
+      env.WINDSHARE_TURN_SMOKE_SOURCE = managedTURN ? 'managed' : 'local';
+      command(process.execPath, ['web/node_modules/@playwright/test/cli.js', 'test', 'v2-parallel-turn.network.spec.ts', '--config', 'web/playwright.network.config.ts',
+        '--project', 'chromium', '--grep', 'isolated Cloudflare Worker']);
+    }
+    env.WINDSHARE_RELAY_ACCESS_KEY = imported.profiles[0].access_key;
+    const probe = phase => command('go', ['run', './relay-rust/tests/_goclient',
+      '-endpoint', before.endpoint + '/v2/ws', '-deployment-phase', phase, '-deployment-state', stateFile]);
+    probe('prepare');
+    for (const mode of [RELAY_ONLY_DEPLOYMENT, FULL_DEPLOYMENT]) {
+      env.CLOUDFLARE_DEPLOYMENT_MODE = mode;
+      env.WINDSHARE_OWNER_PASSWORD = randomBytes(32).toString('base64url');
+      run();
+      const after = JSON.parse(await readFile(join(outputDirectory, 'deployment.json'), 'utf8'));
+      assert.deepEqual(after, { ...before, mode, frontendUrl: mode === FULL_DEPLOYMENT ? before.endpoint : null });
+      await verifyHosting(after);
+      if (managedTURN || bindingFixture) {
+        if (managedTURN) assert.deepEqual(await keys(), originalKeys);
+        assert.equal(await discovery(), true);
+        assert((await client(workerName).settings()).bindings.some(b => b.name === 'TURN_KEY' && b.type === 'secret_text'));
+      }
+      probe('verify');
+    }
+    console.log(JSON.stringify({ event: 'smoke_passed', workerName, managedTURN, bindingFixture, ...before }));
   } finally {
-    for (const path of paths) await rm(path, { force: true });
-    await rmdir(outputDirectory).catch(error => { if (error.code !== 'ENOENT') throw error; });
-    // CLI pairing also creates a lock and a private state directory under this mkdtemp root.
-    await rm(directory, { recursive: true, force: true });
+    try {
+      if (attempted) {
+        await cleanupSmokeResources({
+          workerName,
+          ownedKeyName,
+          client,
+          deleteWorker: name => command(process.execPath, [wrangler, 'delete', name, '--config', 'relay-rust/crates/relay-cloudflare/wrangler.toml']),
+        });
+      }
+    } finally {
+      for (const path of paths) await rm(path, { force: true });
+      await rmdir(outputDirectory).catch(error => { if (error.code !== 'ENOENT') throw error; });
+      // CLI pairing also creates a lock and a private state directory under this mkdtemp root.
+      await rm(directory, { recursive: true, force: true });
+    }
   }
+}
+
+function isDirectEntrypoint() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectEntrypoint()) {
+  await runSmoke();
 }

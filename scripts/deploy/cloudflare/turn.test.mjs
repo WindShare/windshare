@@ -2,7 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { CloudflareRequestError, cloudflareClient } from './cloudflare.mjs';
 import { managedTURNEnabled } from './configuration.mjs';
-import { provisionTURN } from './turn.mjs';
+import { provisionTURN, turnKeyName, turnKeyPrefix } from './turn.mjs';
+
+test('TURN key naming derives deterministic prefix and deployment-scoped name', () => {
+  assert.equal(turnKeyPrefix('private-relay'), 'windshare-private-relay-');
+  assert.equal(turnKeyName('private-relay', '0123456789abcdef'), 'windshare-private-relay-01234567');
+});
 
 test('managed TURN preserves installed keys and reconciles only deployment-owned orphans', async () => {
   const bindings = [], keys = [{ uid: 'other', name: 'another-worker' }], calls = [];

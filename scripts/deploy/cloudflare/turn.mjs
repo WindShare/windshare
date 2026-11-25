@@ -1,11 +1,21 @@
 import { CloudflareRequestError } from './cloudflare.mjs';
 
 const SECRET = 'TURN_KEY';
+const TURN_KEY_PREFIX = 'windshare-';
+const TURN_KEY_ID_LENGTH = 8;
 const PROVISION_WARNING = 'Managed TURN provisioning was skipped. Enable Realtime TURN for this account and grant the API token Account / Cloudflare Calls / Edit, or set CLOUDFLARE_TURN_ENABLED=false.';
 const CLEANUP_WARNING = 'Managed TURN cleanup is incomplete. Check the Worker secret binding and the deployment-owned TURN key.';
 
+export function turnKeyPrefix(workerName) {
+  return `${TURN_KEY_PREFIX}${workerName}-`;
+}
+
+export function turnKeyName(workerName, deploymentId) {
+  return `${turnKeyPrefix(workerName)}${deploymentId.slice(0, TURN_KEY_ID_LENGTH)}`;
+}
+
 export async function provisionTURN({ client, workerName, deploymentId, enabled, log }) {
-  const name = `windshare-${workerName}-${deploymentId.slice(0, 8)}`;
+  const name = turnKeyName(workerName, deploymentId);
   try {
     const settings = await client.settings();
     if (!Array.isArray(settings?.bindings)) {
