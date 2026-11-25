@@ -119,6 +119,10 @@ func openChildFile(parent *Dir, name string, flags int, mode fs.FileMode) (*os.F
 	return f, nil
 }
 
+func openJournalHeaderFile(opDir *Dir) (*os.File, error) {
+	return openChildFile(opDir, journalFileName, os.O_RDONLY, 0)
+}
+
 func lstatChild(parent *Dir, name string) (EntryKind, uint64, error) {
 	if err := validName(name); err != nil {
 		return 0, 0, err

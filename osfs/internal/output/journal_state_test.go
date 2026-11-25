@@ -470,3 +470,113 @@ func TestJournalShortWriteRollbackAllowsRetryAndReopen(t *testing.T) {
 		}
 	})
 }
+
+func TestOpenTaskJournalToleratesCompactionFailureWhenFileStaysOpen(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	const (
+		seed      byte   = 0xdf
+		fileName         = "compact-fallback.bin"
+		partSize  uint64 = 4096
+		totalSize uint64 = 3 * LargeCheckpointBytes
+	)
+	chunk := bytes.Repeat([]byte{0x5a}, int(partSize))
+
+	auth, op, session, sel, tx := openLargeFileTransactionForTest(t, root, seed, fileName, totalSize)
+	intent, _ := op.ReceiveIntent()
+	if err := tx.WriteRange(ctx, 0, chunk); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Pause(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.PauseTree(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := auth.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	opPath := filepath.Join(root, ControlDirName, hex.EncodeToString(intent.OperationID().Bytes()))
+	journalPath := filepath.Join(opPath, journalFileName)
+	f, err := os.OpenFile(journalPath, os.O_WRONLY|os.O_APPEND, privateFileMode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	redundantLine, err := encodeJournalLine(journalRecord{Kind: "retired", Path: "noop.bin"})
+	if err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	for range journalCompactMinLines + 4 {
+		if _, err := f.Write(redundantLine); err != nil {
+			_ = f.Close()
+			t.Fatal(err)
+		}
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Occupy state.log.compact with a directory so compactLocked fails before
+	// closing j.file; openTaskJournal must fall back to the valid open journal.
+	blockerDir := filepath.Join(opPath, "state.log.compact")
+	if err := os.Mkdir(blockerDir, privateDirMode); err != nil {
+		t.Fatal(err)
+	}
+
+	reopen, err := New(Config{RootPath: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reopen.BindDestination(ctx); err != nil {
+		_ = reopen.Close()
+		t.Fatal(err)
+	}
+	lookup, err := reopen.SelectOperation(ctx, sel, receivecontract.AutomaticOperation())
+	if err != nil || lookup.Kind() != LookupReopened || lookup.Operation() == nil {
+		_ = reopen.Close()
+		t.Fatalf("SelectOperation with failed compaction = (kind=%v, err=%v), want LookupReopened", lookup.Kind(), err)
+	}
+	reIntent, _ := lookup.Operation().ReceiveIntent()
+	reSession, err := reopen.OpenOperation(ctx, lookup.Operation())
+	if err != nil {
+		_ = reopen.Close()
+		t.Fatal(err)
+	}
+	rootAdm := testAdmitRoot(t, reSession, reIntent, seed+1)
+	file := testMaterializationFile(t, reSession, reIntent, seed+2, fileName, totalSize, rootAdm)
+	start, err := reSession.BeginFile(ctx, file)
+	if err != nil {
+		_ = reopen.Close()
+		t.Fatal(err)
+	}
+	reTx, durable, ok := start.Transaction()
+	if !ok || rangeTotalBytes(durable.Ranges().Ranges()) != partSize {
+		_ = reopen.Close()
+		t.Fatalf("reopened transaction = (ok=%t, bytes=%d), want (true, %d)", ok, rangeTotalBytes(durable.Ranges().Ranges()), partSize)
+	}
+	if err := reTx.WriteRange(ctx, partSize, chunk); err != nil {
+		_ = reopen.Close()
+		t.Fatal(err)
+	}
+	if _, err := reTx.Pause(ctx); err != nil {
+		_ = reopen.Close()
+		t.Fatal(err)
+	}
+	if _, err := reSession.PauseTree(ctx); err != nil {
+		_ = reopen.Close()
+		t.Fatal(err)
+	}
+	if err := reopen.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Remove(blockerDir); err != nil {
+		t.Fatal(err)
+	}
+	reopened := reopenReusableRangesForTest(t, root, sel, seed, fileName, totalSize)
+	if got := rangeTotalBytes(reopened); got != 2*partSize {
+		t.Fatalf("reusable bytes after fallback append = %d, want %d", got, 2*partSize)
+	}
+}

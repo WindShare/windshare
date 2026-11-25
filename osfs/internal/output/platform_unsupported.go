@@ -18,6 +18,7 @@ func openChildDir(*Dir, string) (*Dir, error)                 { return nil, ErrU
 func openChildFile(*Dir, string, int, fs.FileMode) (*os.File, error) {
 	return nil, ErrUnsupportedOutput
 }
+func openJournalHeaderFile(*Dir) (*os.File, error)               { return nil, ErrUnsupportedOutput }
 func lstatChild(*Dir, string) (EntryKind, uint64, error)         { return 0, 0, ErrUnsupportedOutput }
 func mkdirChild(*Dir, string, fs.FileMode) error                 { return ErrUnsupportedOutput }
 func removeChild(*Dir, string, bool) error                       { return ErrUnsupportedOutput }

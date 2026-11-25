@@ -254,6 +254,11 @@ func ntStatusToError(err error, options uint32) error {
 	switch nt {
 	case windows.STATUS_REPARSE_POINT_ENCOUNTERED:
 		return errors.Join(ErrUnsafeNamespace, errno)
+	case windows.STATUS_DELETE_PENDING:
+		// RtlNtStatusToDosError maps STATUS_DELETE_PENDING to ERROR_ACCESS_DENIED;
+		// preserve ERROR_DELETE_PENDING so transient open races stay distinguishable
+		// from permanent ACL denials.
+		return errors.Join(windows.ERROR_DELETE_PENDING, errno)
 	case windows.STATUS_FILE_IS_A_DIRECTORY:
 		if options&windows.FILE_NON_DIRECTORY_FILE != 0 {
 			return errors.Join(ErrUnsafeNamespace, errno)
@@ -450,7 +455,7 @@ func deleteOpenHandle(h windows.Handle) error {
 		return nil
 	}
 	if nt, ok := errors.AsType[windows.NTStatus](err); ok {
-		if nt == windows.STATUS_INVALID_INFO_CLASS || nt == windows.STATUS_INVALID_PARAMETER || nt == windows.STATUS_NOT_SUPPORTED {
+		if isUnsupportedFileInfoExStatus(nt) {
 			return deleteOpenHandleFallback(h)
 		}
 		return nt.Errno()
@@ -639,107 +644,6 @@ func lockFile(f *os.File) (func() error, error) {
 		runtime.KeepAlive(f)
 		return unlockErr
 	}, nil
-}
-
-type renameInformation struct {
-	Replace uint32
-	Root    windows.Handle
-	Length  uint32
-	Name    [1]uint16
-}
-
-func renameHandle(handle windows.Handle, parent *Dir, name string, replace bool) error {
-	if parent == nil || parent.handle == nil {
-		return fs.ErrClosed
-	}
-	encoded, err := windows.UTF16FromString(name)
-	if err != nil {
-		return err
-	}
-	encoded = encoded[:len(encoded)-1]
-	var layout renameInformation
-	buffer := make([]byte, int(unsafe.Offsetof(layout.Name))+2*len(encoded))
-	value := (*renameInformation)(unsafe.Pointer(&buffer[0]))
-	value.Root = windows.Handle(parent.handle.Fd())
-	if replace {
-		value.Replace = 1
-	}
-	value.Length = uint32(2 * len(encoded))
-	copy(unsafe.Slice(&value.Name[0], len(encoded)), encoded)
-	var status windows.IO_STATUS_BLOCK
-	err = windows.NtSetInformationFile(handle, &status, &buffer[0], uint32(len(buffer)), windows.FileRenameInformation)
-	runtime.KeepAlive(parent.handle)
-	if nt, ok := errors.AsType[windows.NTStatus](err); ok {
-		err = nt.Errno()
-	}
-	if errors.Is(err, windows.ERROR_ALREADY_EXISTS) || errors.Is(err, windows.ERROR_FILE_EXISTS) {
-		return errors.Join(ErrNamespaceCollision, fs.ErrExist, err)
-	}
-	if !replace {
-		return noReplaceError(err)
-	}
-	return err
-}
-
-func noReplaceError(err error) error {
-	if errors.Is(err, windows.ERROR_NOT_SUPPORTED) ||
-		errors.Is(err, windows.ERROR_INVALID_FUNCTION) ||
-		errors.Is(err, windows.ERROR_CALL_NOT_IMPLEMENTED) {
-		return errors.Join(ErrUnsupportedOutput, err)
-	}
-	return err
-}
-
-// Windows antivirus and search-indexer minifilters routinely hold handles on
-// freshly written files for 10-200ms, causing rename handle opens or
-// NtSetInformationFile calls to return ACCESS_DENIED or SHARING_VIOLATION.
-var windowsRenameBackoff = [...]time.Duration{
-	5 * time.Millisecond, 10 * time.Millisecond, 20 * time.Millisecond,
-	40 * time.Millisecond, 80 * time.Millisecond, 160 * time.Millisecond,
-}
-
-func retryWindowsRename(attempt func() error, wait func(time.Duration)) error {
-	err := attempt()
-	if !isTransientWindowsRenameError(err) {
-		return err
-	}
-	for _, delay := range windowsRenameBackoff {
-		wait(delay)
-		err = attempt()
-		if !isTransientWindowsRenameError(err) {
-			return err
-		}
-	}
-	return err
-}
-
-func isTransientWindowsRenameError(err error) bool {
-	if err == nil || errors.Is(err, ErrUnsafeNamespace) {
-		return false
-	}
-	return errors.Is(err, windows.ERROR_ACCESS_DENIED) ||
-		errors.Is(err, windows.ERROR_SHARING_VIOLATION)
-}
-
-func renameFileNoReplace(srcDir *Dir, srcName string, dstDir *Dir, dstName string, replace bool) error {
-	if err := validName(srcName); err != nil {
-		return err
-	}
-	if err := validName(dstName); err != nil {
-		return err
-	}
-	return retryWindowsRename(func() error {
-		h, err := ntCreateAt(srcDir, srcName, windows.DELETE|windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE,
-			windows.FILE_OPEN, windowsSyncFileOpts)
-		if err != nil {
-			return wrapAtError("openat", srcDir, srcName, err, false)
-		}
-		if _, err := verifyOpenHandle(h, false); err != nil {
-			return err
-		}
-		defer windows.CloseHandle(h)
-		return renameHandle(h, dstDir, dstName, replace)
-	}, time.Sleep)
 }
 
 func classifyPlatformError(err error) (NativeErrorClass, bool) {

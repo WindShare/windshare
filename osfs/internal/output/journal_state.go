@@ -453,7 +453,7 @@ func parseJournalLine(line []byte) (journalRecord, error) {
 // state, full integrity validation, or per-file checkpoints must use
 // readJournalState.
 func readJournalHeader(opDir *Dir) (taskHeader, error) {
-	f, err := openChildFile(opDir, journalFileName, os.O_RDONLY, 0)
+	f, err := openJournalHeaderFile(opDir)
 	if err != nil {
 		return taskHeader{}, err
 	}

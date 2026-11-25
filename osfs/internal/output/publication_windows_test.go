@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -709,5 +710,268 @@ func TestWindowsNestedReservedNamesReportRelativeAdjustmentsWithoutSidecar(t *te
 	topEntries, err := os.ReadDir(root)
 	if err != nil || len(topEntries) != 1 || topEntries[0].Name() != res.PhysicalName() {
 		t.Fatalf("unexpected sidecar beside destination: %v (%v)", topEntries, err)
+	}
+}
+
+func TestWindowsApplyRenameInformationPolicy(t *testing.T) {
+	type call struct {
+		flags uint32
+		class uint32
+	}
+	const posixReplace = windows.FILE_RENAME_REPLACE_IF_EXISTS | windows.FILE_RENAME_POSIX_SEMANTICS
+
+	t.Run("no-replace uses legacy FileRenameInformation directly", func(t *testing.T) {
+		var calls []call
+		err := applyRenameInformation(false, func(flags, class uint32) error {
+			calls = append(calls, call{flags: flags, class: class})
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("applyRenameInformation(false) = %v", err)
+		}
+		want := []call{{flags: 0, class: windows.FileRenameInformation}}
+		if !slices.Equal(calls, want) {
+			t.Fatalf("calls = %+v, want %+v", calls, want)
+		}
+	})
+
+	t.Run("replace uses POSIX FileRenameInformationEx when supported", func(t *testing.T) {
+		var calls []call
+		err := applyRenameInformation(true, func(flags, class uint32) error {
+			calls = append(calls, call{flags: flags, class: class})
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("applyRenameInformation(true) = %v", err)
+		}
+		want := []call{{flags: posixReplace, class: windowsFileRenameInformationEx}}
+		if !slices.Equal(calls, want) {
+			t.Fatalf("calls = %+v, want %+v", calls, want)
+		}
+	})
+
+	for _, status := range []windows.NTStatus{
+		windows.STATUS_INVALID_INFO_CLASS,
+		windows.STATUS_INVALID_PARAMETER,
+		windows.STATUS_NOT_SUPPORTED,
+		windows.STATUS_INVALID_DEVICE_REQUEST,
+	} {
+		t.Run("replace falls back on "+status.Error(), func(t *testing.T) {
+			var calls []call
+			err := applyRenameInformation(true, func(flags, class uint32) error {
+				calls = append(calls, call{flags: flags, class: class})
+				if class == windowsFileRenameInformationEx {
+					return status
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatalf("fallback returned %v, want nil", err)
+			}
+			want := []call{
+				{flags: posixReplace, class: windowsFileRenameInformationEx},
+				{flags: windows.FILE_RENAME_REPLACE_IF_EXISTS, class: windows.FileRenameInformation},
+			}
+			if !slices.Equal(calls, want) {
+				t.Fatalf("calls = %+v, want %+v", calls, want)
+			}
+		})
+	}
+
+	t.Run("replace does not fall back on sharing or access denial", func(t *testing.T) {
+		for _, status := range []windows.NTStatus{windows.STATUS_ACCESS_DENIED, windows.STATUS_SHARING_VIOLATION} {
+			var calls []call
+			err := applyRenameInformation(true, func(flags, class uint32) error {
+				calls = append(calls, call{flags: flags, class: class})
+				return status
+			})
+			if !errors.Is(err, status) {
+				t.Fatalf("err = %v, want %v", err, status)
+			}
+			want := []call{{flags: posixReplace, class: windowsFileRenameInformationEx}}
+			if !slices.Equal(calls, want) {
+				t.Fatalf("calls = %+v, want %+v", calls, want)
+			}
+		}
+	})
+}
+
+func TestWindowsRenameReplaceSucceedsWithOpenShareDeleteReader(t *testing.T) {
+	base := t.TempDir()
+	dir, _, err := OpenContainer(base, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dir.Close()
+
+	if err := os.WriteFile(filepath.Join(base, "state.log"), []byte("old-header\n"), privateFileMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "state.log.compact"), []byte("new-header\n"), privateFileMode); err != nil {
+		t.Fatal(err)
+	}
+
+	// Open state.log identically to readJournalHeader (with FILE_SHARE_DELETE)
+	// and keep the handle open while replacing it via a single renameHandle call.
+	reader, err := openChildFile(dir, "state.log", os.O_RDONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+
+	srcHandle, err := ntCreateAt(dir, "state.log.compact", windows.DELETE|windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE,
+		windows.FILE_OPEN, windowsSyncFileOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	renameErr := renameHandle(srcHandle, dir, "state.log", true)
+	closeErr := windows.CloseHandle(srcHandle)
+	if renameErr != nil || closeErr != nil {
+		t.Fatalf("renameHandle with open FILE_SHARE_DELETE reader = (%v, close=%v)", renameErr, closeErr)
+	}
+
+	// The pre-existing open reader keeps reading the replaced stream while new
+	// opens immediately see the compacted file.
+	oldData, err := io.ReadAll(reader)
+	if err != nil || string(oldData) != "old-header\n" {
+		t.Fatalf("existing reader observed (%q, %v), want old-header", oldData, err)
+	}
+	newData, err := os.ReadFile(filepath.Join(base, "state.log"))
+	if err != nil || string(newData) != "new-header\n" {
+		t.Fatalf("new open observed (%q, %v), want new-header", newData, err)
+	}
+}
+
+func TestWindowsRetryHeaderOpenBoundedPolicy(t *testing.T) {
+	sharingErr := &os.PathError{Op: "openat", Path: "state.log", Err: windows.ERROR_SHARING_VIOLATION}
+	deletePendingErr := &os.PathError{Op: "openat", Path: "state.log", Err: ntStatusToError(windows.STATUS_DELETE_PENDING, windowsSyncFileOpts)}
+	permDeniedErr := &os.PathError{Op: "openat", Path: "state.log", Err: windows.ERROR_ACCESS_DENIED}
+	unsafeErr := errors.Join(ErrUnsafeNamespace, windows.ERROR_SHARING_VIOLATION)
+	notExistErr := &os.PathError{Op: "openat", Path: "state.log", Err: windows.ERROR_FILE_NOT_FOUND}
+	allWaits := windowsHeaderReadBackoff[:]
+
+	if !errors.Is(deletePendingErr, windows.ERROR_DELETE_PENDING) || !errors.Is(deletePendingErr, windows.ERROR_ACCESS_DENIED) {
+		t.Fatalf("ntStatusToError(STATUS_DELETE_PENDING) = %v, want both ERROR_DELETE_PENDING and ERROR_ACCESS_DENIED", deletePendingErr)
+	}
+
+	for _, tc := range []struct {
+		name      string
+		results   []error
+		wantErr   error
+		wantWaits []time.Duration
+	}{
+		{name: "immediate success", results: []error{nil}},
+		{name: "recovers after sharing violation", results: []error{sharingErr, nil}, wantWaits: allWaits[:1]},
+		{name: "recovers after delete pending", results: []error{deletePendingErr, nil}, wantWaits: allWaits[:1]},
+		{
+			name:      "exhausts bounded retries",
+			results:   []error{sharingErr, deletePendingErr, sharingErr, deletePendingErr, sharingErr, sharingErr},
+			wantErr:   sharingErr,
+			wantWaits: allWaits,
+		},
+		{name: "permanent access denied does not retry", results: []error{permDeniedErr}, wantErr: permDeniedErr},
+		{name: "not exist does not retry", results: []error{notExistErr}, wantErr: notExistErr},
+		{name: "unsafe namespace does not retry", results: []error{unsafeErr}, wantErr: unsafeErr},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			attempts := 0
+			var waited []time.Duration
+			_, err := retryWindowsHeaderOpen(func() (*os.File, error) {
+				res := tc.results[attempts]
+				attempts++
+				return nil, res
+			}, func(delay time.Duration) {
+				waited = append(waited, delay)
+			})
+			if !errors.Is(err, tc.wantErr) || (tc.wantErr == nil && err != nil) {
+				t.Fatalf("retryWindowsHeaderOpen = %v, want %v", err, tc.wantErr)
+			}
+			if attempts != len(tc.results) || !slices.Equal(waited, tc.wantWaits) {
+				t.Fatalf("attempts=%d waits=%v, want %d and %v", attempts, waited, len(tc.results), tc.wantWaits)
+			}
+		})
+	}
+}
+
+func TestWindowsJournalCompactionConcurrentWithHeaderReaderAndOpenFallback(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	auth, op, intent := openActiveSingleFileOp(t, root, 0xe2)
+	opID := intent.OperationID()
+	opPath := filepath.Join(root, ControlDirName, hex.EncodeToString(opID.Bytes()))
+
+	// Hold an active read handle on state.log (with FILE_SHARE_DELETE) while
+	// forcing compaction, verifying compaction succeeds and concurrent scans keep
+	// observing the running operation.
+	readerDir, err := openDirHandle(opPath)
+	if err != nil {
+		_ = auth.Close()
+		t.Fatal(err)
+	}
+	defer readerDir.Close()
+	readerFile, err := openJournalHeaderFile(readerDir)
+	if err != nil {
+		_ = auth.Close()
+		t.Fatal(err)
+	}
+	op.journal.mu.Lock()
+	compactErr := op.journal.compactLocked()
+	op.journal.mu.Unlock()
+	if compactErr != nil {
+		_ = readerFile.Close()
+		_ = auth.Close()
+		t.Fatalf("compactLocked while header reader held state.log = %v", compactErr)
+	}
+	_ = readerFile.Close()
+
+	inv, err := ListOperations(ctx, root)
+	if err != nil || inv.Status() != RecoveryListReady || inv.UnknownEntries() || len(inv.Summaries()) != 1 || !inv.Summaries()[0].Busy() {
+		_ = auth.Close()
+		t.Fatalf("ListOperations after concurrent compaction = (%+v, %v)", inv, err)
+	}
+
+	if err := auth.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Append enough redundant lines so openTaskJournal itself hits
+	// shouldCompactLocked() == true on reopen.
+	journalPath := filepath.Join(opPath, journalFileName)
+	f, err := os.OpenFile(journalPath, os.O_WRONLY|os.O_APPEND, privateFileMode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	redundantLine, err := encodeJournalLine(journalRecord{Kind: "retired", Path: "noop.bin"})
+	if err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	for range journalCompactMinLines + 4 {
+		if _, err := f.Write(redundantLine); err != nil {
+			_ = f.Close()
+			t.Fatal(err)
+		}
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate an external scanner blocking overwrite rename without blocking R/W open.
+	scannerLock := openWithoutDeleteShare(t, journalPath)
+	defer windows.CloseHandle(scannerLock)
+
+	reopen, err := New(Config{RootPath: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopen.Close()
+	if err := reopen.BindDestination(ctx); err != nil {
+		t.Fatal(err)
+	}
+	lookup, err := reopen.SelectOperation(ctx, intent.SelectionSpec(), receivecontract.AutomaticOperation())
+	if err != nil || lookup.Kind() != LookupReopened || lookup.Operation() == nil {
+		t.Fatalf("reopen during blocked compaction = (kind=%v, err=%v), want LookupReopened", lookup.Kind(), err)
+	}
+	if err := lookup.Operation().RecordShareStopped(ctx); err != nil {
+		t.Fatalf("append after non-fatal openTaskJournal compaction failure = %v", err)
 	}
 }

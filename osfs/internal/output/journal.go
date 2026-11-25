@@ -105,10 +105,10 @@ func openTaskJournal(opDir *Dir, now func() time.Time) (*taskJournal, error) {
 		now:      now,
 	}
 	if j.shouldCompactLocked() {
-		if err := j.compactLocked(); err != nil {
-			if j.file != nil {
-				_ = j.file.Close()
-			}
+		// Compaction is a space optimization; keep the open uncompacted journal
+		// when a transient compaction failure leaves j.file valid, matching
+		// appendLocked.
+		if err := j.compactLocked(); err != nil && j.file == nil {
 			return nil, err
 		}
 	}

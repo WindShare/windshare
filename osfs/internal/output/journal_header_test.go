@@ -15,6 +15,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
@@ -604,4 +605,115 @@ func newBoundAuthority(t *testing.T, root string) *Authority {
 		t.Fatal(err)
 	}
 	return auth
+}
+
+func TestHeaderScanIsolatesUnreadableSiblingAndEmitsTrace(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	ctrlPath := filepath.Join(root, ControlDirName)
+	if err := os.MkdirAll(ctrlPath, privateDirMode); err != nil {
+		t.Fatal(err)
+	}
+
+	// Sibling 1: valid opID whose state.log is replaced by a directory
+	// (ErrUnsafeNamespace), simulating a persistently unreadable sibling.
+	badOpID := testID16[receivecontract.OperationID](0x91)
+	badOpHex := hex.EncodeToString(badOpID.Bytes())
+	if err := os.MkdirAll(filepath.Join(ctrlPath, badOpHex, journalFileName), privateDirMode); err != nil {
+		t.Fatal(err)
+	}
+
+	// Sibling 2: empty retired opID directory (fs.ErrNotExist), which must stay
+	// silent rather than emitting failure traces.
+	emptyOpID := testID16[receivecontract.OperationID](0x92)
+	emptyOpHex := hex.EncodeToString(emptyOpID.Bytes())
+	if err := os.MkdirAll(filepath.Join(ctrlPath, emptyOpHex), privateDirMode); err != nil {
+		t.Fatal(err)
+	}
+
+	stream, err := diagnostics.NewStream(64, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Automatic lookup and creation for an unrelated download must succeed
+	// despite the unreadable sibling directory.
+	auth, err := New(Config{RootPath: root, Diagnostics: stream.Sink()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := auth.BindDestination(ctx); err != nil {
+		_ = auth.Close()
+		t.Fatal(err)
+	}
+	sel := testSelectionSpec(t, 0x95)
+	lookup, err := auth.SelectOperation(ctx, sel, receivecontract.AutomaticOperation())
+	if err != nil || lookup.Kind() != LookupCreateReady {
+		_ = auth.Close()
+		t.Fatalf("SelectOperation with unreadable sibling = (kind=%v, err=%v), want LookupCreateReady", lookup.Kind(), err)
+	}
+	art, err := receivecontract.NewSingleFileDirectoryTree(testID16[catalog.FileID](0x96), "fresh.bin", "fresh.bin")
+	if err != nil {
+		_ = auth.Close()
+		t.Fatal(err)
+	}
+	if _, err := auth.CreateOperation(ctx, lookup, art); err != nil {
+		_ = auth.Close()
+		t.Fatalf("CreateOperation with unreadable sibling = %v, want nil", err)
+	}
+	if err := auth.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Explicit --redownload must likewise remain unblocked.
+	redlAuth, err := New(Config{RootPath: root, Diagnostics: stream.Sink()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := redlAuth.BindDestination(ctx); err != nil {
+		_ = redlAuth.Close()
+		t.Fatal(err)
+	}
+	redlLookup, err := redlAuth.SelectOperation(ctx, sel, receivecontract.RedownloadOperation())
+	if err != nil || redlLookup.Kind() != LookupCreateReady {
+		_ = redlAuth.Close()
+		t.Fatalf("redownload SelectOperation = (kind=%v, err=%v), want LookupCreateReady", redlLookup.Kind(), err)
+	}
+	if _, err := redlAuth.CreateOperation(ctx, redlLookup, art); err != nil {
+		_ = redlAuth.Close()
+		t.Fatalf("redownload CreateOperation with unreadable sibling = %v, want nil", err)
+	}
+	if err := redlAuth.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	stream.Close()
+	wantBadID := diagnostics.Identity(badOpID.Bytes()).Text()
+	wantEmptyID := diagnostics.Identity(emptyOpID.Bytes()).Text()
+	lookupSkips := 0
+	createSkips := 0
+	for rec := range stream.Records() {
+		if rec.Name() != "filesystem_output" || rec.Payload().Get("runtime_decision").Text() != "skip_unreadable_header" {
+			continue
+		}
+		gotOpID := rec.Correlation().Get("receive_operation_id").Text()
+		if gotOpID == wantEmptyID {
+			t.Fatalf("unexpected skip_unreadable_header trace for empty cleanup-pending op %s", emptyOpHex)
+		}
+		if gotOpID != wantBadID {
+			t.Fatalf("skip_unreadable_header opID = %q, want %q", gotOpID, wantBadID)
+		}
+		if !rec.Payload().Get("failed").Bool() {
+			t.Fatal("skip_unreadable_header trace must mark failed=true")
+		}
+		switch rec.Payload().Get("runtime_operation").Text() {
+		case "select_operation":
+			lookupSkips++
+		case "create_operation":
+			createSkips++
+		}
+	}
+	if lookupSkips == 0 || createSkips == 0 {
+		t.Fatalf("skip_unreadable_header traces = (lookup=%d, create=%d), want both > 0", lookupSkips, createSkips)
+	}
 }

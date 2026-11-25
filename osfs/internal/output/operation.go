@@ -155,7 +155,7 @@ func (a *Authority) recheckAutomaticCreateUnderDirLock(
 	ctrlDir *Dir,
 	selection transfer.SelectionSpec,
 ) (claimedTask, error) {
-	matches, err := findAutomaticMatchesLocked(ctrlDir, selection.Digest())
+	matches, err := a.findAutomaticMatchesLocked(ctrlDir, selection.Digest(), "create_operation", FailureCreate)
 	if err != nil {
 		return claimedTask{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "list control directory", err)
 	}
@@ -333,7 +333,7 @@ func (a *Authority) reserveNamedEntryLocked(
 	entryKind receivecontract.ContainerEntryKind,
 	requestedName string,
 ) (receivecontract.DestinationReservation, *Dir, bool, error) {
-	claimed, err := existingTopLevelClaims(ctrlDir)
+	claimed, err := a.existingTopLevelClaimsLocked(ctrlDir)
 	if err != nil {
 		return receivecontract.DestinationReservation{}, nil, false, err
 	}
@@ -417,35 +417,22 @@ func (a *Authority) claimPublicEntryLocked(
 	}
 }
 
-// existingTopLevelClaims collects normalized container-root physical names held
-// by unfinished operations in ctrlDir. Single files stay staged privately until
-// commit, and a paused result root may have been removed from disk before
+// existingTopLevelClaimsLocked collects normalized container-root physical names
+// held by unfinished operations in ctrlDir. Single files stay staged privately
+// until commit, and a paused result root may have been removed from disk before
 // resume; checking every retained reservation prevents another file or folder
 // task from claiming the same top-level name (including case-folded aliases on
 // Windows/macOS).
-func existingTopLevelClaims(ctrlDir *Dir) (map[string]struct{}, error) {
+func (a *Authority) existingTopLevelClaimsLocked(ctrlDir *Dir) (map[string]struct{}, error) {
 	claimed := make(map[string]struct{})
-	names, err := readDirNames(ctrlDir)
-	if err != nil {
-		return nil, err
-	}
-	for _, name := range names {
-		if _, ok := isValidOpDirName(name); !ok {
-			continue
-		}
-		opDir, err := openChildDir(ctrlDir, name)
-		if err != nil {
-			continue
-		}
-		header, err := readJournalHeader(opDir)
-		_ = opDir.Close()
-		if err != nil {
-			continue
-		}
+	err := a.scanOperationHeadersLocked(ctrlDir, "create_operation", FailureCreate, func(_ string, header taskHeader) {
 		if res, ok := header.Intent.MaterializationPlan().DestinationReservation(); ok &&
 			res.Kind() == receivecontract.ReservationNamedContainerEntry {
 			claimed[catalog.SiblingNameKey(res.PhysicalName())] = struct{}{}
 		}
+	})
+	if err != nil {
+		return nil, err
 	}
 	return claimed, nil
 }

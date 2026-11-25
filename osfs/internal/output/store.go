@@ -276,7 +276,7 @@ func (a *Authority) claimAutomaticUnderDirLock(
 	}
 	defer ctrlDir.Close()
 
-	matches, err := findAutomaticMatchesLocked(ctrlDir, selection.Digest())
+	matches, err := a.findAutomaticMatchesLocked(ctrlDir, selection.Digest(), "select_operation", FailureLookup)
 	if err != nil {
 		return claimedTask{}, ActiveLookup{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "list control directory", err)
 	}
@@ -294,34 +294,81 @@ func (a *Authority) claimAutomaticUnderDirLock(
 	}
 }
 
-// findAutomaticMatchesLocked scans non-redownload operations matching wantDigest.
-// Callers must hold dirLock on ctrlDir so automatic lookup and creation enforce
-// the same uniqueness rule.
-func findAutomaticMatchesLocked(
+// scanOperationHeadersLocked visits every readable task header under ctrlDir
+// while isolating per-operation read failures so one damaged or unreadable
+// sibling directory never blocks unrelated downloads in the same container.
+// Non-NotExist failures emit structured trace diagnostics for observability.
+func (a *Authority) scanOperationHeadersLocked(
 	ctrlDir *Dir,
-	wantDigest [transfer.SelectionSpecDigestBytes]byte,
-) ([]string, error) {
+	scanOp string,
+	stage FailureStage,
+	visit func(opDirName string, header taskHeader),
+) error {
 	names, err := readDirNames(ctrlDir)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	var matches []string
 	for _, name := range names {
-		if _, ok := isValidOpDirName(name); !ok {
+		opID, ok := isValidOpDirName(name)
+		if !ok {
 			continue
 		}
-		opDir, err := openChildDir(ctrlDir, name)
-		if err != nil {
+		opDir, openErr := openChildDir(ctrlDir, name)
+		if openErr != nil {
+			if !errors.Is(openErr, fs.ErrNotExist) {
+				a.emitSkippedHeaderTrace(scanOp, stage, opID, openErr)
+			}
 			continue
 		}
 		header, readErr := readJournalHeader(opDir)
 		_ = opDir.Close()
-		if readErr != nil || header.Redownload {
+		if readErr != nil {
+			if !errors.Is(readErr, fs.ErrNotExist) {
+				a.emitSkippedHeaderTrace(scanOp, stage, opID, readErr)
+			}
 			continue
 		}
-		if header.SelectionDigest == wantDigest {
+		visit(name, header)
+	}
+	return nil
+}
+
+func (a *Authority) emitSkippedHeaderTrace(
+	scanOp string,
+	stage FailureStage,
+	opID receivecontract.OperationID,
+	cause error,
+) {
+	nativeClass, _ := ClassifyNativeError(cause)
+	emitTrace(a.diagnostics, traceEvent{
+		component:    "session",
+		operation:    scanOp,
+		decision:     "skip_unreadable_header",
+		failed:       true,
+		failureStage: stage,
+		nativeClass:  nativeClass,
+		bindingID:    a.bindingID,
+		operationID:  opID,
+	})
+}
+
+// findAutomaticMatchesLocked scans non-redownload operations matching wantDigest.
+// Callers must hold dirLock on ctrlDir so automatic lookup and creation enforce
+// the same uniqueness rule.
+func (a *Authority) findAutomaticMatchesLocked(
+	ctrlDir *Dir,
+	wantDigest [transfer.SelectionSpecDigestBytes]byte,
+	scanOp string,
+	stage FailureStage,
+) ([]string, error) {
+	var matches []string
+	err := a.scanOperationHeadersLocked(ctrlDir, scanOp, stage, func(name string, header taskHeader) {
+		if !header.Redownload && header.SelectionDigest == wantDigest {
 			matches = append(matches, name)
 		}
+	})
+	if err != nil {
+		return nil, err
 	}
 	return matches, nil
 }
