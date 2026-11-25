@@ -1,5 +1,10 @@
 import type { DonationProvider, PendingReviewReason, VisibilityKind } from '../../src/model'
-import type { Appearance, Locale } from './preferences'
+
+export const SUPPORTED_LOCALES = ['en', 'zh-CN'] as const
+export type Locale = (typeof SUPPORTED_LOCALES)[number]
+
+export const APPEARANCES = ['system', 'light', 'dark'] as const
+export type Appearance = (typeof APPEARANCES)[number]
 
 export interface CopyCatalog {
   readonly areaTitle: string
@@ -113,6 +118,7 @@ export interface CopyCatalog {
     readonly afdianQueryFailed: string
     readonly afdianRateLimited: string
     readonly serviceUnavailable: string
+    readonly invalidResponse: string
     readonly network: string
     readonly fallback: (code: string) => string
   }
@@ -261,6 +267,7 @@ const en: CopyCatalog = {
     afdianQueryFailed: 'Could not reach Afdian. Please try again.',
     afdianRateLimited: 'Afdian rate limit reached. Try again shortly.',
     serviceUnavailable: 'Service temporarily unavailable. Please try again.',
+    invalidResponse: 'Received an incomplete response from the service. Please try again.',
     network: 'Could not reach the service. Check your connection.',
     fallback: code => `Request failed (${code}).`,
   },
@@ -409,6 +416,7 @@ const zhCN: CopyCatalog = {
     afdianQueryFailed: '无法连接爱发电接口，请稍后重试。',
     afdianRateLimited: '爱发电接口触发限流，请稍后再试。',
     serviceUnavailable: '服务暂时不可用，请稍后重试。',
+    invalidResponse: '服务返回了不完整或异常的响应，请重试。',
     network: '无法连接到服务，请检查网络后重试。',
     fallback: code => `请求失败（${code}）。`,
   },

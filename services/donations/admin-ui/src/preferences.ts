@@ -1,13 +1,16 @@
-export const SUPPORTED_LOCALES = ['en', 'zh-CN'] as const
-export type Locale = (typeof SUPPORTED_LOCALES)[number]
+import {
+  APPEARANCES,
+  SUPPORTED_LOCALES,
+  type Appearance,
+  type Locale,
+} from './locales'
+
+export { APPEARANCES, SUPPORTED_LOCALES, type Appearance, type Locale }
 
 export const LANGUAGE_NAMES: Readonly<Record<Locale, string>> = {
   en: 'English',
   'zh-CN': '简体中文',
 }
-
-export const APPEARANCES = ['system', 'light', 'dark'] as const
-export type Appearance = (typeof APPEARANCES)[number]
 
 // Share localStorage keys with WindShare's other management consoles.
 const LANGUAGE_KEY = 'windshare.console.language'
