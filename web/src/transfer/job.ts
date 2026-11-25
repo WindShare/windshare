@@ -97,6 +97,14 @@ export class TransferJob {
   #failedFiles = 0n
   #failedDirectories = 0n
   #sourceOmittedEntries = 0n
+  // Shared per-job callback identities let LaneSet ref-count remaining work once
+  // across concurrent files and let BlockBroker deduplicate shared receipt callbacks.
+  readonly #onObjectBytes = (bytes: number) => this.#tracker.observeObjectBytes(bytes)
+  readonly #remainingWork = () => {
+    const snap = this.#tracker.snapshot()
+    const rem = Number(snap.discoveredBytes - snap.materializedBytes)
+    return { bytes: Math.max(0, rem), known: this.#discoveryComplete && Number.isSafeInteger(rem) }
+  }
 
   constructor(options: TransferJobOptions) {
     this.transferJobId = options.transferJobId ?? createTaskId()
@@ -338,14 +346,10 @@ export class TransferJob {
       ...(this.#options.onUncheckpointedWrite === undefined ? {} : { onUncheckpointedWrite: this.#options.onUncheckpointedWrite }),
       ...(this.#options.output.capabilities.resumable ? { trackWrite } : {}),
       onInitialCoverage: bytes => this.#tracker.observeInitialCoverage(bytes),
-      onObjectBytes: bytes => this.#tracker.observeObjectBytes(bytes),
+      onObjectBytes: this.#onObjectBytes,
       onWriteCoverageChange: delta => this.#tracker.observeWriteCoverageChange(delta),
       onCapacityWait: (delta, ms, attempt) => this.#tracker.observeCapacityWait(delta, ms, attempt),
-      remainingWork: () => {
-        const snap = this.#tracker.snapshot()
-        const rem = Number(snap.discoveredBytes - snap.materializedBytes)
-        return { bytes: Math.max(0, rem), known: this.#discoveryComplete && Number.isSafeInteger(rem) }
-      },
+      remainingWork: this.#remainingWork,
     }
     try {
       this.#applyFileOutcome(file, await transferSingleFile(context, file))
