@@ -32,9 +32,9 @@ export function Notice({ feedback }: { feedback: Feedback | null }) {
   const { locale } = useLocale()
   if (!feedback) return null
   const failed = feedback.kind === 'error'
-  return <p className={'notice ' + feedback.kind} role={failed ? 'alert' : 'status'}>
+  return <div className={'notice ' + feedback.kind} role={failed ? 'alert' : 'status'}>
     <Icon name={NOTICE_ICONS[feedback.kind]} /><span>{feedback.message.format(locale)}</span>
-  </p>
+  </div>
 }
 
 export function ReadError({ error, retry }: { error: Message | null; retry: () => void }) {

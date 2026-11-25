@@ -11,7 +11,7 @@ export function ManagedTURN({ api }: { api: RelayClient }) {
   const status = useResource(api.turnStatus)
   const action = useAction()
   return (
-    <section className="card managed-turn">
+    <section className="panel managed-turn">
       <label>
         <input
           type="checkbox"

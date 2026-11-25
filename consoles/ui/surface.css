@@ -40,7 +40,7 @@ main:focus, h1[tabindex="-1"]:focus { outline: 0; }
 .padded > * + * { margin-block-start: 1.2rem; }
 .badge { display: inline-flex; width: fit-content; align-items: center; gap: .38rem; padding: .16rem .6rem; border-radius: 2rem; color: var(--muted); background: var(--surface-muted); font-size: .77rem; line-height: 1.6; font-weight: 570; }
 .badge::before { content: ""; width: .34rem; height: .34rem; border-radius: 50%; background: currentColor; flex: none; }
-.badge.good, .success { color: var(--success-ink); background: var(--success-surface); }
+.badge.good, .notice.success { color: var(--success-ink); background: var(--success-surface); }
 .badge.info { background: var(--lilac); color: var(--lilac-ink); }
 .badge.danger { background: var(--error-surface); color: var(--error-ink); }
 .badge.warning { background: var(--warning-surface); color: var(--warning-ink); }
@@ -62,7 +62,7 @@ main:focus, h1[tabindex="-1"]:focus { outline: 0; }
 .notice, .read-error { display: flex; align-items: flex-start; gap: .65rem; padding: .85rem 1rem; border-radius: .65rem; font-size: .9rem; }
 .notice > .icon, .read-error > .icon { margin-top: .17rem; }
 .notice.warning { background: var(--warning-surface); color: var(--warning-ink); }
-.error, .read-error { background: var(--error-surface); color: var(--error-ink); }
+.notice.error, .read-error { background: var(--error-surface); color: var(--error-ink); }
 .read-error { align-items: center; }
 .read-error > span { flex: 1; }
 .read-error > .icon { margin: 0; }
