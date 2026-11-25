@@ -121,7 +121,10 @@ describe('v2 browser gateway connectivity injection', () => {
     const onContentLaneAdmitted = vi.fn()
     const onContentLaneDetached = vi.fn()
     const gateway = new BrowserReceiverGateway({
-      network: { resolve: resolveLinkRelays, icePool: defaultICEEndpointPool },
+      network: {
+        resolve: capability => ({ candidates: resolveLinkRelays(capability), report: undefined }),
+        icePool: defaultICEEndpointPool,
+      },
       offersFactory,
       nativePeerUsable,
       protocolTrace,

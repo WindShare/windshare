@@ -9,6 +9,12 @@ function directoryHasRelay(directory: RelayDirectory, identity: string): boolean
   return directory.snapshot?.nodes.some(node => node.identity === identity) ?? false
 }
 
+export interface ShareReport {
+  readonly url: string | undefined
+  subscribe(listener: () => void): () => void
+  close(): void
+}
+
 export class OfficialShareReporter {
   readonly #origin: string
 
@@ -20,7 +26,37 @@ export class OfficialShareReporter {
     this.#origin = url.origin
   }
 
-  watchReport(
+  track(
+    share: string,
+    candidates: RelayCandidateStream,
+    directory: RelayDirectory,
+  ): ShareReport {
+    let url: string | undefined
+    let closed = false
+    const listeners = new Set<() => void>()
+    const stop = this.#watchReport(share, candidates, directory, next => {
+      if (closed || url === next) return
+      url = next
+      for (const listener of listeners) listener()
+    })
+    return {
+      get url() { return url },
+      subscribe(listener: () => void) {
+        if (closed) return () => undefined
+        listeners.add(listener)
+        return () => { listeners.delete(listener) }
+      },
+      close() {
+        if (closed) return
+        closed = true
+        url = undefined
+        stop()
+        listeners.clear()
+      },
+    }
+  }
+
+  #watchReport(
     share: string,
     candidates: RelayCandidateStream,
     directory: RelayDirectory,
@@ -50,6 +86,7 @@ export class OfficialShareReporter {
     else stopCandidates = unsubscribeCandidates
     return stop
   }
+
   reportURL(share: string): string {
     const url = new URL('/report', this.#origin)
     url.hash = new URLSearchParams({ share }).toString()

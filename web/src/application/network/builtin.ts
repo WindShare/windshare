@@ -6,7 +6,7 @@ import type { NetworkRoot } from '../../network/node-directory'
 import type { Suite02CapabilityLink } from '../../crypto/suite02-link'
 import { resolveLinkRelays } from './resolve'
 import type { RelayCandidates } from '../../receiver/relay-selection/candidates'
-import { OfficialShareReporter } from './report'
+import { OfficialShareReporter, type ShareReport } from './report'
 
 export interface BuiltinNetworkRelease {
   readonly network: string
@@ -21,14 +21,16 @@ export interface BuiltinNetworkDependencies {
   readonly directory?: Pick<NetworkDirectoryOptions, 'cache' | 'fetch' | 'now' | 'origin'>
 }
 
+export interface ResolvedLinkRelays {
+  readonly candidates: RelayCandidates
+  readonly report: ShareReport | undefined
+}
+
 export class BuiltinNetwork {
   readonly #release: BuiltinNetworkRelease
   readonly #directoryOptions: BuiltinNetworkDependencies['directory']
   #directory: NetworkDirectory | undefined
   readonly #reporter: OfficialShareReporter | undefined
-  readonly #reportListeners = new Set<() => void>()
-  #reportURL: string | undefined
-  #stopReport: (() => void) | undefined
   readonly #observe: ((event: DirectoryObservation) => void) | undefined
   constructor(
     observe?: (event: DirectoryObservation) => void,
@@ -38,21 +40,6 @@ export class BuiltinNetwork {
     this.#release = dependencies.release ?? (release as BuiltinNetworkRelease)
     this.#directoryOptions = dependencies.directory
     if (this.#release.authority) this.#reporter = new OfficialShareReporter(this.#release.authority.url)
-  }
-  getReportURL = (): string | undefined => this.#reportURL
-  observeReport = (listener: () => void): (() => void) => {
-    this.#reportListeners.add(listener)
-    return () => { this.#reportListeners.delete(listener) }
-  }
-  clearReport(): void {
-    this.#stopReport?.()
-    this.#stopReport = undefined
-    this.#setReportURL(undefined)
-  }
-  #setReportURL(next: string | undefined): void {
-    if (this.#reportURL === next) return
-    this.#reportURL = next
-    this.#reportListeners.forEach(listener => listener())
   }
   #source(): NetworkDirectory {
     const origin = this.#directoryOptions?.origin ?? (typeof location === 'undefined' ? undefined : location.origin)
@@ -72,32 +59,15 @@ export class BuiltinNetwork {
     return this.#directory
   }
   icePool = (): ICEEndpointPool => directoryICEEndpointPool(this.#release.roots.length === 0 ? undefined : this.#source().snapshot)
-  resolve(capability: Suite02CapabilityLink): RelayCandidates {
+  resolve(capability: Suite02CapabilityLink): ResolvedLinkRelays {
     const source = capability.nodeAliases.length > 0 || this.#reporter ? this.#source() : undefined
     const candidates = resolveLinkRelays(capability, source)
-    this.#stopReport?.()
-    this.#stopReport = undefined
-    if (this.#reporter && source) {
-      let matched = false
-      const stop = this.#reporter.watchReport(capability.shareId, candidates, source, url => {
-        matched = true
-        this.#stopReport = undefined
-        this.#setReportURL(url)
-      })
-      if (!matched) {
-        this.#stopReport = stop
-        this.#setReportURL(undefined)
-      }
-      return candidates
-    }
-    this.#setReportURL(undefined)
-    return candidates
+    const report = this.#reporter && source
+      ? this.#reporter.track(capability.shareId, candidates, source)
+      : undefined
+    return Object.freeze({ candidates, report })
   }
   close(): void {
-    this.#stopReport?.()
-    this.#stopReport = undefined
-    this.#reportURL = undefined
     this.#directory?.close()
-    this.#reportListeners.clear()
   }
 }

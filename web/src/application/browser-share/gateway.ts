@@ -1,4 +1,5 @@
 import { BuiltinNetwork } from '../network/builtin'
+import type { ShareReport } from '../network/report'
 import {
   CatalogClient,
   type CatalogScanProgressListener,
@@ -27,7 +28,7 @@ import { encodeBase64Url } from '../../crypto/bytes'
 import { BrowserSessionFactory } from '../../receiver/session-factory'
 import { joinBrowserRelays } from '../../receiver/browser-join'
 import type { InitialJoinOptions } from '../../receiver/initial-join'
-import { receiverRelayBases } from '../../receiver/relay-selection/candidates'
+import { receiverRelayBases, type RelayCandidateSource } from '../../receiver/relay-selection/candidates'
 import type { ReceiverPathActivitySnapshot } from '../../receiver/path-activity'
 import type { ConnectivityPolicy } from '../../connectivity/receiver-policy'
 import { ReceiverReconnectSupervisor } from '../../receiver/supervisor'
@@ -71,6 +72,7 @@ export class BrowseNavigationError extends Error {
 export class JoinedBrowserShare {
   readonly descriptor: ShareDescriptor
   readonly recoveryIdentity: string
+  readonly report: ShareReport | undefined
   #selection = new SelectionPolicy(true)
 
   get selection(): SelectionPolicy { return this.#selection }
@@ -94,9 +96,11 @@ export class JoinedBrowserShare {
     readonly supervisor: ReceiverReconnectSupervisor
     readonly catalog: CatalogClient
     readonly recoveryIdentity: string
+    readonly report?: ShareReport
   }) {
     this.descriptor = options.descriptor
     this.recoveryIdentity = options.recoveryIdentity
+    this.report = options.report
     this.#supervisor = options.supervisor
     this.#catalog = options.catalog
   }
@@ -241,6 +245,11 @@ export class JoinedBrowserShare {
   async #close(): Promise<void> {
     const failures: unknown[] = []
     try {
+      this.report?.close()
+    } catch (error) {
+      failures.push(error)
+    }
+    try {
       this.#catalog.close()
     } catch (error) {
       failures.push(error)
@@ -251,6 +260,16 @@ export class JoinedBrowserShare {
     }
     if (failures.length > 0) throw new AggregateError(failures, 'Closing the joined share failed')
   }
+}
+
+export interface BrowserJoinOptions extends InitialJoinOptions {
+  /**
+   * Called once relay resolution produces a per-share report tracker.
+   * Returning true transfers failure-path cleanup ownership to the caller
+   * unless the join signal is aborted; successful joins transfer ownership
+   * to the returned JoinedBrowserShare.
+   */
+  readonly onReport?: (report: ShareReport) => boolean
 }
 
 export interface BrowserReceiverGatewayOptions {
@@ -301,9 +320,11 @@ export class BrowserReceiverGateway {
     this.#onContentLaneDetached = options.onContentLaneDetached
   }
 
-  async join(input: string, pageUrl: string, signal?: AbortSignal, recovery: InitialJoinOptions = {}): Promise<JoinedBrowserShare> {
+  async join(input: string, pageUrl: string, signal?: AbortSignal, recovery: BrowserJoinOptions = {}): Promise<JoinedBrowserShare> {
     signal?.throwIfAborted()
     let capability: Suite02CapabilityLink | undefined
+    let report: ShareReport | undefined
+    let reportAdopted = false
     let relay: RelayReceiverConnection | undefined
     let session: ReceiverSessionRuntime | undefined
     let store: CatalogPageStore | undefined
@@ -313,8 +334,10 @@ export class BrowserReceiverGateway {
     try {
       capability = await capabilityFromInput(input, pageUrl)
       signal?.throwIfAborted()
-      const relayBases = this.#relayBases ?? this.#network.resolve(capability)
-      const initial = await joinBrowserRelays(relayBases, capability,
+      const resolved = this.#resolveRelays(capability, recovery.onReport)
+      report = resolved.report
+      reportAdopted = resolved.reportAdopted
+      const initial = await joinBrowserRelays(resolved.relayBases, capability,
         signal ?? new AbortController().signal, this.#protocolTrace, recovery)
       relay = initial.relay
       session = initial.session
@@ -363,25 +386,67 @@ export class BrowserReceiverGateway {
         supervisor,
         catalog,
         recoveryIdentity,
+        ...(report === undefined ? {} : { report }),
       })
     } catch (error) {
-      try {
-        (catalog ?? store)?.close()
-      } catch {
-        // The join failure remains the actionable cause; all other resources are
-        // still closed below so a failed storage close cannot interrupt cleanup.
-      }
-      await Promise.allSettled([
-        ...(supervisor === undefined ? [] : [supervisor.close()]),
-        ...(supervisor !== undefined || session === undefined ? [] : [session.close()]),
-        ...(supervisor !== undefined || relay === undefined ? [] : [relay.close()]),
-      ])
-      if (supervisor === undefined) sessionFactory?.close()
+      await cleanupFailedJoin({
+        report: !reportAdopted || signal?.aborted ? report : undefined,
+        catalog,
+        store,
+        supervisor,
+        session,
+        relay,
+        sessionFactory,
+      })
       throw error
     } finally {
       capability?.readSecret.fill(0)
     }
   }
+
+  #resolveRelays(
+    capability: Suite02CapabilityLink,
+    onReport?: BrowserJoinOptions['onReport'],
+  ): {
+    readonly relayBases: RelayCandidateSource
+    readonly report: ShareReport | undefined
+    readonly reportAdopted: boolean
+  } {
+    if (this.#relayBases !== undefined) {
+      return { relayBases: this.#relayBases, report: undefined, reportAdopted: false }
+    }
+    const resolved = this.#network.resolve(capability)
+    const reportAdopted = resolved.report !== undefined && onReport?.(resolved.report) === true
+    return { relayBases: resolved.candidates, report: resolved.report, reportAdopted }
+  }
+}
+
+async function cleanupFailedJoin(resources: {
+  readonly report: ShareReport | undefined
+  readonly catalog: CatalogClient | undefined
+  readonly store: CatalogPageStore | undefined
+  readonly supervisor: ReceiverReconnectSupervisor | undefined
+  readonly session: ReceiverSessionRuntime | undefined
+  readonly relay: RelayReceiverConnection | undefined
+  readonly sessionFactory: BrowserSessionFactory | undefined
+}): Promise<void> {
+  try {
+    resources.report?.close()
+  } catch {
+    // The join failure remains the actionable cause; cleanup continues below.
+  }
+  try {
+    (resources.catalog ?? resources.store)?.close()
+  } catch {
+    // The join failure remains the actionable cause; all other resources are
+    // still closed below so a failed storage close cannot interrupt cleanup.
+  }
+  await Promise.allSettled([
+    ...(resources.supervisor === undefined ? [] : [resources.supervisor.close()]),
+    ...(resources.supervisor !== undefined || resources.session === undefined ? [] : [resources.session.close()]),
+    ...(resources.supervisor !== undefined || resources.relay === undefined ? [] : [resources.relay.close()]),
+  ])
+  if (resources.supervisor === undefined) resources.sessionFactory?.close()
 }
 
 function gatewayConnectivityOptions(

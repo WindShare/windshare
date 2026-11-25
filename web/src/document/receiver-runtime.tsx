@@ -39,9 +39,9 @@ export function createReceiverRuntime(
   controller.initialize({ capabilityInput: null, pageUrl })
   return {
     surface: controller.presentation.surface,
-    openLocation: captured => { network.clearReport(); controller.openLocation(captured) },
+    openLocation: captured => controller.openLocation(captured),
     refreshDownloads: () => controller.refreshDownloads(),
-    View: function ReceiverSurface() { return <ReceiverApp controller={controller} report={network} /> },
+    View: function ReceiverSurface() { return <ReceiverApp controller={controller} /> },
     Downloads: function RuntimeDownloads(props) {
       return <ReceiverDownloads controller={controller} {...props} />
     },

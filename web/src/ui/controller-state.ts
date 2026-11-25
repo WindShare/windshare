@@ -151,6 +151,7 @@ export function initialReceiverSnapshot(): ReceiverSnapshot {
   return Object.freeze({
     connection: { kind: 'idle' as const },
     share: null,
+    reportUrl: null,
     browse: { kind: 'idle' as const, error: null },
     draft: EMPTY_SELECTION_DRAFT,
     startAdmission: { allowed: false, reason: 'connectFirst' as const, canReleaseCurrent: false, localChoice: null },

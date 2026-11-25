@@ -36,6 +36,7 @@ import {
 import { BrowserNavigationCoordinator } from './controller/navigation'
 import { JoinedShareObservation } from './controller/joined-observation'
 import { ReceiverProjections } from './controller/projections'
+import { ShareReportScope } from './controller/share-report'
 import { initialReceiverSnapshot, joiningReceiverSnapshot, receiverProgressSnapshot } from './controller-state'
 import { projectDraft, scopeSelection } from './draft/model'
 import { SelectionDraftScope } from './draft/scope'
@@ -70,6 +71,7 @@ export class ReceiverController {
   readonly #previews: PreviewController
   readonly #browse: BrowserNavigationCoordinator
   readonly #joinedObservation: JoinedShareObservation
+  readonly #shareReport: ShareReportScope
   readonly #unsubscribeReceive: () => void
   readonly #unsubscribePreferences: (() => void) | undefined
   readonly #operationTransitions: ReceiveOperationTransitions
@@ -119,6 +121,9 @@ export class ReceiverController {
       onPathActivity: pathActivity => this.#publish({ ...this.#snapshot, pathActivity }),
       onCatalogScanProgress: (joined, progress) => this.#browse.catalogScanProgress(joined, progress),
       onProtocolGeneration: joined => this.#beginSelectionProjection(joined),
+    })
+    this.#shareReport = new ShareReportScope(() => {
+      if (!this.#disposed) this.#publish(this.#snapshot)
     })
     this.#snapshot = this.#applyReceiveSnapshot(initialReceiverSnapshot())
     this.presentation = new ReceiverProjections(
@@ -214,7 +219,11 @@ export class ReceiverController {
     if (this.#snapshot.share === null && this.#joined !== undefined) {
       const joined = this.#joined
       this.#joined = undefined
+      this.#joinedObservation.close()
+      this.#shareReport.clear()
       joined.close().catch(() => undefined)
+    } else {
+      this.#shareReport.clearPending()
     }
     this.#receive.observeConnection(null)
     this.#publish({
@@ -450,6 +459,7 @@ export class ReceiverController {
     this.#joinNavigation?.abort(new DOMException('Receiver disposed', 'AbortError'))
     this.#browse.cancel(new DOMException('Receiver disposed', 'AbortError'))
     this.#joinedObservation.close()
+    this.#shareReport.close()
     this.#unsubscribeReceive()
     this.#unsubscribePreferences?.()
     await Promise.allSettled([
@@ -492,6 +502,7 @@ export class ReceiverController {
       this.#joinNavigation?.abort(new DOMException('A newer join replaced this one', 'AbortError'))
       this.#browse.cancel(new DOMException('A newer join replaced this one', 'AbortError'))
       this.#operationTransitions.cancelPendingReplacement()
+      this.#shareReport.clearPending()
       navigation = new AbortController()
       this.#joinNavigation = navigation
       previous = this.#joined
@@ -508,6 +519,7 @@ export class ReceiverController {
       const joined = await lease.handoff(ownedInput =>
         this.#gateway.join(ownedInput, pageUrl, activeNavigation.signal, {
           control: recovery,
+          onReport: report => this.#joinReplacementIsCurrent(activeNavigation) && this.#shareReport.adoptPending(report),
           onState: join => {
             if (!this.#joinReplacementIsCurrent(activeNavigation)) return
             this.#publish({ ...this.#snapshot, connection: { kind: 'idle', join } })
@@ -519,6 +531,7 @@ export class ReceiverController {
         return false
       }
       this.#joined = joined
+      this.#shareReport.commit(joined.report)
       this.#draftScope.reset()
       this.#joinRecovery = undefined
       joinedReplacementInstalled = true
@@ -713,6 +726,7 @@ export class ReceiverController {
           })
     this.#snapshot = Object.freeze({
       ...snapshot,
+      reportUrl: this.#shareReport.url,
       activeReceiveOperationId: this.#receive.getSnapshot().activeTaskId,
       startAdmission,
     })

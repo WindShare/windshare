@@ -8,7 +8,7 @@ import type { Appearance } from './preferences/model'
 import { ReceiverHeading } from './receiver-presentation/ReceiverHeading'
 import { ReceiverBrowsing } from './receiver-presentation/ReceiverBrowsing'
 import { ReceiverIcon, type ReceiverIconName } from './receiver-presentation/ReceiverIcon'
-import { ReportLink, type ShareReportSource } from './receiver-presentation/ReportLink'
+import { ReportLink } from './receiver-presentation/ReportLink'
 import { ReceiverActivity, ReceiverDownloads, ReceiverPrimarySaving } from './receiver-presentation/ReceiverTasks'
 
 const APPEARANCE_ORDER: readonly Appearance[] = ['system', 'light', 'dark']
@@ -30,7 +30,7 @@ function AppearanceToggle() {
 
 const EMPTY_DISMISSED_TASKS: ReadonlySet<string> = new Set()
 
-export function ReceiverApp({ controller, report }: { readonly controller: ReceiverController; readonly report?: ShareReportSource }) {
+export function ReceiverApp({ controller }: { readonly controller: ReceiverController }) {
   const t = useCopy(shellCopy)
   const source = controller.presentation.shareScope
   const { kind, visitId } = useSyncExternalStore(source.subscribe, source.getSnapshot, source.getSnapshot)
@@ -61,7 +61,7 @@ export function ReceiverApp({ controller, report }: { readonly controller: Recei
       <div className="receiver-header-inner">
         <a className="brand" href="/" aria-label={t.home}><WindShareMark size={32} /><span>WindShare</span></a>
         <div className="receiver-header-actions">
-          {report && <ReportLink source={report} />}
+          <ReportLink source={controller.presentation.report} />
           <LanguageSelect className="receiver-language" />
           <AppearanceToggle />
           <ReceiverDownloads controller={controller} open={downloadsOpen} onOpenChange={handleDownloadsOpenChange} />

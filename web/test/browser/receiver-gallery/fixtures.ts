@@ -202,6 +202,7 @@ export async function gallerySnapshot(scenario: Scenario): Promise<GallerySnapsh
     share: single
       ? { kind: scenario === 'unsupported' ? 'file' : kind, shareInstance, name: file.name, file }
       : { kind: 'browser', shareInstance, name: 'Summer photos', homeDirectoryId: 'root', singleFolder: true },
+    reportUrl: null,
     browse: { kind: 'ready', error: null },
     draft: { mode: 'scope', scope: 'current-folder', label: 'Summer photos', excludedItems: 2, empty: false },
     activeReceiveOperationId: output.activeTaskId,

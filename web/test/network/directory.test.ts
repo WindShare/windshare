@@ -230,13 +230,16 @@ describe('root-authorized network directory', () => {
         },
       },
     })
+    let report: { close(): void } | undefined
     try {
       const key = await encodeSuite02CapabilityKey(new Uint8Array(16), new Uint8Array(16))
-      const candidates = network.resolve({ ...key, relays: [], nodeAliases: ['missing-node'] })
-      await expect(candidates.all()).rejects.toThrow()
+      const resolved = network.resolve({ ...key, relays: [], nodeAliases: ['missing-node'] })
+      report = resolved.report
+      await expect(resolved.candidates.all()).rejects.toThrow()
       expect(requests.length).toBeGreaterThanOrEqual(2)
       expect(requests.every(url => !url.toLowerCase().includes('github.com'))).toBe(true)
     } finally {
+      report?.close()
       network.close()
     }
   })

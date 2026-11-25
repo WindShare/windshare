@@ -73,6 +73,7 @@ export class ReceiverProjections {
   readonly downloads: PresentationRegion<ReturnType<typeof downloads>>
   readonly surface: PresentationRegion<boolean>
   readonly shareScope: PresentationRegion<ShareScopeSnapshot>
+  readonly report: PresentationRegion<string | null>
   readonly #composer = new TaskComposer()
   readonly #admission: RetainedAdmission
   readonly #activeAdmission: ActiveAdmission
@@ -90,6 +91,7 @@ export class ReceiverProjections {
     this.downloads = new PresentationRegion(downloads(snapshot, composition))
     this.surface = new PresentationRegion(this.#receiving(snapshot))
     this.shareScope = new PresentationRegion(shareScope(snapshot, this.#shareVisitId))
+    this.report = new PresentationRegion(snapshot.reportUrl)
   }
   commit(snapshot: ReceiverSnapshot): void {
     this.browsing.stage(browse(snapshot))
@@ -104,15 +106,17 @@ export class ReceiverProjections {
       this.#shareVisitId += 1
     }
     this.shareScope.stage(shareScope(snapshot, this.#shareVisitId))
+    this.report.stage(snapshot.reportUrl)
     this.browsing.publish()
     this.connection.publish()
     this.task.publish()
     this.downloads.publish()
     this.surface.publish()
     this.shareScope.publish()
+    this.report.publish()
   }
   close(): void {
-    this.browsing.clear(); this.connection.clear(); this.task.clear(); this.surface.clear(); this.shareScope.clear(); this.downloads.clear()
+    this.browsing.clear(); this.connection.clear(); this.task.clear(); this.surface.clear(); this.shareScope.clear(); this.downloads.clear(); this.report.clear()
   }
   #receiving(snapshot: ReceiverSnapshot): boolean {
     return snapshot.share !== null || snapshot.breadcrumbs.length > 0 ||

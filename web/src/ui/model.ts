@@ -122,6 +122,7 @@ export interface ReceiverSnapshot {
   readonly connection: import('../receiver/connection-state').ReceiverConnectionSnapshot |
     Readonly<{ kind: 'idle'; join?: import('../receiver/initial-join').InitialJoinState }>
   readonly share: ShareIdentity | null
+  readonly reportUrl: string | null
   readonly browse: BrowseState
   readonly draft: SelectionDraft
   readonly startAdmission: StartAdmission
