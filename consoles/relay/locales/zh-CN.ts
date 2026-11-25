@@ -3,7 +3,7 @@ import type { en } from './en'
 export const zhCN = {
   managedTURN: '托管 TURN',
   managedTURNHint: '每个 Cloudflare 账号每月有 1,000 GB 免费流量，与 Realtime SFU 共享。超额按 Cloudflare 费率计费。暂停后停止签发新凭据，已签发的凭据在 30 分钟内到期。',
-  managedTURNDashboard: '在 Cloudflare Dashboard 查看用量',
+  managedTURNBilling: '在 Cloudflare Billing 查看用量',
   title: '节点管理台',
   owner: '节点所有者',
   access: '节点访问',
