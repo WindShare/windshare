@@ -190,7 +190,9 @@ impl NetworkAuthority {
             PostCommitReconcile::OnCommitPending | PostCommitReconcile::None => None,
         };
         if let Some(mode) = reconcile_mode {
-            self.reconcile_and_schedule(mode).await;
+            // The SQLite mutation is already committed; post-commit KV/alarm errors
+            // are logged inside reconcile_and_schedule and recovered by alarm or cron.
+            let _ = self.reconcile_and_schedule(mode).await;
         }
         match result {
             Ok(value) => Response::from_json(&value),
@@ -204,26 +206,31 @@ impl NetworkAuthority {
         }
     }
 
-    pub(super) async fn reconcile_alarm(&self) {
-        let outcome = self
+    pub(super) async fn reconcile_alarm(&self) -> Result<()> {
+        match self
             .reconcile_and_schedule(ReconcileMode::PendingOnly)
-            .await;
-        tracing::info!(event = "directory_kv_alarm_handled", ?outcome);
+            .await
+        {
+            Ok(outcome) => {
+                tracing::info!(event = "directory_kv_alarm_handled", ?outcome);
+                Ok(())
+            }
+            Err(error) => {
+                tracing::warn!(event = "directory_kv_alarm_failed", %error);
+                Err(error)
+            }
+        }
     }
 
-    async fn reconcile_and_schedule(&self, mode: ReconcileMode) -> Option<ReconcileOutcome> {
+    async fn reconcile_and_schedule(&self, mode: ReconcileMode) -> Result<ReconcileOutcome> {
         let _writer = self.publishing.lock().await;
-        let outcome = match self.reconcile_locked(mode).await {
-            Ok(outcome) => outcome,
-            Err(error) => {
-                tracing::warn!(event = "directory_kv_reconcile_failed", ?mode, %error);
-                return None;
-            }
-        };
-        if let Err(error) = self.sync_kv_alarm(outcome).await {
+        let outcome = self.reconcile_locked(mode).await.inspect_err(|error| {
+            tracing::warn!(event = "directory_kv_reconcile_failed", ?mode, %error);
+        })?;
+        self.sync_kv_alarm(outcome).await.inspect_err(|error| {
             tracing::warn!(event = "directory_kv_alarm_update_failed", ?outcome, %error);
-        }
-        Some(outcome)
+        })?;
+        Ok(outcome)
     }
 
     async fn reconcile_locked(&self, mode: ReconcileMode) -> Result<ReconcileOutcome> {
@@ -273,10 +280,13 @@ impl NetworkAuthority {
             return Ok(());
         }
         if self.kv_alarm_deadline.get().is_some() {
-            storage
-                .delete_alarm()
-                .await
-                .map_err(|error| anyhow::anyhow!("{error}"))?;
+            // KV is already synced (or rapid retries are intentionally exhausted);
+            // clearing a redundant alarm is best-effort and must not fail the alarm handler.
+            if let Err(error) = storage.delete_alarm().await {
+                tracing::warn!(event = "directory_kv_alarm_clear_failed", ?outcome, %error);
+            }
+            // Invalidate the cached deadline either way so the next required arm
+            // checks authoritative alarm storage instead of trusting a stale cache.
             self.kv_alarm_deadline.set(None);
         }
         Ok(())

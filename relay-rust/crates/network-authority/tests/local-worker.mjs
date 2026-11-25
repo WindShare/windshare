@@ -114,6 +114,9 @@ export async function fixture(
       constructor(state, env) {
         this.state = state;
         this.kvFailCount = 0;
+        this.alarmSetFailCount = 0;
+        this.alarmDeleteFailCount = 0;
+        this.deliverySqlFailCount = 0;
         this.signingCertReads = 0;
         this.signingSeedReads = 0;
         this.ddlCount = 0;
@@ -128,6 +131,10 @@ export async function fixture(
                   self.ddlCount += 1;
                   if (self.transactionDepth > 0) self.ddlInTransaction += 1;
                 }
+                if (self.deliverySqlFailCount > 0 && bindings.includes('directory/kv-delivery')) {
+                  self.deliverySqlFailCount -= 1;
+                  throw new Error('DO SQLite delivery ledger unavailable');
+                }
                 return target.exec(query, ...bindings);
               };
             }
@@ -138,6 +145,24 @@ export async function fixture(
         const wrapStorage = storage => new Proxy(storage, {
           get(target, prop) {
             if (prop === 'sql') return wrapSql(target.sql);
+            if (prop === 'setAlarm') {
+              return (...args) => {
+                if (self.alarmSetFailCount > 0) {
+                  self.alarmSetFailCount -= 1;
+                  return Promise.reject(new Error('DO setAlarm unavailable'));
+                }
+                return target.setAlarm(...args);
+              };
+            }
+            if (prop === 'deleteAlarm') {
+              return (...args) => {
+                if (self.alarmDeleteFailCount > 0) {
+                  self.alarmDeleteFailCount -= 1;
+                  return Promise.reject(new Error('DO deleteAlarm unavailable'));
+                }
+                return target.deleteAlarm(...args);
+              };
+            }
             if (prop === 'transactionSync') {
               return callback => {
                 self.transactionDepth += 1;
@@ -209,12 +234,31 @@ export async function fixture(
           this.kvFailCount = count;
           return Response.json({ count: this.kvFailCount });
         }
+        if (path === '/__test/alarm-faults' && request.method === 'POST') {
+          const { setAlarm = 0, deleteAlarm = 0, deliverySql = 0 } = await request.json();
+          this.alarmSetFailCount = setAlarm;
+          this.alarmDeleteFailCount = deleteAlarm;
+          this.deliverySqlFailCount = deliverySql;
+          return Response.json({
+            setAlarm: this.alarmSetFailCount,
+            deleteAlarm: this.alarmDeleteFailCount,
+            deliverySql: this.deliverySqlFailCount,
+          });
+        }
         if (path === '/__test/alarm' && request.method === 'GET') {
           return Response.json({ alarm: await this.state.storage.getAlarm() });
         }
+        if (path === '/__test/alarm' && request.method === 'DELETE') {
+          await this.state.storage.deleteAlarm();
+          return Response.json({ alarm: null });
+        }
         if (path === '/__test/run-alarm' && request.method === 'POST') {
           await this.state.storage.deleteAlarm();
-          return this.authority.alarm();
+          try {
+            return await this.authority.alarm();
+          } catch (error) {
+            return Response.json({ error: String(error) }, { status: 500 });
+          }
         }
         if (path === '/__test/signing-reads' && request.method === 'GET') {
           return Response.json({

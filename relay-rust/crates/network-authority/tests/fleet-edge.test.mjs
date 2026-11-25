@@ -367,6 +367,25 @@ test('enrolling and managing a canary publishes signed revisions and coalesces K
     assert.equal((await worker.fetch(publicURL)).status, 200);
   }
 
+  // Post-commit KV and alarm-arming failures stay non-fatal on HTTP fleet mutations.
+  await authority.fetch('https://authority/__test/age-delivery', { method: 'POST', body: JSON.stringify({ ms: 120_000 }) });
+  await authority.fetch('https://authority/__test/kv-fail', { method: 'POST', body: JSON.stringify({ count: 1 }) });
+  await authority.fetch('https://authority/__test/alarm-faults', { method: 'POST', body: JSON.stringify({ setAlarm: 1 }) });
+  await call('/v1/admin/nodes/manage', {
+    node_key: enrollment.node_key,
+    expected_state: current.state,
+    expected_policy_version: current.version,
+    action: { kind: 'drain' },
+  }, { adminAuth: true });
+  const drained = await directory();
+  assert.equal(drained.serial, updated.serial + 1);
+  assert.equal(drained.kv_sync_pending, true);
+  assert.equal(await getAlarm(), null);
+  const drainedFlush = await authority.fetch('https://authority/__test/run-alarm', { method: 'POST' });
+  assert.equal(drainedFlush.status, 200);
+  assert.equal(directoryDigest(JSON.parse(await kv.get(KV_DIRECTORY_KEY))), drained.digest);
+  assert.equal((await directory()).kv_sync_pending, false);
+
   // All partial indexes exist upfront from ensure_schema(), and neither report reads nor PoW pruning run DDL.
   const expectedIndexes = ['authority_reports_newest', 'registration_email_expiry', 'registration_work_expiry'];
   const beforeOnlineQueries = await (await authority.fetch('https://authority/__test/schema-audit')).json();
@@ -451,6 +470,69 @@ test('directory KV publish failures retry via bounded Durable Object alarms and 
   // Once KV recovers, the next scheduled tick repairs KV and leaves no alarm armed.
   const recovered = await worker.scheduled({ cron: '0 * * * *' });
   assert.equal(recovered.outcome, 'ok');
+  assert.equal(await kv.get(KV_DIRECTORY_KEY), published);
+  assert.equal(await getAlarm(), null);
+
+  const setAlarmFaults = async faults => {
+    const response = await authority.fetch('https://authority/__test/alarm-faults', {
+      method: 'POST',
+      body: JSON.stringify(faults),
+    });
+    assert.equal(response.status, 200);
+  };
+  const runAlarmExpectError = async () => {
+    const response = await authority.fetch('https://authority/__test/run-alarm', { method: 'POST' });
+    assert.equal(response.status, 500);
+    return response.json();
+  };
+
+  // Unexpected SQLite reconciliation errors inside alarm() must propagate Err so Cloudflare retries.
+  await authority.fetch('https://authority/__test/age-delivery', { method: 'POST', body: JSON.stringify({ ms: 120_000 }) });
+  await kv.delete(KV_DIRECTORY_KEY);
+  await failKvPuts(1);
+  assert.equal((await worker.scheduled({ cron: '0 * * * *' })).outcome, 'ok');
+  assert.ok((await getAlarm()) !== null);
+  await setAlarmFaults({ deliverySql: 1 });
+  const sqlFailure = await runAlarmExpectError();
+  assert.match(sqlFailure.error, /delivery ledger unavailable/);
+  assert.equal(await kv.get(KV_DIRECTORY_KEY), null);
+  await runAlarm();
+  assert.equal(await kv.get(KV_DIRECTORY_KEY), published);
+  assert.equal(await getAlarm(), null);
+
+  // Failing to re-arm a required retry alarm inside alarm() must also propagate Err for runtime retry.
+  await authority.fetch('https://authority/__test/age-delivery', { method: 'POST', body: JSON.stringify({ ms: 120_000 }) });
+  await kv.delete(KV_DIRECTORY_KEY);
+  await failKvPuts(2);
+  assert.equal((await worker.scheduled({ cron: '0 * * * *' })).outcome, 'ok');
+  assert.ok((await getAlarm()) !== null);
+  await setAlarmFaults({ setAlarm: 1 });
+  const rearmFailure = await runAlarmExpectError();
+  assert.match(rearmFailure.error, /setAlarm unavailable/);
+  assert.equal(await getAlarm(), null);
+  assert.equal(await kv.get(KV_DIRECTORY_KEY), null);
+  await runAlarm();
+  assert.equal(await kv.get(KV_DIRECTORY_KEY), published);
+  assert.equal(await getAlarm(), null);
+
+  // Best-effort deleteAlarm failure after a successful publish must not fail reconciliation
+  // and must invalidate the cached deadline so a subsequent deferred publish re-arms from storage.
+  await authority.fetch('https://authority/__test/age-delivery', { method: 'POST', body: JSON.stringify({ ms: 120_000 }) });
+  await kv.delete(KV_DIRECTORY_KEY);
+  await failKvPuts(1);
+  assert.equal((await worker.scheduled({ cron: '0 * * * *' })).outcome, 'ok');
+  assert.ok((await getAlarm()) !== null);
+  await setAlarmFaults({ deleteAlarm: 1 });
+  assert.equal((await worker.scheduled({ cron: '0 * * * *' })).outcome, 'ok');
+  assert.equal(await kv.get(KV_DIRECTORY_KEY), published);
+  assert.ok((await getAlarm()) !== null, 'failed deleteAlarm leaves the existing alarm untouched');
+  await authority.fetch('https://authority/__test/alarm', { method: 'DELETE' });
+  await authority.fetch('https://authority/__test/age-delivery', { method: 'POST', body: JSON.stringify({ ms: 120_000 }) });
+  await kv.delete(KV_DIRECTORY_KEY);
+  await failKvPuts(1);
+  assert.equal((await worker.scheduled({ cron: '0 * * * *' })).outcome, 'ok');
+  assert.ok((await getAlarm()) !== null, 'invalidated deadline cache must re-arm a fresh alarm');
+  await runAlarm();
   assert.equal(await kv.get(KV_DIRECTORY_KEY), published);
   assert.equal(await getAlarm(), null);
 

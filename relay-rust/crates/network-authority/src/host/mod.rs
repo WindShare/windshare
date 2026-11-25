@@ -199,9 +199,11 @@ impl DurableObject for NetworkAuthority {
         // Clear the cached deadline before awaiting the publishing lock so any
         // concurrent request re-arms from authoritative alarm storage.
         self.kv_alarm_deadline.set(None);
-        self.reconcile_alarm().await;
-        // Return Ok after handling and re-arming so the Workers runtime does not
-        // layer its own unbounded alarm retries on top of RETRY_BACKOFF_MS.
+        self.reconcile_alarm().await.map_err(failure)?;
+        // Return Ok once reconciliation and any required re-arm succeed so the
+        // Workers runtime does not layer its own retries on top of RETRY_BACKOFF_MS;
+        // unexpected reconciliation or re-arm failures propagate above so the
+        // runtime retries the alarm instead of stranding pending KV updates.
         Response::empty()
     }
 }
