@@ -65,11 +65,11 @@ func SelectSources(manual []relayconfig.TURNService, selected []relayprofile.Reg
 // only for a confirmed opposite role, so an ordinary private relay cannot crowd
 // out a working parallel service.
 func activeServices(available []source, unknown map[string]bool, request turngrant.IssueRequest) []source {
-	selected := available
+	selected := slices.Clone(available)
 	if len(request.ServiceIDs) > 0 {
-		selected = slices.DeleteFunc(available, func(s source) bool { return !slices.Contains(request.ServiceIDs, s.ID) })
+		selected = slices.DeleteFunc(selected, func(s source) bool { return !slices.Contains(request.ServiceIDs, s.ID) })
 	} else if len(available) > p.MaxGrantsPerMessage {
-		selected = available[:p.MaxGrantsPerMessage]
+		selected = selected[:p.MaxGrantsPerMessage]
 		role := selected[0].EffectiveRole()
 		if !slices.ContainsFunc(selected, func(s source) bool { return s.EffectiveRole() != role }) {
 			for _, s := range available[p.MaxGrantsPerMessage:] {
