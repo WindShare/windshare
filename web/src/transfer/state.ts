@@ -16,6 +16,7 @@ export type ReceivePartialReason =
 export type ReceiveFailureReason =
   | 'relay-access-denied'
   | 'source-changed'
+  | 'source-busy'
   | 'cancelled'
   | 'session-ended'
   | 'portable-limit-exceeded'

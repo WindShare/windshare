@@ -1,6 +1,6 @@
 import { catalogCapacityReason, classifyNativeError, transferFailureReason } from '../../transfer/fault'
 import type { SettledTransferJobResult } from '../../transfer/job'
-import { transitionReceiveState } from '../../transfer/state'
+import { transitionReceiveState, type ReceiveContentWarning } from '../../transfer/state'
 import { emitOutputTrace, type OutputTraceSource } from '../diagnostics'
 import type { ReceiveStore } from '../store/database'
 import { maxRangeEnd, type OPFSTargetRecord, type ReceiveFileRecord, type ReceiveTaskRecord } from '../store/types'
@@ -289,19 +289,22 @@ export function nextOPFSIncompleteLifecycle(
     })
   }
 
-  return failedOPFSLifecycle(current, status, result.error)
+  return failedOPFSLifecycle(current, status, result.error, warning)
 }
 
 function failedOPFSLifecycle(
   current: ReceiveTaskRecord['lifecycle'],
   status: Exclude<IncompleteOPFSJobStatus, 'paused'>,
   error: unknown,
+  warning: ReceiveContentWarning | null,
 ): ReceiveTaskRecord['lifecycle'] {
   switch (status) {
     case 'stopped':
-      return transitionReceiveState(current, { kind: 'failed', reason: 'cancelled' })
+      return transitionReceiveState(current, { kind: 'failed', reason: 'cancelled', contentWarning: null })
     case 'source-changed':
-      return transitionReceiveState(current, { kind: 'failed', reason: 'source-changed' })
+      return transitionReceiveState(current, { kind: 'failed', reason: 'source-changed', contentWarning: warning })
+    case 'source-busy':
+      return transitionReceiveState(current, { kind: 'failed', reason: 'source-busy', contentWarning: warning })
     case 'partial':
     case 'failed': {
       const reason = transferFailureReason(error)
@@ -309,6 +312,7 @@ function failedOPFSLifecycle(
         kind: 'failed',
         reason,
         ...(reason === 'error' && error instanceof Error ? { detail: error.message } : {}),
+        contentWarning: warning,
       })
     }
   }

@@ -43,6 +43,7 @@ type SettledJobStatus =
   | 'stopped'
   | 'partial'
   | 'source-changed'
+  | 'source-busy'
   | 'failed'
 
 interface TransferJobFacts {
@@ -89,6 +90,7 @@ export class TransferJob {
   #discoveryFailed = false
   #sourceChangedCount = 0n
   #sourceUnavailableCount = 0n
+  #sourceBusyCount = 0n
   readonly #sourceFailures: SourceRevisionFailure[] = []
   readonly #missingFiles: MissingFileWarning[] = []
   #completedFiles = 0n
@@ -391,7 +393,7 @@ export class TransferJob {
         return
       case 'source-busy':
         this.#failedFiles += 1n
-        this.#sourceUnavailableCount += 1n
+        this.#sourceBusyCount += 1n
         this.#firstError ??= outcome.error
         this.#tracker.observeFileFailed()
         this.#recordSourceFailure(file, 'source-busy')
@@ -437,7 +439,7 @@ export class TransferJob {
 
   #buildResult(): TransferJobResult {
     const safeRenamed = this.#options.output.safeRenamedSummary?.()
-    const sourceFailureCount = this.#sourceChangedCount + this.#sourceUnavailableCount
+    const sourceFailureCount = this.#sourceChangedCount + this.#sourceUnavailableCount + this.#sourceBusyCount
     const sourceRevisionFailures: SourceRevisionFailures | undefined = sourceFailureCount === 0n
       ? undefined
       : Object.freeze({
@@ -483,6 +485,17 @@ export class TransferJob {
     }
     if (this.#completedFiles === 0n && this.#sourceChangedCount > 0n) {
       return 'source-changed'
+    }
+    // Only promote to job-level source-busy when every failure was a busy lock;
+    // mixed failures stay generic failed with per-file contentWarning details.
+    if (
+      this.#completedFiles === 0n &&
+      this.#sourceBusyCount > 0n &&
+      this.#sourceBusyCount === this.#failedFiles &&
+      this.#failedDirectories === 0n &&
+      !this.#discoveryFailed
+    ) {
+      return 'source-busy'
     }
     return this.#completedFiles > 0n ? 'partial' : 'failed'
   }

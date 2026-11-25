@@ -142,7 +142,7 @@ describe('OPFS object ownership and recovery', () => {
     expect(new Uint8Array(await f.downloads[0]!.blob.arrayBuffer())).toEqual(bytes)
   })
 
-  it.each(['stopped', 'failed', 'source-changed'] as const)('reclaims unfinished private bytes after %s is durable', async status => {
+  it.each(['stopped', 'failed', 'source-changed', 'source-busy'] as const)('reclaims unfinished private bytes after %s is durable', async status => {
     const f = fixture(single)
     const session = await f.open()
     const file = await session.transferOutput.openFile(fileRequest, new AbortController().signal)

@@ -177,4 +177,69 @@ describe('TransferJob source revision failure summary', () => {
       { path: ['budget.xlsx'], reason: 'source-busy' },
     ])
   })
+
+  it('settles all-busy failures as source-busy while keeping source-changed and mixed failures distinct', async () => {
+    const busy = { seed: 30, name: 'budget.xlsx', bytes: FILE_PAYLOAD }
+    const busyFixture = makeShareFixture([busy])
+    const singleBusy = await new TransferJob({
+      ...busyFixture,
+      selection,
+      revisions: { open: async () => { throw remoteRevisionError(REVISION_CODE_BUSY) } },
+      output: {
+        sessionId: 'sess-single-busy',
+        capabilities: { maxConcurrentFiles: 1, resumable: true },
+        openFile: async () => outputFile({}),
+      },
+    }).run()
+
+    expect(singleBusy.status).toBe('source-busy')
+    expect(singleBusy.completedFiles).toBe(0n)
+    expect(singleBusy.failedFiles).toBe(1n)
+    expect(singleBusy.sourceRevisionFailures?.files).toEqual([
+      expect.objectContaining({ path: ['budget.xlsx'], reason: 'source-busy' }),
+    ])
+    expect(singleBusy.contentWarning?.missingFiles).toEqual([
+      { path: ['budget.xlsx'], reason: 'source-busy' },
+    ])
+
+    const changed = { seed: 31, name: 'changed.txt', bytes: FILE_PAYLOAD }
+    const changedId = encodeBase64Url(id(changed.seed))
+    const changedMixed = await new TransferJob({
+      ...makeShareFixture([busy, changed]),
+      selection,
+      revisions: {
+        open: async fileId => {
+          throw remoteRevisionError(encodeBase64Url(fileId) === changedId ? REVISION_CODE_STALE : REVISION_CODE_BUSY)
+        },
+      },
+      output: {
+        sessionId: 'sess-changed-busy-mixed',
+        capabilities: { maxConcurrentFiles: 1, resumable: true },
+        openFile: async () => outputFile({}),
+      },
+    }).run()
+    expect(changedMixed.status).toBe('source-changed')
+
+    const unreadable = { seed: 32, name: 'locked.txt', bytes: FILE_PAYLOAD }
+    const unreadableId = encodeBase64Url(id(unreadable.seed))
+    const unavailableMixed = await new TransferJob({
+      ...makeShareFixture([busy, unreadable]),
+      selection,
+      revisions: {
+        open: async fileId => {
+          throw remoteRevisionError(encodeBase64Url(fileId) === unreadableId ? REVISION_CODE_UNREADABLE : REVISION_CODE_BUSY)
+        },
+      },
+      output: {
+        sessionId: 'sess-unavailable-busy-mixed',
+        capabilities: { maxConcurrentFiles: 1, resumable: true },
+        openFile: async () => outputFile({}),
+      },
+    }).run()
+    expect(unavailableMixed.status).toBe('failed')
+    expect(unavailableMixed.contentWarning?.missingFiles).toEqual([
+      { path: ['budget.xlsx'], reason: 'source-busy' },
+      { path: ['locked.txt'], reason: 'source-unavailable' },
+    ])
+  })
 })

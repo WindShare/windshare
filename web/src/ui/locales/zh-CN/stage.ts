@@ -40,6 +40,8 @@ export const stage: typeof English = {
   shareCatalogLimit: '已达到分享目录上限',
   shareCatalogLimitHint: '此分享已达到发送方的在线目录数量上限。请让发送方分批分享较小的文件夹，或打包后再分享。',
   sourceChanged: '源文件已更改',
+  sourceBusy: '源文件正被占用',
+  sourceBusyHint: '源文件正被发送方的其他程序占用。请让发送方关闭相关程序后重新下载。',
   cancelled: '已取消',
   discardedHint: '未完成的下载数据已移除。',
   downloading: '正在下载',

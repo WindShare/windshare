@@ -52,7 +52,7 @@ export const connection: typeof English = {
   joinCancelled: '已取消等待连接。',
   receiverStopped: '接收已停止。',
   connectingShare: '正在连接分享…',
-  replacementSelected: '已选中当前版本。点击下载可创建独立任务，原 ZIP 的进度会保留。',
+  replacementSelected: '已选中文件。点击下载可创建独立任务，原任务已保存的文件会保留。',
   retryIn: seconds => `${seconds} 秒后自动重试。`,
   retryAvailableIn: seconds => `${seconds} 秒后可重试。`,
   channel: id => `通道 ${id}`,
@@ -60,5 +60,5 @@ export const connection: typeof English = {
   both: seconds => `最近 ${seconds} 秒通过直连和中转接收了数据`,
   directActivity: seconds => `最近 ${seconds} 秒通过直连接收了数据`,
   relayActivity: seconds => `最近 ${seconds} 秒通过中转接收了数据`,
-  findingReplacement: path => `正在查找 ${path} 的当前版本…`,
+  findingReplacement: path => `正在查找 ${path}…`,
 }

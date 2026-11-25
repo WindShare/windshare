@@ -112,6 +112,9 @@ function failedStage(
   if (reason === 'source-changed') {
     return stage('failed', t.sourceChanged, receiverCopy[language].failures.sourceChangedHint, 'source_invalidated')
   }
+  if (reason === 'source-busy') {
+    return stage('failed', t.sourceBusy, t.sourceBusyHint, reason)
+  }
   if (reason === 'relay-access-denied') {
     return stage('failed', t.relayAccessDenied, receiverCopy[language].failures.relayAccessDenied, reason)
   }

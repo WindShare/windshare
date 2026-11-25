@@ -50,7 +50,7 @@ export const connection = {
   joinCancelled: 'Connection waiting cancelled.',
   receiverStopped: 'The receiver stopped safely.',
   connectingShare: 'Connecting to the share…',
-  replacementSelected: 'Current version selected. Choose Download to create a separate task; the original ZIP progress is retained.',
+  replacementSelected: 'File selected. Choose Download to start a separate task; files already saved from the original task are kept.',
   retryIn: (seconds: number) => `Retrying automatically in ${seconds} s.`,
   retryAvailableIn: (seconds: number) => `Retry available in ${seconds} s.`,
   channel: (id: number) => `Channel ${id}`,
@@ -58,5 +58,5 @@ export const connection = {
   both: (seconds: number) => `Received directly and through relay in the last ${seconds} seconds`,
   directActivity: (seconds: number) => `Received directly in the last ${seconds} seconds`,
   relayActivity: (seconds: number) => `Received through relay in the last ${seconds} seconds`,
-  findingReplacement: (path: string) => `Finding the current version of ${path}…`,
+  findingReplacement: (path: string) => `Finding ${path}…`,
 }

@@ -49,6 +49,26 @@ function partialCatalogLimitHint(
   return null
 }
 
+function explainedByContentWarning(warning: ReceiveContentWarning | undefined): boolean {
+  return warning !== undefined &&
+    warning.missingFiles.length > 0 &&
+    warning.missingFiles.every(file => file.reason !== 'file-failed')
+}
+
+function shouldShowContentWarning(lifecycle: TaskFacts['lifecycle']): boolean {
+  const warning = lifecycle.contentWarning
+  if (warning === undefined) return false
+  // Single-file source-busy and source-changed failures already carry dedicated stage headlines and guidance.
+  if (
+    lifecycle.kind === 'failed' &&
+    warning.selectedFileCount === 1n &&
+    (lifecycle.reason === 'source-busy' || lifecycle.reason === 'source-changed')
+  ) {
+    return false
+  }
+  return true
+}
+
 function collectTaskDetails(
   facts: TaskFacts,
   progress: ReturnType<typeof presentTaskProgress>,
@@ -61,10 +81,13 @@ function collectTaskDetails(
     if (facts.lifecycle.kind === 'paused' || facts.lifecycle.kind === 'downloading') details.push(progress.label)
     details.push(...progress.details)
   }
-  if (facts.lifecycle.kind === 'failed' && facts.lifecycle.detail) details.push(facts.lifecycle.detail)
+  const warning = facts.lifecycle.contentWarning
+  if (facts.lifecycle.kind === 'failed' && facts.lifecycle.detail && !explainedByContentWarning(warning)) {
+    details.push(facts.lifecycle.detail)
+  }
   const catalogLimitHint = partialCatalogLimitHint(facts.lifecycle, language)
-  if (facts.lifecycle.contentWarning !== undefined) {
-    details.unshift(...contentWarningDetails(facts.lifecycle.contentWarning, facts.lifecycle.kind === 'paused', language))
+  if (shouldShowContentWarning(facts.lifecycle) && warning !== undefined) {
+    details.unshift(...contentWarningDetails(warning, facts.lifecycle.kind === 'paused', language))
   } else if (facts.completeness === 'partial') {
     details.unshift(t.partial)
   }
@@ -149,7 +172,10 @@ function contentWarningDetails(
 ): readonly string[] {
   const t = receiverCopy[language].progress
   const missing = warning.selectedFileCount - warning.completedFileCount
-  const details = [t.missingFileCount(warning.completedFileCount, warning.selectedFileCount, missing, paused)]
+  const singleZeroFailure = !paused && warning.selectedFileCount === 1n && warning.completedFileCount === 0n
+  const details = singleZeroFailure
+    ? []
+    : [t.missingFileCount(warning.completedFileCount, warning.selectedFileCount, missing, paused)]
   const reasons = {
     'source-changed': t.sourceChanged,
     'source-unavailable': t.sourceUnavailable,

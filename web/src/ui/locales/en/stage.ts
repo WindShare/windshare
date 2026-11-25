@@ -38,6 +38,8 @@ export const stage = {
   shareCatalogLimit: 'Share directory limit reached',
   shareCatalogLimitHint: 'This share reached the sender’s live directory limit. Ask the sender to share smaller folders separately or archive them before sharing.',
   sourceChanged: 'Source file changed',
+  sourceBusy: 'Source file in use',
+  sourceBusyHint: 'The source file is in use by another app on the sender. Ask the sender to close it and download again.',
   cancelled: 'Cancelled',
   discardedHint: 'Unfinished download data was removed.',
   downloading: 'Downloading',

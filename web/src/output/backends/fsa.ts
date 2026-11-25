@@ -720,15 +720,18 @@ function nextFSALifecycle(
         contentWarning: warning,
       })
     case 'stopped':
-      return transitionReceiveState(current, { kind: 'failed', reason: 'cancelled', ...failedCleanupPending })
+      return transitionReceiveState(current, { kind: 'failed', reason: 'cancelled', contentWarning: null, ...failedCleanupPending })
     case 'source-changed':
-      return transitionReceiveState(current, { kind: 'failed', reason: 'source-changed', ...failedCleanupPending })
+      return transitionReceiveState(current, { kind: 'failed', reason: 'source-changed', contentWarning: warning, ...failedCleanupPending })
+    case 'source-busy':
+      return transitionReceiveState(current, { kind: 'failed', reason: 'source-busy', contentWarning: warning, ...failedCleanupPending })
     case 'failed': {
       const reason = transferFailureReason(result.error)
       return transitionReceiveState(current, {
         kind: 'failed',
         reason,
         ...(reason === 'error' && result.error instanceof Error ? { detail: result.error.message } : {}),
+        contentWarning: warning,
         ...failedCleanupPending,
       })
     }
