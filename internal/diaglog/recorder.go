@@ -8,8 +8,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -22,6 +22,8 @@ const (
 	maximumRecordBytes   = 128 * 1024
 	maximumRotatingBytes = 4 * 1024 * 1024
 	retainedRotating     = 8
+	rotatingFilePrefix   = "host-"
+	rotatingFileSuffix   = ".jsonl"
 )
 
 type RunOptions struct {
@@ -386,20 +388,42 @@ func (r *Recorder) writeRunSummary() {
 	}
 }
 
+func isRotatingLogFile(entry os.DirEntry) bool {
+	if !entry.Type().IsRegular() {
+		return false
+	}
+	name := entry.Name()
+	return strings.HasPrefix(name, rotatingFilePrefix) && strings.HasSuffix(name, rotatingFileSuffix)
+}
+
 func (r *Recorder) rotate() error {
-	entries, err := filepath.Glob(filepath.Join(r.directory, "host-*.jsonl"))
+	// Enumerate the literal directory instead of passing r.directory to
+	// filepath.Glob, which interprets glob metacharacters in parent paths.
+	dirEntries, err := os.ReadDir(r.directory)
 	if err != nil {
 		return err
 	}
-	slices.Sort(entries)
+	var entries []string
+	for _, entry := range dirEntries {
+		if isRotatingLogFile(entry) {
+			entries = append(entries, entry.Name())
+		}
+	}
 	for len(entries) >= retainedRotating {
 		// Another running process may own an old Windows file. Its writer enforces
 		// the same size bound; a later rotation retries pruning it.
-		_ = os.Remove(entries[0])
+		_ = os.Remove(filepath.Join(r.directory, entries[0]))
 		entries = entries[1:]
 	}
 	r.fileSequence++
-	name := fmt.Sprintf("host-%s-%s-%04d.jsonl", r.now().UTC().Format("20060102T150405.000000000"), r.session, r.fileSequence)
+	name := fmt.Sprintf(
+		"%s%s-%s-%04d%s",
+		rotatingFilePrefix,
+		r.now().UTC().Format("20060102T150405.000000000"),
+		r.session,
+		r.fileSequence,
+		rotatingFileSuffix,
+	)
 	r.file, err = createOwnerOnlyFile(filepath.Join(r.directory, name))
 	r.size = 0
 	return err

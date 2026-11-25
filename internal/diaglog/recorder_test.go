@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,22 @@ import (
 
 	"github.com/windshare/windshare/core/diagnostics"
 )
+
+func listRotatingLogs(t *testing.T, directory string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if !entry.IsDir() && strings.HasPrefix(name, "host-") && strings.HasSuffix(name, ".jsonl") {
+			names = append(names, name)
+		}
+	}
+	return names
+}
 
 func TestRotatingRecorderJoinsFlushesAndRetainsBoundedFiles(t *testing.T) {
 	directory := t.TempDir()
@@ -30,13 +47,66 @@ func TestRotatingRecorderJoinsFlushesAndRetainsBoundedFiles(t *testing.T) {
 		}
 		recorder.Record("after_close", nil)
 	}
-	files, err := filepath.Glob(filepath.Join(directory, "host-*.jsonl"))
-	if err != nil || len(files) != retainedRotating {
-		t.Fatalf("retention: %d %v", len(files), err)
+	files := listRotatingLogs(t, directory)
+	if len(files) != retainedRotating {
+		t.Fatalf("retention: %d", len(files))
 	}
-	data, err := os.ReadFile(files[len(files)-1])
+	data, err := os.ReadFile(filepath.Join(directory, files[len(files)-1]))
 	if err != nil || !strings.Contains(string(data), "milestone") || !strings.Contains(string(data), `"dropped":1`) {
 		t.Fatalf("flush: %s %v", data, err)
+	}
+}
+
+func TestRotatingRecorderTreatsDirectoryLiterallyWithoutGlobExpansion(t *testing.T) {
+	root := t.TempDir()
+
+	unclosed := filepath.Join(root, "logs[unclosed")
+	recorder, err := OpenRotating(unclosed, "unclosed")
+	if err != nil {
+		t.Fatalf("open unclosed bracket directory: %v", err)
+	}
+	recorder.Record("milestone", map[string]string{"case": "unclosed"})
+	if err := recorder.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if files := listRotatingLogs(t, unclosed); len(files) != 1 {
+		t.Fatalf("unclosed bracket log count = %d, want 1", len(files))
+	}
+
+	sibling := filepath.Join(root, "logs1")
+	if err := os.MkdirAll(sibling, ownerOnlyDirectoryMode); err != nil {
+		t.Fatal(err)
+	}
+	const siblingSeedCount = retainedRotating + 2
+	for i := range siblingSeedCount {
+		name := fmt.Sprintf("host-20200101T000000.000000000-sibling-%04d.jsonl", i+1)
+		if err := os.WriteFile(filepath.Join(sibling, name), []byte("{}\n"), ownerOnlyFileMode); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	target := filepath.Join(root, "logs[1]")
+	ignoredSubdir := filepath.Join(target, "host-20200101T000000.000000000-dir-0001.jsonl")
+	if err := os.MkdirAll(ignoredSubdir, ownerOnlyDirectoryMode); err != nil {
+		t.Fatal(err)
+	}
+	for i := range retainedRotating + 2 {
+		rec, err := OpenRotating(target, fmt.Sprintf("literal-%02d", i))
+		if err != nil {
+			t.Fatalf("open bracketed directory: %v", err)
+		}
+		if err := rec.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if files := listRotatingLogs(t, target); len(files) != retainedRotating {
+		t.Fatalf("bracketed directory retention = %d, want %d", len(files), retainedRotating)
+	}
+	if files := listRotatingLogs(t, sibling); len(files) != siblingSeedCount {
+		t.Fatalf("sibling logs pruned across glob boundary: %d, want %d", len(files), siblingSeedCount)
+	}
+	if info, err := os.Stat(ignoredSubdir); err != nil || !info.IsDir() {
+		t.Fatalf("matching subdirectory was removed or altered: info=%v err=%v", info, err)
 	}
 }
 
