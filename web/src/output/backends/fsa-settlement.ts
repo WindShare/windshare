@@ -1,6 +1,6 @@
 import { catalogCapacityReason, transferFailureReason } from '../../transfer/fault'
 import type { SettledTransferJobResult } from '../../transfer/job'
-import { transitionReceiveState, type ReceiveContentWarning } from '../../transfer/state'
+import { transitionReceiveState, type ReceiveContentWarning, type ReceivePartialReason } from '../../transfer/state'
 import type { ReceiveTaskRecord, StoredTaskFileSummary } from '../store/types'
 
 export interface FSALifecycleSettlementInput {
@@ -8,7 +8,7 @@ export interface FSALifecycleSettlementInput {
   readonly stored: StoredTaskFileSummary
 }
 
-type TerminalIncompleteFSAStatus = Exclude<SettledTransferJobResult['status'], 'completed' | 'paused'>
+type TerminalIncompleteFSAResult = Exclude<SettledTransferJobResult, { status: 'completed' | 'paused' }>
 
 export function nextFSALifecycle(
   current: ReceiveTaskRecord['lifecycle'],
@@ -56,14 +56,9 @@ export function nextFSALifecycle(
   if (stored.completedFiles > 0n) {
     // Terminal cleanup never deletes completed FSA files; promote any incomplete terminal
     // outcome to `partial` so saved counts, safe-name restoration, and replacement recovery survive.
-    const reason = catalogCapacityReason(result.error) ?? (
-      result.status === 'stopped' || (result.status === 'partial' && failedCount === 0n)
-        ? 'stopped'
-        : 'failures'
-    )
     return transitionReceiveState(current, {
       kind: 'partial',
-      reason,
+      reason: resolvePartialReason(result),
       savedFiles: stored.completedFiles,
       failedFiles: failedCount,
       ...(stored.hasUnfinished ? { cleanupPending: true as const } : {}),
@@ -71,33 +66,39 @@ export function nextFSALifecycle(
     })
   }
 
-  return failedFSALifecycle(current, result.status, result.error, stored, warning)
+  return failedFSALifecycle(current, result, stored, warning)
+}
+
+function resolvePartialReason(result: TerminalIncompleteFSAResult): ReceivePartialReason {
+  if (result.status === 'partial') return result.partialReason
+  if (result.status === 'stopped') return 'stopped'
+  return catalogCapacityReason(result.error) ?? 'failures'
 }
 
 function failedFSALifecycle(
   current: ReceiveTaskRecord['lifecycle'],
-  status: TerminalIncompleteFSAStatus,
-  error: unknown,
+  result: TerminalIncompleteFSAResult,
   stored: StoredTaskFileSummary,
   warning: ReceiveContentWarning | null,
 ): ReceiveTaskRecord['lifecycle'] {
   const failedCleanupPending = stored.hasUnfinished || stored.fileCount === 0n
     ? { cleanupPending: true as const }
     : {}
-  switch (status) {
-    case 'stopped':
-      return transitionReceiveState(current, { kind: 'failed', reason: 'cancelled', contentWarning: null, ...failedCleanupPending })
+  if (result.status === 'stopped' || (result.status === 'partial' && result.partialReason === 'stopped')) {
+    return transitionReceiveState(current, { kind: 'failed', reason: 'cancelled', contentWarning: null, ...failedCleanupPending })
+  }
+  switch (result.status) {
     case 'source-changed':
       return transitionReceiveState(current, { kind: 'failed', reason: 'source-changed', contentWarning: warning, ...failedCleanupPending })
     case 'source-busy':
       return transitionReceiveState(current, { kind: 'failed', reason: 'source-busy', contentWarning: warning, ...failedCleanupPending })
     case 'partial':
     case 'failed': {
-      const reason = transferFailureReason(error)
+      const reason = transferFailureReason(result.error)
       return transitionReceiveState(current, {
         kind: 'failed',
         reason,
-        ...(reason === 'error' && error instanceof Error ? { detail: error.message } : {}),
+        ...(reason === 'error' && result.error instanceof Error ? { detail: result.error.message } : {}),
         contentWarning: warning,
         ...failedCleanupPending,
       })

@@ -268,6 +268,7 @@ describe('OPFS object ownership and recovery', () => {
     const partial = await session.settle({
       ...completion,
       status: 'partial',
+      partialReason: 'browser-catalog-limit',
       discoveryComplete: false,
       failedDirectories: 1n,
       error: new CatalogPageStoreError('resource-limit', 'cache full'),

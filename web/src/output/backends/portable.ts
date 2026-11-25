@@ -192,7 +192,8 @@ class PortableSessionHandle implements OutputSessionHandle {
       this.#zip?.abort()
       this.#singleFileBuffer = undefined
       const reason = failedReasonFor(result)
-      const warning = result.status === 'stopped' ? null : (result.contentWarning ?? null)
+      const isStopped = result.status === 'stopped' || (result.status === 'partial' && result.partialReason === 'stopped')
+      const warning = isStopped ? null : (result.contentWarning ?? null)
       const failed = transitionReceiveState(this.#baseRecord.lifecycle, {
         kind: 'failed',
         reason,
@@ -356,6 +357,6 @@ function failedReasonFor(result: SettledTransferJobResult): ReceiveFailureReason
   if (reason !== 'error') return reason
   if (result.status === 'source-changed') return 'source-changed'
   if (result.status === 'source-busy') return 'source-busy'
-  if (result.status === 'stopped') return 'cancelled'
+  if (result.status === 'stopped' || (result.status === 'partial' && result.partialReason === 'stopped')) return 'cancelled'
   return 'error'
 }

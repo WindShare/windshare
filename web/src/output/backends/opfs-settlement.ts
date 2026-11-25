@@ -1,6 +1,6 @@
 import { catalogCapacityReason, classifyNativeError, transferFailureReason } from '../../transfer/fault'
 import type { SettledTransferJobResult } from '../../transfer/job'
-import { transitionReceiveState, type ReceiveContentWarning } from '../../transfer/state'
+import { transitionReceiveState, type ReceiveContentWarning, type ReceivePartialReason } from '../../transfer/state'
 import { emitOutputTrace, type OutputTraceSource } from '../diagnostics'
 import type { ReceiveStore } from '../store/database'
 import { maxRangeEnd, type OPFSTargetRecord, type ReceiveFileRecord, type ReceiveTaskRecord } from '../store/types'
@@ -275,43 +275,48 @@ export function nextOPFSIncompleteLifecycle(
   if (input.isZip && savedFiles > 0n) {
     // Keep completed OPFS ZIP members exportable via zero-copy `buildPartialZipBlob`
     // instead of sealing in place, which would turn pre-allocated failed slots into dead padding.
-    const reason = catalogCapacityReason(result.error) ?? (
-      status === 'stopped' || (status === 'partial' && failedCount === 0n)
-        ? 'stopped'
-        : 'failures'
-    )
     return transitionReceiveState(current, {
       kind: 'partial',
-      reason,
+      reason: resolveOPFSPartialReason(status, result),
       savedFiles,
       failedFiles: failedCount,
       contentWarning: warning,
     })
   }
 
-  return failedOPFSLifecycle(current, status, result.error, warning)
+  return failedOPFSLifecycle(current, status, result, warning)
+}
+
+function resolveOPFSPartialReason(
+  status: Exclude<IncompleteOPFSJobStatus, 'paused'>,
+  result: SettledTransferJobResult,
+): ReceivePartialReason {
+  if (status === 'partial' && result.status === 'partial') return result.partialReason
+  if (status === 'stopped') return 'stopped'
+  return catalogCapacityReason(result.error) ?? 'failures'
 }
 
 function failedOPFSLifecycle(
   current: ReceiveTaskRecord['lifecycle'],
   status: Exclude<IncompleteOPFSJobStatus, 'paused'>,
-  error: unknown,
+  result: SettledTransferJobResult,
   warning: ReceiveContentWarning | null,
 ): ReceiveTaskRecord['lifecycle'] {
+  if (status === 'stopped' || (status === 'partial' && result.status === 'partial' && result.partialReason === 'stopped')) {
+    return transitionReceiveState(current, { kind: 'failed', reason: 'cancelled', contentWarning: null })
+  }
   switch (status) {
-    case 'stopped':
-      return transitionReceiveState(current, { kind: 'failed', reason: 'cancelled', contentWarning: null })
     case 'source-changed':
       return transitionReceiveState(current, { kind: 'failed', reason: 'source-changed', contentWarning: warning })
     case 'source-busy':
       return transitionReceiveState(current, { kind: 'failed', reason: 'source-busy', contentWarning: warning })
     case 'partial':
     case 'failed': {
-      const reason = transferFailureReason(error)
+      const reason = transferFailureReason(result.error)
       return transitionReceiveState(current, {
         kind: 'failed',
         reason,
-        ...(reason === 'error' && error instanceof Error ? { detail: error.message } : {}),
+        ...(reason === 'error' && result.error instanceof Error ? { detail: result.error.message } : {}),
         contentWarning: warning,
       })
     }

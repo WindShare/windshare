@@ -268,6 +268,7 @@ describe('OPFS partial settlement and export', () => {
 
     const stoppedTask = await stoppedSession.settle({
       status: 'partial',
+      partialReason: 'stopped',
       completedFiles: 1n,
       completedBytes: BigInt(payloadA.byteLength),
       discoveredFiles: 2n,
@@ -318,6 +319,7 @@ describe('OPFS partial settlement and export', () => {
     await bigFirst.abort()
     const interleavedTask = await interleavedSession.settle({
       status: 'partial',
+      partialReason: 'failures',
       completedFiles: 1n,
       completedBytes: BigInt(payloadA.byteLength),
       discoveredFiles: 2n,
@@ -451,6 +453,7 @@ describe('OPFS partial settlement and export', () => {
 
     const settledSingle = await singleSession.settle({
       status: 'partial',
+      partialReason: 'stopped',
       completedFiles: 1n,
       completedBytes: BigInt(singlePayload.byteLength),
       discoveredFiles: 1n,

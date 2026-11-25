@@ -605,7 +605,7 @@ describe('FSA terminal cleanup', () => {
     },
   )
 
-  it('keeps selected empty directories alongside a partial result and prunes abandoned file parents', async () => {
+  it('keeps selected empty directories alongside a failure-settled partial result and prunes abandoned file parents', async () => {
     const { session, root, open, memory } = await openFolderFixture()
     await session.transferOutput.ensureDirectory?.({ path: ['keep'], directoryId: 'keep' }, signal)
     const complete = await open('saved')
@@ -613,10 +613,103 @@ describe('FSA terminal cleanup', () => {
     await complete.commit([byteRange(0n, 8n)])
     const file = await session.transferOutput.openFile({ ...request, path: ['unfinished', 'large'] }, signal)
     await file.abort()
-    await session.settle({ ...paused, status: 'partial', completedFiles: 1n, completedBytes: 8n })
+    await session.settle({
+      ...paused, status: 'partial', partialReason: 'failures', completedFiles: 1n, completedBytes: 8n, failedFiles: 1n,
+    })
     expect([...root.children.keys()]).toEqual(['keep', 'saved'])
     expect((await memory.listTaskFiles(session.taskId)).map(row => row.fileId)).toEqual(['saved'])
     await session.close()
+  })
+
+  it.each(['failed', 'source-changed', 'source-busy'] as const)(
+    'prunes discovery-created subdirectories and removes the empty root on zero-saved %s settlement',
+    async status => {
+      const { session, parent, root, memory } = await openFolderFixture()
+      await session.transferOutput.ensureDirectory?.({ path: ['empty-sub'], directoryId: 'd1' }, signal)
+      await session.transferOutput.ensureDirectory?.({ path: ['nested', 'deep'], directoryId: 'd2' }, signal)
+
+      const record = await session.settle({
+        ...paused,
+        status,
+        completedFiles: 0n,
+        completedBytes: 0n,
+        failedFiles: 1n,
+        ...(status === 'failed' ? { error: new Error('source failed before openFile') } : {}),
+      })
+      await session.close()
+
+      expect(parent.children.has('Folder')).toBe(false)
+      expect(parent.stats.recursiveRemoveCalls).toBe(0)
+      expect(record.lifecycle.kind).toBe('failed')
+      expect(record.lifecycle.kind === 'failed' ? record.lifecycle.cleanupPending : undefined).toBeUndefined()
+      expect(actionsForState(record.lifecycle, 'fsa')).toEqual(['forget'])
+      expect(await memory.listTaskFiles(session.taskId)).toEqual([])
+
+      // Foreign user files placed inside a discovery-created directory stay protected by non-recursive removal.
+      const protectedFixture = await openFolderFixture()
+      await protectedFixture.session.transferOutput.ensureDirectory?.({ path: ['nested', 'deep'], directoryId: 'd3' }, signal)
+      const nestedDir = await protectedFixture.root.getDirectoryHandle('nested')
+      const deepDir = await nestedDir.getDirectoryHandle('deep')
+      deepDir.putUserFile('notes.txt', Uint8Array.of(1, 2, 3))
+      await protectedFixture.session.settle({
+        ...paused, status, completedFiles: 0n, completedBytes: 0n, failedFiles: 1n,
+      })
+      await protectedFixture.session.close()
+      expect(protectedFixture.parent.children.has('Folder')).toBe(true)
+      expect(deepDir.children.has('notes.txt')).toBe(true)
+      expect(protectedFixture.parent.stats.recursiveRemoveCalls).toBe(0)
+      expect(root.children.size).toBe(0)
+    },
+  )
+
+  it('prunes unpopulated scaffolding and safe-renamed empty dirs on stop after saved files even with prior failures', async () => {
+    const memory = new MemoryReceiveStore()
+    const store = memory as unknown as ReceiveStore
+    const parent = new FakeDirectoryHandle('Downloads', memory.events, name => name.endsWith('.cfg'))
+    const session = await openNewFSASession({
+      task: {
+        taskId: 'stop-after-saved',
+        selectionKey: 'sel-stop-after-saved',
+        selection: { shareInstance: 's1', syntheticRoot: 'root', defaultSelected: true, rules: [] },
+        artifact: { kind: 'directory-tree', name: 'Album' },
+        lifecycle: initialReceiveState('stop-after-saved'),
+      },
+      parentHandle: parent as unknown as FileSystemDirectoryHandle,
+      store,
+    })
+
+    await session.transferOutput.ensureDirectory?.({ path: ['day1'], directoryId: 'd1' }, signal)
+    await session.transferOutput.ensureDirectory?.({ path: ['day1', 'unused-child'], directoryId: 'd1b' }, signal)
+    await session.transferOutput.ensureDirectory?.({ path: ['day2', 'nested'], directoryId: 'd2' }, signal)
+    await session.transferOutput.ensureDirectory?.({ path: ['config.cfg'], directoryId: 'd3' }, signal)
+
+    const saved = await session.transferOutput.openFile({
+      fileId: 'f-saved', path: ['day1', 'photo.jpg'], sourcePath: ['Album', 'day1', 'photo.jpg'], revision: 'r1', exactSize: 4n,
+    }, signal)
+    await saved.writeAt(0n, Uint8Array.of(1, 2, 3, 4))
+    await saved.commit([byteRange(0n, 4n)])
+
+    const record = await session.settle({
+      ...paused,
+      status: 'partial',
+      partialReason: 'stopped',
+      completedFiles: 1n,
+      completedBytes: 4n,
+      discoveredFiles: 3n,
+      discoveredBytes: 24n,
+      discoveryComplete: false,
+      failedFiles: 1n,
+    })
+    await session.close()
+
+    const root = parent.children.get('Album') as FakeDirectoryHandle
+    expect([...root.children.keys()]).toEqual(['day1'])
+    const day1 = root.children.get('day1') as FakeDirectoryHandle
+    expect([...day1.children.keys()]).toEqual(['photo.jpg'])
+    expect(record.lifecycle).toMatchObject({ kind: 'partial', reason: 'stopped', savedFiles: 1n, failedFiles: 1n })
+    expect(record.safeRenamed).toBeUndefined()
+    expect(record.safeRenamedDirectories).toBeUndefined()
+    expect(parent.stats.recursiveRemoveCalls).toBe(0)
   })
 
   it('cancels a retained reopen before permission prompting and a discard before its first removal', async () => {
@@ -685,7 +778,9 @@ describe('FSA terminal cleanup', () => {
 
     const nested = await root.getDirectoryHandle('nested')
     const denyRemove = vi.spyOn(nested, 'removeEntry').mockRejectedValueOnce(new DOMException('denied', 'NotAllowedError'))
-    const record = await session.settle({ ...paused, status: 'partial', completedFiles: 1n, completedBytes: 8n })
+    const record = await session.settle({
+      ...paused, status: 'partial', partialReason: 'stopped', completedFiles: 1n, completedBytes: 8n,
+    })
     await session.close()
     expect(denyRemove).toHaveBeenCalledOnce()
 
@@ -723,7 +818,9 @@ describe('FSA terminal cleanup', () => {
       ;(await root.getFileHandle('large')).overwriteExternally(Uint8Array.of(7, 7, 7))
     }
 
-    const record = await session.settle({ ...paused, status: 'partial', completedFiles: 1n, completedBytes: 8n })
+    const record = await session.settle({
+      ...paused, status: 'partial', partialReason: 'stopped', completedFiles: 1n, completedBytes: 8n,
+    })
     await session.close()
 
     expect(record.lifecycle.kind).toBe('partial')

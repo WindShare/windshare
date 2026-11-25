@@ -282,7 +282,7 @@ describe('FSA reservation claim lifecycle', () => {
     await cleanFile.writeAt(0n, Uint8Array.of(1, 2))
     await cleanFile.commit([byteRange(0n, 2n)])
     const cleanRecord = await partialClean.settle({
-      status: 'partial', completedFiles: 1n, completedBytes: 2n,
+      status: 'partial', partialReason: 'failures', completedFiles: 1n, completedBytes: 2n,
       discoveredFiles: 2n, discoveredBytes: 4n, discoveryComplete: true, failedFiles: 1n, failedDirectories: 0n,
     })
     await partialClean.close()
@@ -315,7 +315,7 @@ describe('FSA reservation claim lifecycle', () => {
     const pendingDir = parent.children.get('PartialPending') as FakeDirectoryHandle
     vi.spyOn(pendingDir, 'removeEntry').mockRejectedValueOnce(new DOMException('denied', 'NotAllowedError'))
     const pendingRecord = await partialPending.settle({
-      status: 'partial', completedFiles: 1n, completedBytes: 2n,
+      status: 'partial', partialReason: 'failures', completedFiles: 1n, completedBytes: 2n,
       discoveredFiles: 2n, discoveredBytes: 6n, discoveryComplete: true, failedFiles: 1n, failedDirectories: 0n,
     })
     await partialPending.close()

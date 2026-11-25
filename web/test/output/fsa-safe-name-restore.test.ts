@@ -15,8 +15,8 @@ import { FSARestoreTargetMissingError } from '../../src/output/model/safe-name-r
 import type { ReceiveStore } from '../../src/output/store/database'
 import { acquireTaskLock, TaskBusyError, withFSAReservationLock } from '../../src/output/store/tab-lock'
 import { FileDestinationConflictError } from '../../src/transfer/fault'
-import type { SettledTransferJobResult } from '../../src/transfer/job'
-import { initialReceiveState, transitionReceiveState, type SafeRenamedSummary } from '../../src/transfer/state'
+import type { SettledTransferJobResult, TransferJobFacts } from '../../src/transfer/job'
+import { initialReceiveState, transitionReceiveState, type ReceivePartialReason, type SafeRenamedSummary } from '../../src/transfer/state'
 import { presentTask } from '../../src/ui/tasks/present'
 import { taskFixture } from '../../src/ui/tasks/fixtures'
 import { FakeDirectoryHandle, FakeFileHandle, MemoryReceiveStore, type RejectNameRule } from './fsa-fixture'
@@ -52,9 +52,12 @@ function createFakeLockManager(): LockManager {
   } as unknown as LockManager
 }
 
-function settled(status: SettledTransferJobResult['status'], overrides: Partial<SettledTransferJobResult> = {}): SettledTransferJobResult {
-  return {
-    status,
+function settled(
+  status: SettledTransferJobResult['status'],
+  overrides: Partial<TransferJobFacts> & { readonly partialReason?: ReceivePartialReason } = {},
+): SettledTransferJobResult {
+  const { partialReason, ...facts } = overrides
+  const base: TransferJobFacts = {
     completedFiles: 0n,
     completedBytes: 0n,
     discoveredFiles: 0n,
@@ -62,8 +65,11 @@ function settled(status: SettledTransferJobResult['status'], overrides: Partial<
     discoveryComplete: true,
     failedFiles: 0n,
     failedDirectories: 0n,
-    ...overrides,
+    ...facts,
   }
+  return status === 'partial'
+    ? { ...base, status, partialReason: partialReason ?? 'failures' }
+    : { ...base, status }
 }
 
 describe('FSA safe-name live notification, single source of truth, resume, and crash recovery', () => {

@@ -82,7 +82,9 @@ function createWindowWithBackends(options: Readonly<{
   }
 }
 
-function makePausedResult(overrides: Partial<SettledTransferJobResult> = {}): SettledTransferJobResult {
+function makePausedResult(
+  overrides: Partial<Extract<SettledTransferJobResult, { status: 'paused' }>> = {},
+): SettledTransferJobResult {
   return {
     status: 'paused',
     pauseReason: 'user',

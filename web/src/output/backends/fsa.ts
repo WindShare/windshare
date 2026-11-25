@@ -376,8 +376,13 @@ class FSASessionHandle implements OutputSessionHandle {
     await this.#store.putTask(nextRecord)
     this.#record = nextRecord
     if (nextLifecycle.kind === 'failed' || nextLifecycle.kind === 'partial') {
-      // An explicitly selected empty folder is part of a partial result. During cancellation, remove task-created scaffolding.
-      const directories = result.status === 'stopped' ? [...this.#createdDirectories] : [...this.#fileDirectories]
+      // Failed runs and user-stopped runs remove all task-created empty scaffolding;
+      // failure-settled partial runs preserve explicitly selected empty folders and
+      // prune only abandoned file parents. Non-recursive removal protects saved files.
+      const pruneAllCreated =
+        nextLifecycle.kind === 'failed' ||
+        (nextLifecycle.kind === 'partial' && nextLifecycle.reason === 'stopped')
+      const directories = pruneAllCreated ? [...this.#createdDirectories] : [...this.#fileDirectories]
       nextRecord = await settleFSATerminalCleanup({
         record: nextRecord,
         rootHandle: this.#rootHandle,

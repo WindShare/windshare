@@ -5,7 +5,7 @@ import type { BlockRangeReader, ContentLaneStatus } from '../content/broker'
 import type { RevisionReader } from '../content/session-services'
 import { discoverSelection, type DiscoveredDirectory, type DiscoveredFile } from './discovery'
 import type { ActiveFileWrite } from './active-file-write'
-import { FaultScope, FileDestinationConflictError, TransferFaultError, isRecoverableTransferInterruption, storagePauseReason, transferFailureReason } from './fault'
+import { FaultScope, FileDestinationConflictError, TransferFaultError, catalogCapacityReason, isRecoverableTransferInterruption, storagePauseReason, transferFailureReason } from './fault'
 import { transferSingleFile, type FileTransferContext, type SingleFileTransferOutcome, type TransferExit, type TransferPause } from './file-transfer'
 import type { TransferOutputSession } from './output-port'
 import { TransferProgressTracker, type TransferProgress } from './progress'
@@ -13,6 +13,7 @@ import { createTaskId } from './selection'
 import type {
   MissingFileWarning,
   ReceiveContentWarning,
+  ReceivePartialReason,
   ReceivePauseReason,
   SafeRenamedSummary,
   SourceRevisionFailure,
@@ -37,16 +38,18 @@ export interface TransferJobOptions {
   readonly onProgress?: (progress: TransferProgress) => void
 }
 
-type SettledJobStatus =
+type NonPartialSettledStatus =
   | 'completed'
   | 'paused'
   | 'stopped'
-  | 'partial'
   | 'source-changed'
   | 'source-busy'
   | 'failed'
 
-interface TransferJobFacts {
+type NonPartialSettledVariant<S extends NonPartialSettledStatus = NonPartialSettledStatus> =
+  S extends NonPartialSettledStatus ? Readonly<{ status: S }> : never
+
+export interface TransferJobFacts {
   readonly pauseReason?: ReceivePauseReason
   readonly completedFiles: bigint
   readonly completedBytes: bigint
@@ -62,7 +65,10 @@ interface TransferJobFacts {
   readonly error?: unknown
 }
 
-export type SettledTransferJobResult = TransferJobFacts & Readonly<{ status: SettledJobStatus }>
+export type SettledTransferJobResult = TransferJobFacts & (
+  | Readonly<{ status: 'partial'; partialReason: ReceivePartialReason }>
+  | NonPartialSettledVariant
+)
 export type TransferJobResult = SettledTransferJobResult | (TransferJobFacts & Readonly<{ status: 'detached' }>)
 
 export interface ActiveCheckpointSummary {
@@ -455,9 +461,7 @@ export class TransferJob {
           missingFiles: Object.freeze([...this.#missingFiles]),
         })
 
-    const status = this.#resolveStatus()
-    return Object.freeze({
-      status,
+    const base: TransferJobFacts = {
       ...(this.#exit?.kind === 'paused' ? { pauseReason: this.#exit.reason } : {}),
       completedFiles: this.#completedFiles,
       completedBytes: this.#completedBytes,
@@ -471,32 +475,44 @@ export class TransferJob {
       ...(contentWarning === undefined ? {} : { contentWarning }),
       ...(safeRenamed === undefined ? {} : { safeRenamed }),
       ...(this.#firstError === undefined ? {} : { error: this.#firstError }),
-    })
+    }
+    const status = this.#resolveStatus()
+    if (status === 'partial') {
+      return Object.freeze({ ...base, status, partialReason: this.#resolvePartialReason() })
+    }
+    return Object.freeze({ ...base, status })
+  }
+
+  #resolvePartialReason(): ReceivePartialReason {
+    if (this.#exit?.kind === 'stopped') return 'stopped'
+    return catalogCapacityReason(this.#firstError) ?? 'failures'
   }
 
   #resolveStatus(): TransferJobResult['status'] {
     if (this.#exit?.kind === 'detached' || this.#exit?.kind === 'paused') return this.#exit.kind
-    if (this.#exit?.kind === 'failed') {
-      return this.#options.output.capabilities.resumable && this.#completedFiles > 0n ? 'partial' : 'failed'
+    if (this.#exit?.kind === 'failed' || this.#exit?.kind === 'stopped') {
+      return this.#canProducePartial() ? 'partial' : this.#exit.kind
     }
-    if (this.#exit?.kind === 'stopped') return this.#completedFiles > 0n ? 'partial' : 'stopped'
     if (this.#failedFiles === 0n && this.#failedDirectories === 0n && !this.#discoveryFailed) {
       return 'completed'
     }
-    if (this.#completedFiles === 0n && this.#sourceChangedCount > 0n) {
-      return 'source-changed'
-    }
+    if (this.#completedFiles > 0n) return 'partial'
+    if (this.#sourceChangedCount > 0n) return 'source-changed'
+    return this.#allFailuresSourceBusy() ? 'source-busy' : 'failed'
+  }
+
+  #canProducePartial(): boolean {
+    return this.#options.output.capabilities.resumable && this.#completedFiles > 0n
+  }
+
+  #allFailuresSourceBusy(): boolean {
     // Only promote to job-level source-busy when every failure was a busy lock;
     // mixed failures stay generic failed with per-file contentWarning details.
-    if (
-      this.#completedFiles === 0n &&
+    return (
       this.#sourceBusyCount > 0n &&
       this.#sourceBusyCount === this.#failedFiles &&
       this.#failedDirectories === 0n &&
       !this.#discoveryFailed
-    ) {
-      return 'source-busy'
-    }
-    return this.#completedFiles > 0n ? 'partial' : 'failed'
+    )
   }
 }

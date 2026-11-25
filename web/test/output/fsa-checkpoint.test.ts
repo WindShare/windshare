@@ -159,7 +159,7 @@ describe('FSA durable coverage', () => {
     const changed = await root.getFileHandle('changed')
     changed.overwriteExternally(Uint8Array.of(7, 8))
     const record = await session.settle({
-      status: 'partial', completedBytes: 2n, completedFiles: 1n, discoveredBytes: 24n, discoveredFiles: 3n,
+      status: 'partial', partialReason: 'failures', completedBytes: 2n, completedFiles: 1n, discoveredBytes: 24n, discoveredFiles: 3n,
       discoveryComplete: true, failedFiles: 2n, failedDirectories: 0n,
     })
     expect(record.lifecycle.kind).toBe('partial')
