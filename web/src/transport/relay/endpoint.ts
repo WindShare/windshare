@@ -1,1 +1,1 @@
-export * from '../../network/relay-endpoint'
+export * from '../../network/contracts/relay-endpoint'

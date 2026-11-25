@@ -1,4 +1,4 @@
-import { safeRelayIdentity } from '../../network/relay-endpoint'
+import { safeRelayIdentity } from '../../network/contracts/relay-endpoint'
 import { relayCandidates, type RelayCandidateSource, type RelayExpansionOptions } from './candidates'
 
 export interface FirstUsableRelayOptions {

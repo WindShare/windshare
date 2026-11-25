@@ -13,12 +13,29 @@ function violations(entries) {
 }
 
 test('application and reusable modules reject presentation even through a shared barrel', () => {
-  for (const root of ['application/receive/coordinator.ts', 'output/store/database.ts', 'diagnostics/context.ts']) {
+  for (const root of [
+    'application/receive/coordinator.ts',
+    'output/store/database.ts',
+    'diagnostics/context.ts',
+    'network/directory.ts',
+    'network/contracts/alias.ts',
+  ]) {
     assert.ok(violations([
       [root, ['contracts/barrel.ts']],
       ['contracts/barrel.ts', ['ui/model.ts']],
       ['ui/model.ts', []],
     ]).some(chain => chain[0] === root && chain.at(-1) === 'ui/model.ts'))
+  }
+})
+
+test('network modules cannot depend on application or React', () => {
+  for (const root of ['network/directory.ts', 'network/contracts/node-directory.ts']) {
+    for (const target of ['application/network/builtin.ts', 'package:react', 'package:react-dom/client']) {
+      assert.ok(violations([
+        [root, [target]],
+        [target, []],
+      ]).some(chain => chain[0] === root && chain.at(-1) === target))
+    }
   }
 })
 

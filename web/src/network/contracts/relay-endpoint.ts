@@ -1,10 +1,10 @@
 import punycode from 'punycode/punycode.js'
 
-import { concatBytes, encodeBase64Url } from '../crypto/bytes'
-import { sha256 } from '../crypto/digest'
-import { type CryptoRuntime, defaultCryptoRuntime } from '../crypto/webcrypto'
-import { SUITE02_SHARE_ID_BYTES as RELAY_SHARE_ID_BYTES } from '../crypto/suite02-link'
-import { stripRawUrlCredentials } from '../security/url-sanitizer'
+import { concatBytes, encodeBase64Url } from '../../crypto/bytes'
+import { sha256 } from '../../crypto/digest'
+import { type CryptoRuntime, defaultCryptoRuntime } from '../../crypto/webcrypto'
+import { SUITE02_SHARE_ID_BYTES as RELAY_SHARE_ID_BYTES } from '../../crypto/suite02-link'
+import { stripRawUrlCredentials } from '../../security/url-sanitizer'
 
 export const RELAY_WEBSOCKET_PATH = '/v2/ws'
 export const RELAY_SHARE_ROUTE_QUERY = 'share_id'

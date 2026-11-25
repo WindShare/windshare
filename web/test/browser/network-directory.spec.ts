@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { readFileSync } from 'node:fs'
-import type { NetworkRoot } from '../../src/network/node-directory'
+import type { NetworkRoot } from '../../src/network/contracts/node-directory'
 import { BROWSER_CONTRACT_HOST_PATH } from './contract-host'
 
 const vectors = JSON.parse(readFileSync(new URL('../../../testdata/network/directory.json', import.meta.url), 'utf8')) as {
@@ -10,9 +10,9 @@ const vectors = JSON.parse(readFileSync(new URL('../../../testdata/network/direc
 async function commit(page: Page, name: string): Promise<boolean> {
   return page.evaluate(async ({ network, roots, envelope }) => {
     const cachePath = '/src/network/directory-cache.ts'
-    const trustPath = '/src/network/node-directory.ts'
+    const trustPath = '/src/network/contracts/node-directory.ts'
     const { BrowserDirectoryCache } = await import(/* @vite-ignore */ cachePath) as typeof import('../../src/network/directory-cache')
-    const { verifyDirectory } = await import(/* @vite-ignore */ trustPath) as typeof import('../../src/network/node-directory')
+    const { verifyDirectory } = await import(/* @vite-ignore */ trustPath) as typeof import('../../src/network/contracts/node-directory')
     const verified = await verifyDirectory(envelope, network, roots)
     try { await new BrowserDirectoryCache(network).commit(verified); return true }
     catch { return false }

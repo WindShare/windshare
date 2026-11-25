@@ -1,4 +1,4 @@
-import { canonicalICEHost } from '../network/stun-endpoint'
+import { canonicalICEHost } from '../network/contracts/stun-endpoint'
 import {
   CborError,
   decodeCanonicalCbor,

@@ -1,8 +1,8 @@
 import type { Suite02CapabilityLink } from '../../crypto/suite02-link'
 import type { NetworkDirectory } from '../../network/directory'
-import type { NetworkSnapshot } from '../../network/node-directory'
+import type { NetworkSnapshot } from '../../network/contracts/node-directory'
 import { RelayCandidates } from '../../receiver/relay-selection/candidates'
-import { canonicalRelayIdentity } from '../../network/relay-endpoint'
+import { canonicalRelayIdentity } from '../../network/contracts/relay-endpoint'
 
 export function resolveLinkRelays(capability: Suite02CapabilityLink, directory?: NetworkDirectory): RelayCandidates {
   if (capability.nodeAliases.length === 0) return new RelayCandidates(uniqueEndpoints(capability.relays))

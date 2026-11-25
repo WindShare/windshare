@@ -1,4 +1,4 @@
-import { rejectRollback, type DirectoryCursor, type NetworkSnapshot } from './node-directory'
+import { rejectRollback, type DirectoryCursor, type NetworkSnapshot } from './contracts/node-directory'
 
 export interface DirectoryRecord {
   readonly cursor: DirectoryCursor

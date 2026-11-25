@@ -1,5 +1,5 @@
 import { ICEEndpointPool, MAXIMUM_CATALOG_ENDPOINTS, type ICEEndpoint } from './endpoints'
-import type { NetworkNode, NetworkSnapshot } from '../../network/node-directory'
+import type { NetworkNode, NetworkSnapshot } from '../../network/contracts/node-directory'
 
 export const EXISTING_DEFAULT_STUN_SERVER = 'stun:stun.l.google.com:19302'
 

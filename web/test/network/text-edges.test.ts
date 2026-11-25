@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { text } from '../../src/network/strict-json'
+import { text } from '../../src/network/contracts/strict-json'
 
 // Go derives this list from unicode.IsSpace plus U+FEFF, so both verifiers are
 // held to one generated set instead of a hand-copied one.

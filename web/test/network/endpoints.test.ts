@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest'
-import { canonicalSTUN } from '../../src/network/stun-endpoint'
-import { strictJSON, timestamp } from '../../src/network/strict-json'
+import { canonicalSTUN } from '../../src/network/contracts/stun-endpoint'
+import { strictJSON, timestamp } from '../../src/network/contracts/strict-json'
 
 it('rejects STUN credentials, numeric aliases and non-UDP transports', () => {
   for (const raw of ['stun:127.1:3478', 'stun:2130706433:3478', 'turn:host:3478', 'stun:user@host:3478', 'stun:host:0',

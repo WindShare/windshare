@@ -14,8 +14,8 @@ import {
  defaultICEEndpointPool,
  directoryICEEndpointPool,
 } from '../src/connectivity/ice-policy/defaults'
-import type { NetworkSnapshot } from '../src/network/node-directory'
-import { canonicalSTUN } from '../src/network/stun-endpoint'
+import type { NetworkSnapshot } from '../src/network/contracts/node-directory'
+import { canonicalSTUN } from '../src/network/contracts/stun-endpoint'
 
 const request: SelectionRequest = {
  networkGenerationID: 'network', waveID: 'wave', sequence: 1, nowMs: 100_000,

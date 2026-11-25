@@ -9,6 +9,8 @@ import { BOUNDARY_POLICIES } from './policies.mjs'
 
 const presentation = BOUNDARY_POLICIES.find(policy => policy.roots.includes('ui'))
 const model = BOUNDARY_POLICIES.find(policy => policy.roots.includes('output/model'))
+const wireContracts = BOUNDARY_POLICIES.find(policy => policy.name === 'wire contracts do not depend on runtime implementations')
+const sessions = BOUNDARY_POLICIES.find(policy => policy.roots.length === 1 && policy.roots[0] === 'session')
 
 test('a scoped public subtree permits facts without broad prefix matches', () => {
   const policy = {
@@ -108,5 +110,42 @@ test('resolved aliases, inline types, re-exports and dynamic imports obey the sa
     ])
   } finally {
     fs.rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('wire contracts permit network contracts while denying network runtime and preview by default', () => {
+  assert.deepEqual(findBoundaryViolations(new Map([
+    ['protocol/turn-control.ts', ['network/contracts/stun-endpoint.ts']],
+    ['crypto/suite02-link.ts', ['network/contracts/alias.ts']],
+    ['network/contracts/stun-endpoint.ts', ['network/contracts/relay-endpoint.ts']],
+    ['network/contracts/relay-endpoint.ts', ['crypto/suite02-link.ts', 'security/url-sanitizer.ts']],
+    ['network/contracts/alias.ts', []],
+    ['security/url-sanitizer.ts', []],
+  ]), wireContracts), [])
+
+  for (const root of ['protocol/turn-control.ts', 'crypto/suite02-link.ts', 'network/contracts/node-directory.ts']) {
+    for (const dependency of ['network/directory.ts', 'network/directory-cache.ts', 'network/future-runtime.ts', 'preview/preview.ts']) {
+      assert.deepEqual(findBoundaryViolations(new Map([
+        [root, ['network/contracts/barrel.ts']],
+        ['network/contracts/barrel.ts', [dependency]],
+        [dependency, []],
+      ]), wireContracts), [
+        [root, 'network/contracts/barrel.ts', dependency],
+        ['network/contracts/barrel.ts', dependency],
+      ])
+    }
+  }
+})
+
+test('sessions and output models reject private network runtime paths', () => {
+  for (const [policy, root] of [[sessions, 'session/runtime.ts'], [model, 'output/model/offers.ts']]) {
+    assert.deepEqual(findBoundaryViolations(new Map([
+      [root, ['network/contracts/alias.ts']],
+      ['network/contracts/alias.ts', []],
+    ]), policy), [])
+    assert.deepEqual(findBoundaryViolations(new Map([
+      [root, ['network/directory.ts']],
+      ['network/directory.ts', []],
+    ]), policy), [[root, 'network/directory.ts']])
   }
 })

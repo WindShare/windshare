@@ -1,7 +1,7 @@
 import { openShareDescriptor, type ShareDescriptor } from '../catalog/records'
 import { equalBytes } from '../crypto/bytes'
 import type { Suite02CapabilityKey } from '../crypto/suite02-link'
-import { safeRelayIdentity } from '../network/relay-endpoint'
+import { safeRelayIdentity } from '../network/contracts/relay-endpoint'
 import type { ProtocolTraceSource } from '../session/diagnostics'
 import { ReceiverSessionRuntime, type ReceiverSessionOptions } from '../session/runtime'
 import {

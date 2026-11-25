@@ -4,7 +4,7 @@ import { OfficialShareReporter, type ShareReport } from '../../src/application/n
 import { BuiltinNetwork } from '../../src/application/network/builtin'
 import { encodeSuite02CapabilityKey, type Suite02CapabilityLink } from '../../src/crypto/suite02-link'
 import { MemoryDirectoryCache } from '../../src/network/directory-cache'
-import type { NetworkSnapshot } from '../../src/network/node-directory'
+import type { NetworkSnapshot } from '../../src/network/contracts/node-directory'
 import { RelayCandidates } from '../../src/receiver/relay-selection/candidates'
 
 const api = 'https://authority.example'

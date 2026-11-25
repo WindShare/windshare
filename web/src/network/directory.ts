@@ -1,6 +1,6 @@
 import { operationDeadlineSignal } from '../contracts/deadline'
 import { BrowserDirectoryCache, sameCursor, type DirectoryCache } from './directory-cache'
-import { MAXIMUM_ENVELOPE_BYTES, rejectRollback, usableDirectory, verifyDirectory, type DirectoryCursor, type NetworkRoot, type NetworkSnapshot } from './node-directory'
+import { MAXIMUM_ENVELOPE_BYTES, rejectRollback, usableDirectory, verifyDirectory, type DirectoryCursor, type NetworkRoot, type NetworkSnapshot } from './contracts/node-directory'
 
 const REFRESH_TIMEOUT_MS = 6_000
 const MIRROR_TIMEOUT_MS = 2_000

@@ -16,7 +16,7 @@ import {
   type BlockRouteObservation,
 } from '../content/broker'
 import { RevisionService, SessionBlockLane } from '../content/session-services'
-import { safeRelayIdentity } from '../network/relay-endpoint'
+import { safeRelayIdentity } from '../network/contracts/relay-endpoint'
 import type { ProtocolTraceSource } from '../session/diagnostics'
 import type { ReceiverSessionRuntime } from '../session/runtime'
 import type { LaneChange } from '../session/runtime-types'

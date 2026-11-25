@@ -1,6 +1,6 @@
 import { openShareDescriptor, type ShareDescriptor } from '../catalog/records'
 import type { Suite02CapabilityKey } from '../crypto/suite02-link'
-import { safeRelayIdentity } from '../network/relay-endpoint'
+import { safeRelayIdentity } from '../network/contracts/relay-endpoint'
 import type { ProtocolTraceSource } from '../session/diagnostics'
 import { ReceiverSessionRuntime } from '../session/runtime'
 import { dialRelayReceiver } from '../transport/relay/receiver'

@@ -5,7 +5,7 @@ import { resolveLinkRelays } from '../../src/application/network/resolve'
 import { encodeSuite02CapabilityKey } from '../../src/crypto/suite02-link'
 import { MemoryDirectoryCache } from '../../src/network/directory-cache'
 import { NetworkDirectory, type DirectoryObservation } from '../../src/network/directory'
-import { rejectRollback, usableDirectory, verifyDirectory, type NetworkRoot } from '../../src/network/node-directory'
+import { rejectRollback, usableDirectory, verifyDirectory, type NetworkRoot } from '../../src/network/contracts/node-directory'
 
 const vectors = JSON.parse(readFileSync(new URL('../../../testdata/network/directory.json', import.meta.url), 'utf8')) as {
   network: string; now: string; roots: NetworkRoot[]; entries: { name: string; envelope: unknown; valid: boolean }[]

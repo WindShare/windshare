@@ -6,7 +6,7 @@ import {
   SUITE02_READ_SECRET_BYTES,
 } from './suite02-key-derivation'
 import { type CryptoRuntime, defaultCryptoRuntime } from './webcrypto'
-import { validNodeAlias } from '../network/alias'
+import { validNodeAlias } from '../network/contracts/alias'
 
 export const SUITE02 = 0x02
 export const SUITE02_SHARE_ID_BYTES = 12

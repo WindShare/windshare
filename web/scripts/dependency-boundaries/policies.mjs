@@ -5,6 +5,9 @@ export const TRANSFER_BOUNDARY = Object.freeze({
 })
 
 const OUTPUT_PUBLIC_SURFACE = Object.freeze({ root: 'output', publicSubtree: 'output/model' })
+// Pure wire/endpoint/verification contracts live under network/contracts; all
+// other network/ files (directory fetch, IndexedDB cache) are runtime I/O.
+const NETWORK_CONTRACTS_SURFACE = Object.freeze({ root: 'network', publicSubtree: 'network/contracts' })
 
 export const BOUNDARY_POLICIES = Object.freeze([
   TRANSFER_BOUNDARY,
@@ -18,16 +21,17 @@ export const BOUNDARY_POLICIES = Object.freeze([
     roots: [
       'catalog', 'content', 'contracts', 'crypto', 'protocol', 'unicode',
       'session', 'connectivity', 'receiver', 'transport', 'transfer',
-      'output', 'diagnostics', 'security', 'preview',
+      'output', 'diagnostics', 'security', 'preview', 'network',
     ],
     forbidden: ['application', 'ui', 'package:react', 'package:react-dom'],
   },
   {
     name: 'wire contracts do not depend on runtime implementations',
-    roots: ['protocol', 'crypto', 'contracts', 'unicode'],
+    roots: ['protocol', 'crypto', 'contracts', 'unicode', 'network/contracts'],
+    publicSurfaces: [NETWORK_CONTRACTS_SURFACE],
     forbidden: [
       'catalog', 'content', 'session', 'connectivity', 'receiver', 'transport',
-      'transfer', 'output', 'diagnostics', 'application', 'ui',
+      'transfer', 'output', 'diagnostics', 'preview', 'application', 'ui',
     ],
   },
   {
@@ -49,12 +53,13 @@ export const BOUNDARY_POLICIES = Object.freeze([
   {
     name: 'protocol sessions do not depend on connectivity or storage implementations',
     roots: ['session'],
+    publicSurfaces: [NETWORK_CONTRACTS_SURFACE],
     forbidden: ['connectivity', 'receiver', 'transport', 'output', 'application', 'ui'],
   },
   {
     name: 'output models expose facts and pure queries',
     roots: ['output/model'],
-    publicSurfaces: [OUTPUT_PUBLIC_SURFACE],
+    publicSurfaces: [OUTPUT_PUBLIC_SURFACE, NETWORK_CONTRACTS_SURFACE],
     forbidden: ['application', 'ui', 'package:react', 'package:react-dom', 'connectivity', 'receiver', 'transport'],
   },
   {

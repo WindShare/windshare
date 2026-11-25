@@ -1,7 +1,7 @@
 import { encodeBase64Url } from '../../crypto/bytes'
 import type { ReceiveCounts } from '../../contracts/relay-delivery-observation'
 import type { TraceEntry } from '../../diagnostics/runtime'
-import { safeRelayIdentity } from '../../network/relay-endpoint'
+import { safeRelayIdentity } from '../../network/contracts/relay-endpoint'
 import { formatDiagnosticText } from '../../security/diagnostic-formatter'
 import type {
   ConnectionRecoveryTraceEvent,

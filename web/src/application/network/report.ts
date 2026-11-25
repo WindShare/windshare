@@ -1,4 +1,4 @@
-import { canonicalRelayIdentity } from '../../network/relay-endpoint'
+import { canonicalRelayIdentity } from '../../network/contracts/relay-endpoint'
 import type { NetworkDirectory } from '../../network/directory'
 import type { RelayCandidates } from '../../receiver/relay-selection/candidates'
 
