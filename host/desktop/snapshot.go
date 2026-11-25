@@ -2,6 +2,7 @@ package desktop
 
 import (
 	"cmp"
+	"errors"
 	"reflect"
 	"slices"
 
@@ -10,6 +11,10 @@ import (
 	"github.com/windshare/windshare/engine/relayconfig"
 )
 
+const publicationFailedCode = "publication_failed"
+
+var errEmptyShareURL = errors.New("share capability produced an empty URL")
+
 func (a *Application) snapshotLocked() Snapshot {
 	next := Snapshot{
 		SessionID: a.sessionID, Revision: a.snapshotValue.Revision,
@@ -17,8 +22,7 @@ func (a *Application) snapshotLocked() Snapshot {
 		Preferences: a.preferences, Account: a.accountView, SenderTrace: a.deps.senderTrace.state(),
 	}
 	for _, op := range a.operations {
-		a.retainFailedSelection(op)
-		view := projectShare(op)
+		view := a.reconcileAndProjectLocked(op)
 		a.recordOfficialAuthorizationFailureLocked(op, view)
 		next.Shares = append(next.Shares, view)
 	}
@@ -59,6 +63,68 @@ func (a *Application) snapshot() Snapshot {
 	return a.snapshotLocked()
 }
 
+// reconcileAndProjectLocked samples each running task snapshot once so
+// host-owned transitions (selection retention, publication-failure teardown)
+// and wire projection never diverge across a concurrent state transition.
+func (a *Application) reconcileAndProjectLocked(op *operation) Share {
+	current, ok := op.phase.(running)
+	if !ok {
+		return projectShare(op)
+	}
+	state := current.task.Snapshot()
+	if a.retainFailedSelectionLocked(op, current, state) {
+		return projectShare(op)
+	}
+	current = a.enforceSharePublicationLocked(op, current, state)
+	view := Share{OperationID: op.id, CreatedAt: op.createdAt.UnixMilli()}
+	projectTaskSnapshot(&view, current, state)
+	return view
+}
+
+// If a ready share cannot produce a valid capability URL, stop the running
+// task so it settles cleanly rather than emitting an illegal empty-URL Sharing
+// frame or leaking relay registrations behind a synthetic failure view.
+func (a *Application) enforceSharePublicationLocked(op *operation, current running, state engine.ShareSnapshot) running {
+	if current.publicationError != nil || state.Result != nil ||
+		state.Startup != engine.ShareReadyReached || state.State != engine.TaskRunning {
+		return current
+	}
+	if _, err := publicationURL(state.Ready, current.frontURL); err != nil {
+		current.publicationError = err
+		op.phase = current
+		a.deps.log("host.share_publication_failed", map[string]any{
+			"operation_id":            op.id,
+			"task_id":                 string(current.task.ID()),
+			"error_code":              publicationFailedCode,
+			"has_ready_frontend":      state.Ready.Frontend != "",
+			"has_configured_frontend": current.frontURL != "",
+		})
+		current.task.StopShare()
+	}
+	return current
+}
+
+func publicationURL(ready engine.ShareReady, fallbackFrontend string) (string, error) {
+	frontend := ready.Frontend
+	if frontend == "" {
+		frontend = fallbackFrontend
+	}
+	linkURL, err := ready.Capability.URL(frontend)
+	if err != nil {
+		return "", err
+	}
+	if linkURL == "" {
+		return "", errEmptyShareURL
+	}
+	return linkURL, nil
+}
+
+func publicationFailure(err error) *Failure {
+	result := failure(publicationFailedCode, err)
+	result.EngineCode = string(engine.FailureCapabilityInvalid)
+	return result
+}
+
 func projectShare(op *operation) Share {
 	view := Share{OperationID: op.id, CreatedAt: op.createdAt.UnixMilli()}
 	switch current := op.phase.(type) {
@@ -82,39 +148,23 @@ func projectShare(op *operation) Share {
 }
 
 func projectTask(view *Share, current running) {
-	state := current.task.Snapshot()
+	projectTaskSnapshot(view, current, current.task.Snapshot())
+}
+
+func projectTaskSnapshot(view *Share, current running, state engine.ShareSnapshot) {
 	view.TaskID, view.State = string(current.task.ID()), Preparing
 	switch state.Startup {
 	case engine.ShareAwaitingAuthorization:
 		view.State = AwaitingAuthorization
 		view.Authorization = state.Authorization
 	case engine.ShareReadyReached:
-		view.State = Sharing
-		frontend := state.Ready.Frontend
-		if frontend == "" {
-			frontend = current.frontURL
-		}
-		view.URL, _ = state.Ready.Capability.URL(frontend)
-		if view.URL != "" && state.Ready.AlternateFrontend != "" {
-			view.BackupURL, _ = state.Ready.Capability.URL(state.Ready.AlternateFrontend)
-		}
-		summary := state.Ready.SelectedRootSummary
-		view.Selection = &Selection{Count: summary.SelectedCount()}
-		if root, ok := summary.SingleRoot(); ok {
-			selected := &SelectedRoot{Name: root.Name(), Kind: "directory"}
-			if root.Kind() == liveshare.SelectedRootKindFile {
-				selected.Kind = "file"
-				size, _ := root.FileSize()
-				selected.FileSize = &size
-			}
-			view.Selection.Root = selected
-		}
+		projectShareReady(view, current, state.Ready)
 	case engine.ShareStartupFailed:
 		if state.StartupError != nil && !isCancellationError(state.StartupError) {
 			view.Error = engineFailure("startup_failed", state.StartupError)
 		}
 	}
-	if state.State == engine.TaskStopping || state.State == engine.TaskFinished {
+	if current.publicationError != nil || state.State == engine.TaskStopping || state.State == engine.TaskFinished {
 		view.State = Stopping
 		view.URL = ""
 		view.BackupURL = ""
@@ -142,24 +192,63 @@ func projectTask(view *Share, current running) {
 			Samples: samples,
 		}
 	}
-	if result := state.Result; result != nil {
-		view.State, view.URL, view.BackupURL, view.Relay = Finished, "", "", nil
-		view.Authorization = state.Authorization
-		completion := Completion{
-			Outcome:    outcomeName(result.Outcome),
-			StopReason: reasonName(result.StopReason),
-		}
-		if result.Outcome == engine.OutcomeFailed {
-			completion.Error = errorText(result.Err)
-			completion.CleanupError = errorText(result.CleanupError)
-			view.Error = terminalTaskFailure(state, result)
-		} else {
-			// Task settlement owns terminal outcome semantics: cancellation or clean
-			// stop must never surface a startup or cancellation cause as a failure.
-			view.Error = nil
-		}
-		view.Result = &completion
+	if state.Result != nil {
+		projectTaskCompletion(view, current, state, state.Result)
 	}
+}
+
+func projectShareReady(view *Share, current running, ready engine.ShareReady) {
+	summary := ready.SelectedRootSummary
+	view.Selection = &Selection{Count: summary.SelectedCount()}
+	if root, ok := summary.SingleRoot(); ok {
+		selected := &SelectedRoot{Name: root.Name(), Kind: "directory"}
+		if root.Kind() == liveshare.SelectedRootKindFile {
+			selected.Kind = "file"
+			size, _ := root.FileSize()
+			selected.FileSize = &size
+		}
+		view.Selection.Root = selected
+	}
+	if current.publicationError != nil {
+		return
+	}
+	linkURL, err := publicationURL(ready, current.frontURL)
+	if err != nil {
+		// Never emit Sharing without a capability URL; the wire schema
+		// requires ShareState::Sharing.url.
+		view.State = Stopping
+		return
+	}
+	view.State = Sharing
+	view.URL = linkURL
+	if ready.AlternateFrontend != "" {
+		view.BackupURL, _ = ready.Capability.URL(ready.AlternateFrontend)
+	}
+}
+
+func projectTaskCompletion(view *Share, current running, state engine.ShareSnapshot, result *engine.TaskResult[engine.ShareResult]) {
+	view.State, view.URL, view.BackupURL, view.Relay = Finished, "", "", nil
+	view.Authorization = state.Authorization
+	completion := Completion{
+		Outcome:    outcomeName(result.Outcome),
+		StopReason: reasonName(result.StopReason),
+	}
+	switch {
+	case current.publicationError != nil && result.Outcome != engine.OutcomeCancelled:
+		completion.Outcome = OutcomeFailed
+		completion.Error = errorText(current.publicationError)
+		completion.CleanupError = errorText(result.CleanupError)
+		view.Error = publicationFailure(current.publicationError)
+	case result.Outcome == engine.OutcomeFailed:
+		completion.Error = errorText(result.Err)
+		completion.CleanupError = errorText(result.CleanupError)
+		view.Error = terminalTaskFailure(state, result)
+	default:
+		// Task settlement owns terminal outcome semantics: cancellation or clean
+		// stop must never surface a startup or cancellation cause as a failure.
+		view.Error = nil
+	}
+	view.Result = &completion
 }
 
 func terminalTaskFailure(state engine.ShareSnapshot, result *engine.TaskResult[engine.ShareResult]) *Failure {

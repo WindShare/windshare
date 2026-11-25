@@ -240,6 +240,17 @@ impl Desktop {
                 SharingSetupTarget::RecoverShare(id)
             }
         });
+        let waits_frontend = !operation.is_empty()
+            && matches!(
+                crate::live::host_share_state(&model, operation),
+                Some(windshare_host::ShareState::AwaitingConfiguration {
+                    blocking: windshare_host::CreationBlock {
+                        reason: windshare_host::BlockingReason::FrontendRequired,
+                        ..
+                    },
+                    ..
+                })
+            );
         let (page, relay_url) = if !model.setup_pending()
             && let Some(context) = current
             && let Some(relay_operation) = context.relay_operation
@@ -249,6 +260,8 @@ impl Desktop {
                 SetupPage::Relay(relay_operation),
                 Some(context.relay_url.clone()),
             )
+        } else if waits_frontend {
+            (SetupPage::ReceiverSite, None)
         } else {
             (SetupPage::Selection, None)
         };

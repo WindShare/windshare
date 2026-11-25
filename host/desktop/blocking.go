@@ -18,18 +18,24 @@ const (
 
 type CreationBlockingReason string
 
+const (
+	blockingSettingsUnavailable   CreationBlockingReason = "settings_unavailable"
+	blockingConfigurationRequired CreationBlockingReason = "configuration_required"
+	blockingFrontendRequired      CreationBlockingReason = "frontend_required"
+)
+
 type CreationBlock struct {
 	Reason    CreationBlockingReason `json:"reason"`
 	Recovery  RecoveryAction         `json:"recovery"`
 	RetryAtMS int64                  `json:"retry_at_ms,omitempty"`
 }
 
-func configurationBlocked(code string, err error) operationPhase {
+func configurationBlocked(reason CreationBlockingReason, err error) operationPhase {
 	recovery := ConfigureCreation
-	if code == "settings_unavailable" {
+	if reason == blockingSettingsUnavailable {
 		recovery = RepairSettings
 	}
-	return awaitingConfiguration{block: CreationBlock{Reason: CreationBlockingReason(code), Recovery: recovery}, failure: failure(code, err)}
+	return awaitingConfiguration{block: CreationBlock{Reason: reason, Recovery: recovery}, failure: failure(string(reason), err)}
 }
 
 func networkBlocked(err error) operationPhase {
@@ -58,15 +64,13 @@ func networkBlocked(err error) operationPhase {
 
 // A fresh attempt must own a new engine task. Keeping the file and relay
 // selections on the operation lets recovery change the relay without reselecting files.
-func (a *Application) retainFailedSelection(op *operation) {
-	current, ok := op.phase.(running)
-	if !ok || !current.selectedRelays || a.closing {
-		return
+func (a *Application) retainFailedSelectionLocked(op *operation, current running, state engine.ShareSnapshot) bool {
+	if !current.selectedRelays || a.closing {
+		return false
 	}
-	state := current.task.Snapshot()
 	if state.Startup != engine.ShareStartupFailed || state.Authorization != nil || state.Result == nil ||
 		state.Result.Outcome != engine.OutcomeFailed || state.Result.FailureClass != engine.FailureNetwork {
-		return
+		return false
 	}
 	if op.cancel != nil {
 		op.cancel()
@@ -77,6 +81,7 @@ func (a *Application) retainFailedSelection(op *operation) {
 		failure: engineFailure("selected_relays_unavailable", state.Result.Err),
 	}
 	a.deps.log("host.share_waiting_for_selected_relays", map[string]string{"operation_id": op.id, "task_id": string(current.task.ID())})
+	return true
 }
 
 func waitingForAdmission(phase operationPhase) bool {

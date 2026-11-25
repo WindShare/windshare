@@ -2,6 +2,7 @@ package desktop
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -51,11 +52,19 @@ func (f *fakeShare) stop(reason engine.StopReason) {
 		f.signal()
 	}
 }
+func validTestCapability() link.Link {
+	publicKey := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)).Public().(ed25519.PublicKey)
+	capability, err := link.NewSenderAuthenticated(make([]byte, link.ReadSecretBytes), publicKey, []string{"https://relay.example"})
+	if err != nil {
+		panic(err)
+	}
+	return capability
+}
 func (f *fakeShare) ready() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.state.Startup = engine.ShareReadyReached
-	f.state.Ready.Capability = link.Link{}
+	f.state.Ready.Capability = validTestCapability()
 	f.signal()
 }
 func (f *fakeShare) finish() {
@@ -88,11 +97,12 @@ func fixture(t *testing.T) (*Application, *fakeShare, *atomic.Int32) {
 	task := &fakeShare{id: "engine:1", state: engine.ShareSnapshot{State: engine.TaskRunning}, events: make(chan engine.Observation, 1), changed: make(chan struct{}), done: make(chan struct{})}
 	starts := &atomic.Int32{}
 	a := newApplication("session", dependencies{
-		start:       func(context.Context, engine.ShareRequest) (shareTask, error) { starts.Add(1); return task, nil },
-		close:       func(context.Context) error { task.finish(); return nil },
-		load:        func() (relayconfig.Config, error) { return configured(), nil },
-		log:         func(string, any) {},
-		cancelSetup: func(context.Context, string) error { return nil },
+		defaultFrontend: "https://front.example",
+		start:           func(context.Context, engine.ShareRequest) (shareTask, error) { starts.Add(1); return task, nil },
+		close:           func(context.Context) error { task.finish(); return nil },
+		load:            func() (relayconfig.Config, error) { return configured(), nil },
+		log:             func(string, any) {},
+		cancelSetup:     func(context.Context, string) error { return nil },
 	})
 	t.Cleanup(func() {
 		if err := a.close(); err != nil {
@@ -182,8 +192,8 @@ func TestJoinedCompletionAndReadinessNotifyWithoutObservations(t *testing.T) {
 	task.ready()
 	select {
 	case snapshot := <-queue.snapshots:
-		if snapshot.Shares[0].State != Sharing {
-			t.Fatal("notification preceded commit")
+		if snapshot.Shares[0].State != Sharing || snapshot.Shares[0].URL == "" {
+			t.Fatalf("notification preceded commit or omitted URL: %+v", snapshot.Shares[0])
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("readiness required polling")

@@ -45,15 +45,16 @@ type accountService interface {
 }
 
 type dependencies struct {
-	defaultFrontend string
-	accounts        accountService
-	start           func(context.Context, engine.ShareRequest) (shareTask, error)
-	close           func(context.Context) error
-	load            func() (relayconfig.Config, error)
-	setup           func(context.Context, SetupInput, func(relaysetup.Progress)) (SetupResult, error)
-	cancelSetup     func(context.Context, string) error
-	log             func(string, any)
-	senderTrace     *senderTrace
+	defaultFrontend       string
+	networkUnavailability func() *engine.NetworkUnavailableError
+	accounts              accountService
+	start                 func(context.Context, engine.ShareRequest) (shareTask, error)
+	close                 func(context.Context) error
+	load                  func() (relayconfig.Config, error)
+	setup                 func(context.Context, SetupInput, func(relaysetup.Progress)) (SetupResult, error)
+	cancelSetup           func(context.Context, string) error
+	log                   func(string, any)
+	senderTrace           *senderTrace
 }
 
 type operationPhase interface{ operationPhase() }
@@ -71,9 +72,10 @@ type awaitingAuthorization struct {
 }
 type admission struct{ cancelling bool }
 type running struct {
-	task           shareTask
-	frontURL       string
-	selectedRelays bool
+	task             shareTask
+	frontURL         string
+	selectedRelays   bool
+	publicationError error
 }
 type terminal struct {
 	result Completion

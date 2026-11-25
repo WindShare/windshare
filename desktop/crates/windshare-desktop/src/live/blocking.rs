@@ -183,6 +183,7 @@ impl Desktop {
         let message = match blocking.reason {
             BlockingReason::SettingsUnavailable => Text::SettingsNeedRepair,
             BlockingReason::ConfigurationRequired => Text::RelayRequired,
+            BlockingReason::FrontendRequired => Text::FrontendRequired,
             BlockingReason::Unprovisioned => Text::NetworkNotProvisioned,
             BlockingReason::InvalidNetworkConfiguration => Text::NetworkBuildInvalid,
             BlockingReason::TrustStateUnreadable => Text::TrustStateUnreadable,
@@ -233,12 +234,18 @@ impl Desktop {
                 .disabled(cooling_down || self.runtime.selection_disabled(cx)),
             );
         }
+        let (configure_label, configure_icon) =
+            if blocking.reason == BlockingReason::FrontendRequired {
+                (Text::SetReceiverSite, Icon::Link)
+            } else {
+                (Text::ChooseRelays, Icon::Settings)
+            };
         card = card.child(
             actions
                 .child(Self::button(
                     "configure-relay",
-                    locale.text(Text::ChooseRelays),
-                    Icon::Settings,
+                    locale.text(configure_label),
+                    configure_icon,
                     ButtonStyle::Secondary,
                     Action::ConfigureShare(share.id),
                     cx,

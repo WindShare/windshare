@@ -15,6 +15,7 @@ import (
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/relayconfig"
+	"github.com/windshare/windshare/engine/relayprofile"
 	"github.com/windshare/windshare/engine/relaysetup"
 )
 
@@ -457,5 +458,76 @@ func TestProjectTaskFollowsSettlementOutcomeAndCancellationContract(t *testing.T
 		startupAndCleanup.Result == nil ||
 		startupAndCleanup.Result.CleanupError != cleanupErr.Error() {
 		t.Fatalf("startup + cleanup failure = %+v (result=%+v, error=%+v)", startupAndCleanup, startupAndCleanup.Result, startupAndCleanup.Error)
+	}
+}
+
+func TestUnpublishableReadyShareStopsTaskAndSettlesAsPublicationFailure(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		capability link.Link
+		frontend   string
+	}{
+		{name: "missing frontend", capability: validTestCapability(), frontend: ""},
+		{name: "invalid capability", capability: link.Link{}, frontend: "https://ws.example"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var loggedPublicationFailure bool
+			a, task, _ := fixture(t)
+			a.deps.log = func(event string, _ any) {
+				if event == "host.share_publication_failed" {
+					loggedPublicationFailure = true
+				}
+			}
+			a.deps.load = func() (relayconfig.Config, error) {
+				return relayconfig.Config{
+					ActiveRelays: []string{"https://relay.example"},
+					Profiles:     []relayprofile.Candidate{{PublicURL: "https://relay.example"}},
+				}, nil
+			}
+			a.execute(createRequest())
+			admitted(t, a)
+
+			task.mu.Lock()
+			task.state.Startup = engine.ShareReadyReached
+			task.state.Ready = engine.ShareReady{Capability: test.capability, Frontend: test.frontend}
+			task.state.RelayAvailability = &engine.RelayAvailability{Available: 1, Total: 1, EverReady: true}
+			task.signal()
+			task.mu.Unlock()
+
+			stopping := awaitShare(t, a, "operation", func(s Share) bool { return s.State == Stopping })
+			if stopping.URL != "" || stopping.BackupURL != "" || stopping.Relay != nil {
+				t.Fatalf("stopping unpublishable share leaked ready fields: %+v", stopping)
+			}
+			if task.Snapshot().State != engine.TaskStopping {
+				t.Fatalf("unpublishable ready share did not stop engine task: state=%v", task.Snapshot().State)
+			}
+			if !loggedPublicationFailure {
+				t.Fatal("missing host.share_publication_failed structured log")
+			}
+
+			task.finish()
+			finished := awaitShare(t, a, "operation", func(s Share) bool { return s.State == Finished })
+			if finished.Result == nil || finished.Result.Outcome != OutcomeFailed ||
+				finished.Result.StopReason != ShareStopped || finished.Result.Error == "" ||
+				finished.Error == nil || finished.Error.Code != publicationFailedCode ||
+				finished.Error.EngineCode != string(engine.FailureCapabilityInvalid) {
+				t.Fatalf("settled publication failure = %+v (result=%+v, error=%+v)", finished, finished.Result, finished.Error)
+			}
+		})
+	}
+
+	// Direct projection without snapshotLocked reconciliation still refuses to emit
+	// Sharing with an omitted/empty URL.
+	var direct Share
+	projectTask(&direct, running{task: &fakeShare{
+		id: "engine:direct",
+		state: engine.ShareSnapshot{
+			State:   engine.TaskRunning,
+			Startup: engine.ShareReadyReached,
+			Ready:   engine.ShareReady{Capability: validTestCapability(), Frontend: ""},
+		},
+	}})
+	if direct.State == Sharing || direct.URL != "" {
+		t.Fatalf("direct projection emitted illegal empty-URL sharing state: %+v", direct)
 	}
 }

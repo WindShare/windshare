@@ -55,6 +55,28 @@ fn share_wire_contract_enforces_state_specific_payloads() {
             }),
         }
     );
+
+    let frontend_required: Share = serde_json::from_value(serde_json::json!({
+        "operation_id": "missing-front",
+        "state": "awaiting_configuration",
+        "blocking": { "reason": "frontend_required", "recovery": "configure" },
+        "error": { "code": "frontend_required", "message": "configure a receiver website before sharing" }
+    }))
+    .unwrap();
+    assert_eq!(
+        frontend_required.state,
+        ShareState::AwaitingConfiguration {
+            blocking: CreationBlock {
+                reason: BlockingReason::FrontendRequired,
+                recovery: RecoveryAction::Configure,
+                retry_at_ms: None,
+            },
+            error: Some(Failure::new(
+                "frontend_required",
+                "configure a receiver website before sharing",
+            )),
+        }
+    );
 }
 
 fn snapshot(revision: u64, shares: Vec<Share>) -> Snapshot {

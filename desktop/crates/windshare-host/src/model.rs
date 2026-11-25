@@ -173,6 +173,7 @@ pub struct CreationBlock {
 pub enum BlockingReason {
     SettingsUnavailable,
     ConfigurationRequired,
+    FrontendRequired,
     Unprovisioned,
     InvalidNetworkConfiguration,
     TrustStateUnreadable,

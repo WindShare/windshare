@@ -122,17 +122,19 @@ func (a *Application) runAdmission(ctx context.Context, op *operation, trace dia
 	a.completeAdmission(ctx, op, a.prepareAdmission(ctx, op, trace))
 }
 
+var errFrontendRequired = errors.New("configure a receiver website before sharing")
+
 func (a *Application) prepareAdmission(ctx context.Context, op *operation, trace diagnostics.Sink) operationPhase {
 	config, err := a.deps.load()
 	if err != nil {
-		return configurationBlocked("settings_unavailable", err)
+		return configurationBlocked(blockingSettingsUnavailable, err)
 	}
 	intent, err := relayconfig.ShareIntent(config, op.explicitRelays)
-	if err == nil && config.FrontURL != "" {
-		err = relayconfig.ValidateFrontURL(config.FrontURL)
-	}
 	if err != nil {
-		return configurationBlocked("configuration_required", err)
+		return configurationBlocked(blockingConfigurationRequired, err)
+	}
+	if blocked := a.validateFrontendAdmission(op.id, config.FrontURL, intent); blocked != nil {
+		return blocked
 	}
 	if ctx.Err() != nil {
 		return terminal{}
@@ -150,6 +152,29 @@ func (a *Application) prepareAdmission(ctx context.Context, op *operation, trace
 		return networkBlocked(err)
 	}
 	return terminal{result: Completion{Outcome: OutcomeFailed, StopReason: NoStopReason, Error: errorText(err)}, error: engineFailure("creation_failed", err)}
+}
+
+func (a *Application) validateFrontendAdmission(operationID, explicitFrontend string, intent relayprofile.Intent) operationPhase {
+	frontend := explicitFrontend
+	if frontend == "" {
+		frontend = a.deps.defaultFrontend
+	}
+	if frontend == "" {
+		// On a fresh unprovisioned build without relays or a built-in frontend,
+		// surface relay/network setup first so adding a relay can also expose
+		// its advertised receiver website before prompting for one.
+		if intent.Mode() == relayprofile.Planned && len(intent.Candidates()) == 0 && a.deps.networkUnavailability != nil {
+			if unavailable := a.deps.networkUnavailability(); unavailable != nil {
+				return networkBlocked(unavailable)
+			}
+		}
+		a.deps.log("host.share_frontend_required", map[string]string{"operation_id": operationID})
+		return configurationBlocked(blockingFrontendRequired, errFrontendRequired)
+	}
+	if err := relayconfig.ValidateFrontURL(frontend); err != nil {
+		return configurationBlocked(blockingFrontendRequired, err)
+	}
+	return nil
 }
 
 func (a *Application) completeAdmission(ctx context.Context, op *operation, phase operationPhase) {

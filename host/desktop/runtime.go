@@ -12,6 +12,7 @@ import (
 	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/builtinnetwork"
+	"github.com/windshare/windshare/engine/networkconfig"
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relaysetup"
 	"github.com/windshare/windshare/internal/diaglog"
@@ -100,7 +101,8 @@ func Start() (*Host, error) {
 	}
 	setup := newNativeSetup(store, application)
 	deps := dependencies{
-		defaultFrontend: network.LinkHost,
+		defaultFrontend:       defaultBuiltInFrontend(network),
+		networkUnavailability: application.NetworkUnavailability,
 		start: func(ctx context.Context, request engine.ShareRequest) (shareTask, error) {
 			task, err := application.StartShare(ctx, request)
 			if err != nil {
@@ -126,6 +128,18 @@ func Start() (*Host, error) {
 	host.Endpoint = Endpoint{SessionID: sessionID, Address: host.server.address, Token: token, LogDirectory: directory}
 	log.Record("host.listening", map[string]string{"session_id": sessionID, "address": host.server.address})
 	return host, nil
+}
+
+// Match networkruntime's built-in fallback order so backup-only custom builds
+// remain shareable without requiring an explicit front_url override.
+func defaultBuiltInFrontend(network *networkconfig.Config) string {
+	if network == nil {
+		return ""
+	}
+	if network.LinkHost != "" {
+		return network.LinkHost
+	}
+	return network.BackupEntry
 }
 
 func (h *Host) recordDiagnostics() {

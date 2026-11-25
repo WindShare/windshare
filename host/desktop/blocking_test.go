@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/engine"
+	"github.com/windshare/windshare/engine/networkconfig"
 	"github.com/windshare/windshare/engine/relayconfig"
+	"github.com/windshare/windshare/engine/relayprofile"
 	"github.com/windshare/windshare/engine/relaysetup"
 )
 
@@ -178,5 +180,97 @@ func TestMissingDefaultSettingsStillAdmitDefaultShare(t *testing.T) {
 	config, err := relayconfig.Load()
 	if !errors.Is(err, os.ErrNotExist) || config.FrontURL != "" {
 		t.Fatal("explicit missing settings were ignored", err)
+	}
+}
+
+func TestFrontendAdmissionGuardsUnconfiguredBuildsAndBackupFallback(t *testing.T) {
+	// 1. Unprovisioned build with explicit relay and no frontend blocks before starting engine,
+	//    then automatically resumes once a receiver website is saved.
+	a, _, starts := fixture(t)
+	a.deps.defaultFrontend = ""
+	currentConfig := relayconfig.Config{
+		ActiveRelays: []string{"https://relay.example"},
+		Profiles:     []relayprofile.Candidate{{PublicURL: "https://relay.example"}},
+	}
+	a.deps.load = func() (relayconfig.Config, error) { return currentConfig, nil }
+	a.deps.setup = func(_ context.Context, input SetupInput, _ func(relaysetup.Progress)) (SetupResult, error) {
+		if input.Preference == nil || input.Preference.Action != "frontend" {
+			t.Fatalf("unexpected setup input: %+v", input)
+		}
+		currentConfig.FrontURL = input.Preference.Value
+		return SetupResult{FrontendSaved: true}, nil
+	}
+	a.execute(createRequest())
+	blocked := awaitShare(t, a, "operation", func(s Share) bool { return s.State == AwaitingConfiguration })
+	a.work.Wait()
+	if starts.Load() != 0 || blocked.Blocking == nil ||
+		blocked.Blocking.Reason != blockingFrontendRequired ||
+		blocked.Blocking.Recovery != ConfigureCreation ||
+		blocked.Error == nil || blocked.Error.Code != string(blockingFrontendRequired) ||
+		blocked.Error.EngineCode != "" {
+		t.Fatalf("missing frontend block = %+v (error=%+v, starts=%d)", blocked, blocked.Error, starts.Load())
+	}
+	reply := a.execute(Request{
+		Command:     "configure",
+		OperationID: "operation",
+		Setup: &SetupInput{
+			ID:         "setup:frontend",
+			Preference: &relayconfig.PreferenceEdit{Action: "frontend", Value: "https://receiver.example"},
+		},
+	})
+	if reply.Error != nil {
+		t.Fatal(reply.Error)
+	}
+	admitted(t, a)
+	if starts.Load() != 1 {
+		t.Fatalf("saving frontend did not resume blocked share: starts=%d", starts.Load())
+	}
+
+	// 2. Fresh unprovisioned build without relays surfaces network unprovisioned before frontend.
+	unprovisioned, _, unprovisionedStarts := fixture(t)
+	unprovisioned.deps.defaultFrontend = ""
+	unprovisioned.deps.load = func() (relayconfig.Config, error) { return relayconfig.Config{}, nil }
+	unprovisioned.deps.networkUnavailability = func() *engine.NetworkUnavailableError {
+		return &engine.NetworkUnavailableError{Reason: engine.NetworkUnprovisioned}
+	}
+	unprovisioned.execute(createRequest())
+	unprovisionedView := awaitShare(t, unprovisioned, "operation", func(s Share) bool { return s.State == AwaitingConfiguration })
+	if unprovisionedStarts.Load() != 0 || unprovisionedView.Blocking == nil ||
+		unprovisionedView.Blocking.Reason != CreationBlockingReason(engine.NetworkUnprovisioned) {
+		t.Fatalf("unprovisioned priority = %+v (starts=%d)", unprovisionedView, unprovisionedStarts.Load())
+	}
+
+	// 3. Invalid explicit front_url blocks with frontend_required rather than relay configuration.
+	invalidFront, _, invalidStarts := fixture(t)
+	invalidFront.deps.load = func() (relayconfig.Config, error) {
+		cfg := configured()
+		cfg.FrontURL = "wss://invalid.example"
+		return cfg, nil
+	}
+	invalidFront.execute(createRequest())
+	invalidView := awaitShare(t, invalidFront, "operation", func(s Share) bool { return s.State == AwaitingConfiguration })
+	if invalidStarts.Load() != 0 || invalidView.Blocking == nil ||
+		invalidView.Blocking.Reason != blockingFrontendRequired {
+		t.Fatalf("invalid frontend block = %+v (starts=%d)", invalidView, invalidStarts.Load())
+	}
+
+	// 4. Backup-only built-in manifest resolves its backup entry as default frontend.
+	backupDefault := defaultBuiltInFrontend(&networkconfig.Config{BackupEntry: "https://backup.example"})
+	if backupDefault != "https://backup.example" {
+		t.Fatalf("backup-only built-in frontend = %q", backupDefault)
+	}
+	if got := defaultBuiltInFrontend(&networkconfig.Config{LinkHost: "https://primary.example", BackupEntry: "https://backup.example"}); got != "https://primary.example" {
+		t.Fatalf("primary built-in frontend = %q", got)
+	}
+	if got := defaultBuiltInFrontend(nil); got != "" {
+		t.Fatalf("nil network frontend = %q", got)
+	}
+	backupApp, _, backupStarts := fixture(t)
+	backupApp.deps.defaultFrontend = backupDefault
+	backupApp.deps.load = func() (relayconfig.Config, error) { return relayconfig.Config{}, nil }
+	backupApp.execute(createRequest())
+	admitted(t, backupApp)
+	if backupStarts.Load() != 1 {
+		t.Fatalf("backup-only default frontend did not admit share: starts=%d", backupStarts.Load())
 	}
 }
