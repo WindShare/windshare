@@ -176,12 +176,22 @@ describe('v2 catalog multi-receiver ownership', () => {
     const pendingObserver = observerLoad
     if (pendingObserver === undefined) throw new Error('commit boundary did not start the observer')
     const committed = await pendingObserver
-    publisher.close()
-    await store.closed.promise
+    // Drain the publisher's exclusive load lock before closing the store so any
+    // late post-commit abort would have run while the committed page is verified.
+    await withCatalogLoadLock(
+      JSON.stringify(['windshare:v2:catalog', fixture.descriptor.shareInstanceId, committed.directoryIdText]),
+      new AbortController().signal,
+      async () => undefined,
+    )
 
     expect(store.commits).toBe(1)
     expect(store.aborts).toBe(0)
+    await expect(observer.page(committed, 0)).resolves.toBeDefined()
     await expect(store.loadPage(committed, 0)).resolves.toBeDefined()
+
+    publisher.close()
+    await store.closed.promise
+    expect(store.aborts).toBe(0)
     observer.close()
   })
 
@@ -373,6 +383,27 @@ describe('v2 catalog multi-receiver ownership', () => {
         Object.defineProperty(globalThis.navigator, 'locks', originalLocks)
       }
     }
+  })
+
+  it('rejects page and entry iteration with CatalogClientError once closed', async () => {
+    const fixture = catalogVectorFixture()
+    const client = new CatalogClient({
+      descriptor: fixture.descriptor,
+      operations: { fetchPage: async () => fixture.catalogPayload },
+      store: new MemoryCatalogPageStore(),
+    })
+    const committed = await client.loadDirectory(fixture.directoryId)
+    const multiPageHandle = Object.freeze({ ...committed, pageCount: 2 })
+
+    const iterator = client.pages(multiPageHandle)
+    const first = await iterator.next()
+    expect(first.done).toBe(false)
+
+    client.close()
+    await expect(iterator.next()).rejects.toThrow('Catalog client is closed')
+    await expect(client.pages(committed).next()).rejects.toBeInstanceOf(CatalogClientError)
+    await expect(client.entries(committed).next()).rejects.toBeInstanceOf(CatalogClientError)
+    await expect(client.page(committed, 0)).rejects.toBeInstanceOf(CatalogClientError)
   })
 })
 

@@ -149,9 +149,14 @@ export class CatalogClient {
     directory: CommittedDirectory,
     signal?: AbortSignal,
   ): AsyncGenerator<CatalogPage> {
+    this.#requireOpen()
+    signal?.throwIfAborted()
     for (let pageIndex = 0; pageIndex < directory.pageCount; pageIndex += 1) {
+      this.#requireOpen()
       signal?.throwIfAborted()
       const page = await this.#store.loadPage(directory, pageIndex)
+      this.#requireOpen()
+      signal?.throwIfAborted()
       if (page === undefined) {
         throw new CatalogClientError('Committed catalog directory is missing a page')
       }
@@ -176,6 +181,8 @@ export class CatalogClient {
       throw new RangeError('Catalog page index is outside the committed directory')
     }
     const page = await this.#store.loadPage(directory, pageIndex)
+    this.#requireOpen()
+    signal?.throwIfAborted()
     if (page === undefined) {
       throw new CatalogClientError('Committed catalog directory is missing a page')
     }

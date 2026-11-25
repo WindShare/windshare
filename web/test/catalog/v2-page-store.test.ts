@@ -394,6 +394,67 @@ describe('v2 catalog page store', () => {
   })
 })
 
+describe('v2 catalog page store lifecycle', () => {
+  it('clears all backing maps on close and rejects subsequent operations', async () => {
+    const store = new MemoryCatalogPageStore()
+    await store.begin('committed')
+    await store.stage(page(0, 'committed', [entry(1, 'alpha')]))
+    const committed = {
+      directoryIdText: 'committed',
+      generationText: 'generation',
+      directoryId: new Uint8Array(16).fill(1),
+      generation: new Uint8Array(16).fill(2),
+      pageCount: 1,
+      entryCount: 1,
+      omittedCount: 0n,
+      terminalCommitment: new Uint8Array(32),
+    }
+    await store.commit(committed)
+
+    await store.begin('staged')
+    await store.stage(page(0, 'staged', [entry(2, 'beta')]))
+
+    await store.storeFailure({
+      failure: directoryFailure('failed', false),
+      retryAtMilliseconds: null,
+    })
+
+    expect(countClearedPopulatedMaps(() => store.close())).toBe(6)
+    expect(countClearedPopulatedMaps(() => store.close())).toBe(0)
+
+    const closedError = {
+      name: 'CatalogPageStoreError',
+      kind: 'local-storage',
+    }
+    await expect(store.loadDirectory('committed')).rejects.toMatchObject(closedError)
+    await expect(store.loadFailure('failed')).rejects.toMatchObject(closedError)
+    await expect(store.loadPage(committed, 0)).rejects.toMatchObject(closedError)
+    await expect(store.begin('next')).rejects.toMatchObject(closedError)
+    await expect(store.stage(page(0, 'next', [entry(3, 'gamma')]))).rejects.toMatchObject(closedError)
+    await expect(store.commit(committed)).rejects.toMatchObject(closedError)
+    await expect(store.storeFailure({
+      failure: directoryFailure('next', false),
+      retryAtMilliseconds: null,
+    })).rejects.toMatchObject(closedError)
+    await expect(store.abort('committed')).rejects.toMatchObject(closedError)
+  })
+})
+
+function countClearedPopulatedMaps(operation: () => void): number {
+  let cleared = 0
+  const originalClear = Map.prototype.clear
+  Map.prototype.clear = function (this: Map<unknown, unknown>): void {
+    if (this.size > 0) cleared += 1
+    originalClear.call(this)
+  }
+  try {
+    operation()
+  } finally {
+    Map.prototype.clear = originalClear
+  }
+  return cleared
+}
+
 async function countMapIterations(operation: () => Promise<void>): Promise<number> {
   let visited = 0
   const originalIterator = Map.prototype[Symbol.iterator]

@@ -120,16 +120,19 @@ export class MemoryCatalogPageStore implements CatalogPageStore {
   #metadataBytes = 0
   #committedEntries = 0
   #committedMetadataBytes = 0
+  #closed = false
 
   constructor(limits: MemoryCatalogCacheBudgetLimits = DEFAULT_MEMORY_CATALOG_CACHE_BUDGET_LIMITS) {
     this.#limits = validateMemoryBudgetLimits(limits)
   }
 
   async loadDirectory(directoryIdText: string): Promise<CommittedDirectory | undefined> {
+    this.#requireOpen()
     return this.#directories.get(directoryIdText)
   }
 
   async loadFailure(directoryIdText: string): Promise<CachedDirectoryFailure | undefined> {
+    this.#requireOpen()
     const cached = this.#failures.get(directoryIdText)
     return cached === undefined ? undefined : snapshotCachedFailure(cached)
   }
@@ -138,14 +141,17 @@ export class MemoryCatalogPageStore implements CatalogPageStore {
     directory: CommittedDirectory,
     pageIndex: number,
   ): Promise<CatalogPage | undefined> {
+    this.#requireOpen()
     return this.#pages.get(directory.directoryIdText)?.get(directory.generationText)?.get(pageIndex)
   }
 
   async begin(directoryIdText: string): Promise<void> {
-    await this.abort(directoryIdText)
+    this.#requireOpen()
+    this.#abortDirectory(directoryIdText)
   }
 
   async stage(page: CatalogPage): Promise<void> {
+    this.#requireOpen()
     if (this.#directories.has(page.directoryIdText)) {
       throw ownershipFailure('Catalog directory is already committed')
     }
@@ -206,6 +212,7 @@ export class MemoryCatalogPageStore implements CatalogPageStore {
   }
 
   async commit(directory: CommittedDirectory): Promise<void> {
+    this.#requireOpen()
     this.#failures.delete(directory.directoryIdText)
     // Sibling name collision checks only span pages staged for one generation;
     // releasing the transient index avoids retaining duplicate name maps after commit.
@@ -222,12 +229,18 @@ export class MemoryCatalogPageStore implements CatalogPageStore {
   }
 
   async storeFailure(cached: CachedDirectoryFailure): Promise<void> {
+    this.#requireOpen()
     requireCachedFailure(cached)
-    await this.abort(cached.failure.directoryIdText)
+    this.#abortDirectory(cached.failure.directoryIdText)
     this.#failures.set(cached.failure.directoryIdText, snapshotCachedFailure(cached))
   }
 
   async abort(directoryIdText: string): Promise<void> {
+    this.#requireOpen()
+    this.#abortDirectory(directoryIdText)
+  }
+
+  #abortDirectory(directoryIdText: string): void {
     const wasCommitted = this.#directories.delete(directoryIdText)
     this.#failures.delete(directoryIdText)
     this.#releaseDirectoryPages(directoryIdText)
@@ -259,7 +272,28 @@ export class MemoryCatalogPageStore implements CatalogPageStore {
     this.#pages.delete(directoryIdText)
   }
 
-  close(): void {}
+  close(): void {
+    if (this.#closed) return
+    this.#closed = true
+    // Release all cached pages and ownership indexes immediately so a retained
+    // reference cannot pin up to the 256 MiB share budget after close.
+    this.#directories.clear()
+    this.#failures.clear()
+    this.#pages.clear()
+    this.#nodeOwners.clear()
+    this.#nameOwners.clear()
+    this.#directoryCharges.clear()
+    this.#entries = 0
+    this.#metadataBytes = 0
+    this.#committedEntries = 0
+    this.#committedMetadataBytes = 0
+  }
+
+  #requireOpen(): void {
+    if (this.#closed) {
+      throw new CatalogPageStoreError('local-storage', 'Catalog page store is closed')
+    }
+  }
 }
 
 function validateMemoryBudgetLimits(
