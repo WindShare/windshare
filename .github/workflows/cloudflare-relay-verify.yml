@@ -52,7 +52,8 @@ concurrency:
 
 jobs:
   console:
-    # Enabled forks delegate push verification to the deployment workflow.
+    # Enabled forks skip standalone push runs: relay deployments verify via
+    # cloudflare-relay.yml, while non-deploying syncs rely on upstream/PR/manual runs.
     if: &verify-relay >-
       inputs.caller_managed == true ||
       github.event_name != 'push' ||

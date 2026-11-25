@@ -1,6 +1,6 @@
 # Forks use repository Actions settings so credentials and mode switches share one scope.
 # Manual dispatch deploys from the default branch. CLOUDFLARE_RELAY_ENABLED opts into
-# automatic updates. Upstream leaves it unset to verify Go-only pushes to main.
+# automatic updates; upstream leaves it unset so main runs standalone relay verification.
 name: Deploy private relay
 
 on:
@@ -8,7 +8,8 @@ on:
   push:
     branches:
       - main
-    # Go contract and CI tooling changes have their own verification workflow.
+    # Only changes affecting deployed artifacts trigger automatic updates; Go contracts,
+    # tests, and CI tooling (e.g. setup-worker-build) are verified upstream and on PRs.
     paths:
       - .github/workflows/cloudflare-relay.yml
       - scripts/deploy/cloudflare/**
