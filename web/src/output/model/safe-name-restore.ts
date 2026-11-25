@@ -7,7 +7,8 @@ export type SafeNameUnsupportedReason = 'invalid-for-os' | 'case-collision'
 export interface SafeNameRestoreStep {
   readonly kind: 'file' | 'directory'
   readonly parentPhysicalPath: readonly string[]
-  readonly parentLogicalPath: readonly string[]
+  /** Expected on-disk parent path after this plan completes; unsupported ancestors stay physical. */
+  readonly parentRestoredPath: readonly string[]
   readonly fromName: string
   readonly toName: string
   readonly logicalPath: readonly string[]

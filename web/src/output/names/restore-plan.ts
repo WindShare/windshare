@@ -76,7 +76,7 @@ export function serializeRestoreManifestJson(plan: SafeNameRestorePlan): string 
     restorable: plan.restorable.map(step => ({
       kind: step.kind,
       parentPhysicalPath: [...step.parentPhysicalPath],
-      parentLogicalPath: [...step.parentLogicalPath],
+      parentRestoredPath: [...step.parentRestoredPath],
       fromName: step.fromName,
       toName: step.toName,
       logicalPath: [...step.logicalPath],
@@ -165,7 +165,7 @@ function buildSingleFilePlan(
   const step: SafeNameRestoreStep = Object.freeze({
     kind: 'file',
     parentPhysicalPath: Object.freeze([]),
-    parentLogicalPath: Object.freeze([]),
+    parentRestoredPath: Object.freeze([]),
     fromName,
     toName: logicalRootName,
     logicalPath: Object.freeze([logicalRootName]),
@@ -288,8 +288,11 @@ function classifyDirectorySteps(
   readonly unsupported: readonly SafeNameUnsupportedEntry[]
 } {
   const ordered = [...collector.stepsByKey.values()].sort(compareStepsDeepestFirst)
-  const restorable: SafeNameRestoreStep[] = []
+  const restorableRaw: RawStep[] = []
   const unsupported: SafeNameUnsupportedEntry[] = []
+  // Keyed by physical path because SafeNameRegistry guarantees 1:1 physical-to-logical ownership;
+  // two passes ensure deepest-first children resolve ancestors after every directory is classified.
+  const restorableDirTargets = new Map<string, string>()
 
   for (const step of ordered) {
     if (!isNameValidForPlatform(step.toName, platform)) {
@@ -300,17 +303,30 @@ function classifyDirectorySteps(
       unsupported.push(freezeUnsupported(step, 'case-collision'))
       continue
     }
-    restorable.push(Object.freeze({
-      kind: step.kind,
-      parentPhysicalPath: Object.freeze([...step.parentPhysicalPath]),
-      parentLogicalPath: Object.freeze([...step.parentLogicalPath]),
-      fromName: step.fromName,
-      toName: step.toName,
-      logicalPath: Object.freeze([...step.logicalPath]),
-    }))
+    restorableRaw.push(step)
+    if (step.kind === 'directory') {
+      restorableDirTargets.set(JSON.stringify([...step.parentPhysicalPath, step.fromName]), step.toName)
+    }
   }
 
+  const restorable = restorableRaw.map(step => Object.freeze({
+    kind: step.kind,
+    parentPhysicalPath: Object.freeze([...step.parentPhysicalPath]),
+    parentRestoredPath: resolveParentRestoredPath(step.parentPhysicalPath, restorableDirTargets),
+    fromName: step.fromName,
+    toName: step.toName,
+    logicalPath: Object.freeze([...step.logicalPath]),
+  }))
+
   return { restorable: Object.freeze(restorable), unsupported: Object.freeze(unsupported) }
+}
+
+function resolveParentRestoredPath(
+  parentPhysicalPath: readonly string[],
+  restorableDirTargets: ReadonlyMap<string, string>,
+): readonly string[] {
+  return Object.freeze(parentPhysicalPath.map((physicalSegment, index) =>
+    restorableDirTargets.get(JSON.stringify(parentPhysicalPath.slice(0, index + 1))) ?? physicalSegment))
 }
 
 function emptyPlan(
@@ -385,11 +401,11 @@ function buildWindowsInlineCommand(plan: SafeNameRestorePlan): string {
   const inlineData = {
     targetFolder: plan.targetFolderLabel,
     restorable: plan.restorable.map(step => {
-      const sameParents = step.parentPhysicalPath.length === step.parentLogicalPath.length &&
-        step.parentPhysicalPath.every((seg, i) => seg === step.parentLogicalPath[i])
+      const sameParents = step.parentPhysicalPath.length === step.parentRestoredPath.length &&
+        step.parentPhysicalPath.every((seg, i) => seg === step.parentRestoredPath[i])
       return {
         ...(step.parentPhysicalPath.length > 0 ? { parentPhysicalPath: [...step.parentPhysicalPath] } : {}),
-        ...(!sameParents && step.parentLogicalPath.length > 0 ? { parentLogicalPath: [...step.parentLogicalPath] } : {}),
+        ...(!sameParents && step.parentRestoredPath.length > 0 ? { parentRestoredPath: [...step.parentRestoredPath] } : {}),
         fromName: step.fromName,
         toName: step.toName,
       }
@@ -424,14 +440,14 @@ function buildPowerShellExecutor(sourceInit: string, cleanupFileExpr: string | n
     sourceInit,
     'foreach($s in @($m.restorable)){' +
       '$pp=@();if($s.parentPhysicalPath){$pp=@($s.parentPhysicalPath)};' +
-      '$pl=$pp;if($s.parentLogicalPath){$pl=@($s.parentLogicalPath)};' +
+      '$pr=$pp;if($s.parentRestoredPath){$pr=@($s.parentRestoredPath)};' +
       '$fr=[string]$s.fromName;$to=[string]$s.toName;$k=(@($pp)+@($fr))-join"/";' +
       'if($b.ContainsKey($k)){$fl++;Write-Host "SKIP(blocked): $k";continue}' +
       '$d=$r;$st=0;' +
       'for($i=0;$i -lt $pp.Count;$i++){' +
-        '$p1=&$pc $d $pp[$i];$p2=&$pc $d $pl[$i];$e1=&$td $p1;' +
-        'if($pp[$i] -ceq $pl[$i]){if($e1){$d=$p1}else{$st=2;break}}' +
-        'else{$e2=&$td $p2;if($e1 -and $e2){$st=1;break}elseif($e1){$d=$p1}elseif($e2){$d=$p2}else{$st=2;break}}' +
+        '$p1=&$pc $d $pp[$i];$e1=&$td $p1;' +
+        'if($pp[$i] -ceq $pr[$i]){if($e1){$d=$p1}else{$st=2;break}}' +
+        'else{$p2=$null;$e2=$false;try{$p2=&$pc $d $pr[$i];$e2=&$td $p2}catch{};if($e1 -and $e2){$st=1;break}elseif($e1){$d=$p1}elseif($e2){$d=$p2}else{$st=2;break}}' +
       '}' +
       'if($st -eq 1){$cf++;Write-Host "CONFLICT: $k";continue}' +
       'if($st -eq 2){$ms++;Write-Host "MISSING: $k";continue}' +
@@ -470,8 +486,8 @@ function buildPosixStepCalls(plan: SafeNameRestorePlan, separator: string): stri
     const parts: string[] = ['_d=$_b;_st=0;_pk="";_anc=""']
     for (let i = 0; i < step.parentPhysicalPath.length; i += 1) {
       const phys = step.parentPhysicalPath[i]!
-      const log = step.parentLogicalPath[i]!
-      parts.push(phys === log ? `p ${quotePosix(phys)}` : `p ${quotePosix(phys)} ${quotePosix(log)}`)
+      const restored = step.parentRestoredPath[i]!
+      parts.push(phys === restored ? `p ${quotePosix(phys)}` : `p ${quotePosix(phys)} ${quotePosix(restored)}`)
     }
     parts.push(`r ${quotePosix(step.fromName)} ${quotePosix(step.toName)}`)
     return parts.join(';')

@@ -129,50 +129,74 @@ describe('buildSafeNameRestorePlan', () => {
     expect(posixPlan.restorable.map(step => ({
       kind: step.kind,
       parentPhysical: step.parentPhysicalPath,
-      parentLogical: step.parentLogicalPath,
+      parentRestored: step.parentRestoredPath,
       from: step.fromName,
       to: step.toName,
     }))).toEqual([
       {
         kind: 'file',
         parentPhysical: ['entry-CON.windshare-11111111', 'entry-CON.windshare-22222222', 'sub-cfg.windshare-44444444'],
-        parentLogical: ['CON', 'CON', 'sub.cfg'],
+        parentRestored: ['CON', 'CON', 'sub.cfg'],
         from: 'lib-dll.windshare-55555555',
         to: 'lib.dll',
       },
       {
         kind: 'directory',
         parentPhysical: ['entry-CON.windshare-11111111', 'entry-CON.windshare-22222222'],
-        parentLogical: ['CON', 'CON'],
+        parentRestored: ['CON', 'CON'],
         from: 'empty-cfg.windshare-33333333',
         to: 'empty.cfg',
       },
       {
         kind: 'directory',
         parentPhysical: ['entry-CON.windshare-11111111', 'entry-CON.windshare-22222222'],
-        parentLogical: ['CON', 'CON'],
+        parentRestored: ['CON', 'CON'],
         from: 'sub-cfg.windshare-44444444',
         to: 'sub.cfg',
       },
       {
         kind: 'directory',
         parentPhysical: ['entry-CON.windshare-11111111'],
-        parentLogical: ['CON'],
+        parentRestored: ['CON'],
         from: 'entry-CON.windshare-22222222',
         to: 'CON',
       },
       {
         kind: 'directory',
         parentPhysical: [],
-        parentLogical: [],
+        parentRestored: [],
         from: 'entry-CON.windshare-11111111',
         to: 'CON',
       },
     ])
 
-    // On Windows, both CON directories are unsupported, while nested .cfg/.dll entries stay restorable inside their physical parents.
+    // On Windows, both CON directories are unsupported, so descendants keep physical CON segments while still restoring sub.cfg.
     const winPlan = buildSafeNameRestorePlan({ task, files, platform: 'windows' })
-    expect(winPlan.restorable.map(step => step.toName)).toEqual(['lib.dll', 'empty.cfg', 'sub.cfg'])
+    expect(winPlan.restorable.map(step => ({
+      parentPhysical: step.parentPhysicalPath,
+      parentRestored: step.parentRestoredPath,
+      logicalPath: step.logicalPath,
+      toName: step.toName,
+    }))).toEqual([
+      {
+        parentPhysical: ['entry-CON.windshare-11111111', 'entry-CON.windshare-22222222', 'sub-cfg.windshare-44444444'],
+        parentRestored: ['entry-CON.windshare-11111111', 'entry-CON.windshare-22222222', 'sub.cfg'],
+        logicalPath: ['CON', 'CON', 'sub.cfg', 'lib.dll'],
+        toName: 'lib.dll',
+      },
+      {
+        parentPhysical: ['entry-CON.windshare-11111111', 'entry-CON.windshare-22222222'],
+        parentRestored: ['entry-CON.windshare-11111111', 'entry-CON.windshare-22222222'],
+        logicalPath: ['CON', 'CON', 'empty.cfg'],
+        toName: 'empty.cfg',
+      },
+      {
+        parentPhysical: ['entry-CON.windshare-11111111', 'entry-CON.windshare-22222222'],
+        parentRestored: ['entry-CON.windshare-11111111', 'entry-CON.windshare-22222222'],
+        logicalPath: ['CON', 'CON', 'sub.cfg'],
+        toName: 'sub.cfg',
+      },
+    ])
     expect(winPlan.unsupported.map(entry => ({ logicalPath: entry.logicalPath, reason: entry.reason }))).toEqual([
       { logicalPath: ['CON', 'CON'], reason: 'invalid-for-os' },
       { logicalPath: ['CON'], reason: 'invalid-for-os' },
@@ -220,7 +244,7 @@ describe('buildSafeNameRestorePlan', () => {
       {
         kind: 'file',
         parentPhysicalPath: [],
-        parentLogicalPath: [],
+        parentRestoredPath: [],
         fromName: 'plugin-dll.windshare-dddddddd',
         toName: 'plugin (2).dll',
         logicalPath: ['plugin (2).dll'],
@@ -301,6 +325,81 @@ describe('buildSafeNameRestorePlan', () => {
     expect(posixPlan.restorable.map(s => s.toName)).toContain('case.cfg')
     expect(posixPlan.restorable.map(s => s.toName)).toContain('FOO')
     expect(posixPlan.restorable.map(s => s.toName)).not.toContain('..')
+  })
+
+  it('keeps physical segments in parentRestoredPath for unsupported Windows and POSIX ancestors', () => {
+    const task = makeFSATask({ artifactName: 'Repo', reservedName: 'Repo' })
+    const overlongDir = 'd'.repeat(260)
+    const files = [
+      makeFile(['Foo', 'readme.txt'], ['Foo', 'readme.txt']),
+      makeFile(['foo', 'sub.cfg', 'case.dll'], ['foo.windshare-11111111', 'sub-cfg.windshare-22222222', 'case-dll.windshare-33333333']),
+      makeFile(['a<b>', 'angle.dll'], ['a-b.windshare-44444444', 'angle-dll.windshare-55555555']),
+      makeFile(['C:', 'drive.dll'], ['C.windshare-66666666', 'drive-dll.windshare-77777777']),
+      makeFile(['foo.', 'dot.dll'], ['foo.windshare-88888888', 'dot-dll.windshare-99999999']),
+      makeFile([overlongDir, 'deep.dll'], ['ddd.windshare-aaaaaaaa', 'deep-dll.windshare-bbbbbbbb']),
+    ]
+
+    const winPlan = buildSafeNameRestorePlan({ task, files, platform: 'windows' })
+    expect(winPlan.unsupported.map(u => [u.toName, u.reason]).sort()).toEqual([
+      ['a<b>', 'invalid-for-os'],
+      ['C:', 'invalid-for-os'],
+      [overlongDir, 'invalid-for-os'],
+      ['foo', 'case-collision'],
+      ['foo.', 'invalid-for-os'],
+    ].sort())
+
+    const byTarget = new Map(winPlan.restorable.map(step => [step.toName, step]))
+    expect(byTarget.get('case.dll')?.parentRestoredPath).toEqual(['foo.windshare-11111111', 'sub.cfg'])
+    expect(byTarget.get('case.dll')?.logicalPath).toEqual(['foo', 'sub.cfg', 'case.dll'])
+    expect(byTarget.get('sub.cfg')?.parentRestoredPath).toEqual(['foo.windshare-11111111'])
+    expect(byTarget.get('angle.dll')?.parentRestoredPath).toEqual(['a-b.windshare-44444444'])
+    expect(byTarget.get('drive.dll')?.parentRestoredPath).toEqual(['C.windshare-66666666'])
+    expect(byTarget.get('dot.dll')?.parentRestoredPath).toEqual(['foo.windshare-88888888'])
+    expect(byTarget.get('deep.dll')?.parentRestoredPath).toEqual(['ddd.windshare-aaaaaaaa'])
+
+    const parsedManifest = JSON.parse(serializeRestoreManifestJson(winPlan))
+    const manifestByTarget = new Map<string, { parentRestoredPath: string[]; parentLogicalPath?: unknown }>(
+      parsedManifest.restorable.map((entry: { toName: string; parentRestoredPath: string[] }) => [entry.toName, entry]),
+    )
+    expect(manifestByTarget.get('case.dll')?.parentRestoredPath).toEqual(['foo.windshare-11111111', 'sub.cfg'])
+    expect(manifestByTarget.get('drive.dll')?.parentRestoredPath).toEqual(['C.windshare-66666666'])
+    expect(manifestByTarget.get('drive.dll')?.parentLogicalPath).toBeUndefined()
+
+    const winManifestCmd = renderRestoreArtifact(winPlan, 'windows').runCommand(RESTORE_MANIFEST_FILENAME)
+    expect(winManifestCmd).toContain('else{$p2=$null;$e2=$false;try{$p2=&$pc $d $pr[$i];$e2=&$td $p2}catch{};')
+
+    const compactWinPlan = buildSafeNameRestorePlan({
+      task,
+      files: [
+        makeFile(['Foo', 'readme.txt'], ['Foo', 'readme.txt']),
+        makeFile(['foo', 'case.dll'], ['foo.windshare-11111111', 'case-dll.windshare-33333333']),
+        makeFile(['a<b>', 'angle.dll'], ['a-b.windshare-44444444', 'angle-dll.windshare-55555555']),
+        makeFile(['C:', 'drive.dll'], ['C.windshare-66666666', 'drive-dll.windshare-77777777']),
+      ],
+      platform: 'windows',
+    })
+    const winInline = formatInlineRestoreCommand(compactWinPlan, 'windows')
+    expect(winInline).not.toBeNull()
+    expect(winInline!).not.toContain('a<b>')
+    expect(winInline!).not.toContain('"C:"')
+    expect(winInline!).not.toContain('"foo"')
+    expect(winInline!).not.toContain('parentRestoredPath":[')
+
+    const posixPlan = buildSafeNameRestorePlan({ task, files, platform: 'posix' })
+    expect(posixPlan.unsupported.map(u => [u.toName, u.reason])).toEqual([[overlongDir, 'invalid-for-os']])
+    const posixDeep = posixPlan.restorable.find(step => step.toName === 'deep.dll')
+    expect(posixDeep?.parentRestoredPath).toEqual(['ddd.windshare-aaaaaaaa'])
+    expect(renderRestoreArtifact(posixPlan, 'posix').content).not.toContain(overlongDir)
+
+    const compactPosixPlan = buildSafeNameRestorePlan({
+      task,
+      files: [makeFile([overlongDir, 'deep.dll'], ['ddd.windshare-aaaaaaaa', 'deep-dll.windshare-bbbbbbbb'])],
+      platform: 'posix',
+    })
+    const posixInline = formatInlineRestoreCommand(compactPosixPlan, 'posix')
+    expect(posixInline).not.toBeNull()
+    expect(posixInline!).toContain("p 'ddd.windshare-aaaaaaaa';r 'deep-dll.windshare-bbbbbbbb' 'deep.dll'")
+    expect(posixInline!).not.toContain(overlongDir)
   })
 })
 
