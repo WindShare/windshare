@@ -25,6 +25,7 @@ export const REVISION_RETRY_MAXIMUM_MILLISECONDS = 30_000
 export const REVISION_CODE_QUOTA = 0x3005
 export const REVISION_CODE_LEASE_EXPIRED = 0x3006
 export const REVISION_CODE_INVALID_LEASE = 0x3008
+export const REVISION_CODE_BUSY = 0x3009
 
 export interface OpenResult {
   readonly fileId: Uint8Array<ArrayBuffer>
@@ -248,7 +249,7 @@ export function decodeOpenResults(
   }
   const codeValue = requireUnsigned(item[2], 'revision failure code')
   const retryable = requireBoolean(item[3], 'revision failure retryable')
-  if (codeValue < 0x3001n || codeValue > 0x3008n) {
+  if (codeValue < 0x3001n || codeValue > 0x3009n) {
     throw new CborError('Revision failure code is outside its scope')
   }
   const retry = item[4]

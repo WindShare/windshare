@@ -7,6 +7,7 @@ import {
   FragmentAssembler,
   LEASE_RENEW_AFTER_MILLISECONDS,
   LEASE_TTL_MILLISECONDS,
+  REVISION_CODE_BUSY,
   REVISION_CODE_QUOTA,
   REVISION_RETRY_MAXIMUM_MILLISECONDS,
 } from '../../src/content/flow'
@@ -51,6 +52,19 @@ describe('v2 content result frozen bounds', () => {
       retryable: true,
       retryAfterMilliseconds: 25,
     })
+
+    const nonRetryableOpen = (code: number) => encodeCanonicalCbor(
+      new Map<number, unknown>([
+        [0, 1],
+        [1, [[fileId, 1, code, false, null]]],
+      ]),
+    )
+    expect(decodeOpenResults(nonRetryableOpen(REVISION_CODE_BUSY), fileId).failure).toEqual({
+      code: REVISION_CODE_BUSY,
+      retryable: false,
+    })
+    expect(() => decodeOpenResults(nonRetryableOpen(REVISION_CODE_BUSY + 1), fileId))
+      .toThrow(/outside its scope/i)
   })
 
   it('requires exact authenticated lease timing', () => {

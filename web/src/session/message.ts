@@ -228,7 +228,7 @@ function operationErrorCodeRange(
     case 'directory':
       return [0x2001n, 0x2008n]
     case 'revision':
-      return [0x3001n, 0x3008n]
+      return [0x3001n, 0x3009n]
     case 'block':
       return [0x4001n, 0x4006n]
     case 'peer':
@@ -378,7 +378,7 @@ function validateOpenResult(value: unknown): void {
     throw new MessageError('Open result has an unknown outcome shape')
   }
   const code = requireUnsigned(item[2], 'revision failure code')
-  if (code < 0x3001n || code > 0x3008n) {
+  if (code < 0x3001n || code > 0x3009n) {
     throw new MessageError('Revision failure code is outside its scope')
   }
   const retryable = requireBoolean(item[3], 'revision failure retryable')

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
@@ -244,7 +245,7 @@ func TestWindowsStabilityBinderFailsClosedAtEveryBoundary(t *testing.T) {
 	baseline := windowsTestToken(1, 4)
 	changed := baseline
 	changed.changeTime++
-	openFailure := errors.Join(content.ErrUnsupportedStability, windows.ERROR_SHARING_VIOLATION)
+	openFailure := errors.Join(content.ErrSourceBusy, windows.ERROR_SHARING_VIOLATION)
 	tests := []struct {
 		name           string
 		preliminary    []windowsMutationToken
@@ -258,7 +259,7 @@ func TestWindowsStabilityBinderFailsClosedAtEveryBoundary(t *testing.T) {
 		{name: "candidate stale before open", preliminary: []windowsMutationToken{changed}, stable: []windowsMutationToken{baseline}, bindingPath: "file.bin", want: content.ErrRevisionStale},
 		{name: "mutation during open", preliminary: []windowsMutationToken{baseline, changed}, stable: []windowsMutationToken{baseline}, bindingPath: "file.bin", want: content.ErrRevisionStale, wantOpen: true, wantFileClosed: 1},
 		{name: "different locked object", preliminary: []windowsMutationToken{baseline, baseline}, stable: []windowsMutationToken{changed}, bindingPath: "file.bin", want: content.ErrRevisionStale, wantOpen: true, wantFileClosed: 1},
-		{name: "writer already open", preliminary: []windowsMutationToken{baseline}, stable: []windowsMutationToken{baseline}, openErr: openFailure, bindingPath: "file.bin", want: content.ErrUnsupportedStability, wantOpen: true},
+		{name: "writer already open", preliminary: []windowsMutationToken{baseline}, stable: []windowsMutationToken{baseline}, openErr: openFailure, bindingPath: "file.bin", want: content.ErrSourceBusy, wantOpen: true},
 		{name: "empty relative path", preliminary: []windowsMutationToken{baseline}, stable: []windowsMutationToken{baseline}, want: content.ErrUnsupportedStability},
 	}
 	for _, test := range tests {
@@ -270,6 +271,7 @@ func TestWindowsStabilityBinderFailsClosedAtEveryBoundary(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			binder.wait = func(context.Context, time.Duration) error { return nil }
 			preliminary := windowsPreliminaryFile(t)
 			_, err = binder.BindStable(context.Background(), StableBinding{
 				File: preliminary, Record: windowsTestRecord(t, baseline, "file.bin"), RelativePath: test.bindingPath,
@@ -720,8 +722,9 @@ func TestWindowsStableSourceRejectsPreexistingWritableMapping(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer source.Close()
+	setNoDelayRetryWait(source)
 	stable, err := source.OpenStable(context.Background(), record)
-	if stable != nil || !errors.Is(err, content.ErrUnsupportedStability) || !errors.Is(err, windows.ERROR_SHARING_VIOLATION) {
+	if stable != nil || !errors.Is(err, content.ErrSourceBusy) || !errors.Is(err, windows.ERROR_SHARING_VIOLATION) {
 		if stable != nil {
 			_ = stable.Close()
 		}
@@ -768,6 +771,7 @@ func TestWindowsRootedRevisionSourceRejectsExistingWriterAndIntermediateReparse(
 		t.Fatal(err)
 	}
 	defer source.Close()
+	setNoDelayRetryWait(source)
 
 	name, _ := windows.UTF16PtrFromString(path)
 	writer, err := windows.CreateFile(
@@ -778,7 +782,7 @@ func TestWindowsRootedRevisionSourceRejectsExistingWriterAndIntermediateReparse(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := source.OpenStable(context.Background(), makeRecord("inside/source.bin")); !errors.Is(err, content.ErrUnsupportedStability) {
+	if _, err := source.OpenStable(context.Background(), makeRecord("inside/source.bin")); !errors.Is(err, content.ErrSourceBusy) || !errors.Is(err, windows.ERROR_SHARING_VIOLATION) {
 		t.Fatalf("existing writer error=%v", err)
 	}
 	_ = windows.CloseHandle(writer)

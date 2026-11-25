@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { SelectionPolicy } from '../../src/catalog/selection'
+import { REVISION_CODE_BUSY } from '../../src/content/flow'
 import { RemoteRevisionError } from '../../src/content/session-services'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import { createReceivedProtocolError } from '../../src/session/diagnostics'
@@ -141,5 +142,39 @@ describe('TransferJob source revision failure summary', () => {
     expect(result.contentWarning?.selectedFileCount).toBe(BigInt(totalUnavailable))
     expect(result.contentWarning?.completedFileCount).toBe(0n)
     expect(result.contentWarning?.missingFiles).toHaveLength(SOURCE_FAILURE_SAMPLE_LIMIT)
+  })
+
+  it('isolates source-busy files while completing healthy siblings', async () => {
+    const healthy = { seed: 20, name: 'healthy.txt', bytes: FILE_PAYLOAD }
+    const busy = { seed: 21, name: 'budget.xlsx', bytes: FILE_PAYLOAD }
+    const busyId = encodeBase64Url(id(busy.seed))
+    const fixture = makeShareFixture([healthy, busy])
+
+    const result = await new TransferJob({
+      ...fixture,
+      selection,
+      revisions: {
+        open: async fileId => {
+          if (encodeBase64Url(fileId) === busyId) throw remoteRevisionError(REVISION_CODE_BUSY)
+          return fixture.revisions.open(fileId)
+        },
+      },
+      output: {
+        sessionId: 'sess-source-busy',
+        capabilities: { maxConcurrentFiles: 1, resumable: true },
+        openFile: async () => outputFile({}),
+      },
+    }).run()
+
+    expect(result.status).toBe('partial')
+    expect(result.completedFiles).toBe(1n)
+    expect(result.failedFiles).toBe(1n)
+    expect(result.sourceRevisionFailures?.count).toBe(1n)
+    expect(result.sourceRevisionFailures?.files).toEqual([
+      expect.objectContaining({ path: ['budget.xlsx'], reason: 'source-busy' }),
+    ])
+    expect(result.contentWarning?.missingFiles).toEqual([
+      { path: ['budget.xlsx'], reason: 'source-busy' },
+    ])
   })
 })

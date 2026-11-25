@@ -1,4 +1,5 @@
 import { BLOCK_BROKER_PARALLEL_READS, type BlockRangeReader } from '../content/broker'
+import { REVISION_CODE_BUSY } from '../content/flow'
 import { ByteRangeSet, byteRange } from '../content/geometry'
 import type { FileRevisionDescriptor } from '../content/records'
 import { compareRevisionDescriptors, compareRevisionMetadata } from '../content/revision-comparison'
@@ -66,6 +67,7 @@ export type SingleFileTransferOutcome = TransferExit
   | Readonly<{ kind: 'completed'; size: bigint }>
   | Readonly<{ kind: 'source-changed' }>
   | Readonly<{ kind: 'source-unavailable'; error: unknown }>
+  | Readonly<{ kind: 'source-busy'; error: unknown }>
 
 interface FileTransferAttemptState {
   readonly attemptIndex: number
@@ -328,10 +330,15 @@ async function handleFileError(
   if (ctx.output.capabilities.resumable && !ctx.signal.aborted && isRecoverableTransferInterruption(error)) {
     return pauseFile(ctx, writer, active, error, 'interrupted')
   }
-  return abortFile(writer, error,
-    error instanceof RemoteRevisionError && !(error instanceof RevisionCapacityBusyError)
-      ? { kind: 'source-unavailable', error }
-      : { kind: 'failed', error })
+  return abortFile(writer, error, terminalFileOutcome(error))
+}
+
+function terminalFileOutcome(error: unknown): SingleFileTransferOutcome {
+  if (isSourceBusyError(error)) return { kind: 'source-busy', error }
+  if (error instanceof RemoteRevisionError && !(error instanceof RevisionCapacityBusyError)) {
+    return { kind: 'source-unavailable', error }
+  }
+  return { kind: 'failed', error }
 }
 
 /** A storage failure retires its writer. Healthy siblings can still save their own ranges when the job pauses. */
@@ -410,6 +417,16 @@ const REVISION_CODE_DRIFT = 0x3007
 
 function isSourceChangedRevisionCode(code: number): boolean {
   return code === REVISION_CODE_STALE || code === REVISION_CODE_NOT_FOUND || code === REVISION_CODE_DRIFT
+}
+
+function isSourceBusyError(error: unknown): boolean {
+  if (error instanceof RemoteRevisionError) {
+    return error.failure.code === REVISION_CODE_BUSY
+  }
+  if (error instanceof RemoteOperationError) {
+    return error.scope === 'revision' && error.code === REVISION_CODE_BUSY
+  }
+  return false
 }
 
 function isSourceChangedError(error: unknown): boolean {

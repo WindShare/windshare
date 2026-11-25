@@ -39,7 +39,7 @@ const (
 	directoryOperationCodeFirst       = uint16(0x2001)
 	directoryOperationCodeLast        = uint16(0x2008)
 	revisionOperationCodeFirst        = uint16(0x3001)
-	revisionOperationCodeLast         = uint16(0x3008)
+	revisionOperationCodeLast         = uint16(0x3009)
 	blockOperationCodeFirst           = uint16(0x4001)
 	blockOperationCodeLast            = uint16(0x4006)
 )

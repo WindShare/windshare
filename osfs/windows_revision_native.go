@@ -296,15 +296,18 @@ func adoptNativeWindowsRevisionRoot(handle windows.Handle, api windowsRevisionMe
 	return &nativeWindowsRevisionRoot{handle: handle, metadata: metadata}, nil
 }
 
+// r.handle is immutable until Close, and Windows root-relative NtCreateFile is
+// safe for concurrent opens on the same directory handle. Using RWMutex avoids
+// serializing sibling file opens behind each other while still blocking Close.
 type nativeWindowsRevisionRoot struct {
-	mu       sync.Mutex
+	mu       sync.RWMutex
 	handle   windows.Handle
 	metadata windowsRevisionMetadata
 }
 
 func (r *nativeWindowsRevisionRoot) Identity() ([windowsRevisionIdentityBytes]byte, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	if r.handle == 0 || r.handle == windows.InvalidHandle {
 		return [windowsRevisionIdentityBytes]byte{}, content.ErrRevisionStoreClosed
 	}
@@ -313,8 +316,8 @@ func (r *nativeWindowsRevisionRoot) Identity() ([windowsRevisionIdentityBytes]by
 }
 
 func (r *nativeWindowsRevisionRoot) OpenStable(relative string) (windowsRevisionFile, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	if r.handle == 0 || r.handle == windows.InvalidHandle {
 		return nil, content.ErrRevisionStoreClosed
 	}
@@ -597,7 +600,7 @@ func normalizeWindowsNTError(err error) error {
 func classifyWindowsStableOpenError(err error) error {
 	switch {
 	case errors.Is(err, windows.ERROR_SHARING_VIOLATION):
-		return errors.Join(content.ErrUnsupportedStability, err)
+		return content.WithRevisionComparison(errors.Join(content.ErrSourceBusy, err), content.RevisionComparisonUnavailable)
 	case isWindowsCapabilityUnavailable(err):
 		return errors.Join(content.ErrUnsupportedStability, err)
 	case errors.Is(err, windows.ERROR_FILE_NOT_FOUND), errors.Is(err, windows.ERROR_PATH_NOT_FOUND),

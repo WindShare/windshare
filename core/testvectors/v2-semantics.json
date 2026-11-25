@@ -101,6 +101,7 @@
         "timeout": 20482
       },
       "revision": {
+        "busy": 12297,
         "drift": 12295,
         "invalid-lease": 12296,
         "lease-expired": 12294,

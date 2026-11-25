@@ -544,6 +544,8 @@ func classifyRootRelativeOpenError(operation, relative string, err error) error 
 		return content.WithRevisionComparison(err, content.RevisionComparisonMismatch)
 	case errors.Is(err, os.ErrNotExist), errors.Is(err, windows.ERROR_CANT_ACCESS_FILE):
 		return content.WithRevisionComparison(errors.Join(content.ErrRevisionStale, err), content.RevisionComparisonUnavailable)
+	case errors.Is(err, windows.ERROR_SHARING_VIOLATION):
+		return content.WithRevisionComparison(errors.Join(content.ErrSourceBusy, err), content.RevisionComparisonUnavailable)
 	case errors.Is(err, windows.ERROR_REPARSE), errors.Is(err, windows.ERROR_REPARSE_OBJECT),
 		errors.Is(err, windows.ERROR_REPARSE_POINT_ENCOUNTERED):
 		return content.WithRevisionComparison(errors.Join(content.ErrRevisionStale, err), content.RevisionComparisonMismatch)
@@ -552,6 +554,10 @@ func classifyRootRelativeOpenError(operation, relative string, err error) error 
 			pathfailure.Filesystem(operation, relative, err), content.RevisionComparisonUnavailable,
 		)
 	}
+}
+
+func isTransientRevisionOpenError(err error) bool {
+	return errors.Is(err, windows.ERROR_SHARING_VIOLATION)
 }
 
 func isWindowsPlaceholderError(err error) bool {

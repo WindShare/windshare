@@ -5,6 +5,7 @@ export const progress: typeof English = {
   partial: '仅部分完成：部分所选项目缺失或尚未完成。',
   sourceChanged: '源文件已更改或已删除。',
   sourceUnavailable: '源文件不可用或已删除。',
+  sourceBusy: '源文件正被发送方的其他程序占用，关闭后重试。',
   fileFailed: '无法接收此文件。',
   destinationConflict: path => `请检查文件夹中的「${path}」，如需重新下载该文件，请先将其移到其他位置。`,
   countFailed: '未能完成统计，总大小未知。',

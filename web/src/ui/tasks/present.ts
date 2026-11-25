@@ -153,6 +153,7 @@ function contentWarningDetails(
   const reasons = {
     'source-changed': t.sourceChanged,
     'source-unavailable': t.sourceUnavailable,
+    'source-busy': t.sourceBusy,
     'file-failed': t.fileFailed,
   }
   for (const file of warning.missingFiles) {

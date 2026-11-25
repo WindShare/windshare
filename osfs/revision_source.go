@@ -9,11 +9,61 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/osfs/internal/pathfailure"
 )
+
+// Bounded exponential backoff (~315ms total) aligns with output's
+// windowsRenameBackoff to absorb brief 10-200ms antivirus, OneDrive,
+// search-indexer, and editor auto-save locks without masking long-lived
+// application locks such as an open Word/Excel document.
+var revisionOpenSharingBackoff = [...]time.Duration{
+	5 * time.Millisecond, 10 * time.Millisecond, 20 * time.Millisecond,
+	40 * time.Millisecond, 80 * time.Millisecond, 160 * time.Millisecond,
+}
+
+type retryWaitFunc func(context.Context, time.Duration) error
+
+func waitContextDelay(ctx context.Context, delay time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func traceRevisionOpenRetry(
+	sink diagnostics.Sink,
+	stage string,
+	slot RootSlot,
+	attempts int,
+	elapsed time.Duration,
+	outcome string,
+) {
+	if !sink.Enabled() {
+		return
+	}
+	sink.Emit(diagnostics.New("revision_open_sharing_retry", diagnostics.Fields{
+		"stage":      diagnostics.Text(stage),
+		"root_slot":  diagnostics.Uint(uint64(slot)),
+		"attempts":   diagnostics.Uint(uint64(attempts)),
+		"elapsed_ms": diagnostics.Uint(uint64(max(elapsed.Milliseconds(), 0))),
+		"outcome":    diagnostics.Text(outcome),
+	}))
+}
 
 // StableBinding gives a platform/backend stability implementation an already
 // root-confined handle plus the authenticated private catalog baseline. The
@@ -50,12 +100,14 @@ type stabilityRootValidator interface {
 }
 
 type RootedRevisionSource struct {
-	mu        sync.RWMutex
-	roots     []*os.Root
-	inspector rootInspector
-	binder    StabilityBinder
-	closer    io.Closer
-	closed    bool
+	mu          sync.RWMutex
+	roots       []*os.Root
+	inspector   rootInspector
+	binder      StabilityBinder
+	closer      io.Closer
+	wait        retryWaitFunc
+	diagnostics diagnostics.Sink
+	closed      bool
 }
 
 func NewRootedRevisionSource(config RootedRevisionSourceConfig) (*RootedRevisionSource, error) {
@@ -87,10 +139,15 @@ func newRootedRevisionSource(rootPaths []string, binder StabilityBinder, closer 
 		}
 		roots = append(roots, root)
 	}
-	return adoptRootedRevisionSource(roots, binder, closer)
+	return adoptRootedRevisionSource(roots, binder, closer, diagnostics.Sink{})
 }
 
-func newRetainedRootedRevisionSource(retained []*os.Root, binder StabilityBinder, closer io.Closer) (*RootedRevisionSource, error) {
+func newRetainedRootedRevisionSource(
+	retained []*os.Root,
+	binder StabilityBinder,
+	closer io.Closer,
+	sink diagnostics.Sink,
+) (*RootedRevisionSource, error) {
 	if len(retained) == 0 || len(retained) > catalog.MaxSelectedRoots || binder == nil {
 		return nil, errors.Join(content.ErrUnsupportedStability, closeOwnedBinder(closer))
 	}
@@ -102,12 +159,17 @@ func newRetainedRootedRevisionSource(retained []*os.Root, binder StabilityBinder
 		}
 		roots = append(roots, root)
 	}
-	return adoptRootedRevisionSource(roots, binder, closer)
+	return adoptRootedRevisionSource(roots, binder, closer, sink)
 }
 
 // Both construction paths transfer independent root ownership here. The binder
 // must prove that any additional native handles describe these exact roots.
-func adoptRootedRevisionSource(roots []*os.Root, binder StabilityBinder, closer io.Closer) (*RootedRevisionSource, error) {
+func adoptRootedRevisionSource(
+	roots []*os.Root,
+	binder StabilityBinder,
+	closer io.Closer,
+	sink diagnostics.Sink,
+) (*RootedRevisionSource, error) {
 	if validator, ok := binder.(stabilityRootValidator); ok {
 		if err := validator.ValidateRoots(roots); err != nil {
 			return nil, errors.Join(err, closeRoots(roots), closeOwnedBinder(closer))
@@ -117,7 +179,7 @@ func adoptRootedRevisionSource(roots []*os.Root, binder StabilityBinder, closer 
 	if err != nil {
 		return nil, errors.Join(err, closeRoots(roots), closeOwnedBinder(closer))
 	}
-	return &RootedRevisionSource{roots: roots, inspector: inspector, binder: binder, closer: closer}, nil
+	return &RootedRevisionSource{roots: roots, inspector: inspector, binder: binder, closer: closer, diagnostics: sink}, nil
 }
 
 func closeOwnedBinder(closer io.Closer) error {
@@ -135,6 +197,86 @@ func closeRoots(roots []*os.Root) error {
 	return result
 }
 
+func (s *RootedRevisionSource) waitForRetry(ctx context.Context, delay time.Duration) error {
+	if s.wait != nil {
+		return s.wait(ctx, delay)
+	}
+	return waitContextDelay(ctx, delay)
+}
+
+func (s *RootedRevisionSource) openPreliminaryOnce(
+	slot int,
+	relative string,
+) (*os.File, sourceObjectIdentity, sourceObjectIdentity, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
+		return nil, sourceObjectIdentity{}, sourceObjectIdentity{}, false, content.WithRevisionComparison(
+			content.ErrRevisionStoreClosed, content.RevisionComparisonUnavailable,
+		)
+	}
+	if slot < 0 || slot >= len(s.roots) {
+		return nil, sourceObjectIdentity{}, sourceObjectIdentity{}, false, content.WithRevisionComparison(
+			content.ErrRevisionStale, content.RevisionComparisonMismatch,
+		)
+	}
+	root := s.roots[slot]
+	before, beforeOK, err := s.inspector.inspectRelativeRegularFile(root, slot, relative)
+	if err != nil {
+		return nil, sourceObjectIdentity{}, sourceObjectIdentity{}, false, classifyRootRelativeOpenError("inspect stable revision", relative, err)
+	}
+	if !beforeOK {
+		return nil, sourceObjectIdentity{}, sourceObjectIdentity{}, false, content.WithRevisionComparison(
+			content.ErrRevisionStale, content.RevisionComparisonMismatch,
+		)
+	}
+	handle, err := openRootObjectNoRecall(root, relative)
+	if err != nil {
+		return nil, sourceObjectIdentity{}, sourceObjectIdentity{}, false, classifyRootRelativeOpenError("open stable revision", relative, err)
+	}
+	after, afterOK, afterErr := s.inspector.inspectRelativeRegularFile(root, slot, relative)
+	if afterErr != nil {
+		_ = handle.Close()
+		return nil, sourceObjectIdentity{}, sourceObjectIdentity{}, false, classifyRootRelativeOpenError("reinspect stable revision", relative, afterErr)
+	}
+	return handle, before, after, afterOK, nil
+}
+
+func (s *RootedRevisionSource) openPreliminaryWithBackoff(
+	ctx context.Context,
+	slot RootSlot,
+	relative string,
+) (*os.File, sourceObjectIdentity, sourceObjectIdentity, bool, error) {
+	handle, before, after, afterOK, err := s.openPreliminaryOnce(int(slot), relative)
+	if err == nil || !isTransientRevisionOpenError(err) {
+		return handle, before, after, afterOK, err
+	}
+	started := time.Now()
+	attempts := 1
+	// Wait outside s.mu.RLock so a single locked file never blocks Close() or
+	// sibling opens while absorbing brief external sharing violations.
+	for _, delay := range revisionOpenSharingBackoff {
+		if waitErr := s.waitForRetry(ctx, delay); waitErr != nil {
+			traceRevisionOpenRetry(s.diagnostics, "preliminary", slot, attempts, time.Since(started), "canceled")
+			return nil, sourceObjectIdentity{}, sourceObjectIdentity{}, false, content.WithRevisionComparison(
+				waitErr, content.RevisionComparisonUnavailable,
+			)
+		}
+		attempts++
+		handle, before, after, afterOK, err = s.openPreliminaryOnce(int(slot), relative)
+		if err == nil {
+			traceRevisionOpenRetry(s.diagnostics, "preliminary", slot, attempts, time.Since(started), "recovered")
+			return handle, before, after, afterOK, nil
+		}
+		if !isTransientRevisionOpenError(err) {
+			traceRevisionOpenRetry(s.diagnostics, "preliminary", slot, attempts, time.Since(started), "failed")
+			return nil, sourceObjectIdentity{}, sourceObjectIdentity{}, false, err
+		}
+	}
+	traceRevisionOpenRetry(s.diagnostics, "preliminary", slot, attempts, time.Since(started), "exhausted")
+	return nil, sourceObjectIdentity{}, sourceObjectIdentity{}, false, err
+}
+
 func (s *RootedRevisionSource) OpenStable(ctx context.Context, record catalog.NodeRecord) (content.StableFile, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, content.WithRevisionComparison(err, content.RevisionComparisonUnavailable)
@@ -147,36 +289,9 @@ func (s *RootedRevisionSource) OpenStable(ctx context.Context, record catalog.No
 	if err != nil || locator.RelativePath() == "" {
 		return nil, content.WithRevisionComparison(content.ErrRevisionStale, content.RevisionComparisonMismatch)
 	}
-	s.mu.RLock()
-	if s.closed {
-		s.mu.RUnlock()
-		return nil, content.WithRevisionComparison(content.ErrRevisionStoreClosed, content.RevisionComparisonUnavailable)
-	}
-	slot := int(locator.RootSlot())
-	if slot >= len(s.roots) {
-		s.mu.RUnlock()
-		return nil, content.WithRevisionComparison(content.ErrRevisionStale, content.RevisionComparisonMismatch)
-	}
-	root := s.roots[slot]
-	before, beforeOK, err := s.inspector.inspectRelativeRegularFile(root, slot, locator.RelativePath())
+	handle, before, after, afterOK, err := s.openPreliminaryWithBackoff(ctx, locator.RootSlot(), locator.RelativePath())
 	if err != nil {
-		s.mu.RUnlock()
-		return nil, classifyRootRelativeOpenError("inspect stable revision", locator.RelativePath(), err)
-	}
-	if !beforeOK {
-		s.mu.RUnlock()
-		return nil, content.WithRevisionComparison(content.ErrRevisionStale, content.RevisionComparisonMismatch)
-	}
-	handle, err := openRootObjectNoRecall(root, locator.RelativePath())
-	if err != nil {
-		s.mu.RUnlock()
-		return nil, classifyRootRelativeOpenError("open stable revision", locator.RelativePath(), err)
-	}
-	after, afterOK, afterErr := s.inspector.inspectRelativeRegularFile(root, slot, locator.RelativePath())
-	s.mu.RUnlock()
-	if afterErr != nil {
-		_ = handle.Close()
-		return nil, classifyRootRelativeOpenError("reinspect stable revision", locator.RelativePath(), afterErr)
+		return nil, err
 	}
 	owned := false
 	defer func() {

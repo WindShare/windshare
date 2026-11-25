@@ -109,3 +109,5 @@ func classifyRootRelativeOpenError(operation, relative string, err error) error 
 		pathfailure.Filesystem(operation, relative, err), content.RevisionComparisonUnavailable,
 	)
 }
+
+func isTransientRevisionOpenError(error) bool { return false }

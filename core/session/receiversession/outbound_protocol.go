@@ -192,6 +192,9 @@ func classifyRevisionFailure(diagnostic error, code uint16, retryable bool) erro
 			return sourceBoundaryError(transferfault.SourcePermanent, revisionFailure)
 		}
 	}
+	// RevisionCodeBusy intentionally maps to SourceUnavailable rather than
+	// SourcePermanent so active transactions settle as FilePaused and keep
+	// resumable progress instead of retiring the file.
 	return sourceBoundaryError(transferfault.SourceUnavailable, revisionFailure)
 }
 

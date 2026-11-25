@@ -317,6 +317,8 @@ func TestEveryRevisionFailureDispositionSettlesOneFileAndContinuesSibling(t *tes
 		{contentflow.RevisionCodeDrift, true, transfer.FileFailed, transferfault.SourceRevisionInvalidated},
 		{contentflow.RevisionCodeInvalidLease, false, transfer.FilePaused, transferfault.SourceUnavailable},
 		{contentflow.RevisionCodeInvalidLease, true, transfer.FilePaused, transferfault.SourceUnavailable},
+		{contentflow.RevisionCodeBusy, false, transfer.FilePaused, transferfault.SourceUnavailable},
+		{contentflow.RevisionCodeBusy, true, transfer.FilePaused, transferfault.SourceUnavailable},
 	}
 	for _, test := range tests {
 		t.Run(fmt.Sprintf("code_%04x_retryable_%t", test.code, test.retryable), func(t *testing.T) {

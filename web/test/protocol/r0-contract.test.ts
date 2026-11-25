@@ -867,6 +867,7 @@ describe('R0 resource and state-machine contract', () => {
         'lease-expired': 0x3006,
         drift: 0x3007,
         'invalid-lease': 0x3008,
+        busy: 0x3009,
       },
       block: {
         'invalid-ref': 0x4001,

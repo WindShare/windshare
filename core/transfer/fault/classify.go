@@ -22,7 +22,8 @@ func ClassifyContent(err error) (Fault, bool) {
 		value, _ := NewSource(ScopeFileLocal, SourcePermanent)
 		return value, true
 	case errors.Is(err, content.ErrRevisionReopened), errors.Is(err, content.ErrQuotaExceeded),
-		errors.Is(err, content.ErrLeaseExpired), errors.Is(err, content.ErrInvalidLease):
+		errors.Is(err, content.ErrLeaseExpired), errors.Is(err, content.ErrInvalidLease),
+		errors.Is(err, content.ErrSourceBusy):
 		value, _ := NewSource(ScopeFileLocal, SourceUnavailable)
 		return value, true
 	default:

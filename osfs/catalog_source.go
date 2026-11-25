@@ -251,7 +251,7 @@ func (source *SelectedCatalogSource) RevisionSource() (*RootedRevisionSource, er
 	}
 	// File lookup must retain the same root authority as discovery. Reopening
 	// names here could bind a replaced directory outside the selected scope.
-	return newPlatformRootedRevisionSource(source.roots)
+	return newPlatformRootedRevisionSource(source.roots, source.diagnostics)
 }
 
 func (source *SelectedCatalogSource) ScanDirectory(ctx context.Context, request catalog.ScanRequest) (catalog.ScanResult, error) {

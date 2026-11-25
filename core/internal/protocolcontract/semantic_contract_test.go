@@ -77,7 +77,7 @@ func semanticCases(t *testing.T) []any {
 			"name":      "error-domains",
 			"session":   map[string]uint16{"auth": 0x1001, "replay-sequence": 0x1002, "malformed": 0x1003, "version": 0x1004, "budget": 0x1005, "sender-signature": 0x1006, "illegal-terminal": 0x1007, "sender-stopped": sessionCodeSenderStopped},
 			"directory": map[string]uint16{"stale": 0x2001, "permission": 0x2002, "collision": 0x2003, "too-wide": 0x2004, "budget": 0x2005, "permanent-io": 0x2006, "transient-io": 0x2007, "cancelled": 0x2008},
-			"revision":  map[string]uint16{"stale": 0x3001, "not-found": 0x3002, "unreadable": 0x3003, "unsupported-stability": 0x3004, "quota": 0x3005, "lease-expired": 0x3006, "drift": 0x3007, "invalid-lease": 0x3008},
+			"revision":  map[string]uint16{"stale": 0x3001, "not-found": 0x3002, "unreadable": 0x3003, "unsupported-stability": 0x3004, "quota": 0x3005, "lease-expired": 0x3006, "drift": 0x3007, "invalid-lease": 0x3008, "busy": 0x3009},
 			"block":     map[string]uint16{"invalid-ref": 0x4001, "out-of-range": 0x4002, "object-auth": 0x4003, "fragment-conflict": 0x4004, "timeout": 0x4005, "cancelled": 0x4006},
 			"peer":      map[string]uint16{"negotiation": 0x5001, "timeout": 0x5002, "candidates": 0x5003, "admission": 0x5004, "capacity": 0x500c},
 		},

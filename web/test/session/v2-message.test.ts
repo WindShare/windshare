@@ -107,8 +107,11 @@ describe('v2 authenticated sender control schemas', () => {
       [MESSAGE_KIND.openResults, new Map<number, unknown>([[
         0, 1,
       ], [
-        1, [[identity(2), 1, 0x3001, false, null]],
+        1, [[identity(2), 1, 0x3001, false, null], [identity(8), 1, 0x3009, false, null]],
       ]])],
+      [MESSAGE_KIND.operationError, new Map<number, unknown>([
+        [0, 1], [1, 3], [2, 0x3009], [3, false], [4, null], [5, 'source busy'],
+      ])],
       [MESSAGE_KIND.operationComplete, new Map<number, unknown>([[0, 1], [1, 0]])],
       [MESSAGE_KIND.leaseResult, new Map<number, unknown>([
         [0, 1], [1, identity(3)], [2, 120_000], [3, 60_000],

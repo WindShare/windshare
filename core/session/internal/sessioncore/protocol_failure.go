@@ -29,6 +29,8 @@ func RevisionOperationCause(code uint16) (error, bool) {
 		return content.ErrRevisionDrift, true
 	case contentflow.RevisionCodeInvalidLease:
 		return content.ErrInvalidLease, true
+	case contentflow.RevisionCodeBusy:
+		return content.ErrSourceBusy, true
 	default:
 		return nil, false
 	}

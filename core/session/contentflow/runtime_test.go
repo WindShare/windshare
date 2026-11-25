@@ -808,6 +808,7 @@ func TestErrorClassificationPreservesOperationScope(t *testing.T) {
 	for err, expected := range map[error]uint16{
 		content.ErrRevisionStale:        RevisionCodeStale,
 		content.ErrRevisionNotFound:     RevisionCodeNotFound,
+		content.ErrSourceBusy:           RevisionCodeBusy,
 		content.ErrUnsupportedStability: RevisionCodeUnsupportedStability,
 		content.ErrQuotaExceeded:        RevisionCodeUnreadable,
 		content.ErrLeaseExpired:         RevisionCodeLeaseExpired,
@@ -815,8 +816,8 @@ func TestErrorClassificationPreservesOperationScope(t *testing.T) {
 		content.ErrInvalidLease:         RevisionCodeInvalidLease,
 		content.ErrRenewTooEarly:        RevisionCodeInvalidLease,
 	} {
-		if failure := classifyRevisionError(err); failure.Code != expected {
-			t.Fatalf("revision error %v code=%#x", err, failure.Code)
+		if failure := classifyRevisionError(err); failure.Code != expected || failure.Retryable || failure.RetryAfter != 0 {
+			t.Fatalf("revision error %v failure=%+v want code=%#x non-retryable", err, failure, expected)
 		}
 	}
 	for err, expected := range map[error]uint16{

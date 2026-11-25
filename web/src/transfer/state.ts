@@ -30,7 +30,7 @@ export interface ReceiveTiming {
 }
 
 export type MissingFileWarning =
-  | Readonly<{ path: readonly string[]; reason: 'source-changed' | 'source-unavailable' | 'file-failed' }>
+  | Readonly<{ path: readonly string[]; reason: 'source-changed' | 'source-unavailable' | 'source-busy' | 'file-failed' }>
   | Readonly<{ path: readonly string[]; reason: 'destination-conflict'; destinationPath: string }>
 
 export interface ReceiveContentWarning {
@@ -55,7 +55,7 @@ export interface SourceRevisionFailure {
   readonly entryId: string
   readonly path: readonly string[]
   readonly sourcePath: readonly string[]
-  readonly reason: 'source-changed' | 'source-unavailable'
+  readonly reason: 'source-changed' | 'source-unavailable' | 'source-busy'
 }
 
 export interface SourceRevisionFailures {

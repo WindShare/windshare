@@ -15,9 +15,11 @@ import (
 	"slices"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/osfs/internal/pathfailure"
 	"golang.org/x/sys/windows"
 )
@@ -37,8 +39,8 @@ func platformCatalogBaseline(file *os.File) (catalog.SourceIdentity, catalog.Ver
 	return windowsCatalogObjectBaseline(file)
 }
 
-func newPlatformRootedRevisionSource(roots []*os.Root) (*RootedRevisionSource, error) {
-	binder := &WindowsStabilityBinder{platform: nativeWindowsRevisionPlatform{}}
+func newPlatformRootedRevisionSource(roots []*os.Root, sink diagnostics.Sink) (*RootedRevisionSource, error) {
+	binder := &WindowsStabilityBinder{platform: nativeWindowsRevisionPlatform{}, diagnostics: sink}
 	for _, authority := range roots {
 		root, err := retainWindowsRevisionRoot(authority)
 		if err != nil {
@@ -46,14 +48,16 @@ func newPlatformRootedRevisionSource(roots []*os.Root) (*RootedRevisionSource, e
 		}
 		binder.roots = append(binder.roots, root)
 	}
-	return newRetainedRootedRevisionSource(roots, binder, binder)
+	return newRetainedRootedRevisionSource(roots, binder, binder, sink)
 }
 
 type WindowsStabilityBinder struct {
-	mu       sync.RWMutex
-	platform windowsRevisionPlatform
-	roots    []windowsRevisionRoot
-	closed   bool
+	mu          sync.RWMutex
+	platform    windowsRevisionPlatform
+	roots       []windowsRevisionRoot
+	wait        retryWaitFunc
+	diagnostics diagnostics.Sink
+	closed      bool
 }
 
 func NewWindowsStabilityBinder(rootPaths []string) (*WindowsStabilityBinder, error) {
@@ -138,6 +142,70 @@ func windowsCatalogObjectBaseline(file *os.File) (catalog.SourceIdentity, catalo
 	return identity, candidate, nil
 }
 
+func (b *WindowsStabilityBinder) waitForRetry(ctx context.Context, delay time.Duration) error {
+	if b.wait != nil {
+		return b.wait(ctx, delay)
+	}
+	return waitContextDelay(ctx, delay)
+}
+
+func (b *WindowsStabilityBinder) checkSlotReady(slot int) error {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if b.closed {
+		return content.ErrRevisionStoreClosed
+	}
+	if slot < 0 || slot >= len(b.roots) {
+		return content.ErrRevisionStale
+	}
+	return nil
+}
+
+func (b *WindowsStabilityBinder) openStableRootOnce(slot int, relative string) (windowsRevisionFile, error) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if b.closed {
+		return nil, content.ErrRevisionStoreClosed
+	}
+	if slot < 0 || slot >= len(b.roots) {
+		return nil, content.ErrRevisionStale
+	}
+	return b.roots[slot].OpenStable(relative)
+}
+
+func (b *WindowsStabilityBinder) openStableRootWithBackoff(
+	ctx context.Context,
+	slot RootSlot,
+	relative string,
+) (windowsRevisionFile, error) {
+	handle, err := b.openStableRootOnce(int(slot), relative)
+	if err == nil || !isTransientRevisionOpenError(err) {
+		return handle, err
+	}
+	started := time.Now()
+	attempts := 1
+	// Keep every retry sleep outside b.mu.RLock and root locks so a busy file
+	// never delays Close() or concurrent opens of sibling files.
+	for _, delay := range revisionOpenSharingBackoff {
+		if waitErr := b.waitForRetry(ctx, delay); waitErr != nil {
+			traceRevisionOpenRetry(b.diagnostics, "stable", slot, attempts, time.Since(started), "canceled")
+			return nil, content.WithRevisionComparison(waitErr, content.RevisionComparisonUnavailable)
+		}
+		attempts++
+		handle, err = b.openStableRootOnce(int(slot), relative)
+		if err == nil {
+			traceRevisionOpenRetry(b.diagnostics, "stable", slot, attempts, time.Since(started), "recovered")
+			return handle, nil
+		}
+		if !isTransientRevisionOpenError(err) {
+			traceRevisionOpenRetry(b.diagnostics, "stable", slot, attempts, time.Since(started), "failed")
+			return nil, err
+		}
+	}
+	traceRevisionOpenRetry(b.diagnostics, "stable", slot, attempts, time.Since(started), "exhausted")
+	return nil, err
+}
+
 func (b *WindowsStabilityBinder) BindStable(ctx context.Context, binding StableBinding) (content.StableFile, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -149,15 +217,8 @@ func (b *WindowsStabilityBinder) BindStable(ctx context.Context, binding StableB
 	if !filepath.IsLocal(relative) {
 		return nil, content.ErrRevisionStale
 	}
-
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	if b.closed {
-		return nil, content.ErrRevisionStoreClosed
-	}
-	slot := int(binding.RootSlot)
-	if slot < 0 || slot >= len(b.roots) {
-		return nil, content.ErrRevisionStale
+	if err := b.checkSlotReady(int(binding.RootSlot)); err != nil {
+		return nil, err
 	}
 	before, err := b.platform.Token(binding.File)
 	if err != nil {
@@ -166,7 +227,7 @@ func (b *WindowsStabilityBinder) BindStable(ctx context.Context, binding StableB
 	if !before.matches(binding.Record) {
 		return nil, content.ErrRevisionStale
 	}
-	handle, err := b.roots[slot].OpenStable(relative)
+	handle, err := b.openStableRootWithBackoff(ctx, binding.RootSlot, relative)
 	if err != nil {
 		return nil, err
 	}

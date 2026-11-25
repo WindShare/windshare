@@ -5,6 +5,7 @@ export const progress = {
   partial: 'Partial result: some selected items are missing or unfinished.',
   sourceChanged: 'The source file changed or was deleted.',
   sourceUnavailable: 'The source file is unavailable or was deleted.',
+  sourceBusy: 'The source file is in use by another app on the sender. Close it and retry.',
   fileFailed: 'The file could not be received.',
   destinationConflict: (path: string) => `Check “${path}” in your folder. Move it aside before downloading this file again.`,
   countFailed: 'Counting did not finish; final total unknown.',

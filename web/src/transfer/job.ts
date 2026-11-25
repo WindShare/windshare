@@ -389,6 +389,14 @@ export class TransferJob {
         this.#recordSourceFailure(file, 'source-unavailable')
         this.#recordMissing({ path: file.relativePath, reason: 'source-unavailable' })
         return
+      case 'source-busy':
+        this.#failedFiles += 1n
+        this.#sourceUnavailableCount += 1n
+        this.#firstError ??= outcome.error
+        this.#tracker.observeFileFailed()
+        this.#recordSourceFailure(file, 'source-busy')
+        this.#recordMissing({ path: file.relativePath, reason: 'source-busy' })
+        return
       case 'failed':
         this.#failedFiles += 1n
         this.#recordFailure(outcome.error)
@@ -412,7 +420,7 @@ export class TransferJob {
     }
   }
 
-  #recordSourceFailure(file: DiscoveredFile, reason: 'source-changed' | 'source-unavailable'): void {
+  #recordSourceFailure(file: DiscoveredFile, reason: SourceRevisionFailure['reason']): void {
     if (this.#sourceFailures.length >= MAX_SOURCE_FAILURES) return
     this.#sourceFailures.push(Object.freeze({
       entryId: file.entry.idText,

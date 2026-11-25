@@ -207,6 +207,8 @@ func TestClassifyContentAndSessionTerminal(t *testing.T) {
 		{content.ErrRevisionStale, fault.SourceRevisionChanged},
 		{content.ErrSourceDrift, fault.SourceRevisionChanged},
 		{content.ErrRevisionNotFound, fault.SourcePermanent},
+		{content.ErrUnsupportedStability, fault.SourcePermanent},
+		{content.ErrSourceBusy, fault.SourceUnavailable},
 		{content.ErrLeaseExpired, fault.SourceUnavailable},
 	}
 	for _, tc := range cases {

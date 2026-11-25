@@ -15,6 +15,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/diagnostics"
 )
 
 const posixMutationTokenBytes = 56
@@ -27,8 +28,8 @@ func platformCatalogBaseline(file *os.File) (catalog.SourceIdentity, catalog.Ver
 	return POSIXCatalogBaseline(file)
 }
 
-func newPlatformRootedRevisionSource(roots []*os.Root) (*RootedRevisionSource, error) {
-	return newRetainedRootedRevisionSource(roots, POSIXStabilityBinder{}, nil)
+func newPlatformRootedRevisionSource(roots []*os.Root, sink diagnostics.Sink) (*RootedRevisionSource, error) {
+	return newRetainedRootedRevisionSource(roots, POSIXStabilityBinder{}, nil, sink)
 }
 
 type posixMutationToken struct {

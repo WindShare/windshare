@@ -544,6 +544,11 @@ func classifyRevisionError(err error) RevisionFailure {
 		code = RevisionCodeStale
 	case errors.Is(err, content.ErrRevisionNotFound):
 		code = RevisionCodeNotFound
+	case errors.Is(err, content.ErrSourceBusy):
+		// Brief locks are absorbed locally by osfs. A sustained lock stays
+		// non-retryable so receivers isolate this file immediately instead of
+		// stalling sibling files behind a retry-after backoff loop.
+		code = RevisionCodeBusy
 	case errors.Is(err, content.ErrUnsupportedStability):
 		code = RevisionCodeUnsupportedStability
 	case errors.Is(err, content.ErrLeaseExpired), errors.Is(err, content.ErrLeaseLifetime):

@@ -29,6 +29,7 @@ const (
 	RevisionCodeLeaseExpired         uint16 = 0x3006
 	RevisionCodeDrift                uint16 = 0x3007
 	RevisionCodeInvalidLease         uint16 = 0x3008
+	RevisionCodeBusy                 uint16 = 0x3009
 
 	BlockCodeInvalidRef       uint16 = 0x4001
 	BlockCodeOutOfRange       uint16 = 0x4002
@@ -140,7 +141,7 @@ type RevisionFailure struct {
 }
 
 func NewRevisionFailure(code uint16, retryable bool, retryAfter time.Duration) (RevisionFailure, error) {
-	if code < RevisionCodeStale || code > RevisionCodeInvalidLease {
+	if code < RevisionCodeStale || code > RevisionCodeBusy {
 		return RevisionFailure{}, errors.New("revision failure code is outside its scope")
 	}
 	if retryable && (retryAfter < MinRevisionFailureRetryAfter ||

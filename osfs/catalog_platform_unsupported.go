@@ -8,6 +8,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/diagnostics"
 )
 
 func catalogModifiedTime(information fs.FileInfo) (catalog.ModifiedTime, error) {
@@ -18,6 +19,6 @@ func platformCatalogBaseline(*os.File) (catalog.SourceIdentity, catalog.VersionC
 	return catalog.SourceIdentity{}, catalog.VersionCandidate{}, content.ErrUnsupportedStability
 }
 
-func newPlatformRootedRevisionSource([]*os.Root) (*RootedRevisionSource, error) {
+func newPlatformRootedRevisionSource([]*os.Root, diagnostics.Sink) (*RootedRevisionSource, error) {
 	return nil, content.ErrUnsupportedStability
 }
