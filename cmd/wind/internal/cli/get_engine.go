@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"strings"
+	"sync"
 
 	"golang.org/x/term"
 
@@ -238,19 +239,140 @@ func parseReceiveRecoveryAction(pause engine.ReceivePause, input string) (engine
 	return action, pause.Allows(action)
 }
 
-func (a *App) receivePauseHandler() func(context.Context, engine.ReceivePause) (engine.ReceiveRecoveryAction, error) {
+type receivePausePrompt func(context.Context, engine.ReceivePause) (engine.ReceiveRecoveryAction, error)
+
+type receivePauseDecision struct {
+	action engine.ReceiveRecoveryAction
+	err    error
+}
+
+type receivePauseRequest struct {
+	ctx   context.Context
+	pause engine.ReceivePause
+	reply chan receivePauseDecision
+}
+
+// receivePauseCoordinator keeps terminal ownership on the observation loop
+// goroutine. The engine invokes OnPause from its task worker while observations
+// may still sit buffered in the stream; marshaling prompts onto the consumer
+// loop guarantees pending progress drains and FinishProgress runs before stdin
+// interaction begins.
+type receivePauseCoordinator struct {
+	requests  chan receivePauseRequest
+	done      chan struct{}
+	closeOnce sync.Once
+	prompt    receivePausePrompt
+}
+
+func newReceivePauseCoordinator(prompt receivePausePrompt) *receivePauseCoordinator {
+	if prompt == nil {
+		return nil
+	}
+	return &receivePauseCoordinator{
+		requests: make(chan receivePauseRequest),
+		done:     make(chan struct{}),
+		prompt:   prompt,
+	}
+}
+
+func (c *receivePauseCoordinator) handler() receivePausePrompt {
+	if c == nil {
+		return nil
+	}
+	return c.requestPause
+}
+
+func (c *receivePauseCoordinator) close() {
+	if c == nil {
+		return
+	}
+	c.closeOnce.Do(func() { close(c.done) })
+}
+
+func (c *receivePauseCoordinator) requestPause(ctx context.Context, pause engine.ReceivePause) (engine.ReceiveRecoveryAction, error) {
+	if err := ctx.Err(); err != nil {
+		return engine.ReceiveRecoveryExit, err
+	}
+	req := receivePauseRequest{
+		ctx:   ctx,
+		pause: pause,
+		reply: make(chan receivePauseDecision, 1),
+	}
+	select {
+	case c.requests <- req:
+	case <-ctx.Done():
+		return engine.ReceiveRecoveryExit, ctx.Err()
+	case <-c.done:
+		return engine.ReceiveRecoveryExit, nil
+	}
+	select {
+	case decision := <-req.reply:
+		return decision.action, decision.err
+	case <-ctx.Done():
+		return engine.ReceiveRecoveryExit, ctx.Err()
+	case <-c.done:
+		return engine.ReceiveRecoveryExit, nil
+	}
+}
+
+func observeReceive(observations <-chan engine.Observation, runtime *commandRuntime, pause *receivePauseCoordinator) {
+	var requests <-chan receivePauseRequest
+	if pause != nil {
+		defer pause.close()
+		requests = pause.requests
+	}
+	for observations != nil {
+		select {
+		case value, ok := <-observations:
+			if !ok {
+				observations = nil
+				continue
+			}
+			runtime.ObserveEngine(value)
+		case req := <-requests:
+			observations = drainPendingObservations(observations, runtime)
+			runtime.FinishProgress()
+			if err := req.ctx.Err(); err != nil {
+				req.reply <- receivePauseDecision{action: engine.ReceiveRecoveryExit, err: err}
+				continue
+			}
+			action, err := pause.prompt(req.ctx, req.pause)
+			req.reply <- receivePauseDecision{action: action, err: err}
+		}
+	}
+}
+
+func drainPendingObservations(observations <-chan engine.Observation, runtime *commandRuntime) <-chan engine.Observation {
+	for observations != nil {
+		select {
+		case value, ok := <-observations:
+			if !ok {
+				return nil
+			}
+			runtime.ObserveEngine(value)
+		default:
+			return observations
+		}
+	}
+	return nil
+}
+
+func (a *App) interactiveReceivePause() *receivePauseCoordinator {
 	input, inputOK := a.Stdin.(interface{ Fd() uintptr })
 	output, outputOK := a.Stderr.(interface{ Fd() uintptr })
 	if !inputOK || !outputOK || !term.IsTerminal(int(input.Fd())) || !term.IsTerminal(int(output.Fd())) {
 		return nil
 	}
 	reader := bufio.NewReader(a.Stdin)
-	return func(ctx context.Context, pause engine.ReceivePause) (engine.ReceiveRecoveryAction, error) {
+	return newReceivePauseCoordinator(func(ctx context.Context, pause engine.ReceivePause) (engine.ReceiveRecoveryAction, error) {
 		return a.promptReceiveRecovery(ctx, reader, pause)
-	}
+	})
 }
 
 func (a *App) promptReceiveRecovery(ctx context.Context, reader *bufio.Reader, pause engine.ReceivePause) (engine.ReceiveRecoveryAction, error) {
+	if err := ctx.Err(); err != nil {
+		return engine.ReceiveRecoveryExit, err
+	}
 	reason := "a transfer or output failure"
 	switch pause.Recovery.Reason {
 	case engine.ReceiveRecoveryCollision:

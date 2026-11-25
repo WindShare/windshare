@@ -68,6 +68,7 @@ func (a *App) runReceive(ctx context.Context, command receiveCommand, args []str
 	if factory == nil {
 		factory = filesystem.FilesystemOutput{RootPath: destination, CreateRoot: true}
 	}
+	pause := a.interactiveReceivePause()
 	task, err := a.application.StartReceive(ctx, engine.ReceiveRequest{
 		Admission:    request.admission,
 		OperationID:  request.operationID,
@@ -78,7 +79,7 @@ func (a *App) runReceive(ctx context.Context, command receiveCommand, args []str
 		Output:       factory,
 		Destination:  destination,
 		Diagnostics:  runtime.diagnosticSink(),
-		OnPause:      a.receivePauseHandler(),
+		OnPause:      pause.handler(),
 	})
 	if err != nil {
 		return runtime.failToStart(err)
@@ -86,9 +87,7 @@ func (a *App) runReceive(ctx context.Context, command receiveCommand, args []str
 	if a.networkSetup != nil && request.connectivity != engine.ConnectivityRelayOnly {
 		networkcommand.ObserveStartup(a.networkSetup, runtime.ObserveNetworkSetup)
 	}
-	for value := range task.Observations() {
-		runtime.ObserveEngine(value)
-	}
+	observeReceive(task.Observations(), runtime, pause)
 	result, err := task.Wait(context.Background())
 	if err != nil {
 		runtime.StageCommandFailure(ExitFailure, classifyFailure(err))

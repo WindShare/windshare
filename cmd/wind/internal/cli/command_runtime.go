@@ -279,6 +279,13 @@ func (runtime *commandRuntime) AddDropped(count uint64) {
 	runtime.trace.AddDropped(count)
 }
 
+func (runtime *commandRuntime) FinishProgress() {
+	if runtime == nil {
+		return
+	}
+	runtime.human.FinishProgress()
+}
+
 // failToStart handles failures before a task exists. Derive both exit code and
 // terminal presentation from one classification so share and get stay aligned.
 func (runtime *commandRuntime) failToStart(cause error) int {
