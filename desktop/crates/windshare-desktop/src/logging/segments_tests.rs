@@ -82,3 +82,40 @@ fn records_that_fit_a_fresh_segment_are_not_torn_across_segments() {
         [first, second].map(|line| String::from_utf8(line.to_vec()).unwrap())
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn unix_open_creates_private_log_directories_and_segments() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let base = tempfile::tempdir().unwrap();
+    fs::set_permissions(base.path(), fs::Permissions::from_mode(0o755)).unwrap();
+    let app_cache = base.path().join("WindShare");
+    let log_dir = app_cache.join("logs");
+
+    let mut writer = Segments::open(log_dir.clone()).unwrap();
+    writer.write_all(b"diagnostic line\n").unwrap();
+    writer.flush().unwrap();
+
+    assert_eq!(
+        fs::metadata(base.path()).unwrap().permissions().mode() & 0o777,
+        0o755
+    );
+    assert_eq!(
+        fs::metadata(&app_cache).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
+        fs::metadata(&log_dir).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    let entries = fs::read_dir(&log_dir)
+        .unwrap()
+        .map(Result::unwrap)
+        .collect::<Vec<_>>();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].metadata().unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+}

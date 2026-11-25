@@ -15,6 +15,7 @@ mod network;
 mod overlays;
 mod pages;
 mod preferences;
+mod private_fs;
 #[cfg(feature = "motion-profile")]
 mod profiling;
 mod receiving;

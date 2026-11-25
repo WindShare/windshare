@@ -123,3 +123,36 @@ fn unavailable_storage_does_not_prevent_preference_changes() {
     assert_eq!(settings.choice, ThemePreference::Explicit(Theme::Light));
     assert_eq!(settings.persistence, Persistence::SaveFailed);
 }
+
+#[cfg(unix)]
+#[test]
+fn unix_save_creates_private_config_directories_without_changing_existing_root() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let base = tempfile::tempdir().unwrap();
+    fs::set_permissions(base.path(), fs::Permissions::from_mode(0o755)).unwrap();
+    let config_root = base.path().join(CONFIG_DIRECTORY);
+    let desktop_dir = config_root.join(PREFERENCES_DIRECTORY);
+    let path = desktop_dir.join(ThemePreference::KEY);
+
+    let mut settings = AppearanceSettings::load_from(Some(path.clone()));
+    settings.select(ThemePreference::Explicit(Theme::Dark));
+    assert_eq!(settings.persistence, Persistence::Saved);
+
+    assert_eq!(
+        fs::metadata(base.path()).unwrap().permissions().mode() & 0o777,
+        0o755
+    );
+    assert_eq!(
+        fs::metadata(&config_root).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
+        fs::metadata(&desktop_dir).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+}

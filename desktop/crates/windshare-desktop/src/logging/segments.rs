@@ -1,5 +1,5 @@
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::{self, Write},
     path::PathBuf,
     time::SystemTime,
@@ -18,7 +18,9 @@ pub struct Segments {
 
 impl Segments {
     pub fn open(directory: PathBuf) -> io::Result<Self> {
-        fs::create_dir_all(&directory)?;
+        // Desktop logging starts before Go's diaglog host, so create the shared
+        // log directory and segment files owner-only on Unix up front.
+        crate::private_fs::create_dir_all(&directory)?;
         let mut segments = Self {
             directory,
             file: None,
@@ -72,12 +74,9 @@ impl Segments {
             std::process::id(),
             self.sequence
         );
-        self.file = Some(
-            OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(self.directory.join(name))?,
-        );
+        self.file = Some(crate::private_fs::create_new_file(
+            &self.directory.join(name),
+        )?);
         self.bytes = 0;
         Ok(())
     }

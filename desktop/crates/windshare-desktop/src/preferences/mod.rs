@@ -122,7 +122,9 @@ impl<C: PreferenceChoice> Preference<C> {
                 "preference file needs a parent directory",
             )
         })?;
-        fs::create_dir_all(parent)?;
+        // Keep a shared config root owner-only on Unix even when desktop writes
+        // a UI preference before Go initializes config.json or account state.
+        crate::private_fs::create_dir_all(parent)?;
         // Replace atomically so interruption cannot truncate the previous choice.
         let mut pending = tempfile::NamedTempFile::new_in(parent)?;
         pending.write_all(self.choice.code().as_bytes())?;
