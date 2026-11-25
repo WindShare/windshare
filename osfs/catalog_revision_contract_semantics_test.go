@@ -184,7 +184,9 @@ func TestSelectedCatalogSourceClassifiesFilesystemAndIdentityFailures(t *testing
 		t.Fatal(err)
 	}
 	request := catalog.ScanRequest{Work: &countingScanWork{}, Children: &collectingScanChildren{}}
-	if _, _, err := source.enumerateCatalogChildren(context.Background(), authority, closedHandle, sourceLocation{}, request); err == nil {
+	if _, _, err := source.enumerateCatalogChildren(
+		context.Background(), authority, closedHandle, sourceLocation{}, request, catalog.MaxDirectoryEntries,
+	); err == nil {
 		t.Fatal("enumeration classified a closed directory stream as exhaustion")
 	}
 	if _, err := catalogDirectoryFingerprint(context.Background(), closedHandle); err == nil {

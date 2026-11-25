@@ -307,3 +307,89 @@ func identity16(value byte) []byte {
 	identity[0] = value
 	return identity
 }
+
+type boundedScanWork struct {
+	limit uint64
+	units uint64
+}
+
+func (work *boundedScanWork) Consume(units uint64) error {
+	if work.units+units > work.limit {
+		return catalog.ErrBudgetExceeded
+	}
+	work.units += units
+	return nil
+}
+
+func TestEnumerateCatalogChildrenStopsAtWidthLimitBeforeExtraScanWork(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"ok.txt", "omit\u200b-1.txt", "omit\u200b-2.txt"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("data"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	synthetic, err := catalog.DirectoryIDFromBytes(identity16(41))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := NewSelectedCatalogSource(SelectedCatalogSourceConfig{
+		Paths: []string{root}, SyntheticRoot: synthetic,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = source.Close() })
+
+	selected := source.SelectedRoots()[0]
+	locator, err := parseSourceReference(selected.SourceReference())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dirRoot, err := source.roots[locator.RootSlot()].OpenRoot(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dirRoot.Close()
+
+	// Total entries (1 admitted + 2 omitted = 3) exceed maxEntries = 2.
+	// ErrPageLimit must fire before Work.Consume runs on the 3rd entry even when
+	// remaining ScanWork is exhausted at 2 units.
+	handle, err := openRootObjectNoRecall(dirRoot, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := &boundedScanWork{limit: 2}
+	children := &collectingScanChildren{}
+	_, _, enumErr := source.enumerateCatalogChildren(
+		t.Context(), dirRoot, handle, locator,
+		catalog.ScanRequest{Directory: selected, Work: work, Children: children},
+		2,
+	)
+	_ = handle.Close()
+	if !errors.Is(enumErr, catalog.ErrPageLimit) {
+		t.Fatalf("width overflow error = %v, want ErrPageLimit", enumErr)
+	}
+	if work.units != 2 {
+		t.Fatalf("width overflow consumed %d work units, want 2", work.units)
+	}
+
+	// Exactly at maxEntries = 3 succeeds with 1 admitted and 2 omitted entries.
+	exactHandle, err := openRootObjectNoRecall(dirRoot, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	exactWork := &boundedScanWork{limit: 3}
+	exactChildren := &collectingScanChildren{}
+	omissions, _, exactErr := source.enumerateCatalogChildren(
+		t.Context(), dirRoot, exactHandle, locator,
+		catalog.ScanRequest{Directory: selected, Work: exactWork, Children: exactChildren},
+		3,
+	)
+	_ = exactHandle.Close()
+	if exactErr != nil {
+		t.Fatalf("exact width limit failed: %v", exactErr)
+	}
+	if len(exactChildren.items) != 1 || omissions.count != 2 || exactWork.units != 3 {
+		t.Fatalf("exact width limit = children:%d omitted:%d work:%d, want 1/2/3", len(exactChildren.items), omissions.count, exactWork.units)
+	}
+}

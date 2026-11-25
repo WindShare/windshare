@@ -212,15 +212,17 @@ func (s *CatalogStore) commitPreparedFailureLocked(
 	return directoryFailureFromRecord(prepared.record, cause), nil
 }
 
-// classifyScanBudgetError promotes an uncontended ShareBudget entry/memory
-// overflow to ErrShareCapacityExceeded. Committed directories remain resident
-// until Close, so retrying within the same share cannot reclaim share capacity.
+// classifyScanBudgetError promotes an uncontended ShareBudget capacity
+// overflow (retained entries/memory or single-scan work) to
+// ErrShareCapacityExceeded. Committed directories remain resident until Close
+// and ShareBudget limits are immutable, so retrying within the same share
+// cannot succeed.
 func (s *CatalogStore) classifyScanBudgetError(err error, exclusivePass bool) error {
 	if err == nil || errors.Is(err, ErrShareCapacityExceeded) {
 		return err
 	}
 	var budgetErr *budgetExceededError
-	if !errors.As(err, &budgetErr) || budgetErr.account != s.shareBudget || !budgetErr.retainedExceeded {
+	if !errors.As(err, &budgetErr) || budgetErr.account != s.shareBudget || !budgetErr.capacityExceeded {
 		return err
 	}
 	if !exclusivePass && budgetErr.contendedForActiveScan() {
@@ -234,7 +236,7 @@ func (s *CatalogStore) classifyDirectCommitBudgetError(err error) error {
 		return err
 	}
 	var budgetErr *budgetExceededError
-	if !errors.As(err, &budgetErr) || budgetErr.account != s.shareBudget || !budgetErr.retainedExceeded || budgetErr.activeScans > 0 {
+	if !errors.As(err, &budgetErr) || budgetErr.account != s.shareBudget || !budgetErr.capacityExceeded || budgetErr.activeScans > 0 {
 		return err
 	}
 	return &shareCapacityExceededError{cause: err}

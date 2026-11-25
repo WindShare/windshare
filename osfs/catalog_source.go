@@ -291,7 +291,9 @@ func (source *SelectedCatalogSource) ScanDirectory(ctx context.Context, request 
 	if err != nil || !bytes.Equal(beforeIdentity.Bytes(), request.Directory.SourceIdentity().Bytes()) {
 		return catalog.ScanResult{}, catalog.NewPermanentScanError(errors.Join(catalog.ErrDirectoryStale, err))
 	}
-	result, beforeEntries, err := source.enumerateCatalogChildren(ctx, directory, handle, locator, request)
+	result, beforeEntries, err := source.enumerateCatalogChildren(
+		ctx, directory, handle, locator, request, catalog.MaxDirectoryEntries,
+	)
 	if err != nil {
 		return catalog.ScanResult{}, err
 	}
@@ -320,6 +322,7 @@ func (source *SelectedCatalogSource) enumerateCatalogChildren(
 	handle *os.File,
 	locator sourceLocation,
 	request catalog.ScanRequest,
+	maxEntries uint64,
 ) (catalogOmissions, [sha256.Size]byte, error) {
 	result := catalogOmissions{}
 	captureSamples := source.omissions != nil || source.diagnostics.Enabled()
@@ -327,6 +330,12 @@ func (source *SelectedCatalogSource) enumerateCatalogChildren(
 	for {
 		entries, readErr := handle.ReadDir(catalogEnumerationBatchSize)
 		for _, entry := range entries {
+			// Every enumerated entry becomes either admitted or omitted, so exceeding
+			// maxEntries always fails commit validation; fail fast before consuming
+			// additional ScanWork or opening child handles.
+			if fingerprint.count == maxEntries {
+				return catalogOmissions{}, [sha256.Size]byte{}, catalog.ErrPageLimit
+			}
 			fingerprint.add(entry)
 			if err := request.Work.Consume(1); err != nil {
 				return catalogOmissions{}, [sha256.Size]byte{}, err
@@ -336,9 +345,6 @@ func (source *SelectedCatalogSource) enumerateCatalogChildren(
 				return catalogOmissions{}, [sha256.Size]byte{}, err
 			}
 			if omission.Reason != catalog.SourceOmissionNone {
-				if result.count == catalog.MaxDirectoryEntries {
-					return catalogOmissions{}, [sha256.Size]byte{}, catalog.ErrPageLimit
-				}
 				result.count++
 				if captureSamples && len(result.samples) < catalog.MaxSourceOmissionSamples {
 					result.samples = append(result.samples, omission)

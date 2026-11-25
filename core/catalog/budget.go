@@ -23,10 +23,11 @@ var (
 	ErrBudgetExceeded = errors.New("catalog resource budget exceeded")
 
 	// ErrShareCapacityExceeded reports that an uncontended operation exceeded the
-	// share's retained entry or memory ceiling. Committed directories remain
-	// resident until Close, so retrying that directory within the same share
+	// share's immutable capacity ceiling (retained entries, memory, or single-scan
+	// work). Committed directories remain resident until Close and the share's
+	// work ceiling is fixed, so retrying that directory within the same share
 	// cannot succeed, although smaller sibling directories can still commit once
-	// the failed scan releases its transient sorting memory.
+	// the failed scan releases its transient sorting memory and scan work.
 	ErrShareCapacityExceeded = errors.New("catalog share capacity exhausted")
 )
 
@@ -35,7 +36,15 @@ const (
 	DefaultShareActiveScans   = 16
 	DefaultProcessActiveScans = 64
 
-	DefaultSessionScanWork = 1_048_576
+	// MaxSingleDirectoryScanWork bounds one uncontended scan up to
+	// MaxDirectoryEntries: 1 directory open plus at most 2 work units per entry
+	// (source enumeration and catalog child admission).
+	MaxSingleDirectoryScanWork = 1 + 2*MaxDirectoryEntries
+
+	// Session matches Share and exceeds MaxSingleDirectoryScanWork so any single
+	// directory within the protocol width limit hits ErrPageLimit or retained
+	// Share memory ceilings instead of tripping a smaller per-session work gate.
+	DefaultSessionScanWork = 4_194_304
 	DefaultShareScanWork   = 4_194_304
 	DefaultProcessScanWork = 16_777_216
 
@@ -155,7 +164,7 @@ func usageWithin(used, limit ResourceUsage) bool {
 type budgetExceededError struct {
 	account          *BudgetAccount
 	activeScans      uint64
-	retainedExceeded bool
+	capacityExceeded bool
 }
 
 func (e *budgetExceededError) Error() string {
@@ -190,14 +199,18 @@ func (a *BudgetAccount) add(usage ResourceUsage) error {
 	defer a.mu.Unlock()
 	next, ok := addUsage(a.used, usage)
 	if !ok || !usageWithin(next, a.limits) {
-		// Capture active-scan count and whether a retained capacity dimension
-		// (Entries or MemoryBytes) overflowed atomically under the account lock so
-		// a peer scan finishing afterward cannot hide transient contention.
-		retainedExceeded := !ok || next.Entries > a.limits.Entries || next.MemoryBytes > a.limits.MemoryBytes
+		// Capture active-scan count and whether a capacity dimension (Entries,
+		// MemoryBytes, or ScanWork — everything except ActiveScans concurrency
+		// slots) overflowed atomically under the account lock so a peer scan
+		// finishing afterward cannot hide transient contention.
+		capacityExceeded := !ok ||
+			next.Entries > a.limits.Entries ||
+			next.MemoryBytes > a.limits.MemoryBytes ||
+			next.ScanWork > a.limits.ScanWork
 		return &budgetExceededError{
 			account:          a,
 			activeScans:      a.used.ActiveScans,
-			retainedExceeded: retainedExceeded,
+			capacityExceeded: capacityExceeded,
 		}
 	}
 	a.used = next

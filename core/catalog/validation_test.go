@@ -185,8 +185,11 @@ func TestBudgetAccountsRejectInvalidHierarchiesAndOverflow(t *testing.T) {
 	shareLimits := DefaultShareBudgetLimits()
 	processLimits := DefaultProcessBudgetLimits()
 	if sessionLimits.ActiveScans != DefaultSessionActiveScans ||
+		sessionLimits.ScanWork != DefaultSessionScanWork ||
 		sessionLimits.MemoryBytes != DefaultSessionCatalogMemory ||
+		shareLimits.ScanWork != DefaultShareScanWork ||
 		shareLimits.MemoryBytes != DefaultShareCatalogMemory ||
+		processLimits.ScanWork != DefaultProcessScanWork ||
 		processLimits.Entries != DefaultProcessCommittedEntries ||
 		processLimits.MemoryBytes != DefaultProcessCatalogMemory {
 		t.Fatal("catalog default budget profile drifted from the frozen limits")
@@ -195,6 +198,14 @@ func TestBudgetAccountsRejectInvalidHierarchiesAndOverflow(t *testing.T) {
 		t.Fatalf(
 			"catalog default memory budgets invert hierarchy: session=%d share=%d process=%d",
 			sessionLimits.MemoryBytes, shareLimits.MemoryBytes, processLimits.MemoryBytes,
+		)
+	}
+	if sessionLimits.ScanWork < MaxSingleDirectoryScanWork ||
+		sessionLimits.ScanWork < shareLimits.ScanWork ||
+		shareLimits.ScanWork > processLimits.ScanWork {
+		t.Fatalf(
+			"catalog default scan-work budgets invert hierarchy or undercut single-directory width: min=%d session=%d share=%d process=%d",
+			MaxSingleDirectoryScanWork, sessionLimits.ScanWork, shareLimits.ScanWork, processLimits.ScanWork,
 		)
 	}
 	if _, err := NewBudgetAccount("", BudgetLimits{ActiveScans: 1, ScanWork: 1, Entries: 1, MemoryBytes: 1}); err == nil {

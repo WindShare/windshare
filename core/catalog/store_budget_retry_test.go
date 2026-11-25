@@ -818,3 +818,260 @@ func TestListChildrenShareActiveScanLimitRemainsRetryable(t *testing.T) {
 		t.Fatalf("dirB after slot release = %+v err=%v", committed, err)
 	}
 }
+
+func TestListChildrenUncontendedShareScanWorkExhaustionIsPermanentWithoutRescan(t *testing.T) {
+	clock := &fakeClock{now: time.Unix(500, 0)}
+	process, err := NewBudgetAccount("work-perm-process", DefaultProcessBudgetLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Limit share ScanWork to 6: 1 open + 5 children fit, 6 children overflow.
+	share, err := NewBudgetAccount("work-perm-share", BudgetLimits{
+		ActiveScans: 4, ScanWork: 6, Entries: 1_000, MemoryBytes: DefaultShareCatalogMemory,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var nextAttempt, nextGen atomic.Uint32
+	store, err := NewCatalogStore(StoreConfig{
+		ShareInstance:  idValue[ShareInstance](1),
+		ProcessBudget:  process,
+		ShareBudget:    share,
+		FailureEncoder: testFailureEncoder{},
+		Clock:          clock,
+		AttemptIDs: ScanAttemptIDGeneratorFunc(func() (ScanAttemptID, error) {
+			return idValue[ScanAttemptID](byte(nextAttempt.Add(1))), nil
+		}),
+		Generations: DirectoryGenerationGeneratorFunc(func() (DirectoryGeneration, error) {
+			return idValue[DirectoryGeneration](byte(nextGen.Add(1))), nil
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	session := generousBudget(t, "work-perm-session")
+	dirs := prepareSelectedDirectories(t, store, session, 110, 111, 112)
+	wideDir, smallDir := dirs[0], dirs[1]
+
+	var wideScans atomic.Int32
+	scanner := DirectoryScannerFunc(func(ctx context.Context, request ScanRequest) (ScanResult, error) {
+		dirID, _ := request.Directory.DirectoryID()
+		if dirID == smallDir {
+			return ScanResult{}, request.Children.Add(ctx, scannedFile(t, 220, "small", 1))
+		}
+		wideScans.Add(1)
+		for index := range 8 {
+			if err := request.Children.Add(ctx, scannedFile(t, byte(221+index), fmt.Sprintf("w-%d", index), 1)); err != nil {
+				return ScanResult{}, err
+			}
+		}
+		return ScanResult{}, nil
+	})
+
+	_, firstErr := store.ListChildren(context.Background(), wideDir, session, ScanOptions{}, scanner)
+	var failure *DirectoryFailure
+	if !errors.As(firstErr, &failure) || failure.Kind != FailureKindBudget ||
+		failure.Transient || failure.RetryAfter != 0 ||
+		!errors.Is(firstErr, ErrShareCapacityExceeded) || !errors.Is(firstErr, ErrBudgetExceeded) {
+		t.Fatalf("uncontended share ScanWork error = %v, want permanent FailureKindBudget wrapping ErrShareCapacityExceeded", firstErr)
+	}
+	if wideScans.Load() != 1 {
+		t.Fatalf("uncontended share ScanWork exhaustion rescanned %d times, want 1", wideScans.Load())
+	}
+
+	clock.Advance(MaxScanRetryCooldown)
+	_, retryErr := store.ListChildren(context.Background(), wideDir, session, ScanOptions{Retry: true}, scanner)
+	var replayed *DirectoryFailure
+	if !errors.As(retryErr, &replayed) || replayed.AttemptID != failure.AttemptID || replayed.Transient || wideScans.Load() != 1 {
+		t.Fatalf("retry of permanent share ScanWork exhaustion = %v scans=%d", retryErr, wideScans.Load())
+	}
+	if committed, err := store.ListChildren(context.Background(), smallDir, session, ScanOptions{}, scanner); err != nil || committed.EntryCount() != 1 {
+		t.Fatalf("sibling after share ScanWork failure = %+v err=%v", committed, err)
+	}
+	if session.Snapshot().Used != (ResourceUsage{}) {
+		t.Fatalf("share ScanWork failure leaked session budget: %+v", session.Snapshot().Used)
+	}
+}
+
+func TestListChildrenContendedShareScanWorkResolvesOrBecomesPermanentAfterExclusiveRetry(t *testing.T) {
+	newShareWorkStore := func(t *testing.T, shareScanWork uint64) *CatalogStore {
+		t.Helper()
+		process, err := NewBudgetAccount("contended-work-process", DefaultProcessBudgetLimits())
+		if err != nil {
+			t.Fatal(err)
+		}
+		share, err := NewBudgetAccount("contended-work-share", BudgetLimits{
+			ActiveScans: 4, ScanWork: shareScanWork, Entries: 1_000, MemoryBytes: DefaultShareCatalogMemory,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var nextAttempt, nextGen atomic.Uint32
+		store, err := NewCatalogStore(StoreConfig{
+			ShareInstance:  idValue[ShareInstance](1),
+			ProcessBudget:  process,
+			ShareBudget:    share,
+			FailureEncoder: testFailureEncoder{},
+			AttemptIDs: ScanAttemptIDGeneratorFunc(func() (ScanAttemptID, error) {
+				return idValue[ScanAttemptID](byte(nextAttempt.Add(1))), nil
+			}),
+			Generations: DirectoryGenerationGeneratorFunc(func() (DirectoryGeneration, error) {
+				return idValue[DirectoryGeneration](byte(nextGen.Add(1))), nil
+			}),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = store.Close() })
+		return store
+	}
+
+	t.Run("fits alone after exclusive retry", func(t *testing.T) {
+		// Each directory consumes 1 open + 3 children = 4 ScanWork. Two concurrent
+		// scans need 8 > 6, while each fits comfortably alone in 6.
+		store := newShareWorkStore(t, 6)
+		session := generousBudget(t, "contended-work-ok-session")
+		dirs := prepareSelectedDirectories(t, store, session, 120, 121, 122)
+		dirA, dirB := dirs[0], dirs[1]
+
+		var atBarrier atomic.Int32
+		barrier := make(chan struct{})
+		var scansA, scansB atomic.Int32
+		scanner := DirectoryScannerFunc(func(ctx context.Context, request ScanRequest) (ScanResult, error) {
+			dirID, _ := request.Directory.DirectoryID()
+			var pass int32
+			var seedBase byte
+			if dirID == dirA {
+				pass = scansA.Add(1)
+				seedBase = 10
+			} else {
+				pass = scansB.Add(1)
+				seedBase = 30
+			}
+			for index := range 3 {
+				if err := request.Children.Add(ctx, scannedFile(t, seedBase+byte(index), fmt.Sprintf("f-%d", index), 1)); err != nil {
+					return ScanResult{}, err
+				}
+				if pass == 1 && index == 1 {
+					if atBarrier.Add(1) == 2 {
+						close(barrier)
+					}
+					select {
+					case <-barrier:
+					case <-ctx.Done():
+						return ScanResult{}, ctx.Err()
+					}
+				}
+			}
+			return ScanResult{}, nil
+		})
+
+		errs := make(chan error, 2)
+		for _, dir := range []DirectoryID{dirA, dirB} {
+			go func(dir DirectoryID) {
+				committed, err := store.ListChildren(context.Background(), dir, session, ScanOptions{}, scanner)
+				if err == nil && committed.EntryCount() != 3 {
+					err = fmt.Errorf("dir %x entries = %d, want 3", dir, committed.EntryCount())
+				}
+				errs <- err
+			}(dir)
+		}
+		for range 2 {
+			if err := <-errs; err != nil {
+				t.Fatalf("contended recoverable share ScanWork failed: %v", err)
+			}
+		}
+		if scansA.Load()+scansB.Load() < 3 {
+			t.Fatalf("expected exclusive retry on ScanWork contention, got scans A=%d B=%d", scansA.Load(), scansB.Load())
+		}
+	})
+
+	t.Run("oversized becomes permanent after exclusive retry", func(t *testing.T) {
+		store := newShareWorkStore(t, 6)
+		session := generousBudget(t, "contended-work-perm-session")
+		dirs := prepareSelectedDirectories(t, store, session, 125, 126, 127)
+		smallDir, wideDir := dirs[0], dirs[1]
+
+		smallEntered := make(chan struct{})
+		releaseSmall := make(chan struct{})
+		var wideScans atomic.Int32
+		scanner := DirectoryScannerFunc(func(ctx context.Context, request ScanRequest) (ScanResult, error) {
+			dirID, _ := request.Directory.DirectoryID()
+			if dirID == smallDir {
+				close(smallEntered)
+				<-releaseSmall
+				return ScanResult{}, request.Children.Add(ctx, scannedFile(t, 50, "tiny", 1))
+			}
+			if wideScans.Add(1) == 1 {
+				<-smallEntered
+				defer close(releaseSmall)
+			}
+			for index := range 8 {
+				if err := request.Children.Add(ctx, scannedFile(t, byte(60+index), fmt.Sprintf("w-%d", index), 1)); err != nil {
+					return ScanResult{}, err
+				}
+			}
+			return ScanResult{}, nil
+		})
+
+		smallDone := make(chan error, 1)
+		go func() {
+			_, err := store.ListChildren(context.Background(), smallDir, session, ScanOptions{}, scanner)
+			smallDone <- err
+		}()
+		_, wideErr := store.ListChildren(context.Background(), wideDir, session, ScanOptions{}, scanner)
+		if err := <-smallDone; err != nil {
+			t.Fatalf("small peer failed: %v", err)
+		}
+		var failure *DirectoryFailure
+		if !errors.As(wideErr, &failure) || failure.Kind != FailureKindBudget ||
+			failure.Transient || failure.RetryAfter != 0 || !errors.Is(wideErr, ErrShareCapacityExceeded) {
+			t.Fatalf("contended oversized share ScanWork = %v, want permanent FailureKindBudget", wideErr)
+		}
+		if wideScans.Load() != 2 {
+			t.Fatalf("contended oversized share ScanWork scanned %d times, want 2 (initial + 1 exclusive retry)", wideScans.Load())
+		}
+	})
+}
+
+func TestListChildrenSoloSessionScanWorkFailureRemainsRetryableForLargerSession(t *testing.T) {
+	clock := &fakeClock{now: time.Unix(600, 0)}
+	store, _, _ := newStore(t, clock)
+	defer store.Close()
+
+	rootSession := generousBudget(t, "root-session")
+	directory := prepareScannableDirectory(t, store, rootSession, 130, 131)
+
+	tightSession, err := NewBudgetAccount("tight-work-session", BudgetLimits{
+		ActiveScans: 4, ScanWork: 3, Entries: 100, MemoryBytes: DefaultSessionCatalogMemory,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	generousSession := generousBudget(t, "larger-work-session")
+
+	scanner := DirectoryScannerFunc(func(ctx context.Context, request ScanRequest) (ScanResult, error) {
+		for index := range 4 {
+			if err := request.Children.Add(ctx, scannedFile(t, byte(70+index), fmt.Sprintf("f-%d", index), 1)); err != nil {
+				return ScanResult{}, err
+			}
+		}
+		return ScanResult{}, nil
+	})
+
+	_, firstErr := store.ListChildren(context.Background(), directory, tightSession, ScanOptions{}, scanner)
+	var failure *DirectoryFailure
+	if !errors.As(firstErr, &failure) || failure.Kind != FailureKindBudget ||
+		!failure.Transient || failure.RetryAfter != DefaultScanRetryCooldown ||
+		errors.Is(firstErr, ErrShareCapacityExceeded) {
+		t.Fatalf("solo session ScanWork failure = %v, want retryable FailureKindBudget", firstErr)
+	}
+
+	clock.Advance(DefaultScanRetryCooldown)
+	committed, err := store.ListChildren(context.Background(), directory, generousSession, ScanOptions{Retry: true}, scanner)
+	if err != nil || committed.EntryCount() != 4 {
+		t.Fatalf("larger session retry after tight session ScanWork = %+v err=%v", committed, err)
+	}
+}
