@@ -336,4 +336,80 @@ stderr=$(FAIL_RMDIR=$(revision 4) install_node 7 2>&1)
 [[ $(selected) == "$(revision 7)" && $(last_healthy) == "$(revision 7)" ]]
 [[ $stderr == *"event=wsrelay_install revision=$(revision 7) note=prune_warning target=$(revision 4) reason=remove_failed"* ]]
 [[ $stderr == *"event=wsrelay_install revision=$(revision 7) result=healthy"* ]]
+
+# Best-effort reaping cleans orphaned .incoming.* and .switch.* temp dirs left by crashes/SIGKILL
+# after a healthy commit, while leaving preflight read-only, skipping unexpected/symlinked entries,
+# preserving retention slots, and leaving the active invocation's temp dirs intact (including reinstall).
+reset_host
+install_node 1
+install_node 2
+install_node 3
+touch -t 202001010000 "$WS_TEST_ROOT/releases/$(revision 1)"
+touch -t 202001020000 "$WS_TEST_ROOT/releases/$(revision 2)"
+touch -t 202001030000 "$WS_TEST_ROOT/releases/$(revision 3)"
+mkdir -p \
+    "$WS_TEST_ROOT/releases/.incoming.1111aaaa" \
+    "$WS_TEST_ROOT/releases/.incoming.2222bbbb" \
+    "$WS_TEST_ROOT/releases/.incoming.failrm11" \
+    "$WS_TEST_ROOT/releases/.incoming.badextra" \
+    "$WS_TEST_ROOT/releases/.incoming.badsymlk" \
+    "$WS_TEST_ROOT/releases/.incoming.custom" \
+    "$WS_TEST_ROOT/.switch.3333cccc" \
+    "$WS_TEST_ROOT/.switch.4444dddd" \
+    "$WS_TEST_ROOT/.switch.5555eeee" \
+    "$WS_TEST_ROOT/.switch.badfile1" \
+    "$WS_TEST_ROOT/.switch.custom" \
+    "$work/victim-incoming" \
+    "$work/victim-switch"
+cp "$work/wsrelay" "$WS_TEST_ROOT/releases/.incoming.1111aaaa/wsrelay"
+cp "$work/wsrelay" "$WS_TEST_ROOT/releases/.incoming.badextra/wsrelay"
+echo "keep" > "$WS_TEST_ROOT/releases/.incoming.badextra/note.txt"
+ln -s "$WS_TEST_CONFIG" "$WS_TEST_ROOT/releases/.incoming.badsymlk/wsrelay"
+ln -s "$WS_TEST_ROOT/releases/$(revision 2)" "$WS_TEST_ROOT/.switch.3333cccc/link"
+mkdir -p "$WS_TEST_ROOT/releases/missing"
+ln -s "$WS_TEST_ROOT/releases/missing" "$WS_TEST_ROOT/.switch.4444dddd/link"
+rmdir "$WS_TEST_ROOT/releases/missing"
+echo "not a symlink" > "$WS_TEST_ROOT/.switch.badfile1/link"
+echo "victim" > "$work/victim-incoming/keep.txt"
+echo "victim" > "$work/victim-switch/keep.txt"
+ln -s "$work/victim-incoming" "$WS_TEST_ROOT/releases/.incoming.linkdir1"
+ln -s "$work/victim-switch" "$WS_TEST_ROOT/.switch.linkdir2"
+
+FAIL_CONFIG=1 fails install_node 4
+[[ -d $WS_TEST_ROOT/releases/.incoming.1111aaaa && -d $WS_TEST_ROOT/.switch.3333cccc ]]
+
+stderr=$(FAIL_RMDIR=.incoming.failrm11 install_node 4 2>&1)
+[[ $(selected) == "$(revision 4)" && $(last_healthy) == "$(revision 4)" ]]
+[[ $stderr == *"event=wsrelay_install revision=$(revision 4) result=healthy"* ]]
+for reaped in .incoming.1111aaaa .incoming.2222bbbb .switch.3333cccc .switch.4444dddd .switch.5555eeee; do
+    [[ $stderr == *"event=wsrelay_install revision=$(revision 4) note=pruned_orphan target=$reaped"* ]]
+done
+[[ ! -e $WS_TEST_ROOT/releases/.incoming.1111aaaa && ! -e $WS_TEST_ROOT/releases/.incoming.2222bbbb ]]
+[[ ! -e $WS_TEST_ROOT/.switch.3333cccc && ! -e $WS_TEST_ROOT/.switch.4444dddd && ! -e $WS_TEST_ROOT/.switch.5555eeee ]]
+[[ -x $WS_TEST_ROOT/releases/$(revision 2)/wsrelay && -x $WS_TEST_ROOT/releases/$(revision 3)/wsrelay && -x $WS_TEST_ROOT/releases/$(revision 4)/wsrelay ]]
+[[ ! -d $WS_TEST_ROOT/releases/$(revision 1) ]]
+[[ $stderr == *"event=wsrelay_install revision=$(revision 4) note=prune_warning target=.incoming.badextra reason=unexpected_entries"* ]]
+[[ -f $WS_TEST_ROOT/releases/.incoming.badextra/wsrelay && -f $WS_TEST_ROOT/releases/.incoming.badextra/note.txt ]]
+[[ $stderr == *"event=wsrelay_install revision=$(revision 4) note=prune_warning target=.incoming.badsymlk reason=unexpected_entries"* ]]
+[[ -L $WS_TEST_ROOT/releases/.incoming.badsymlk/wsrelay && -f $WS_TEST_CONFIG ]]
+[[ $stderr == *"event=wsrelay_install revision=$(revision 4) note=prune_warning target=.switch.badfile1 reason=unexpected_entries"* ]]
+[[ -f $WS_TEST_ROOT/.switch.badfile1/link ]]
+[[ $stderr == *"event=wsrelay_install revision=$(revision 4) note=prune_warning target=.incoming.failrm11 reason=remove_failed"* ]]
+[[ -d $WS_TEST_ROOT/releases/.incoming.failrm11 ]]
+[[ -L $WS_TEST_ROOT/releases/.incoming.linkdir1 && -f $work/victim-incoming/keep.txt ]]
+[[ -L $WS_TEST_ROOT/.switch.linkdir2 && -f $work/victim-switch/keep.txt ]]
+[[ -d $WS_TEST_ROOT/releases/.incoming.custom && -d $WS_TEST_ROOT/.switch.custom ]]
+
+# Same-revision reinstall keeps its own stage and switch dirs intact until EXIT cleanup while reaping orphans.
+mkdir -p "$WS_TEST_ROOT/releases/.incoming.reinst11" "$WS_TEST_ROOT/.switch.reinst22"
+cp "$work/wsrelay" "$WS_TEST_ROOT/releases/.incoming.reinst11/wsrelay"
+stderr=$(install_node 4 2>&1)
+[[ $(selected) == "$(revision 4)" && $(last_healthy) == "$(revision 4)" ]]
+[[ $stderr == *"event=wsrelay_install revision=$(revision 4) note=pruned_orphan target=.incoming.reinst11"* ]]
+[[ $stderr == *"event=wsrelay_install revision=$(revision 4) note=pruned_orphan target=.incoming.failrm11"* ]]
+[[ $stderr == *"event=wsrelay_install revision=$(revision 4) note=pruned_orphan target=.switch.reinst22"* ]]
+[[ $stderr == *"event=wsrelay_install revision=$(revision 4) result=healthy"* ]]
+[[ ! -e $WS_TEST_ROOT/releases/.incoming.reinst11 && ! -e $WS_TEST_ROOT/releases/.incoming.failrm11 && ! -e $WS_TEST_ROOT/.switch.reinst22 ]]
+[[ $(find "$WS_TEST_ROOT/releases" -mindepth 1 -maxdepth 1 -type d -name '.incoming.*' | wc -l) == 3 ]]
+[[ $(find "$WS_TEST_ROOT" -mindepth 1 -maxdepth 1 -type d -name '.switch.*' | wc -l) == 2 ]]
 echo "wsrelay install, preflight, rollback and retention passed"

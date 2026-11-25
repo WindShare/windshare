@@ -8,6 +8,10 @@ readonly health_url=http://127.0.0.1:8484/healthz
 readonly health_attempts=10
 readonly retain_releases=3
 readonly busy=75
+readonly stage_prefix=.incoming
+readonly switch_prefix=.switch
+readonly temp_suffix_template=XXXXXXXX
+readonly temp_suffix_pattern='[A-Za-z0-9_-]{8}'
 
 die() { echo "wsrelay installation: $*" >&2; exit 1; }
 [[ $(id -u) == 0 ]] || die "root required"
@@ -74,7 +78,7 @@ inspect_running_release() {
 current_release=$(resolve_release_link "$current" "current")
 previous=$(resolve_release_link "$last_healthy" "last-healthy")
 
-stage=$(mktemp -d "$releases/.incoming.XXXXXXXX")
+stage=$(mktemp -d "$releases/${stage_prefix}.${temp_suffix_template}")
 switch=
 cleanup() {
     rm -f -- "$stage/wsrelay"
@@ -85,7 +89,7 @@ cleanup() {
     fi
 }
 trap cleanup EXIT
-switch=$(mktemp -d "$root/.switch.XXXXXXXX")
+switch=$(mktemp -d "$root/${switch_prefix}.${temp_suffix_template}")
 cat > "$stage/wsrelay"
 verify() { printf '%s  %s\n' "$digest" "$1" | sha256sum --check --status; }
 verify "$stage/wsrelay" || die "SHA-256 mismatch"
@@ -185,12 +189,34 @@ warn_prune() {
         "$revision" "$1" "$2" >&2
 }
 
+remove_managed_dir() {
+    local dir=$1 name=$2 child=$3 child_type=$4 success_note=${5:-} extra
+    # Check for unexpected entries before unlinking so cleanup neither wipes
+    # operator files nor leaves a binary-less directory with a bumped mtime.
+    if ! extra=$(find "$dir" -mindepth 1 -maxdepth 1 ! \( -name "$child" -type "$child_type" \) -print -quit); then
+        warn_prune "$name" inspect_failed
+        return 0
+    fi
+    if [[ -n $extra ]]; then
+        warn_prune "$name" unexpected_entries
+        return 0
+    fi
+    if ! rm -f -- "$dir/$child" || ! rmdir -- "$dir"; then
+        warn_prune "$name" remove_failed
+        return 0
+    fi
+    if [[ -n $success_note ]]; then
+        printf 'event=wsrelay_install revision=%s note=%s target=%s\n' \
+            "$revision" "$success_note" "$name" >&2
+    fi
+}
+
 prune_releases() {
     # Keep the actual rollback target even when older releases were reinstalled.
     # Cleanup runs best-effort after the new release is live and recorded healthy so
     # housekeeping errors never misreport a committed upgrade as failed.
     touch -- "$release" || warn_prune "$revision" touch_failed
-    local listed name dir extra kept=1
+    local listed name dir kept=1
     if [[ -n $previous && $previous != "$release" ]]; then kept=2; fi
     if ! listed=$(find "$releases" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %f\n' | LC_ALL=C sort -nr); then
         warn_prune "releases" list_failed
@@ -204,22 +230,33 @@ prune_releases() {
             kept=$((kept + 1))
             continue
         fi
-        # Check for unexpected files before unlinking wsrelay so cleanup neither wipes
-        # operator files nor leaves a binary-less directory with a bumped mtime.
-        if ! extra=$(find "$dir" -mindepth 1 -maxdepth 1 ! \( -name wsrelay -type f \) -print -quit); then
-            warn_prune "$name" inspect_failed
-            continue
-        fi
-        if [[ -n $extra ]]; then
-            warn_prune "$name" unexpected_entries
-            continue
-        fi
-        if ! rm -f -- "$dir/wsrelay" || ! rmdir -- "$dir"; then
-            warn_prune "$name" remove_failed
-        fi
+        remove_managed_dir "$dir" "$name" wsrelay f
     done <<< "$listed"
+}
+
+prune_orphan_dirs() {
+    local parent=$1 prefix=$2 active=$3 child=$4 child_type=$5
+    local listed name suffix suffix_re="^${temp_suffix_pattern}$"
+    # Holding the exclusive install lock guarantees every other matching temp dir
+    # was orphaned by an ungraceful exit (for example SIGKILL or power loss).
+    if ! listed=$(find "$parent" -mindepth 1 -maxdepth 1 -type d -name "${prefix}.*" -printf '%f\n'); then
+        warn_prune "$prefix" list_failed
+        return 0
+    fi
+    while IFS= read -r name; do
+        [[ $name == "${prefix}."* && $name != "$active" ]] || continue
+        suffix=${name#"${prefix}."}
+        [[ $suffix =~ $suffix_re ]] || continue
+        remove_managed_dir "$parent/$name" "$name" "$child" "$child_type" pruned_orphan
+    done <<< "$listed"
+}
+
+prune_orphans() {
+    prune_orphan_dirs "$releases" "$stage_prefix" "${stage##*/}" wsrelay f
+    prune_orphan_dirs "$root" "$switch_prefix" "${switch##*/}" link l
 }
 
 record_healthy "$release"
 prune_releases
+prune_orphans
 log healthy
