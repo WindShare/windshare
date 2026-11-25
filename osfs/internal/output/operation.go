@@ -425,7 +425,7 @@ func (a *Authority) claimPublicEntryLocked(
 // Windows/macOS).
 func (a *Authority) existingTopLevelClaimsLocked(ctrlDir *Dir) (map[string]struct{}, error) {
 	claimed := make(map[string]struct{})
-	err := a.scanOperationHeadersLocked(ctrlDir, "create_operation", FailureCreate, func(_ string, header taskHeader) {
+	err := a.scanOperationHeadersLocked(ctrlDir, "create_operation", FailureCreate, func(_ receivecontract.OperationID, header taskHeader) {
 		if res, ok := header.Intent.MaterializationPlan().DestinationReservation(); ok &&
 			res.Kind() == receivecontract.ReservationNamedContainerEntry {
 			claimed[catalog.SiblingNameKey(res.PhysicalName())] = struct{}{}
@@ -619,12 +619,16 @@ func removeOperationLocked(root, ctrlDir *Dir, dirLock *DirLock, opDirName strin
 }
 
 func markOperationCleanupPending(ctrlDir *Dir, opDirName string) {
+	opID, ok := isValidOpDirName(opDirName)
+	if !ok {
+		return
+	}
 	opDir, err := openChildDir(ctrlDir, opDirName)
 	if err != nil {
 		return
 	}
 	defer opDir.Close()
-	journal, err := openTaskJournal(opDir, nil)
+	journal, err := openTaskJournal(opDir, opID, nil)
 	if err != nil {
 		return
 	}

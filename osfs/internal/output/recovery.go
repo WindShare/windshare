@@ -185,8 +185,8 @@ func inspectOperationDir(opID receivecontract.OperationID, opDir *Dir) (Recovery
 		// Another process owns task.lock and may be appending or compacting
 		// state.log; read only the immutable header and omit checkpoint details
 		// so running operations stay consistent with the recovery contract.
-		header, err := readJournalHeader(opDir)
-		if err != nil || header.Intent.OperationID() != opID {
+		header, err := readVerifiedJournalHeader(opDir, opID)
+		if err != nil {
 			return RecoverySummary{}, false
 		}
 		return RecoverySummary{

@@ -254,7 +254,7 @@ func TestReopenReleasesDirLockBeforeJournalReplay(t *testing.T) {
 	cases := []struct {
 		name string
 		seed byte
-		run  func(t *testing.T, root string, hook func(*Dir, func() time.Time) (*taskJournal, error)) (
+		run  func(t *testing.T, root string, hook func(*Dir, receivecontract.OperationID, func() time.Time) (*taskJournal, error)) (
 			opID receivecontract.OperationID,
 			selector receivecontract.OperationSelection,
 			reopen func() (receivecontract.OperationID, error),
@@ -264,7 +264,7 @@ func TestReopenReleasesDirLockBeforeJournalReplay(t *testing.T) {
 		{
 			name: "automatic select",
 			seed: 0xf1,
-			run: func(t *testing.T, root string, hook func(*Dir, func() time.Time) (*taskJournal, error)) (
+			run: func(t *testing.T, root string, hook func(*Dir, receivecontract.OperationID, func() time.Time) (*taskJournal, error)) (
 				receivecontract.OperationID, receivecontract.OperationSelection, func() (receivecontract.OperationID, error), func() error,
 			) {
 				sel, intent, _ := createPausedSingleFileOp(t, root, 0xf1)
@@ -287,7 +287,7 @@ func TestReopenReleasesDirLockBeforeJournalReplay(t *testing.T) {
 		{
 			name: "explicit by id",
 			seed: 0xf4,
-			run: func(t *testing.T, root string, hook func(*Dir, func() time.Time) (*taskJournal, error)) (
+			run: func(t *testing.T, root string, hook func(*Dir, receivecontract.OperationID, func() time.Time) (*taskJournal, error)) (
 				receivecontract.OperationID, receivecontract.OperationSelection, func() (receivecontract.OperationID, error), func() error,
 			) {
 				sel, intent, _ := createPausedSingleFileOp(t, root, 0xf4)
@@ -314,7 +314,7 @@ func TestReopenReleasesDirLockBeforeJournalReplay(t *testing.T) {
 		{
 			name: "create recheck",
 			seed: 0xf7,
-			run: func(t *testing.T, root string, hook func(*Dir, func() time.Time) (*taskJournal, error)) (
+			run: func(t *testing.T, root string, hook func(*Dir, receivecontract.OperationID, func() time.Time) (*taskJournal, error)) (
 				receivecontract.OperationID, receivecontract.OperationSelection, func() (receivecontract.OperationID, error), func() error,
 			) {
 				sel := testSelectionSpec(t, 0xf7)
@@ -346,10 +346,10 @@ func TestReopenReleasesDirLockBeforeJournalReplay(t *testing.T) {
 			root := t.TempDir()
 			entered := make(chan struct{})
 			release := make(chan struct{})
-			hook := func(opDir *Dir, now func() time.Time) (*taskJournal, error) {
+			hook := func(opDir *Dir, opID receivecontract.OperationID, now func() time.Time) (*taskJournal, error) {
 				close(entered)
 				<-release
-				return openTaskJournal(opDir, now)
+				return openTaskJournal(opDir, opID, now)
 			}
 
 			wantOpID, selector, runReopen, cleanup := tc.run(t, root, hook)
@@ -467,10 +467,10 @@ func TestReopenReleasesDirLockBeforeJournalReplay(t *testing.T) {
 		release := make(chan struct{})
 		auth := newBoundAuthority(t, root)
 		defer auth.Close()
-		auth.openJournal = func(opDir *Dir, now func() time.Time) (*taskJournal, error) {
+		auth.openJournal = func(opDir *Dir, opID receivecontract.OperationID, now func() time.Time) (*taskJournal, error) {
 			close(entered)
 			<-release
-			return openTaskJournal(opDir, now)
+			return openTaskJournal(opDir, opID, now)
 		}
 
 		type selectOutcome struct {

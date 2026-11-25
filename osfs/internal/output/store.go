@@ -57,7 +57,7 @@ type Authority struct {
 	diagnostics diagnostics.Sink
 	random      io.Reader
 	now         func() time.Time
-	openJournal func(*Dir, func() time.Time) (*taskJournal, error)
+	openJournal func(*Dir, receivecontract.OperationID, func() time.Time) (*taskJournal, error)
 
 	mu          sync.Mutex
 	stage       authorityStage
@@ -74,6 +74,7 @@ type Authority struct {
 // non-blocking task.lock acquired under dirLock so full journal replay can
 // proceed under task.lock after dirLock is released.
 type claimedTask struct {
+	opID      receivecontract.OperationID
 	opDirName string
 	opDir     *Dir
 	taskLock  *FileLock
@@ -212,8 +213,7 @@ func (a *Authority) selectByIDLocked(
 	selection transfer.SelectionSpec,
 	opID receivecontract.OperationID,
 ) (ActiveLookup, error) {
-	opDirName := hex.EncodeToString(opID.Bytes())
-	claimed, early, err := a.claimByIDUnderDirLock(ctx, opDirName)
+	claimed, early, err := a.claimByIDUnderDirLock(ctx, opID)
 	if err != nil || early.kind != 0 {
 		return early, err
 	}
@@ -222,7 +222,7 @@ func (a *Authority) selectByIDLocked(
 
 func (a *Authority) claimByIDUnderDirLock(
 	ctx context.Context,
-	opDirName string,
+	opID receivecontract.OperationID,
 ) (claimedTask, ActiveLookup, error) {
 	dirLock, err := acquireDirLock(a.root)
 	if err != nil {
@@ -240,7 +240,7 @@ func (a *Authority) claimByIDUnderDirLock(
 	}
 	defer ctrlDir.Close()
 
-	return a.claimOpUnderDirLock(ctx, ctrlDir, opDirName, true)
+	return a.claimOpUnderDirLock(ctx, ctrlDir, opID, true)
 }
 
 func (a *Authority) selectAutomaticLocked(
@@ -294,15 +294,16 @@ func (a *Authority) claimAutomaticUnderDirLock(
 	}
 }
 
-// scanOperationHeadersLocked visits every readable task header under ctrlDir
-// while isolating per-operation read failures so one damaged or unreadable
-// sibling directory never blocks unrelated downloads in the same container.
-// Non-NotExist failures emit structured trace diagnostics for observability.
+// scanOperationHeadersLocked visits every readable, directory-bound task header
+// under ctrlDir while isolating per-operation read failures and ID mismatches
+// so one damaged or copied sibling directory never blocks unrelated downloads
+// or bypasses task.lock isolation. Non-NotExist failures emit structured trace
+// diagnostics for observability.
 func (a *Authority) scanOperationHeadersLocked(
 	ctrlDir *Dir,
 	scanOp string,
 	stage FailureStage,
-	visit func(opDirName string, header taskHeader),
+	visit func(opID receivecontract.OperationID, header taskHeader),
 ) error {
 	names, err := readDirNames(ctrlDir)
 	if err != nil {
@@ -320,15 +321,25 @@ func (a *Authority) scanOperationHeadersLocked(
 			}
 			continue
 		}
-		header, readErr := readJournalHeader(opDir)
+		header, readErr := readVerifiedJournalHeader(opDir, opID)
 		_ = opDir.Close()
 		if readErr != nil {
-			if !errors.Is(readErr, fs.ErrNotExist) {
+			if errors.Is(readErr, errJournalOperationMismatch) {
+				emitTrace(a.diagnostics, traceEvent{
+					component:    "session",
+					operation:    scanOp,
+					decision:     "operation_id_mismatch",
+					failed:       true,
+					failureStage: stage,
+					bindingID:    a.bindingID,
+					operationID:  opID,
+				})
+			} else if !errors.Is(readErr, fs.ErrNotExist) {
 				a.emitSkippedHeaderTrace(scanOp, stage, opID, readErr)
 			}
 			continue
 		}
-		visit(name, header)
+		visit(opID, header)
 	}
 	return nil
 }
@@ -360,11 +371,11 @@ func (a *Authority) findAutomaticMatchesLocked(
 	wantDigest [transfer.SelectionSpecDigestBytes]byte,
 	scanOp string,
 	stage FailureStage,
-) ([]string, error) {
-	var matches []string
-	err := a.scanOperationHeadersLocked(ctrlDir, scanOp, stage, func(name string, header taskHeader) {
+) ([]receivecontract.OperationID, error) {
+	var matches []receivecontract.OperationID
+	err := a.scanOperationHeadersLocked(ctrlDir, scanOp, stage, func(opID receivecontract.OperationID, header taskHeader) {
 		if !header.Redownload && header.SelectionDigest == wantDigest {
-			matches = append(matches, name)
+			matches = append(matches, opID)
 		}
 	})
 	if err != nil {
@@ -373,16 +384,17 @@ func (a *Authority) findAutomaticMatchesLocked(
 	return matches, nil
 }
 
-// claimOpUnderDirLock opens opDirName and acquires its non-blocking task.lock
-// while dirLock prevents concurrent retirement. Callers release ctrlDir and
-// dirLock before replaying state.log so per-task I/O never blocks unrelated
-// tasks sharing the destination container.
+// claimOpUnderDirLock opens opID's directory and acquires its non-blocking
+// task.lock while dirLock prevents concurrent retirement. Callers release
+// ctrlDir and dirLock before replaying state.log so per-task I/O never blocks
+// unrelated tasks sharing the destination container.
 func (a *Authority) claimOpUnderDirLock(
 	ctx context.Context,
 	ctrlDir *Dir,
-	opDirName string,
+	opID receivecontract.OperationID,
 	allowNotFound bool,
 ) (claimedTask, ActiveLookup, error) {
+	opDirName := hex.EncodeToString(opID.Bytes())
 	opDir, err := openChildDir(ctrlDir, opDirName)
 	if allowNotFound && errors.Is(err, fs.ErrNotExist) {
 		a.stage = stageStopped
@@ -403,7 +415,6 @@ func (a *Authority) claimOpUnderDirLock(
 		if empty, emptyErr := isEmptyDir(opDir); emptyErr == nil && empty {
 			_ = opDir.Close()
 			a.stage = stageStopped
-			opID, _ := isValidOpDirName(opDirName)
 			emitTrace(a.diagnostics, traceEvent{
 				component:   "session",
 				operation:   "select_operation",
@@ -425,6 +436,7 @@ func (a *Authority) claimOpUnderDirLock(
 		return claimedTask{}, ActiveLookup{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "acquire task lock", lockErr)
 	}
 	return claimedTask{
+		opID:      opID,
 		opDirName: opDirName,
 		opDir:     opDir,
 		taskLock:  taskLock,
@@ -440,14 +452,25 @@ func (a *Authority) reopenClaimedLocked(
 	claimed claimedTask,
 	explicitByID bool,
 ) (ActiveLookup, error) {
-	opDirName, opDir, taskLock := claimed.opDirName, claimed.opDir, claimed.taskLock
+	opID, opDirName, opDir, taskLock := claimed.opID, claimed.opDirName, claimed.opDir, claimed.taskLock
 	openJournal := a.openJournal
 	if openJournal == nil {
 		openJournal = openTaskJournal
 	}
-	journal, err := openJournal(opDir, a.now)
+	journal, err := openJournal(opDir, opID, a.now)
 	if err != nil {
 		_ = errors.Join(taskLock.Close(), opDir.Close())
+		if errors.Is(err, errJournalOperationMismatch) {
+			a.stage = stageStopped
+			emitTrace(a.diagnostics, traceEvent{
+				component:   "session",
+				operation:   "select_operation",
+				decision:    "operation_id_mismatch",
+				bindingID:   a.bindingID,
+				operationID: opID,
+			})
+			return ActiveLookup{authority: a, kind: LookupNeedsAttention, attention: AttentionOperation}, nil
+		}
 		if errors.Is(err, errJournalCorrupt) || errors.Is(err, fs.ErrNotExist) {
 			a.stage = stageStopped
 			return ActiveLookup{authority: a, kind: LookupNeedsAttention, attention: AttentionOperation}, nil
@@ -455,6 +478,19 @@ func (a *Authority) reopenClaimedLocked(
 		return ActiveLookup{}, DiagnoseFailure(FailureOpen, wrapOutputFault(ctx, transferfault.OutputOwnership, "open task journal", err))
 	}
 	meta := journal.meta()
+	if meta.Intent.OperationID() != opID {
+		_ = errors.Join(journal.close(), taskLock.Close(), opDir.Close())
+		a.stage = stageStopped
+		emitTrace(a.diagnostics, traceEvent{
+			component:    "session",
+			operation:    "select_operation",
+			decision:     "operation_id_mismatch",
+			bindingID:    a.bindingID,
+			operationID:  opID,
+			intentDigest: meta.Intent.Digest(),
+		})
+		return ActiveLookup{authority: a, kind: LookupNeedsAttention, attention: AttentionOperation}, nil
+	}
 	if meta.Intent.SelectionSpec().Digest() != selection.Digest() {
 		_ = errors.Join(journal.close(), taskLock.Close(), opDir.Close())
 		if explicitByID {

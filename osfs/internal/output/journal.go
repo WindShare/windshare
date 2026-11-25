@@ -77,13 +77,18 @@ func createTaskJournal(opDir *Dir, meta taskMeta, now func() time.Time) (*taskJo
 	return j, nil
 }
 
-func openTaskJournal(opDir *Dir, now func() time.Time) (*taskJournal, error) {
+func openTaskJournal(opDir *Dir, expectedOpID receivecontract.OperationID, now func() time.Time) (*taskJournal, error) {
 	if now == nil {
 		now = time.Now
 	}
 	state, validBytes, err := readJournalState(opDir)
 	if err != nil {
 		return nil, err
+	}
+	// Verify directory-to-operation ownership before opening O_RDWR, truncating
+	// a torn tail, or compacting so a mismatched directory is rejected read-only.
+	if state.meta.Intent.OperationID() != expectedOpID {
+		return nil, errJournalOperationMismatch
 	}
 	f, err := openChildFile(opDir, journalFileName, os.O_RDWR, privateFileMode)
 	if err != nil {

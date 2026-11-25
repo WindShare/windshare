@@ -17,6 +17,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 const (
@@ -30,7 +31,10 @@ const (
 	journalLifecycleAttn           = "attention"
 )
 
-var errJournalCorrupt = errors.New("osfs: task journal is corrupt")
+var (
+	errJournalCorrupt           = errors.New("osfs: task journal is corrupt")
+	errJournalOperationMismatch = errors.New("osfs: task journal operation ID does not match directory")
+)
 
 type journalRecord struct {
 	Kind string `json:"k"`
@@ -173,6 +177,12 @@ func decodeTaskHeader(rec journalRecord) (taskHeader, error) {
 
 func (s *journalState) applyMeta(rec journalRecord) error {
 	if len(rec.Intent) > 0 {
+		// Creation fields (Intent, SelectionDigest, Redownload) are immutable
+		// once established on the first record so header-only scans and full
+		// replays can never disagree about operation identity or reservations.
+		if s.hasMeta {
+			return fmt.Errorf("%w: duplicate meta intent", errJournalCorrupt)
+		}
 		header, err := decodeTaskHeader(rec)
 		if err != nil {
 			return err
@@ -486,6 +496,21 @@ func readJournalHeader(opDir *Dir) (taskHeader, error) {
 		}
 		return decodeTaskHeader(rec)
 	}
+}
+
+// readVerifiedJournalHeader reads the immutable first record of state.log and
+// enforces that its OperationID matches the enclosing scratch directory name.
+// Binding directory identity and journal OperationID together ensures each
+// per-directory task.lock protects only its own public output reservation.
+func readVerifiedJournalHeader(opDir *Dir, expectedOpID receivecontract.OperationID) (taskHeader, error) {
+	header, err := readJournalHeader(opDir)
+	if err != nil {
+		return taskHeader{}, err
+	}
+	if header.Intent.OperationID() != expectedOpID {
+		return taskHeader{}, errJournalOperationMismatch
+	}
+	return header, nil
 }
 
 // readJournalState loads and validates state.log read-only. Every committed
