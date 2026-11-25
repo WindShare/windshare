@@ -128,14 +128,12 @@ func TestArtifactVariantsPreserveDistinctDigestsAndJSONRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	catalogTree := NewCatalogRootDirectoryTree()
 
 	for name, artifact := range map[string]ArtifactSpec{
 		"single":    single,
 		"complete":  completeTree,
 		"selection": resultTree,
 		"synthetic": syntheticTree,
-		"catalog":   catalogTree,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if artifact.Kind() != ArtifactDirectoryTree || artifact.Digest().IsZero() || artifact.IsZero() {
@@ -220,12 +218,7 @@ func TestReservationsBindingsAndPlansAreClosed(t *testing.T) {
 	single, _ := NewSingleFileDirectoryTree(file, "report.txt", "report.txt")
 	root, _ := NewDirectorySelectionResultRoot(directory, "docs")
 	tree, _ := NewResultRootDirectoryTree(root)
-	catalogTree := NewCatalogRootDirectoryTree()
 
-	nativeRoot, err := NewNativeContainerRootReservation(operation, reservationID, catalogTree, authority)
-	if err != nil {
-		t.Fatal(err)
-	}
 	singleName, _ := CollisionName(operation, "report.txt", 1, true)
 	nativeEntry, err := NewNativeNamedEntryReservation(
 		operation, reservationID, single, authority, singleName, singleName, 1,
@@ -241,12 +234,9 @@ func TestReservationsBindingsAndPlansAreClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if nativeRoot.Kind() != ReservationContainerRoot || nativeRoot.OperationID() != operation ||
-		nativeRoot.ID() != reservationID || nativeRoot.AuthorityRef() != authority ||
-		nativeRoot.ArtifactDigest() != catalogTree.Digest() || nativeRoot.Digest().IsZero() {
-		t.Fatalf("native root=%+v", nativeRoot)
-	}
-	if nativeEntry.Kind() != ReservationNamedContainerEntry || nativeEntry.EntryKind() != ContainerEntrySingleFile ||
+	if nativeEntry.EntryKind() != ContainerEntrySingleFile || nativeEntry.OperationID() != operation ||
+		nativeEntry.ID() != reservationID || nativeEntry.AuthorityRef() != authority ||
+		nativeEntry.ArtifactDigest() != single.Digest() || nativeEntry.Digest().IsZero() ||
 		nativeEntry.RequestedName() != "report.txt" || nativeEntry.LogicalReservedName() != singleName ||
 		nativeEntry.PhysicalName() != singleName || nativeEntry.CollisionIndex() != 1 {
 		t.Fatal("reservation variant fields mismatch")
@@ -257,7 +247,6 @@ func TestReservationsBindingsAndPlansAreClosed(t *testing.T) {
 		artifact    ArtifactSpec
 		reservation DestinationReservation
 	}{
-		{"catalog-root", catalogTree, nativeRoot},
 		{"single-file", single, nativeEntry},
 		{"result-root", tree, resultEntry},
 	}
@@ -290,8 +279,8 @@ func TestReservationsBindingsAndPlansAreClosed(t *testing.T) {
 	if _, err := CollisionName(OperationID{}, "report.txt", 1, true); !errors.Is(err, ErrInvalidReceiveContract) {
 		t.Fatalf("zero-operation collision error=%v", err)
 	}
-	if _, err := NewNativeContainerRootReservation(operation, reservationID, tree, authority); !errors.Is(err, ErrInvalidReceiveContract) {
-		t.Fatalf("result tree accepted as container root: %v", err)
+	if _, err := NewDirectTreePlan(tree, nativeEntry); !errors.Is(err, ErrInvalidReceiveContract) {
+		t.Fatalf("mismatched artifact/reservation accepted: %v", err)
 	}
 	if _, err := NewNativeNamedEntryReservation(
 		operation, reservationID, single, authority, "wrong.txt", "wrong.txt", 1,
@@ -358,8 +347,9 @@ func TestReceiveContractArtifactEdgeCases(t *testing.T) {
 	for _, raw := range []string{
 		`{}`,
 		`{"layout":"unknown"}`,
-		`{"layout":"catalog_root","extra":true}`,
-		`{"layout":"catalog_root"} trailing`,
+		`{"layout":"catalog_root"}`,
+		`{"layout":"result_root","result_root":{"class":"synthetic_selection"},"extra":true}`,
+		`{"layout":"result_root","result_root":{"class":"synthetic_selection"}} trailing`,
 		`{"layout":"single_file","single_file":{"file_id":"bad","source_path":"a","suggested_name":"a"}}`,
 		`{"layout":"result_root","result_root":{"class":"synthetic_selection","source_path":"x"}}`,
 	} {

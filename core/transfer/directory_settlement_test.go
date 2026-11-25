@@ -12,7 +12,7 @@ func TestDirectorySettlementIsAnExactImmutableSum(t *testing.T) {
 	admission, err := NewDirectoryAdmission(
 		admissionTestMaterializationDirectory(t, admissionTestDirectory(
 			t, root, admissionTestGeneration(t, 0x56), DirectoryAdmission{}, "", catalog.ModifiedTime{},
-		)),
+		), "windshare"),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -52,7 +52,7 @@ func TestDirectorySettlementRejectsNonTerminalOrWiderFaults(t *testing.T) {
 	admission, err := NewDirectoryAdmission(
 		admissionTestMaterializationDirectory(t, admissionTestDirectory(
 			t, root, admissionTestGeneration(t, 0x57), DirectoryAdmission{}, "", catalog.ModifiedTime{},
-		)),
+		), "windshare"),
 	)
 	if err != nil {
 		t.Fatal(err)

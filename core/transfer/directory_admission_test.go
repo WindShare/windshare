@@ -13,12 +13,12 @@ func TestDirectoryAdmissionValidatesHierarchyAndEquality(t *testing.T) {
 	rootDirectory := admissionTestDirectory(
 		t, root, admissionTestGeneration(t, 0x50), DirectoryAdmission{}, "", catalog.ModifiedTime{},
 	)
-	rootAdmission, err := NewDirectoryAdmission(admissionTestMaterializationDirectory(t, rootDirectory))
+	rootAdmission, err := NewDirectoryAdmission(admissionTestMaterializationDirectory(t, rootDirectory, "windshare"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if rootAdmission.IsZero() || rootAdmission.DirectoryID() != root ||
-		rootAdmission.Path() != "" || rootAdmission.HasParent() {
+		rootAdmission.Path() != "windshare" || rootAdmission.HasParent() {
 		t.Fatalf("root admission=%+v", rootAdmission)
 	}
 
@@ -30,15 +30,15 @@ func TestDirectoryAdmissionValidatesHierarchyAndEquality(t *testing.T) {
 		t, admissionTestDirectoryID(t, 0x30), admissionTestGeneration(t, 0x60),
 		rootAdmission, "photos", modified,
 	)
-	childMaterialization := admissionTestMaterializationDirectory(t, childDirectory)
+	childMaterialization := admissionTestMaterializationDirectory(t, childDirectory, "windshare/photos")
 	childAdmission, err := NewDirectoryAdmission(childMaterialization)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if childAdmission.IsZero() || childAdmission.DirectoryID() != childDirectory.DirectoryID ||
 		childAdmission.Generation() != childDirectory.Generation ||
-		childAdmission.Path() != "photos" || !childAdmission.HasParent() ||
-		childAdmission.ParentPath() != "" || childAdmission.ModifiedTime() != modified {
+		childAdmission.Path() != "windshare/photos" || !childAdmission.HasParent() ||
+		childAdmission.ParentPath() != "windshare" || childAdmission.ModifiedTime() != modified {
 		t.Fatalf("child admission=%+v", childAdmission)
 	}
 	if !childAdmission.Equal(childAdmission) || childAdmission.Equal(rootAdmission) ||
@@ -57,15 +57,19 @@ func TestDirectoryAdmissionValidatesHierarchyAndEquality(t *testing.T) {
 		t, admissionTestDirectoryID(t, 0x36), admissionTestGeneration(t, 0x66),
 		rootAdmission, "child/grandchild", catalog.ModifiedTime{},
 	)
-	if _, err := NewDirectoryAdmission(admissionTestMaterializationDirectory(t, grandchild)); !errors.Is(err, ErrInvalidDirectoryAdmission) {
+	if _, err := NewDirectoryAdmission(admissionTestMaterializationDirectory(t, grandchild, "windshare/child/grandchild")); !errors.Is(err, ErrInvalidDirectoryAdmission) {
 		t.Fatalf("non-immediate parent error=%v", err)
 	}
-	// Parent on empty root path must be rejected.
+	// Parent on top-level result root path must be rejected.
 	parentedRoot := admissionTestDirectory(
 		t, root, admissionTestGeneration(t, 0x51), rootAdmission, "", catalog.ModifiedTime{},
 	)
-	if _, err := NewDirectoryAdmission(admissionTestMaterializationDirectory(t, parentedRoot)); !errors.Is(err, ErrInvalidDirectoryAdmission) {
+	if _, err := NewDirectoryAdmission(admissionTestMaterializationDirectory(t, parentedRoot, "windshare")); !errors.Is(err, ErrInvalidDirectoryAdmission) {
 		t.Fatalf("parented root error=%v", err)
+	}
+	// Empty materialization path must be rejected.
+	if _, err := NewMaterializationRootRelativePath(""); !errors.Is(err, ErrInvalidOutputBinding) {
+		t.Fatalf("empty materialization path error=%v", err)
 	}
 }
 

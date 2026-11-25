@@ -60,7 +60,7 @@ func TestTransferJobIsolatesTransactionQuarantineAndPublishesSibling(t *testing.
 	output := &pathScriptedJobOutput{
 		jobOutput: base,
 		scripts: map[string]jobTransactionScript{
-			"a-quarantined.bin": {commitSettlement: FileItemBlocked},
+			"windshare/a-quarantined.bin": {commitSettlement: FileItemBlocked},
 		},
 	}
 	revisions := &jobRevisionClient{
@@ -105,20 +105,20 @@ func TestTransferJobIsolatesTransactionQuarantineAndPublishesSibling(t *testing.
 		result.SucceededFiles != 1 || result.TerminationCause != nil || result.SettlementFailure != nil {
 		t.Fatalf("quarantine-isolated result = %+v", result)
 	}
-	if len(result.Files) != 1 || result.Files[0].Path != "a-quarantined.bin" ||
+	if len(result.Files) != 1 || result.Files[0].Path != "windshare/a-quarantined.bin" ||
 		!errors.Is(result.Files[0].Cause, ErrOutputQuarantined) ||
 		result.Files[0].Settlement.Kind() != FileItemBlocked || result.Files[0].SettlementFailure != nil {
 		t.Fatalf("quarantined file failure = %+v", result.Files)
 	}
 	if binding, ok := result.Files[0].Settlement.MaterializedBinding(); !ok ||
-		binding != base.transactions["a-quarantined.bin"].Binding() {
+		binding != base.transactions["windshare/a-quarantined.bin"].Binding() {
 		t.Fatalf("quarantine lost transaction binding: binding=%+v ok=%t", binding, ok)
 	}
-	if base.transactions["a-quarantined.bin"].commitCalls != 1 ||
-		base.transactions["b-published.bin"].commitCalls != 1 ||
-		!base.transactions["b-published.bin"].committed || base.pauseCalls != 0 || base.completeCalls != 1 {
+	if base.transactions["windshare/a-quarantined.bin"].commitCalls != 1 ||
+		base.transactions["windshare/b-published.bin"].commitCalls != 1 ||
+		!base.transactions["windshare/b-published.bin"].committed || base.pauseCalls != 0 || base.completeCalls != 1 {
 		t.Fatalf("sibling flow = quarantined=%+v published=%+v pause=%d complete=%d",
-			base.transactions["a-quarantined.bin"], base.transactions["b-published.bin"],
+			base.transactions["windshare/a-quarantined.bin"], base.transactions["windshare/b-published.bin"],
 			base.pauseCalls, base.completeCalls)
 	}
 }
@@ -143,7 +143,7 @@ func TestTransferJobStopsSiblingWorkOnUnsettledCommit(t *testing.T) {
 			output := &pathScriptedJobOutput{
 				jobOutput: base,
 				scripts: map[string]jobTransactionScript{
-					"a-first.bin": {commitErr: outputFailure(scope, fault.OutputStateIO, cause)},
+					"windshare/a-first.bin": {commitErr: outputFailure(scope, fault.OutputStateIO, cause)},
 				},
 			}
 			revisions := &jobRevisionClient{
@@ -177,7 +177,7 @@ func TestTransferJobStopsSiblingWorkOnUnsettledCommit(t *testing.T) {
 			if result.Outcome != DirectTreeOutcomePaused || normalizedFault(result.TerminationCause) != expected ||
 				normalizedFault(result.SettlementFailure) != expected ||
 				!slices.Equal(revisions.order, []catalog.FileID{first}) ||
-				base.transactions["a-first.bin"] == nil || base.transactions["b-second.bin"] != nil ||
+				base.transactions["windshare/a-first.bin"] == nil || base.transactions["windshare/b-second.bin"] != nil ||
 				len(base.finalized) != 0 || base.pauseCalls != 1 || base.completeCalls != 0 {
 				t.Fatalf("result=%+v revisions=%v transactions=%v finalized=%v pause=%d complete=%d",
 					result, revisions.order, base.transactions, base.finalized, base.pauseCalls, base.completeCalls)

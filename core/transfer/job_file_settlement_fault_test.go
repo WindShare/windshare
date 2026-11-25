@@ -43,12 +43,12 @@ func TestTransferJobSessionFailureAbortsJob(t *testing.T) {
 		result.Progress.DiscoveredFiles != 2 || result.Progress.DiscoveredBytes != 2*chunk {
 		t.Fatalf("result=%+v output=%+v", result, output)
 	}
-	transaction := output.transactions["file.bin"]
+	transaction := output.transactions["windshare/file.bin"]
 	if transaction == nil || len(result.Files) != 1 || result.Files[0].Stage != FailureBlockTransfer ||
 		result.Files[0].Fault != normalizedFault(terminal) || result.Files[0].Settlement.Kind() != FilePaused ||
 		result.Files[0].SettlementFailure != nil || result.Files[0].SettlementFault.Valid() ||
 		!transaction.aborted || transaction.pauseCalls != 1 ||
-		transaction.commitCalls != 0 || output.transactions["later.bin"] != nil {
+		transaction.commitCalls != 0 || output.transactions["windshare/later.bin"] != nil {
 		t.Fatalf("result=%+v transaction=%+v output=%+v", result, transaction, output)
 	}
 	if second := job.Run(context.Background()); second.Outcome != DirectTreeOutcomePaused || second.TerminationFault != fault.DependencyContractFault() {
@@ -143,7 +143,7 @@ func TestTransferJobAcceptsRecoveredImmediateRetirementWithoutContentOrSecondFil
 	blocks := &retiredCountingRangeReader{}
 	job, file := branchJob(t, output, revisions, blocks)
 	opened := revisions.opened[file]
-	locator, err := NewPathMaterializationLocator("file.bin")
+	locator, err := NewPathMaterializationLocator("windshare/file.bin")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestTransferJobAcceptsRecoveredImmediateRetirementWithoutContentOrSecondFil
 	if err != nil {
 		t.Fatal(err)
 	}
-	output.immediate["file.bin"] = retired
+	output.immediate["windshare/file.bin"] = retired
 
 	result := job.Run(context.Background())
 	if result.Outcome != DirectTreeOutcomePartial || result.Settlement.Kind() != DirectTreeSettlementPartial ||
@@ -196,7 +196,7 @@ func TestTransferJobCountsRecoveredImmediatePublicationWithoutInventingNewBytes(
 	blocks := &retiredCountingRangeReader{}
 	job, file := branchJob(t, output, revisions, blocks)
 	opened := revisions.opened[file]
-	locator, err := NewPathMaterializationLocator("file.bin")
+	locator, err := NewPathMaterializationLocator("windshare/file.bin")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +215,7 @@ func TestTransferJobCountsRecoveredImmediatePublicationWithoutInventingNewBytes(
 	if err != nil {
 		t.Fatal(err)
 	}
-	output.immediate["file.bin"] = published
+	output.immediate["windshare/file.bin"] = published
 
 	result := job.Run(context.Background())
 	progress := result.Progress
@@ -295,7 +295,7 @@ func TestTransferJobPauseAcceptsRangeWrittenAsCancellationArrives(t *testing.T) 
 			}
 
 			result := job.Run(ctx)
-			transaction := output.transactions["file.bin"]
+			transaction := output.transactions["windshare/file.bin"]
 			if result.Outcome != DirectTreeOutcomePaused || !errors.Is(result.TerminationCause, context.Canceled) ||
 				result.SettlementFailure != nil || result.SettlementFault.Valid() || result.TerminationFault.Valid() ||
 				len(result.Files) != 1 || result.Files[0].SettlementFailure != nil ||
@@ -322,7 +322,7 @@ func TestTransferJobPauseAcceptsRangeWrittenBeforeOutputFailure(t *testing.T) {
 	expectedSize := revisions.opened[file].Descriptor.ExactSize()
 
 	result := job.Run(context.Background())
-	transaction := output.transactions["file.bin"]
+	transaction := output.transactions["windshare/file.bin"]
 	if result.Outcome != DirectTreeOutcomePartial || result.TerminationCause != nil || result.TerminationFault.Valid() ||
 		result.SettlementFailure != nil || result.SettlementFault.Valid() ||
 		len(result.Files) != 1 || !errors.Is(result.Files[0].Cause, syscall.ENOSPC) ||
@@ -372,7 +372,7 @@ func TestTransferJobLiveOnlyPauseDeclinesRangeThatNeverReachedOutput(t *testing.
 			job, _ := branchJob(t, output, &jobRevisionClient{}, scriptedRangeReader{})
 
 			result := job.Run(ctx)
-			transaction := output.transactions["file.bin"]
+			transaction := output.transactions["windshare/file.bin"]
 			if result.Outcome != test.outcome || (test.cause == nil) != (result.TerminationCause == nil) ||
 				(test.cause != nil && !errors.Is(result.TerminationCause, test.cause)) ||
 				result.SettlementFailure != nil || result.SettlementFault.Valid() || result.TerminationFault.Valid() ||
@@ -438,7 +438,7 @@ func TestTransferJobRetiresOnlyWithTypedPermanentSourceAuthority(t *testing.T) {
 			}
 			job, _ := branchJob(t, output, &jobRevisionClient{}, test.blocks)
 			result := job.Run(context.Background())
-			transaction := output.transactions["file.bin"]
+			transaction := output.transactions["windshare/file.bin"]
 			if transaction == nil || result.Outcome != test.wantOutcome || len(result.Files) != 1 {
 				t.Fatalf("result=%+v transaction=%+v", result, transaction)
 			}
@@ -479,7 +479,7 @@ func TestTransferJobContinuesSiblingAfterSettledFileOutputFault(t *testing.T) {
 	}
 	output := newJobOutput(share)
 	writeCause := errors.New("file checkpoint device unavailable")
-	output.transactionScripts["a-failed.bin"] = jobTransactionScript{
+	output.transactionScripts["windshare/a-failed.bin"] = jobTransactionScript{
 		writeErr: outputFailure(fault.ScopeFileLocal, fault.OutputStateIO, writeCause),
 	}
 	rules, err := NewSelectionRules(true, nil)
@@ -500,8 +500,8 @@ func TestTransferJobContinuesSiblingAfterSettledFileOutputFault(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
-	failedTransaction := output.transactions["a-failed.bin"]
-	siblingTransaction := output.transactions["b-sibling.bin"]
+	failedTransaction := output.transactions["windshare/a-failed.bin"]
+	siblingTransaction := output.transactions["windshare/b-sibling.bin"]
 	if result.Outcome != DirectTreeOutcomePartial || result.TerminationCause != nil ||
 		result.SucceededFiles != 1 || len(result.Files) != 1 ||
 		result.Progress.FileOutcomes.DownloadedFiles != 1 || result.Progress.FileOutcomes.PausedFiles != 1 ||
@@ -510,7 +510,7 @@ func TestTransferJobContinuesSiblingAfterSettledFileOutputFault(t *testing.T) {
 		failedTransaction == nil || siblingTransaction == nil ||
 		failedTransaction.pauseCalls != 1 ||
 		siblingTransaction.commitCalls != 1 || output.pauseCalls != 0 || output.completeCalls != 1 ||
-		!slices.Equal(output.finalized, []string{""}) {
+		!slices.Equal(output.finalized, []string{"windshare"}) {
 		t.Fatalf("result=%+v failed=%+v sibling=%+v output=%+v", result, failedTransaction, siblingTransaction, output)
 	}
 }

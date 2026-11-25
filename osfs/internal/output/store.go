@@ -562,13 +562,10 @@ func (a *Authority) reopenResultDirLocked(intent transfer.ReceiveIntent) (*Dir, 
 	if !ok || res.IsZero() {
 		return nil, false, ErrUnsafeNamespace
 	}
-	switch res.Kind() {
-	case receivecontract.ReservationContainerRoot:
+	switch res.EntryKind() {
+	case receivecontract.ContainerEntrySingleFile:
 		return a.root, false, nil
-	case receivecontract.ReservationNamedContainerEntry:
-		if res.EntryKind() == receivecontract.ContainerEntrySingleFile {
-			return a.root, false, nil
-		}
+	case receivecontract.ContainerEntryResultRoot:
 		dir, err := openChildDir(a.root, res.PhysicalName())
 		if err != nil {
 			return nil, false, err

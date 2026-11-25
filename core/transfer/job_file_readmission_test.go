@@ -258,7 +258,7 @@ func TestTransferJobReconcilesNewlyVerifiedWhenSecondReadmissionBlocked(t *testi
 	output := newJobOutput(share)
 	blockedBegins := 0
 	output.beginHook = func(file MaterializationFile) {
-		if file.ArtifactPath().String() != "a-blocked.bin" {
+		if file.ArtifactPath().String() != "windshare/a-blocked.bin" {
 			return
 		}
 		blockedBegins++
@@ -275,7 +275,7 @@ func TestTransferJobReconcilesNewlyVerifiedWhenSecondReadmissionBlocked(t *testi
 			if settlementErr != nil {
 				t.Fatal(settlementErr)
 			}
-			output.immediate["a-blocked.bin"] = settlement
+			output.immediate["windshare/a-blocked.bin"] = settlement
 		}
 	}
 	blocks := &scriptedReopenBlocks{
@@ -337,7 +337,7 @@ func TestTransferJobReconcilesCoverageRegressionAcrossMultipleReadmissions(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	output.durable["regressed.bin"] = initialRecovered
+	output.durable["windshare/regressed.bin"] = initialRecovered
 	begins := 0
 	output.beginHook = func(file MaterializationFile) {
 		begins++
@@ -345,7 +345,7 @@ func TestTransferJobReconcilesCoverageRegressionAcrossMultipleReadmissions(t *te
 		// re-downloads [0, window) as newly verified bytes. Attempt 2 loses
 		// coverage again before finishing the whole file.
 		if begins == 2 || begins == 3 {
-			output.durable["regressed.bin"] = content.RangeSet{}
+			output.durable["windshare/regressed.bin"] = content.RangeSet{}
 		}
 	}
 	blocks := &scriptedReopenBlocks{
@@ -407,7 +407,7 @@ func TestTransferJobReconcilesPartialCoverageRegressionOnSecondReadmission(t *te
 		// Attempt 1 reuses attempt 0's [0, window) and advances to [0, 2*window).
 		// Attempt 2 regresses back inside attempt 0's range to [0, chunk).
 		if begins == 3 {
-			output.durable["partial-regress.bin"] = regressed
+			output.durable["windshare/partial-regress.bin"] = regressed
 		}
 	}
 	blocks := &scriptedReopenBlocks{
@@ -621,12 +621,12 @@ func TestTransferJobReconcilesReadmissionImmediateSettlements(t *testing.T) {
 			output := newJobOutput(share)
 			begins := 0
 			output.beginHook = func(file MaterializationFile) {
-				if file.ArtifactPath().String() != "a-target.bin" {
+				if file.ArtifactPath().String() != "windshare/a-target.bin" {
 					return
 				}
 				begins++
 				if begins == 3 {
-					output.immediate["a-target.bin"] = test.settlement(t, output, file)
+					output.immediate["windshare/a-target.bin"] = test.settlement(t, output, file)
 				}
 			}
 			blocks := &scriptedReopenBlocks{

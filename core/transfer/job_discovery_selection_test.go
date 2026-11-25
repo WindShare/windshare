@@ -67,7 +67,7 @@ func runSparseFileLocalResume(t *testing.T, inProcess bool) {
 		output.capabilitiesOverride, output.inProcess = &capabilities, true
 	}
 	firstBlock, _ := content.NewRangeSet([]content.Range{{Offset: 0, End: chunk}})
-	output.durable["a.bin"] = firstBlock
+	output.durable["windshare/a.bin"] = firstBlock
 	rules, _ := NewSelectionRules(true, nil)
 	job, err := newTestTransferJob(t, testTransferJobConfig{
 		ShareInstance: share, SyntheticRoot: root, Rules: rules, Catalog: client,
@@ -100,8 +100,8 @@ func runSparseFileLocalResume(t *testing.T, inProcess bool) {
 	if !slices.Equal(loads, wantLoads) {
 		t.Fatalf("catalog loads=%v", loads)
 	}
-	if !slices.Equal(output.directories, []string{"", "folder", "folder/empty-dir"}) ||
-		!slices.Equal(output.finalized, []string{"folder/empty-dir", "folder", ""}) || output.finished != DirectTreeOutcomeSuccess {
+	if !slices.Equal(output.directories, []string{"windshare", "windshare/folder", "windshare/folder/empty-dir"}) ||
+		!slices.Equal(output.finalized, []string{"windshare/folder/empty-dir", "windshare/folder", "windshare"}) || output.finished != DirectTreeOutcomeSuccess {
 		t.Fatalf("directories=%v finalized=%v outcome=%v", output.directories, output.finalized, output.finished)
 	}
 	if client.CachedBytes() != 0 {
@@ -119,7 +119,7 @@ func TestTransferJobRejectsRegressiveCheckpointAndCatalogCycle(t *testing.T) {
 		opened, _ := NewOpenedRevision(transferID[RevisionHandle](56), descriptor)
 		output := newJobOutput(share)
 		first, _ := content.NewRangeSet([]content.Range{{Offset: 0, End: chunk}})
-		output.durable["file.bin"] = first
+		output.durable["windshare/file.bin"] = first
 		output.transactionScript.dropPriorRanges = true
 		rules, _ := NewSelectionRules(true, nil)
 		job, _ := newTestTransferJob(t, testTransferJobConfig{
@@ -316,7 +316,7 @@ func TestTransferJobDiscoveryFailurePreservesIndependentContentWork(t *testing.T
 		t.Fatalf("failed discovery measure=%+v", result.Progress)
 	}
 	if len(revisions.order) != 3 || len(output.transactions) != 2 ||
-		output.intent.IsZero() || !slices.Equal(output.directories, []string{""}) {
+		output.intent.IsZero() || !slices.Equal(output.directories, []string{"windshare"}) {
 		t.Fatalf("independent discovery work missing: revisions=%v transactions=%d intent=%v directories=%v", revisions.order, len(output.transactions), !output.intent.IsZero(), output.directories)
 	}
 }
@@ -460,7 +460,7 @@ func TestTransferJobReportsMissingPathTargetAfterCompleteTraversal(t *testing.T)
 	if result.Outcome != DirectTreeOutcomePartial || result.TerminationCause != nil ||
 		len(result.Directories) != 0 || !errors.Is(result.SelectionResolutionFailure, ErrSelectionTargetMissing) ||
 		output.aborted || output.pauseCalls != 0 || output.completeCalls != 1 ||
-		!slices.Equal(output.directories, []string{""}) || !slices.Equal(output.finalized, []string{""}) {
+		!slices.Equal(output.directories, []string{"windshare"}) || !slices.Equal(output.finalized, []string{"windshare"}) {
 		t.Fatalf("result=%+v output aborted=%v", result, output.aborted)
 	}
 }

@@ -105,7 +105,7 @@ func TestTransferJobOpensOutputBeforeRevisionAndAdmitsGeneration(t *testing.T) {
 	revisions.openHook = func() {
 		output.mu.Lock()
 		defer output.mu.Unlock()
-		if output.intent.IsZero() || !slices.Equal(output.directories, []string{""}) || output.events[0] != "open" {
+		if output.intent.IsZero() || !slices.Equal(output.directories, []string{"windshare"}) || output.events[0] != "open" {
 			t.Errorf("revision opened before output admission: intent=%v directories=%v events=%v", !output.intent.IsZero(), output.directories, output.events)
 		}
 	}
@@ -179,14 +179,14 @@ func TestTransferJobAdmitsGenerationsIncrementallyBeforeContent(t *testing.T) {
 			output.mu.Lock()
 			defer output.mu.Unlock()
 			if len(output.events) == 0 || output.events[0] != "open" ||
-				!slices.Contains(output.directories, "") || !slices.Contains(output.directories, "folder") {
+				!slices.Contains(output.directories, "windshare") || !slices.Contains(output.directories, "windshare/folder") {
 				t.Errorf("revision opened without incremental output admission: events=%v directories=%v", output.events, output.directories)
 			}
 		}
 		result := newJob(output, revisions, scriptedRangeReader{}).Run(context.Background())
-		if result.Outcome != DirectTreeOutcomeSuccess || !slices.Equal(output.directories, []string{"", "folder", "other"}) ||
-			!slices.Equal(output.finalized, []string{"folder", "other", ""}) ||
-			!slices.Contains(output.events, "begin:folder/file.bin") || output.completeCalls != 1 {
+		if result.Outcome != DirectTreeOutcomeSuccess || !slices.Equal(output.directories, []string{"windshare", "windshare/folder", "windshare/other"}) ||
+			!slices.Equal(output.finalized, []string{"windshare/folder", "windshare/other", "windshare"}) ||
+			!slices.Contains(output.events, "begin:windshare/folder/file.bin") || output.completeCalls != 1 {
 			t.Fatalf("result=%+v events=%v", result, output.events)
 		}
 	})
@@ -194,7 +194,7 @@ func TestTransferJobAdmitsGenerationsIncrementallyBeforeContent(t *testing.T) {
 	t.Run("one failed directory prevents partial admission", func(t *testing.T) {
 		output := newJobOutput(share)
 		output.ensureFailures = map[string]error{
-			"folder": outputFailure(fault.ScopeDirectoryLocal, fault.OutputDirectoryMetadata, errors.New("parent unavailable")),
+			"windshare/folder": outputFailure(fault.ScopeDirectoryLocal, fault.OutputDirectoryMetadata, errors.New("parent unavailable")),
 		}
 		revisions := &jobRevisionClient{
 			opened: map[catalog.FileID]OpenedRevision{file: opened}, failures: make(map[catalog.FileID]error),
@@ -204,8 +204,8 @@ func TestTransferJobAdmitsGenerationsIncrementallyBeforeContent(t *testing.T) {
 		if result.Outcome != DirectTreeOutcomePartial || result.TerminationCause != nil || len(result.Directories) != 1 ||
 			result.Directories[0].Stage != FailureDirectoryOutput ||
 			len(revisions.order) != 0 || blocks.calls != 0 || output.pauseCalls != 0 || output.completeCalls != 1 ||
-			!slices.Equal(output.directories, []string{"", "other"}) ||
-			!slices.Equal(output.finalized, []string{"other", ""}) {
+			!slices.Equal(output.directories, []string{"windshare", "windshare/other"}) ||
+			!slices.Equal(output.finalized, []string{"windshare/other", "windshare"}) {
 			t.Fatalf("result=%+v events=%v revisions=%v blocks=%d", result, output.events, revisions.order, blocks.calls)
 		}
 	})
@@ -239,7 +239,7 @@ func TestTransferJobRejectsForeignOrMissingImmediateSettlementAuthority(t *testi
 				if err != nil {
 					t.Fatal(err)
 				}
-				locator, err := NewPathMaterializationLocator("file.bin")
+				locator, err := NewPathMaterializationLocator("windshare/file.bin")
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -253,27 +253,27 @@ func TestTransferJobRejectsForeignOrMissingImmediateSettlementAuthority(t *testi
 				if err != nil {
 					t.Fatal(err)
 				}
-				output.immediate["file.bin"] = settlement
+				output.immediate["windshare/file.bin"] = settlement
 			},
 		},
 		{
 			name: "foreign published session",
 			configure: func(t *testing.T, output *jobOutput, descriptor content.FileRevisionDescriptor) {
-				settlement := immediatePublishedSettlement(t, descriptor, "file.bin", transferID[OutputSessionID](201))
-				output.immediate["file.bin"] = settlement
+				settlement := immediatePublishedSettlement(t, descriptor, "windshare/file.bin", transferID[OutputSessionID](201))
+				output.immediate["windshare/file.bin"] = settlement
 			},
 		},
 		{
 			name: "noncanonical published locator",
 			configure: func(t *testing.T, output *jobOutput, descriptor content.FileRevisionDescriptor) {
-				settlement := immediatePublishedSettlement(t, descriptor, "other.bin", output.session)
-				output.immediate["file.bin"] = settlement
+				settlement := immediatePublishedSettlement(t, descriptor, "windshare/other.bin", output.session)
+				output.immediate["windshare/file.bin"] = settlement
 			},
 		},
 		{
 			name: "foreign quarantine reference",
 			configure: func(t *testing.T, output *jobOutput, descriptor content.FileRevisionDescriptor) {
-				locator, err := NewPathMaterializationLocator("file.bin")
+				locator, err := NewPathMaterializationLocator("windshare/file.bin")
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -292,7 +292,7 @@ func TestTransferJobRejectsForeignOrMissingImmediateSettlementAuthority(t *testi
 				if err != nil {
 					t.Fatal(err)
 				}
-				output.immediate["file.bin"] = settlement
+				output.immediate["windshare/file.bin"] = settlement
 			},
 		},
 		{
@@ -432,8 +432,9 @@ func TestTransferJobIsolatesImmediateCollisionAndItemBlocks(t *testing.T) {
 				)
 			}
 			output := newJobOutput(share)
-			output.immediate[blockedPath] = test.settlement(
-				output, blockedPath, revisions.opened[blockedFile].Descriptor,
+			blockedArtifact := "windshare/" + blockedPath
+			output.immediate[blockedArtifact] = test.settlement(
+				output, blockedArtifact, revisions.opened[blockedFile].Descriptor,
 			)
 			output.completeSettlement = DirectTreeSettlementFailed
 			rules, _ := NewSelectionRules(true, nil)
@@ -454,10 +455,10 @@ func TestTransferJobIsolatesImmediateCollisionAndItemBlocks(t *testing.T) {
 				result.Progress.FileOutcomes != test.outcomes || !result.Progress.CountersExact {
 				t.Fatalf("result=%+v", result)
 			}
-			if _, exists := output.transactions[blockedPath]; exists {
+			if _, exists := output.transactions[blockedArtifact]; exists {
 				t.Fatal("immediate settlement exposed a transaction")
 			}
-			if transaction := output.transactions["good.bin"]; transaction == nil || !transaction.committed {
+			if transaction := output.transactions["windshare/good.bin"]; transaction == nil || !transaction.committed {
 				t.Fatal("isolated settlement prevented the independent file commit")
 			}
 		})
@@ -470,13 +471,13 @@ func TestTransferJobKeepsItemBlockedOperationActive(t *testing.T) {
 	revisions := &jobRevisionClient{}
 	job, file := branchJob(t, output, revisions, scriptedRangeReader{})
 	descriptor := revisions.opened[file].Descriptor
-	locator, _ := NewPathMaterializationLocator("file.bin")
+	locator, _ := NewPathMaterializationLocator("windshare/file.bin")
 	target, _ := NewFileMaterializationTarget(output.SessionID(), descriptor, locator)
 	reference, _ := NewMaterializationStateRef(output.SessionID(), locator.Digest())
 	quarantined, _ := NewImmediateItemBlockedFileSettlement(
 		target, reference, ItemBlockOwnershipUnknown,
 	)
-	output.immediate["file.bin"] = quarantined
+	output.immediate["windshare/file.bin"] = quarantined
 
 	result := job.Run(context.Background())
 	if result.Outcome != DirectTreeOutcomePartial || len(result.Files) != 1 ||
@@ -526,7 +527,7 @@ func TestTransferJobTerminalSettlementMethodsAreSingleShot(t *testing.T) {
 		)
 		job, _ := branchJob(t, output, &jobRevisionClient{}, scriptedRangeReader{})
 		result := job.Run(context.Background())
-		transaction := output.transactions["file.bin"]
+		transaction := output.transactions["windshare/file.bin"]
 		expected, _ := fault.NewOutput(fault.ScopeFileLocal, fault.OutputStateIO)
 		if result.Outcome != DirectTreeOutcomePaused || result.TerminationFault != expected ||
 			result.SettlementFault != expected || transaction == nil ||
@@ -542,13 +543,13 @@ func TestTransferJobTerminalSettlementMethodsAreSingleShot(t *testing.T) {
 		revisions := &jobRevisionClient{}
 		job, file := branchJob(t, output, revisions, scriptedRangeReader{})
 		descriptor := revisions.opened[file].Descriptor
-		locator, _ := NewPathMaterializationLocator("file.bin")
+		locator, _ := NewPathMaterializationLocator("windshare/file.bin")
 		target, _ := NewFileMaterializationTarget(output.SessionID(), descriptor, locator)
 		collision, _ := NewCollisionFileSettlement(target)
 		output.transactionScript.commitResult = &collision
 
 		result := job.Run(context.Background())
-		transaction := output.transactions["file.bin"]
+		transaction := output.transactions["windshare/file.bin"]
 		if result.Outcome != DirectTreeOutcomePaused || result.TerminationFault != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) ||
 			result.SettlementFault != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) || transaction == nil ||
 			transaction.commitCalls != 1 || transaction.pauseCalls != 0 ||
@@ -564,7 +565,7 @@ func TestTransferJobTerminalSettlementMethodsAreSingleShot(t *testing.T) {
 		output.finishErr = outputFailure(fault.ScopeOutputPause, fault.OutputStateIO, completeCause)
 		job, _ := branchJob(t, output, &jobRevisionClient{}, scriptedRangeReader{})
 		result := job.Run(context.Background())
-		transaction := output.transactions["file.bin"]
+		transaction := output.transactions["windshare/file.bin"]
 		expected, _ := fault.NewOutput(fault.ScopeOutputPause, fault.OutputStateIO)
 		if result.Outcome != DirectTreeOutcomePaused || result.TerminationCause != nil ||
 			result.SettlementFault != expected || transaction == nil ||
@@ -806,7 +807,7 @@ func TestTransferLifecycleFirstWriteRequiresNewDurableContent(t *testing.T) {
 				t.Fatal(err)
 			}
 			if immediate {
-				locator, err := NewPathMaterializationLocator("file.bin")
+				locator, err := NewPathMaterializationLocator("windshare/file.bin")
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -814,7 +815,7 @@ func TestTransferLifecycleFirstWriteRequiresNewDurableContent(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				digest := sha256.Sum256([]byte("file.bin"))
+				digest := sha256.Sum256([]byte("windshare/file.bin"))
 				var identity OwnedObjectID
 				copy(identity[:], digest[:])
 				binding, err := BindFileMaterializationTarget(target, identity)
@@ -825,12 +826,12 @@ func TestTransferLifecycleFirstWriteRequiresNewDurableContent(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				output.immediate["file.bin"], err = NewVerifiedFileSettlement(FilePublished, checkpoint)
+				output.immediate["windshare/file.bin"], err = NewVerifiedFileSettlement(FilePublished, checkpoint)
 				if err != nil {
 					t.Fatal(err)
 				}
 			} else {
-				output.durable["file.bin"] = full
+				output.durable["windshare/file.bin"] = full
 			}
 			stream := newTestDiagnosticsStream(t)
 			job.diagnostics = stream.Sink()

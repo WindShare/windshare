@@ -152,8 +152,8 @@ func TestTransferJobRollsBackSelectedPrefixOfFailedGeneration(t *testing.T) {
 	if result.Outcome != DirectTreeOutcomePartial || result.SucceededFiles != 1 ||
 		len(result.Directories) != 1 || len(result.Files) != 0 ||
 		!slices.Equal(revisions.order, []catalog.FileID{sibling}) ||
-		!slices.Equal(output.directories, []string{""}) ||
-		!slices.Equal(output.finalized, []string{""}) {
+		!slices.Equal(output.directories, []string{"windshare"}) ||
+		!slices.Equal(output.finalized, []string{"windshare"}) {
 		t.Fatalf("result=%+v revision opens=%v directories=%v finalized=%v", result, revisions.order, output.directories, output.finalized)
 	}
 }
@@ -201,7 +201,7 @@ func TestTransferJobPausesWithoutAdmittingFailedRootPrefix(t *testing.T) {
 func TestTransferJobPausesWhenRootAdmissionFailsEvenIfFilesAreIsolatable(t *testing.T) {
 	share := transferID[catalog.ShareInstance](133)
 	output := newJobOutput(share)
-	output.ensureFailures = map[string]error{"": errors.New("root output authority unavailable")}
+	output.ensureFailures = map[string]error{"windshare": errors.New("root output authority unavailable")}
 	revisions := &jobRevisionClient{}
 	job, _ := branchJob(t, output, revisions, scriptedRangeReader{})
 
@@ -297,7 +297,7 @@ func TestTransferJobMaterializesOnlyAuthenticatedSelectedOutput(t *testing.T) {
 		descriptor := jobDescriptor(t, share, file, 1, 0)
 		opened, _ := NewOpenedRevision(transferID[RevisionHandle](155), descriptor)
 		output := newJobOutput(share)
-		output.ensureFailures = map[string]error{"unrelated": errors.New("unrelated output must remain virtual")}
+		output.ensureFailures = map[string]error{"windshare/unrelated": errors.New("unrelated output must remain virtual")}
 		job, err := newTestTransferJob(t, testTransferJobConfig{
 			ShareInstance: share, SyntheticRoot: root, Rules: rules,
 			Catalog: failingCatalog{
@@ -320,7 +320,7 @@ func TestTransferJobMaterializesOnlyAuthenticatedSelectedOutput(t *testing.T) {
 		if result.Outcome != DirectTreeOutcomeSuccess || result.SucceededFiles != 1 {
 			t.Fatalf("result=%+v", result)
 		}
-		if !slices.Equal(output.directories, []string{"", "wanted"}) || !slices.Equal(output.finalized, []string{"wanted", ""}) {
+		if !slices.Equal(output.directories, []string{"windshare", "windshare/wanted"}) || !slices.Equal(output.finalized, []string{"windshare/wanted", "windshare"}) {
 			t.Fatalf("directories=%v finalized=%v", output.directories, output.finalized)
 		}
 	})
@@ -348,7 +348,7 @@ func TestTransferJobMaterializesOnlyAuthenticatedSelectedOutput(t *testing.T) {
 		})
 		result := job.Run(context.Background())
 		if result.Outcome != DirectTreeOutcomePartial || len(result.Files) != 1 ||
-			!slices.Equal(output.directories, []string{"", "folder"}) || !slices.Equal(output.finalized, []string{"folder", ""}) {
+			!slices.Equal(output.directories, []string{"windshare", "windshare/folder"}) || !slices.Equal(output.finalized, []string{"windshare/folder", "windshare"}) {
 			t.Fatalf("result=%+v directories=%v finalized=%v", result, output.directories, output.finalized)
 		}
 	})
@@ -378,8 +378,8 @@ func TestTransferJobSelectedDirectoryRequiresSuccessfulGenerationBeforeOutput(t 
 	if result.Outcome != DirectTreeOutcomePartial || len(result.Directories) != 1 || result.Progress.ConnectionSizeClass() != ConnectionSizeUnknown {
 		t.Fatalf("result=%+v", result)
 	}
-	if !slices.Equal(output.directories, []string{"", "empty"}) ||
-		!slices.Equal(output.finalized, []string{"empty", ""}) {
+	if !slices.Equal(output.directories, []string{"windshare", "windshare/empty"}) ||
+		!slices.Equal(output.finalized, []string{"windshare/empty", "windshare"}) {
 		t.Fatalf("directories=%v finalized=%v", output.directories, output.finalized)
 	}
 }
@@ -405,7 +405,7 @@ func TestTransferJobMissingOpaqueTargetsRemainKindSafe(t *testing.T) {
 	if result.Outcome != DirectTreeOutcomePartial || result.TerminationCause != nil ||
 		len(result.Directories) != 0 || !errors.Is(result.SelectionResolutionFailure, ErrSelectionTargetMissing) ||
 		output.aborted || output.pauseCalls != 0 || output.completeCalls != 1 ||
-		!slices.Equal(output.directories, []string{""}) || !slices.Equal(output.finalized, []string{""}) {
+		!slices.Equal(output.directories, []string{"windshare"}) || !slices.Equal(output.finalized, []string{"windshare"}) {
 		t.Fatalf("result=%+v", result)
 	}
 }
@@ -429,7 +429,7 @@ func TestTransferJobMissingOpaqueDirectoryTargetAborts(t *testing.T) {
 		len(result.Directories) != 0 || !errors.Is(result.SelectionResolutionFailure, ErrSelectionTargetMissing) ||
 		result.MissingSelectionPaths != nil ||
 		output.aborted || output.pauseCalls != 0 || output.completeCalls != 1 ||
-		!slices.Equal(output.directories, []string{""}) || !slices.Equal(output.finalized, []string{""}) {
+		!slices.Equal(output.directories, []string{"windshare"}) || !slices.Equal(output.finalized, []string{"windshare"}) {
 		t.Fatalf("result=%+v", result)
 	}
 }
@@ -459,7 +459,7 @@ func TestTransferJobUnmatchedFileBelowFailedDirectoryRemainsUnknown(t *testing.T
 	}
 	if result.Outcome != DirectTreeOutcomePartial || result.TerminationCause != nil ||
 		result.Progress.ConnectionSizeClass() != ConnectionSizeUnknown || admission.ConnectionSizeClass() != ConnectionSizeUnknown ||
-		!slices.Equal(output.directories, []string{""}) || !slices.Equal(output.finalized, []string{""}) {
+		!slices.Equal(output.directories, []string{"windshare"}) || !slices.Equal(output.finalized, []string{"windshare"}) {
 		t.Fatalf("result=%+v admission=%+v directories=%v finalized=%v", result, admission, output.directories, output.finalized)
 	}
 }
@@ -484,7 +484,7 @@ func TestTransferJobMissingPathDescendantLeavesAncestorVirtual(t *testing.T) {
 	if result.Outcome != DirectTreeOutcomePartial || result.TerminationCause != nil ||
 		len(result.Directories) != 0 || !errors.Is(result.SelectionResolutionFailure, ErrSelectionTargetMissing) ||
 		output.aborted || output.pauseCalls != 0 || output.completeCalls != 1 ||
-		!slices.Equal(output.directories, []string{""}) || !slices.Equal(output.finalized, []string{""}) {
+		!slices.Equal(output.directories, []string{"windshare"}) || !slices.Equal(output.finalized, []string{"windshare"}) {
 		t.Fatalf("result=%+v directories=%v finalized=%v", result, output.directories, output.finalized)
 	}
 }

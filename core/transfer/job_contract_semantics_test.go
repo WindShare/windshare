@@ -116,14 +116,14 @@ func TestTransferJobDirectorySettlementValidatorRequiresExactAdmission(t *testin
 	root := transferID[catalog.DirectoryID](0xa2)
 	rootAdmission, err := NewDirectoryAdmission(admissionTestMaterializationDirectory(t, admissionTestDirectory(
 		t, root, transferID[catalog.DirectoryGeneration](0xa3), DirectoryAdmission{}, "", catalog.ModifiedTime{},
-	)))
+	), "windshare"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	childAdmission, err := NewDirectoryAdmission(admissionTestMaterializationDirectory(t, admissionTestDirectory(
 		t, transferID[catalog.DirectoryID](0xa4), transferID[catalog.DirectoryGeneration](0xa5),
 		rootAdmission, "child", catalog.ModifiedTime{},
-	)))
+	), "windshare/child"))
 	if err != nil {
 		t.Fatal(err)
 	}

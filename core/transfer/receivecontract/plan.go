@@ -20,16 +20,12 @@ func NewDirectTreePlan(artifact ArtifactSpec, reservation DestinationReservation
 		return MaterializationPlan{}, ErrInvalidReceiveContract
 	}
 	switch layout.Kind() {
-	case DirectoryTreeCatalogRoot:
-		if reservation.Kind() != ReservationContainerRoot {
-			return MaterializationPlan{}, ErrInvalidReceiveContract
-		}
 	case DirectoryTreeSingleFile:
-		if reservation.Kind() != ReservationNamedContainerEntry || reservation.EntryKind() != ContainerEntrySingleFile {
+		if reservation.EntryKind() != ContainerEntrySingleFile {
 			return MaterializationPlan{}, ErrInvalidReceiveContract
 		}
 	case DirectoryTreeResultRoot:
-		if reservation.Kind() != ReservationNamedContainerEntry || reservation.EntryKind() != ContainerEntryResultRoot {
+		if reservation.EntryKind() != ContainerEntryResultRoot {
 			return MaterializationPlan{}, ErrInvalidReceiveContract
 		}
 	default:

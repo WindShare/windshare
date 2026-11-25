@@ -52,11 +52,6 @@ func TestProjectionConstructorsRejectContradictoryCoordinates(t *testing.T) {
 	); !errors.Is(err, ErrInvalidArtifactProjector) {
 		t.Fatalf("oversized synthetic name = %v", err)
 	}
-	if _, err := newCatalogRootProjectionLayout(catalog.DirectoryID{}); !errors.Is(
-		err, ErrInvalidArtifactProjector,
-	) {
-		t.Fatalf("zero catalog root = %v", err)
-	}
 	if _, err := newArtifactPathProjector(projectionLayout{}); !errors.Is(
 		err, ErrInvalidArtifactProjector,
 	) {
@@ -106,12 +101,6 @@ func TestProjectorRejectsEveryAuthoritySubstitution(t *testing.T) {
 			sourceNode(t, catalog.NodeKindDirectory, other.NodeID(), "", SourceNodeConnectsSelection),
 			ArtifactRejectWrongIdentity},
 		{"synthetic-root-id-as-child", syntheticProjector(t, root),
-			sourceNode(t, catalog.NodeKindDirectory, root.NodeID(), "child", SourceNodeSelected),
-			ArtifactRejectWrongIdentity},
-		{"catalog-root-substitution", catalogRootProjector(t, root),
-			sourceNode(t, catalog.NodeKindDirectory, other.NodeID(), "", SourceNodeConnectsSelection),
-			ArtifactRejectWrongIdentity},
-		{"catalog-root-id-as-child", catalogRootProjector(t, root),
 			sourceNode(t, catalog.NodeKindDirectory, root.NodeID(), "child", SourceNodeSelected),
 			ArtifactRejectWrongIdentity},
 	}

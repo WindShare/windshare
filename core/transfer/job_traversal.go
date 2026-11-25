@@ -35,7 +35,6 @@ const (
 	directTreeNoRoot directTreeRootKind = iota + 1
 	directTreeDirectoryAnchor
 	directTreeSyntheticRoot
-	directTreeCatalogRoot
 )
 
 type directTreeRootExpectation struct {
@@ -80,10 +79,6 @@ func newDirectTreeCoordinateProjector(intent ReceiveIntent) (directTreeCoordinat
 				kind: directTreeSyntheticRoot, directory: intent.SyntheticRoot(), path: resultRoot.Name(),
 			}
 		}
-	case receivecontract.DirectoryTreeCatalogRoot:
-		root = directTreeRootExpectation{
-			kind: directTreeCatalogRoot, directory: intent.SyntheticRoot(),
-		}
 	default:
 		return directTreeCoordinateProjector{}, ErrInvalidDirectoryAdmission
 	}
@@ -106,22 +101,8 @@ func (projector directTreeCoordinateProjector) projectDirectory(
 	}
 	projection := projector.artifact.Project(node)
 	switch projection.Kind() {
-	case ordinaryoutput.ArtifactReject:
+	case ordinaryoutput.ArtifactReject, ordinaryoutput.ArtifactTraverseOnly:
 		return projection, MaterializationDirectory{}, false, nil
-	case ordinaryoutput.ArtifactTraverseOnly:
-		root := projector.root
-		if root.kind != directTreeCatalogRoot || !source.SourcePath.IsRoot() ||
-			source.DirectoryID != root.directory || !source.ParentAdmission.IsZero() {
-			return projection, MaterializationDirectory{}, false, nil
-		}
-		path, pathErr := NewMaterializationRootRelativePath(root.path)
-		if pathErr != nil {
-			return ordinaryoutput.ArtifactPathProjection{}, MaterializationDirectory{}, false, pathErr
-		}
-		directory, directoryErr := NewMaterializationDirectory(
-			source.DirectoryID, source.Generation, path, source.ParentAdmission, source.ModifiedTime,
-		)
-		return projection, directory, directoryErr == nil, directoryErr
 	case ordinaryoutput.ArtifactMaterialize:
 		artifactPath, ok := projection.ArtifactPath()
 		if !ok {

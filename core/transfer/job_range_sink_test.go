@@ -109,7 +109,7 @@ func TestTransferJobAtomicallyRejectsMalformedRangeReaderOutput(t *testing.T) {
 			} else if normalizedFault(result.TerminationCause) != fault.DependencyContractFault() {
 				t.Fatalf("termination cause = %v, want unknown reader error to fail closed", result.TerminationCause)
 			}
-			transaction := output.transactions["file.bin"]
+			transaction := output.transactions["windshare/file.bin"]
 			if transaction == nil || !transaction.pending.IsEmpty() || !transaction.durable.IsEmpty() ||
 				transaction.commitCalls != 0 || transaction.pauseCalls != 1 || output.pauseCalls != 1 {
 				t.Fatalf("malformed reader touched output: transaction=%+v pauseCalls=%d", transaction, output.pauseCalls)

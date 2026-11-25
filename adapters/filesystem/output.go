@@ -161,10 +161,7 @@ func projectOperation(native *osfs.OutputOperation, absRoot string) (output.Oper
 	if !ok || reservation.IsZero() {
 		return output.Operation{}, output.ErrContract
 	}
-	destination := absRoot
-	if reservation.Kind() == receivecontract.ReservationNamedContainerEntry {
-		destination = filepath.Join(absRoot, reservation.PhysicalName())
-	}
+	destination := filepath.Join(absRoot, reservation.PhysicalName())
 	return output.Operation{
 		Intent:              intent,
 		Control:             outputOperationControl{operation: native},

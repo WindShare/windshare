@@ -26,11 +26,9 @@ func NewDirectoryAdmission(directory MaterializationDirectory) (DirectoryAdmissi
 		return DirectoryAdmission{}, ErrInvalidDirectoryAdmission
 	}
 	path := directory.Path().String()
-	if path != "" {
-		canonical, err := catalog.CanonicalPath(path)
-		if err != nil || canonical != path {
-			return DirectoryAdmission{}, ErrInvalidDirectoryAdmission
-		}
+	canonical, err := catalog.CanonicalPath(path)
+	if path == "" || err != nil || canonical != path {
+		return DirectoryAdmission{}, ErrInvalidDirectoryAdmission
 	}
 	parent := directory.ParentAdmission()
 	hasParent := !parent.IsZero()
@@ -67,14 +65,11 @@ func (admission DirectoryAdmission) Equal(other DirectoryAdmission) bool {
 }
 
 func immediateDirectoryChild(parent, child string) bool {
-	if child == "" {
+	if parent == "" || child == "" {
 		return false
 	}
 	parentPath, _, found := strings.CutLast(child, "/")
-	if !found {
-		return parent == ""
-	}
-	return parent == parentPath
+	return found && parent == parentPath
 }
 
 func validateDirectoryAdmission(

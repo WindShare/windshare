@@ -175,7 +175,7 @@ func TestTransferJobSettlesSyntheticRootAfterIsolatedChildFinalization(t *testin
 		t.Fatal(err)
 	}
 	output.directorySettlement = func(admission DirectoryAdmission) (DirectorySettlement, error) {
-		if admission.Path() == "child" {
+		if admission.Path() == "windshare/child" {
 			return NewIsolatedDirectorySettlement(admission, metadataFault)
 		}
 		return NewFinalizedDirectorySettlement(admission)
@@ -201,13 +201,13 @@ func TestTransferJobSettlesSyntheticRootAfterIsolatedChildFinalization(t *testin
 		t.Fatalf("result=%+v pause=%d complete=%d", result, output.pauseCalls, output.completeCalls)
 	}
 	if len(result.Directories) != 1 || result.Directories[0].DirectoryID != child ||
-		result.Directories[0].Path != "child" || result.Directories[0].Fault != metadataFault {
+		result.Directories[0].Path != "windshare/child" || result.Directories[0].Fault != metadataFault {
 		t.Fatalf("directory failures=%+v", result.Directories)
 	}
 	if len(output.directoryAdmissions) != 2 || len(output.finalizedAdmissions) != 2 ||
 		output.directoryAdmissions[1] != output.finalizedAdmissions[0] ||
 		output.directoryAdmissions[0] != output.finalizedAdmissions[1] ||
-		output.finalizedAdmissions[1].Path() != "" {
+		output.finalizedAdmissions[1].Path() != "windshare" {
 		t.Fatalf("admitted=%+v finalized=%+v", output.directoryAdmissions, output.finalizedAdmissions)
 	}
 }
@@ -222,7 +222,7 @@ func TestTransferJobPausesWhenDirectorySettlementNamesAnotherAdmission(t *testin
 	}
 	output := newJobOutput(share)
 	output.directorySettlement = func(admission DirectoryAdmission) (DirectorySettlement, error) {
-		if admission.Path() != "child" {
+		if admission.Path() != "windshare/child" {
 			return NewFinalizedDirectorySettlement(admission)
 		}
 		output.mu.Lock()
@@ -250,7 +250,7 @@ func TestTransferJobPausesWhenDirectorySettlementNamesAnotherAdmission(t *testin
 		result.TerminationFault != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) ||
 		result.SettlementFault != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) || len(result.Directories) != 0 ||
 		output.pauseCalls != 1 || output.completeCalls != 0 ||
-		!slices.Equal(output.finalized, []string{"child"}) {
+		!slices.Equal(output.finalized, []string{"windshare/child"}) {
 		t.Fatalf("result=%+v finalized=%v pause=%d complete=%d", result, output.finalized,
 			output.pauseCalls, output.completeCalls)
 	}
@@ -266,11 +266,11 @@ func TestTransferJobRejectsMismatchedDirectoryAdmission(t *testing.T) {
 	output := newJobOutput(share)
 	output.directoryAdmission = func(
 		directory AuthenticatedSourceDirectory,
-		_ DirectoryAdmission,
+		admission DirectoryAdmission,
 	) (DirectoryAdmission, error) {
 		mismatched := directory
 		mismatched.Generation = transferID[catalog.DirectoryGeneration](0xee)
-		return NewDirectoryAdmission(admissionTestMaterializationDirectory(t, mismatched))
+		return NewDirectoryAdmission(admissionTestMaterializationDirectory(t, mismatched, admission.Path()))
 	}
 	job, err := newTestTransferJob(t, testTransferJobConfig{
 		ShareInstance: share, SyntheticRoot: root, Rules: rules,
@@ -566,7 +566,7 @@ func TestTransferJobFailsClosedForUnknownChildCursorFailureWithoutPhantomSelecti
 	result := job.Run(context.Background())
 	if result.Outcome != DirectTreeOutcomePaused || result.TerminationFault != fault.DependencyContractFault() ||
 		result.Progress.DiscoveredFiles != 0 || result.Progress.DiscoveredBytes != 0 ||
-		!slices.Equal(output.directories, []string{""}) || len(output.finalized) != 0 {
+		!slices.Equal(output.directories, []string{"windshare"}) || len(output.finalized) != 0 {
 		t.Fatalf("result=%+v directories=%v finalized=%v", result, output.directories, output.finalized)
 	}
 }

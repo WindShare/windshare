@@ -209,7 +209,8 @@ func (s *Session) AdmitDirectory(
 	if err := ctx.Err(); err != nil {
 		return transfer.DirectoryAdmission{}, err
 	}
-	if !transfer.DirectoryMaterializationMatchesIntent(s.intent, request) {
+	if !transfer.DirectoryMaterializationMatchesIntent(s.intent, request) ||
+		request.Projection().Kind() != ordinaryoutput.ArtifactMaterialize {
 		return transfer.DirectoryAdmission{}, transfer.ErrInvalidOutputBinding
 	}
 	dirReq, ok := request.Directory()
@@ -234,18 +235,6 @@ func (s *Session) AdmitDirectory(
 		return transfer.DirectoryAdmission{}, transfer.ErrInvalidOutputBinding
 	}
 
-	// Traverse-only directories need an admission for child lineage, but do not
-	// create a directory on disk.
-	if request.Projection().Kind() == ordinaryoutput.ArtifactTraverseOnly {
-		state := &dirState{
-			admission:    admission,
-			logicalPath:  logicalPath,
-			materialized: false,
-		}
-		s.dirsByLogical[logicalPath] = state
-		return admission, nil
-	}
-
 	dirHandle, isRoot, err := s.openAdmittedDirLocked(ctx, logicalPath, dirReq.ParentAdmission())
 	if err != nil {
 		return transfer.DirectoryAdmission{}, err
@@ -267,15 +256,14 @@ func (s *Session) openAdmittedDirLocked(
 	parentAdmission transfer.DirectoryAdmission,
 ) (*Dir, bool, error) {
 	if parentAdmission.IsZero() {
+		if s.names.entryKind != receivecontract.ContainerEntryResultRoot || logicalPath != s.names.requestedRoot {
+			return nil, false, transfer.ErrInvalidOutputBinding
+		}
 		// Root of the reserved tree is already bound in op.resultDir.
 		return s.op.resultDir, true, nil
 	}
 	parentState, found := s.dirsByLogical[parentAdmission.Path()]
 	if !found || !parentState.admission.Equal(parentAdmission) || !parentState.materialized || parentState.dir == nil {
-		// Ancestor may be traverse-only when selecting a deep subdirectory as result root.
-		if logicalPath == s.names.requestedRoot && s.names.entryKind == receivecontract.ContainerEntryResultRoot {
-			return s.op.resultDir, true, nil
-		}
 		return nil, false, transfer.ErrInvalidOutputBinding
 	}
 	childDir, err := s.names.bindDirectory(logicalPath, parentState.dir, createFreshSubdir, ensureSubdirNoAlias)

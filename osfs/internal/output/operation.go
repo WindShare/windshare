@@ -22,7 +22,7 @@ type Operation struct {
 	intent    transfer.ReceiveIntent
 	opDirName string
 	opDir     *Dir
-	resultDir *Dir // container root for CatalogRoot/SingleFile; reserved dir for ResultRoot
+	resultDir *Dir // container root for SingleFile; reserved dir for ResultRoot
 	ownsRes   bool // true when resultDir is distinct from authority.root and must be closed
 	taskLock  *FileLock
 	journal   *taskJournal
@@ -295,12 +295,6 @@ func (a *Authority) reserveTopLevelLocked(
 	ctrlDir *Dir,
 ) (receivecontract.DestinationReservation, *Dir, bool, error) {
 	switch layout.Kind() {
-	case receivecontract.DirectoryTreeCatalogRoot:
-		res, err := receivecontract.NewNativeContainerRootReservation(opID, resID, artifact, authorityRef)
-		if err != nil {
-			return receivecontract.DestinationReservation{}, nil, false, err
-		}
-		return res, a.root, false, nil
 	case receivecontract.DirectoryTreeResultRoot:
 		rootLayout, ok := layout.ResultRoot()
 		if !ok {
@@ -426,8 +420,7 @@ func (a *Authority) claimPublicEntryLocked(
 func (a *Authority) existingTopLevelClaimsLocked(ctrlDir *Dir) (map[string]struct{}, error) {
 	claimed := make(map[string]struct{})
 	err := a.scanOperationHeadersLocked(ctrlDir, "create_operation", FailureCreate, func(_ receivecontract.OperationID, header taskHeader) {
-		if res, ok := header.Intent.MaterializationPlan().DestinationReservation(); ok &&
-			res.Kind() == receivecontract.ReservationNamedContainerEntry {
+		if res, ok := header.Intent.MaterializationPlan().DestinationReservation(); ok && !res.IsZero() {
 			claimed[catalog.SiblingNameKey(res.PhysicalName())] = struct{}{}
 		}
 	})

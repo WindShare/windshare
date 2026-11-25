@@ -246,6 +246,66 @@ func TestSessionNonDeliveredOutcomesReplayAndRejectForeignIdentity(t *testing.T)
 	})
 }
 
+func TestSessionRejectsTraverseOnlyDirectoryAdmissionAndZeroEntryKindMapper(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	auth, err := New(Config{RootPath: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer auth.Close()
+	if err := auth.BindDestination(ctx); err != nil {
+		t.Fatal(err)
+	}
+	sel := testSelectionSpec(t, 0xd1)
+	lookup, err := auth.SelectOperation(ctx, sel, receivecontract.AutomaticOperation())
+	if err != nil || lookup.Kind() != LookupCreateReady {
+		t.Fatalf("select = (%v, %v)", lookup.Kind(), err)
+	}
+	layout, err := receivecontract.NewCompleteDirectoryResultRoot(testID16[catalog.DirectoryID](0xd5), "parent/photos")
+	if err != nil {
+		t.Fatal(err)
+	}
+	art, err := receivecontract.NewResultRootDirectoryTree(layout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, err := auth.CreateOperation(ctx, lookup, art)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, _ := op.ReceiveIntent()
+	sessionIface, err := auth.OpenOperation(ctx, op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := sessionIface.(*Session)
+
+	traverseReq, err := transfer.NewDirectoryMaterializationRequest(
+		intent,
+		transfer.AuthenticatedSourceDirectory{
+			DirectoryID: intent.SyntheticRoot(),
+			Generation:  testID16[catalog.DirectoryGeneration](0xd3),
+			SourcePath:  ordinaryoutput.EmptySourceCatalogPath(),
+		},
+		ordinaryoutput.SourceNodeConnectsSelection,
+		transfer.MaterializedDirectoryClaim{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if traverseReq.Projection().Kind() != ordinaryoutput.ArtifactTraverseOnly {
+		t.Fatalf("projection kind = %v, want ArtifactTraverseOnly", traverseReq.Projection().Kind())
+	}
+	if _, err := session.AdmitDirectory(ctx, traverseReq); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
+		t.Fatalf("AdmitDirectory(traverse-only) = %v, want ErrInvalidOutputBinding", err)
+	}
+
+	if _, err := newNameMapper(intent.OperationID(), receivecontract.DestinationReservation{}, nil, nil, nil); !errors.Is(err, ErrInvalidNameMapping) {
+		t.Fatalf("newNameMapper(zero reservation) = %v, want ErrInvalidNameMapping", err)
+	}
+}
+
 func openTestResultRootSession(
 	t *testing.T,
 	root string,

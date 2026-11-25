@@ -110,18 +110,6 @@ func TestArtifactPathProjectorThreeStateMatrix(t *testing.T) {
 			node:      sourceNode(t, catalog.NodeKindFile, file.NodeID(), "photos/image.jpg", SourceNodeSelected),
 			wantKind:  ArtifactMaterialize, wantPath: "windshare/photos/image.jpg",
 		},
-		{
-			name:      "legacy root traverses",
-			projector: catalogRootProjector(t, root),
-			node:      sourceNode(t, catalog.NodeKindDirectory, root.NodeID(), "", SourceNodeConnectsSelection),
-			wantKind:  ArtifactTraverseOnly,
-		},
-		{
-			name:      "legacy descendant preserves source coordinate",
-			projector: catalogRootProjector(t, root),
-			node:      sourceNode(t, catalog.NodeKindFile, file.NodeID(), "photos/image.jpg", SourceNodeSelected),
-			wantKind:  ArtifactMaterialize, wantPath: "photos/image.jpg",
-		},
 	}
 
 	for _, test := range tests {
@@ -323,16 +311,6 @@ func syntheticProjector(t *testing.T, root catalog.DirectoryID) ArtifactPathProj
 		receivecontract.NewSyntheticSelectionResultRoot(),
 	)
 	return artifactProjector(t, root, artifact, err)
-}
-
-func catalogRootProjector(t *testing.T, root catalog.DirectoryID) ArtifactPathProjector {
-	t.Helper()
-	return artifactProjector(
-		t,
-		root,
-		receivecontract.NewCatalogRootDirectoryTree(),
-		nil,
-	)
 }
 
 func artifactProjector(

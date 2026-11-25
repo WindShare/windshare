@@ -53,7 +53,7 @@ func TestTransferWave2DirectoryAdmissionProjection(t *testing.T) {
 	parentOutput := admissionTestDirectory(
 		t, root, transferID[catalog.DirectoryGeneration](0x62), DirectoryAdmission{}, "", catalog.ModifiedTime{},
 	)
-	parent, err := NewDirectoryAdmission(admissionTestMaterializationDirectory(t, parentOutput))
+	parent, err := NewDirectoryAdmission(admissionTestMaterializationDirectory(t, parentOutput, "windshare"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,45 +61,51 @@ func TestTransferWave2DirectoryAdmissionProjection(t *testing.T) {
 		t, transferID[catalog.DirectoryID](0x63), transferID[catalog.DirectoryGeneration](0x64),
 		parent, "child", catalog.ModifiedTime{},
 	)
-	childMaterialization := admissionTestMaterializationDirectory(t, childOutput)
+	childMaterialization := admissionTestMaterializationDirectory(t, childOutput, "windshare/child")
 	child, err := NewDirectoryAdmission(childMaterialization)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if child.IsZero() || child.DirectoryID() != childOutput.DirectoryID || child.Generation() != childOutput.Generation || child.Path() != "child" {
+	if child.IsZero() || child.DirectoryID() != childOutput.DirectoryID || child.Generation() != childOutput.Generation || child.Path() != "windshare/child" {
 		t.Fatalf("child admission projection = %+v", child)
 	}
 	if child.Equal(parent) || !child.Equal(child) {
 		t.Fatal("admission equality failed")
 	}
-	if !child.HasParent() || child.ParentPath() != "" || parent.HasParent() {
+	if !child.HasParent() || child.ParentPath() != "windshare" || parent.HasParent() {
 		t.Fatalf("parent links child=%+v root=%+v", child, parent)
 	}
 	if err := validateDirectoryAdmission(child, childMaterialization); err != nil {
 		t.Fatalf("valid admission binding = %v", err)
 	}
-	for name, invalid := range map[string]AuthenticatedSourceDirectory{
-		"path": func() AuthenticatedSourceDirectory {
-			value := childOutput
-			value.SourcePath = admissionTestDirectory(
-				t, value.DirectoryID, value.Generation, value.ParentAdmission, "other", value.ModifiedTime,
-			).SourcePath
-			return value
-		}(),
-		"generation": func() AuthenticatedSourceDirectory {
-			value := childOutput
-			value.Generation = transferID[catalog.DirectoryGeneration](0x65)
-			return value
-		}(),
-		"parent": func() AuthenticatedSourceDirectory {
-			value := childOutput
-			value.ParentAdmission = DirectoryAdmission{}
-			return value
-		}(),
+	for name, invalid := range map[string]struct {
+		dir  AuthenticatedSourceDirectory
+		path string
+	}{
+		"path": {
+			dir:  childOutput,
+			path: "windshare/other",
+		},
+		"generation": {
+			dir: func() AuthenticatedSourceDirectory {
+				value := childOutput
+				value.Generation = transferID[catalog.DirectoryGeneration](0x65)
+				return value
+			}(),
+			path: "windshare/child",
+		},
+		"parent": {
+			dir: func() AuthenticatedSourceDirectory {
+				value := childOutput
+				value.ParentAdmission = DirectoryAdmission{}
+				return value
+			}(),
+			path: "windshare/child",
+		},
 	} {
 		t.Run("mismatch/"+name, func(t *testing.T) {
 			if !errors.Is(validateDirectoryAdmission(
-				child, admissionTestMaterializationDirectory(t, invalid),
+				child, admissionTestMaterializationDirectory(t, invalid.dir, invalid.path),
 			), ErrDirectoryAdmissionMismatch) {
 				t.Fatalf("mismatch %s was accepted", name)
 			}
@@ -117,7 +123,7 @@ func TestTransferWave2DirectoryAdmissionProjection(t *testing.T) {
 		),
 	} {
 		t.Run("invalid/"+name, func(t *testing.T) {
-			path, pathErr := NewMaterializationRootRelativePath(invalid.SourcePath.String())
+			path, pathErr := NewMaterializationRootRelativePath("windshare")
 			if pathErr != nil {
 				t.Fatal(pathErr)
 			}

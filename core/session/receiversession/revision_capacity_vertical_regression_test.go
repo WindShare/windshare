@@ -458,7 +458,10 @@ func syntheticCapacityReceiveIntent(
 	if err != nil {
 		t.Fatal(err)
 	}
-	artifact := receivecontract.NewCatalogRootDirectoryTree()
+	artifact, err := receivecontract.NewResultRootDirectoryTree(receivecontract.NewSyntheticSelectionResultRoot())
+	if err != nil {
+		t.Fatal(err)
+	}
 	identityMaterial := append(share.Bytes(), root.Bytes()...)
 	operationDigest := sha256.Sum256(append([]byte("windshare/synthetic-capacity-operation/v1\x00"), identityMaterial...))
 	reservationDigest := sha256.Sum256(append([]byte("windshare/synthetic-capacity-reservation/v1\x00"), identityMaterial...))
@@ -477,7 +480,10 @@ func syntheticCapacityReceiveIntent(
 	if err != nil {
 		t.Fatal(err)
 	}
-	reservation, err := receivecontract.NewNativeContainerRootReservation(operation, reservationID, artifact, authority)
+	reservation, err := receivecontract.NewNativeNamedEntryReservation(
+		operation, reservationID, artifact, authority,
+		receivecontract.DefaultResultRootName, receivecontract.DefaultResultRootName, 0,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

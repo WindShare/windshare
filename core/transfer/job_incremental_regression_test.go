@@ -279,8 +279,8 @@ func TestTransferJobDownloadsSupportedChildrenAndReportsSourceOmissions(t *testi
 			if result.Outcome != DirectTreeOutcomeSuccess || result.TerminationCause != nil || len(result.Directories) != 0 ||
 				len(result.Files) != 0 || result.SucceededFiles != 1 || result.Progress.SourceOmittedEntries != selectionCase.omitted ||
 				result.Progress.Discovery != DiscoveryComplete || !result.Progress.CountersExact ||
-				!slices.Equal(revisions.order, []catalog.FileID{file}) || !slices.Equal(output.directories, []string{"", "child"}) ||
-				!slices.Equal(output.finalized, []string{"child", ""}) {
+				!slices.Equal(revisions.order, []catalog.FileID{file}) || !slices.Equal(output.directories, []string{"windshare", "windshare/child"}) ||
+				!slices.Equal(output.finalized, []string{"windshare/child", "windshare"}) {
 				t.Fatalf("omitted child result=%+v opens=%v directories=%v finalized=%v", result, revisions.order, output.directories, output.finalized)
 			}
 		})
@@ -369,8 +369,8 @@ func TestOpaqueSelectionBeginsBeforeDelayedUnrelatedBranchAndKeepsItVirtual(t *t
 	close(releaseUnrelated)
 	result := <-resultChannel
 	if result.Outcome != DirectTreeOutcomeSuccess || result.SucceededFiles != 1 ||
-		!slices.Equal(output.directories, []string{"", "a-wanted"}) ||
-		!slices.Equal(output.finalized, []string{"a-wanted", ""}) {
+		!slices.Equal(output.directories, []string{"windshare", "windshare/a-wanted"}) ||
+		!slices.Equal(output.finalized, []string{"windshare/a-wanted", "windshare"}) {
 		t.Fatalf("result=%+v directories=%v finalized=%v", result, output.directories, output.finalized)
 	}
 	select {
@@ -410,7 +410,7 @@ func TestNonDurableStreamPublishesWithTransientCoverageAndEmptyCheckpoints(t *te
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
-	transaction := output.transactions["stream.bin"]
+	transaction := output.transactions["windshare/stream.bin"]
 	if result.Outcome != DirectTreeOutcomeSuccess || result.SucceededFiles != 1 || transaction == nil ||
 		!transaction.durable.IsEmpty() || !RangesCoverFile(size, transaction.transient) ||
 		!transaction.committed || result.Progress.VerifiedBytes != size ||

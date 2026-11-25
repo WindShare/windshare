@@ -11,9 +11,9 @@ import (
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
-// MaterializationRootRelativePath names an object below the output authority's
-// already-reserved root. The empty value is a valid directory-root coordinate;
-// keeping it typed prevents catalog and logical paths from crossing this boundary.
+// MaterializationRootRelativePath names a materialized object within the
+// output authority's reserved destination entry. Keeping it typed prevents
+// source catalog and physical paths from crossing this boundary.
 type MaterializationRootRelativePath struct {
 	value string
 	valid bool
@@ -21,7 +21,7 @@ type MaterializationRootRelativePath struct {
 
 func NewMaterializationRootRelativePath(value string) (MaterializationRootRelativePath, error) {
 	if value == "" {
-		return MaterializationRootRelativePath{valid: true}, nil
+		return MaterializationRootRelativePath{}, ErrInvalidOutputBinding
 	}
 	canonical, err := catalog.CanonicalPath(value)
 	if err != nil || canonical != value {
@@ -31,7 +31,6 @@ func NewMaterializationRootRelativePath(value string) (MaterializationRootRelati
 }
 
 func (path MaterializationRootRelativePath) String() string { return path.value }
-func (path MaterializationRootRelativePath) IsRoot() bool   { return path.valid && path.value == "" }
 func (path MaterializationRootRelativePath) Valid() bool    { return path.valid }
 
 // MaterializationDirectory contains only destination-root-relative admission
@@ -151,11 +150,9 @@ func (parent MaterializationFileParent) valid() bool {
 	case MaterializationFileParentReference:
 		return parent.admission.IsZero() && !parent.materialization.Valid()
 	case MaterializationFileParentDirectory:
-		materializationMatches := parent.materialization.Valid() &&
-			parent.materialization.Admission().Equal(parent.admission)
-		catalogRootReference := !parent.materialization.Valid() &&
-			!parent.admission.HasParent() && parent.admission.Path() == ""
-		return !parent.admission.IsZero() && (materializationMatches || catalogRootReference) &&
+		return !parent.admission.IsZero() &&
+			parent.materialization.Valid() &&
+			parent.materialization.Admission().Equal(parent.admission) &&
 			parent.admission.DirectoryID() == parent.directory &&
 			parent.admission.Generation() == parent.generation
 	default:

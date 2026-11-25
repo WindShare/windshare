@@ -30,12 +30,12 @@ func TestOutputObservationWaitsForMaterializerAcceptance(t *testing.T) {
 			var output *jobOutput
 			reader := outputObservedRangeReader{
 				buffered: func() {
-					if accepted != 0 || !output.transactions["file.bin"].pending.IsEmpty() {
+					if accepted != 0 || !output.transactions["windshare/file.bin"].pending.IsEmpty() {
 						t.Error("buffered authentication was counted as materialized output")
 					}
 				},
 				accepted: func(bytes uint64) {
-					if output.transactions["file.bin"].pending.IsEmpty() {
+					if output.transactions["windshare/file.bin"].pending.IsEmpty() {
 						t.Error("output observed before its transaction accepted bytes")
 					}
 					accepted += bytes

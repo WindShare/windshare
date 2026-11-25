@@ -144,7 +144,7 @@ func TestTransferJobPreservesWorkerStopDuringCatalogReplay(t *testing.T) {
 				discoveryRec.Payload().Get("failed").Bool() || discoveryRec.Payload().Get("fault").Present() {
 				t.Fatalf("authenticated discovery status=%v rec=%+v", result.Progress.Discovery, discoveryRec)
 			}
-			transaction := output.transactions["file.bin"]
+			transaction := output.transactions["windshare/file.bin"]
 			if transaction == nil || transaction.commitCalls != 1 || transaction.pauseCalls != 0 ||
 				transaction.retireCalls != 0 || output.pauseCalls != 1 || output.completeCalls != 0 {
 				t.Fatalf("worker settlement was repeated: transaction=%+v pause=%d complete=%d",

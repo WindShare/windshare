@@ -211,7 +211,6 @@ const (
 	projectionSingleFile projectionLayoutKind = iota + 1
 	projectionRealResultRoot
 	projectionSyntheticResultRoot
-	projectionCatalogRoot
 )
 
 // ProjectionLayout is a validated, non-encoded view lowered from a canonical
@@ -272,16 +271,6 @@ func newSyntheticResultRootProjectionLayout(
 	}, nil
 }
 
-func newCatalogRootProjectionLayout(syntheticRoot catalog.DirectoryID) (projectionLayout, error) {
-	if syntheticRoot.IsZero() {
-		return projectionLayout{}, ErrInvalidArtifactProjector
-	}
-	return projectionLayout{
-		kind: projectionCatalogRoot, syntheticRoot: syntheticRoot,
-		anchorID: syntheticRoot.NodeID(), sourcePath: EmptySourceCatalogPath(),
-	}, nil
-}
-
 func (layout projectionLayout) valid() bool {
 	if layout.syntheticRoot.IsZero() || layout.anchorID.IsZero() || !layout.sourcePath.Valid() {
 		return false
@@ -299,9 +288,6 @@ func (layout projectionLayout) valid() bool {
 	case projectionSyntheticResultRoot:
 		return layout.sourcePath.IsRoot() && layout.anchorID == layout.syntheticRoot.NodeID() &&
 			canonicalArtifactComponent(layout.preferredName)
-	case projectionCatalogRoot:
-		return layout.sourcePath.IsRoot() && layout.anchorID == layout.syntheticRoot.NodeID() &&
-			layout.preferredName == ""
 	default:
 		return false
 	}
@@ -362,8 +348,6 @@ func NewArtifactPathProjector(
 		default:
 			err = ErrInvalidArtifactProjector
 		}
-	case receivecontract.DirectoryTreeCatalogRoot:
-		layout, err = newCatalogRootProjectionLayout(syntheticRoot)
 	default:
 		err = ErrInvalidArtifactProjector
 	}
@@ -384,8 +368,6 @@ func (projector ArtifactPathProjector) Project(node AuthenticatedSourceNode) Art
 		return projector.projectRealResultRoot(node)
 	case projectionSyntheticResultRoot:
 		return projector.projectSyntheticResultRoot(node)
-	case projectionCatalogRoot:
-		return projector.projectCatalogRoot(node)
 	default:
 		return rejectProjection(ArtifactRejectInvalidSource)
 	}
@@ -487,26 +469,6 @@ func (projector ArtifactPathProjector) projectSyntheticResultRoot(
 	return materializeProjection(
 		joinArtifactPath(projector.layout.preferredName, node.sourcePath.String()),
 	)
-}
-
-func (projector ArtifactPathProjector) projectCatalogRoot(
-	node AuthenticatedSourceNode,
-) ArtifactPathProjection {
-	if node.sourcePath.IsRoot() {
-		if node.kind == catalog.NodeKindDirectory &&
-			node.nodeID == projector.layout.syntheticRoot.NodeID() &&
-			node.role == SourceNodeConnectsSelection {
-			return traverseOnlyProjection()
-		}
-		return rejectProjection(ArtifactRejectWrongIdentity)
-	}
-	if node.nodeID == projector.layout.syntheticRoot.NodeID() {
-		return rejectProjection(ArtifactRejectWrongIdentity)
-	}
-	if node.role != SourceNodeSelected && node.role != SourceNodeConnectsSelection {
-		return rejectProjection(ArtifactRejectWrongRole)
-	}
-	return materializeProjection(node.sourcePath.String())
 }
 
 type sourcePathRelation uint8

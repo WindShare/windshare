@@ -8,15 +8,8 @@ import (
 )
 
 const (
-	destinationReservationDomain = "windshare/destination-reservation/v4"
+	destinationReservationDomain = "windshare/destination-reservation/v5"
 	nameCollisionDomain          = "windshare/name-collision/v1"
-)
-
-type DestinationReservationKind uint8
-
-const (
-	ReservationContainerRoot DestinationReservationKind = iota + 1
-	ReservationNamedContainerEntry
 )
 
 type ContainerEntryKind uint8
@@ -27,7 +20,6 @@ const (
 )
 
 type DestinationReservation struct {
-	kind                DestinationReservationKind
 	operation           OperationID
 	id                  DestinationReservationID
 	artifact            ArtifactDigest
@@ -39,22 +31,6 @@ type DestinationReservation struct {
 	collisionIndex      uint32
 	digest              BindingDigest
 	valid               bool
-}
-
-func NewNativeContainerRootReservation(
-	operation OperationID,
-	id DestinationReservationID,
-	artifact ArtifactSpec,
-	authority AuthorityRef,
-) (DestinationReservation, error) {
-	layout, ok := artifact.DirectoryTree()
-	if !ok || layout.Kind() != DirectoryTreeCatalogRoot {
-		return DestinationReservation{}, ErrInvalidReceiveContract
-	}
-	return newDestinationReservation(
-		ReservationContainerRoot, operation, id, artifact,
-		authority, 0, "", "", "", 0,
-	)
 }
 
 func NewNativeNamedEntryReservation(
@@ -86,13 +62,12 @@ func NewNativeNamedEntryReservation(
 		return DestinationReservation{}, ErrInvalidReceiveContract
 	}
 	return newDestinationReservation(
-		ReservationNamedContainerEntry, operation, id, artifact,
+		operation, id, artifact,
 		authority, entryKind, requestedName, logicalReservedName, physicalName, collisionIndex,
 	)
 }
 
 func newDestinationReservation(
-	kind DestinationReservationKind,
 	operation OperationID,
 	id DestinationReservationID,
 	artifact ArtifactSpec,
@@ -104,32 +79,21 @@ func newDestinationReservation(
 	if operation.IsZero() || id.IsZero() || artifact.IsZero() || authority.IsZero() {
 		return DestinationReservation{}, ErrInvalidReceiveContract
 	}
-	material := canonicalRecord(destinationReservationDomain,
-		[]byte{byte(kind)},
-		frame(operation.Bytes()), frame(id.Bytes()),
-		frame(artifact.Digest().Bytes()), frame(authority.Bytes()),
-	)
-	switch kind {
-	case ReservationContainerRoot:
-		if entryKind != 0 || requestedName != "" || logicalReservedName != "" ||
-			physicalName != "" || collisionIndex != 0 {
-			return DestinationReservation{}, ErrInvalidReceiveContract
-		}
-	case ReservationNamedContainerEntry:
-		if entryKind != ContainerEntrySingleFile && entryKind != ContainerEntryResultRoot {
-			return DestinationReservation{}, ErrInvalidReceiveContract
-		}
-		material = append(material, frame([]byte{byte(entryKind)})...)
-		material = append(material, frame([]byte(requestedName))...)
-		material = append(material, frame([]byte(logicalReservedName))...)
-		material = append(material, frame([]byte(physicalName))...)
-		material = append(material, frame(uint32Bytes(collisionIndex))...)
-	default:
+	if entryKind != ContainerEntrySingleFile && entryKind != ContainerEntryResultRoot {
 		return DestinationReservation{}, ErrInvalidReceiveContract
 	}
+	material := canonicalRecord(destinationReservationDomain,
+		frame(operation.Bytes()), frame(id.Bytes()),
+		frame(artifact.Digest().Bytes()), frame(authority.Bytes()),
+		frame([]byte{byte(entryKind)}),
+		frame([]byte(requestedName)),
+		frame([]byte(logicalReservedName)),
+		frame([]byte(physicalName)),
+		frame(uint32Bytes(collisionIndex)),
+	)
 	sum := digest(material)
 	return DestinationReservation{
-		kind: kind, operation: operation, id: id, artifact: artifact.Digest(),
+		operation: operation, id: id, artifact: artifact.Digest(),
 		authority: authority, entryKind: entryKind, requestedName: requestedName,
 		logicalReservedName: logicalReservedName, physicalName: physicalName,
 		collisionIndex: collisionIndex, digest: BindingDigest(sum), valid: true,
@@ -168,9 +132,8 @@ func CollisionName(operation OperationID, requestedName string, index uint32, fi
 	return result, nil
 }
 
-func (reservation DestinationReservation) Kind() DestinationReservationKind { return reservation.kind }
-func (reservation DestinationReservation) OperationID() OperationID         { return reservation.operation }
-func (reservation DestinationReservation) ID() DestinationReservationID     { return reservation.id }
+func (reservation DestinationReservation) OperationID() OperationID     { return reservation.operation }
+func (reservation DestinationReservation) ID() DestinationReservationID { return reservation.id }
 func (reservation DestinationReservation) ArtifactDigest() ArtifactDigest {
 	return reservation.artifact
 }
@@ -188,15 +151,14 @@ func (reservation DestinationReservation) Digest() BindingDigest  { return reser
 func (reservation DestinationReservation) IsZero() bool           { return !reservation.valid }
 
 type destinationReservationJSON struct {
-	Kind                string                   `json:"kind"`
 	OperationID         OperationID              `json:"operation_id"`
 	ID                  DestinationReservationID `json:"id"`
 	ArtifactDigest      ArtifactDigest           `json:"artifact_digest"`
 	AuthorityRef        AuthorityRef             `json:"authority_ref"`
-	EntryKind           string                   `json:"entry_kind,omitempty"`
-	RequestedName       string                   `json:"requested_name,omitempty"`
-	LogicalReservedName string                   `json:"logical_reserved_name,omitempty"`
-	PhysicalName        string                   `json:"physical_name,omitempty"`
+	EntryKind           string                   `json:"entry_kind"`
+	RequestedName       string                   `json:"requested_name"`
+	LogicalReservedName string                   `json:"logical_reserved_name"`
+	PhysicalName        string                   `json:"physical_name"`
 	CollisionIndex      uint32                   `json:"collision_index,omitempty"`
 }
 
@@ -204,31 +166,25 @@ func (reservation DestinationReservation) MarshalJSON() ([]byte, error) {
 	if !reservation.valid {
 		return nil, ErrInvalidReceiveContract
 	}
-	payload := destinationReservationJSON{
-		OperationID:    reservation.operation,
-		ID:             reservation.id,
-		ArtifactDigest: reservation.artifact,
-		AuthorityRef:   reservation.authority,
-	}
-	switch reservation.kind {
-	case ReservationContainerRoot:
-		payload.Kind = "container_root"
-	case ReservationNamedContainerEntry:
-		payload.Kind = "named_entry"
-		switch reservation.entryKind {
-		case ContainerEntrySingleFile:
-			payload.EntryKind = "single_file"
-		case ContainerEntryResultRoot:
-			payload.EntryKind = "result_root"
-		default:
-			return nil, ErrInvalidReceiveContract
-		}
-		payload.RequestedName = reservation.requestedName
-		payload.LogicalReservedName = reservation.logicalReservedName
-		payload.PhysicalName = reservation.physicalName
-		payload.CollisionIndex = reservation.collisionIndex
+	var entryKind string
+	switch reservation.entryKind {
+	case ContainerEntrySingleFile:
+		entryKind = "single_file"
+	case ContainerEntryResultRoot:
+		entryKind = "result_root"
 	default:
 		return nil, ErrInvalidReceiveContract
+	}
+	payload := destinationReservationJSON{
+		OperationID:         reservation.operation,
+		ID:                  reservation.id,
+		ArtifactDigest:      reservation.artifact,
+		AuthorityRef:        reservation.authority,
+		EntryKind:           entryKind,
+		RequestedName:       reservation.requestedName,
+		LogicalReservedName: reservation.logicalReservedName,
+		PhysicalName:        reservation.physicalName,
+		CollisionIndex:      reservation.collisionIndex,
 	}
 	return json.Marshal(payload)
 }
@@ -237,36 +193,24 @@ func decodeReservationJSON(payload destinationReservationJSON, artifact Artifact
 	if artifact.IsZero() || payload.ArtifactDigest != artifact.Digest() {
 		return DestinationReservation{}, ErrInvalidReceiveContract
 	}
-	switch payload.Kind {
-	case "container_root":
-		if payload.EntryKind != "" || payload.RequestedName != "" ||
-			payload.LogicalReservedName != "" || payload.PhysicalName != "" ||
-			payload.CollisionIndex != 0 {
-			return DestinationReservation{}, ErrInvalidReceiveContract
-		}
-		return NewNativeContainerRootReservation(payload.OperationID, payload.ID, artifact, payload.AuthorityRef)
-	case "named_entry":
-		reservation, err := NewNativeNamedEntryReservation(
-			payload.OperationID, payload.ID, artifact, payload.AuthorityRef,
-			payload.LogicalReservedName, payload.PhysicalName, payload.CollisionIndex,
-		)
-		if err != nil {
-			return DestinationReservation{}, err
-		}
-		var wantEntryKind ContainerEntryKind
-		switch payload.EntryKind {
-		case "single_file":
-			wantEntryKind = ContainerEntrySingleFile
-		case "result_root":
-			wantEntryKind = ContainerEntryResultRoot
-		default:
-			return DestinationReservation{}, ErrInvalidReceiveContract
-		}
-		if reservation.EntryKind() != wantEntryKind || reservation.RequestedName() != payload.RequestedName {
-			return DestinationReservation{}, ErrInvalidReceiveContract
-		}
-		return reservation, nil
+	reservation, err := NewNativeNamedEntryReservation(
+		payload.OperationID, payload.ID, artifact, payload.AuthorityRef,
+		payload.LogicalReservedName, payload.PhysicalName, payload.CollisionIndex,
+	)
+	if err != nil {
+		return DestinationReservation{}, err
+	}
+	var wantEntryKind ContainerEntryKind
+	switch payload.EntryKind {
+	case "single_file":
+		wantEntryKind = ContainerEntrySingleFile
+	case "result_root":
+		wantEntryKind = ContainerEntryResultRoot
 	default:
 		return DestinationReservation{}, ErrInvalidReceiveContract
 	}
+	if reservation.EntryKind() != wantEntryKind || reservation.RequestedName() != payload.RequestedName {
+		return DestinationReservation{}, ErrInvalidReceiveContract
+	}
+	return reservation, nil
 }

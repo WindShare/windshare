@@ -33,7 +33,6 @@ type DirectoryTreeLayoutKind uint8
 const (
 	DirectoryTreeSingleFile DirectoryTreeLayoutKind = iota + 1
 	DirectoryTreeResultRoot
-	DirectoryTreeCatalogRoot
 )
 
 type ResultRootClass uint8
@@ -96,14 +95,6 @@ func NewResultRootDirectoryTree(layout ResultRootLayout) (ArtifactSpec, error) {
 		return ArtifactSpec{}, ErrInvalidReceiveContract
 	}
 	return newDirectoryTreeArtifact(DirectoryTreeLayout{kind: DirectoryTreeResultRoot, resultRoot: layout})
-}
-
-func NewCatalogRootDirectoryTree() ArtifactSpec {
-	result, err := newDirectoryTreeArtifact(DirectoryTreeLayout{kind: DirectoryTreeCatalogRoot})
-	if err != nil {
-		panic(err)
-	}
-	return result
 }
 
 func newDirectoryTreeArtifact(layout DirectoryTreeLayout) (ArtifactSpec, error) {
@@ -278,7 +269,6 @@ func (layout DirectoryTreeLayout) digestBytes() []byte {
 		encoded = append(encoded, frame([]byte(layout.singleFile.SuggestedName))...)
 	case DirectoryTreeResultRoot:
 		encoded = append(encoded, frame(layout.resultRoot.digestBytes())...)
-	case DirectoryTreeCatalogRoot:
 	}
 	return encoded
 }
@@ -291,8 +281,6 @@ func (layout DirectoryTreeLayout) valid() bool {
 			leaf == layout.singleFile.SuggestedName
 	case DirectoryTreeResultRoot:
 		return layout.resultRoot.valid
-	case DirectoryTreeCatalogRoot:
-		return layout.singleFile == (OriginalFileSpec{}) && !layout.resultRoot.valid
 	default:
 		return false
 	}
@@ -371,8 +359,6 @@ func (artifact ArtifactSpec) MarshalJSON() ([]byte, error) {
 			dto.DirectoryID = hex.EncodeToString(root.directoryID.Bytes())
 		}
 		payload.ResultRoot = dto
-	case DirectoryTreeCatalogRoot:
-		payload.Layout = "catalog_root"
 	default:
 		return nil, ErrInvalidReceiveContract
 	}
@@ -391,11 +377,6 @@ func (artifact *ArtifactSpec) UnmarshalJSON(data []byte) error {
 		rebuilt, err = unmarshalSingleFileArtifact(payload)
 	case "result_root":
 		rebuilt, err = unmarshalResultRootArtifact(payload)
-	case "catalog_root":
-		if payload.SingleFile != nil || payload.ResultRoot != nil {
-			return ErrInvalidReceiveContract
-		}
-		rebuilt = NewCatalogRootDirectoryTree()
 	default:
 		return ErrInvalidReceiveContract
 	}

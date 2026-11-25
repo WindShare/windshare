@@ -111,7 +111,10 @@ func receiveIntentFixture(
 	if err != nil {
 		t.Fatal(err)
 	}
-	artifact := receivecontract.NewCatalogRootDirectoryTree()
+	artifact, err := receivecontract.NewResultRootDirectoryTree(receivecontract.NewSyntheticSelectionResultRoot())
+	if err != nil {
+		t.Fatal(err)
+	}
 	operation, err := receivecontract.OperationIDFromBytes(
 		bytes.Repeat([]byte{identity}, receivecontract.StableIdentityBytes),
 	)
@@ -130,8 +133,9 @@ func receiveIntentFixture(
 	if err != nil {
 		t.Fatal(err)
 	}
-	reservation, err := receivecontract.NewNativeContainerRootReservation(
+	reservation, err := receivecontract.NewNativeNamedEntryReservation(
 		operation, reservationID, artifact, authority,
+		receivecontract.DefaultResultRootName, receivecontract.DefaultResultRootName, 0,
 	)
 	if err != nil {
 		t.Fatal(err)

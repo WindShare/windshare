@@ -183,7 +183,7 @@ type nameTraceEvent struct {
 type nameMapper struct {
 	mu            sync.Mutex
 	opID          []byte
-	entryKind     receivecontract.ContainerEntryKind // 0 for ReservationContainerRoot
+	entryKind     receivecontract.ContainerEntryKind
 	requestedRoot string
 	physicalRoot  string
 	mappings      map[string]NameMapping
@@ -199,6 +199,10 @@ func newNameMapper(
 	persist func(NameMapping) error,
 	trace func(nameTraceEvent),
 ) (*nameMapper, error) {
+	if reservation.EntryKind() != receivecontract.ContainerEntrySingleFile &&
+		reservation.EntryKind() != receivecontract.ContainerEntryResultRoot {
+		return nil, ErrInvalidNameMapping
+	}
 	mapper := &nameMapper{
 		opID:          opID.Bytes(),
 		entryKind:     reservation.EntryKind(),
@@ -231,12 +235,9 @@ func (m *nameMapper) resolve(logical string) (string, error) {
 
 // resolveLocked turns a canonical logical materialization path into a physical
 // path relative to the operation's root directory (resultDir for ResultRoot,
-// container root for CatalogRoot and SingleFile).
+// container root for SingleFile).
 func (m *nameMapper) resolveLocked(logical string) (string, error) {
 	if logical == "" {
-		if m.entryKind == 0 {
-			return "", nil
-		}
 		return "", ErrInvalidNameMapping
 	}
 	canonical, err := catalog.CanonicalPath(logical)
@@ -267,25 +268,16 @@ func (m *nameMapper) resolveLocked(logical string) (string, error) {
 		}
 		return strings.Join(phys, "/"), nil
 	default:
-		// Container root (CatalogRoot): all segments are directly under dest root.
-		phys := make([]string, 0, len(parts))
-		for i := range parts {
-			comp := parts[i]
-			if rec, ok := m.mappings[strings.Join(parts[:i+1], "/")]; ok {
-				comp = rec.PhysicalComponent
-			}
-			phys = append(phys, comp)
-		}
-		return strings.Join(phys, "/"), nil
+		return "", ErrInvalidNameMapping
 	}
 }
 
 // bindFileLeaf resolves the physical leaf name for a file inside parentDir,
-// repairing only when the destination rejects the component, it collides with
-// .windshare-tmp* at the container root, or it aliases another mapped name.
-// Repaired file names are persisted ahead of staging/publication so crash
-// recovery can reconcile interrupted publishes against the same physical leaf;
-// NameAdjustments gates file reporting on durable delivery receipts.
+// repairing only when the destination rejects the component or it aliases
+// another mapped name. Repaired file names are persisted ahead of
+// staging/publication so crash recovery can reconcile interrupted publishes
+// against the same physical leaf; NameAdjustments gates file reporting on
+// durable delivery receipts.
 func (m *nameMapper) bindFileLeaf(logicalPath string, parentDir *Dir) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -305,8 +297,7 @@ func (m *nameMapper) bindFileLeaf(logicalPath string, parentDir *Dir) (string, e
 		return leaf, nil
 	}
 	owner, claimed := m.claims[phys]
-	reserved := m.entryKind == 0 && parentRel == "" && isReservedContainerRootName(leaf)
-	if !reserved && (!claimed || owner == logicalPath) {
+	if !claimed || owner == logicalPath {
 		usable, checkErr := leafUsableDirectly(parentDir, leaf)
 		if checkErr != nil {
 			return "", checkErr
@@ -352,8 +343,7 @@ func (m *nameMapper) bindDirectory(
 		return childDir, nil
 	}
 	owner, claimed := m.claims[phys]
-	reserved := m.entryKind == 0 && parentRel == "" && isReservedContainerRootName(leaf)
-	if !reserved && (!claimed || owner == logicalPath) {
+	if !claimed || owner == logicalPath {
 		usable, checkErr := leafUsableDirectly(parentDir, leaf)
 		if checkErr != nil {
 			return nil, checkErr
@@ -573,8 +563,7 @@ func topLevelNameAdjustment(
 	reservation receivecontract.DestinationReservation,
 	hasDelivered bool,
 ) (NameAdjustment, bool) {
-	if reservation.Kind() != receivecontract.ReservationNamedContainerEntry ||
-		reservation.PhysicalName() == reservation.LogicalReservedName() {
+	if reservation.IsZero() || reservation.PhysicalName() == reservation.LogicalReservedName() {
 		return NameAdjustment{}, false
 	}
 	switch reservation.EntryKind() {

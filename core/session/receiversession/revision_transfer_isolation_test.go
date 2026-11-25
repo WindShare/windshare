@@ -113,7 +113,10 @@ func newSessionRuntimeDirectTreeIntent(
 	if err != nil {
 		t.Fatal(err)
 	}
-	artifact := receivecontract.NewCatalogRootDirectoryTree()
+	artifact, err := receivecontract.NewResultRootDirectoryTree(receivecontract.NewSyntheticSelectionResultRoot())
+	if err != nil {
+		t.Fatal(err)
+	}
 	identityMaterial := append(append(share.Bytes(), root.Bytes()...), label...)
 	operationDigest := sha256.Sum256(append([]byte("sessionruntime/test-operation/v1\x00"), identityMaterial...))
 	operation, err := receivecontract.OperationIDFromBytes(operationDigest[:receivecontract.StableIdentityBytes])
@@ -132,8 +135,9 @@ func newSessionRuntimeDirectTreeIntent(
 	if err != nil {
 		t.Fatal(err)
 	}
-	reservation, err := receivecontract.NewNativeContainerRootReservation(
+	reservation, err := receivecontract.NewNativeNamedEntryReservation(
 		operation, reservationID, artifact, authority,
+		receivecontract.DefaultResultRootName, receivecontract.DefaultResultRootName, 0,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -463,7 +467,10 @@ func runContentTransferIsolationCase(
 	if err != nil {
 		t.Fatal(err)
 	}
-	artifact := receivecontract.NewCatalogRootDirectoryTree()
+	artifact, err := receivecontract.NewResultRootDirectoryTree(receivecontract.NewSyntheticSelectionResultRoot())
+	if err != nil {
+		t.Fatal(err)
+	}
 	operationDigest := sha256.Sum256([]byte("sessionruntime revision transfer operation"))
 	operation, err := receivecontract.OperationIDFromBytes(operationDigest[:receivecontract.StableIdentityBytes])
 	if err != nil {
@@ -481,8 +488,9 @@ func runContentTransferIsolationCase(
 	if err != nil {
 		t.Fatal(err)
 	}
-	reservation, err := receivecontract.NewNativeContainerRootReservation(
+	reservation, err := receivecontract.NewNativeNamedEntryReservation(
 		operation, reservationID, artifact, authority,
+		receivecontract.DefaultResultRootName, receivecontract.DefaultResultRootName, 0,
 	)
 	if err != nil {
 		t.Fatal(err)

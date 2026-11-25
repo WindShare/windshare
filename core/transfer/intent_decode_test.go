@@ -122,14 +122,18 @@ func receiveIntentJSONFixtures(t *testing.T) map[string]ReceiveIntent {
 	if err != nil {
 		t.Fatal(err)
 	}
-	catalogTree := receivecontract.NewCatalogRootDirectoryTree()
-	rootReservation, err := receivecontract.NewNativeContainerRootReservation(
-		operation, reservationID, catalogTree, authority,
+	syntheticTree, err := receivecontract.NewResultRootDirectoryTree(receivecontract.NewSyntheticSelectionResultRoot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootReservation, err := receivecontract.NewNativeNamedEntryReservation(
+		operation, reservationID, syntheticTree, authority,
+		receivecontract.DefaultResultRootName, receivecontract.DefaultResultRootName, 0,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	directTree, err := receivecontract.NewDirectTreePlan(catalogTree, rootReservation)
+	directTree, err := receivecontract.NewDirectTreePlan(syntheticTree, rootReservation)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,9 +178,9 @@ func receiveIntentJSONFixtures(t *testing.T) map[string]ReceiveIntent {
 		return intent
 	}
 	return map[string]ReceiveIntent{
-		"direct-tree-node-selection": makeIntent(nodeSelection, catalogTree, directTree),
+		"direct-tree-node-selection": makeIntent(nodeSelection, syntheticTree, directTree),
 		"direct-tree-single-file":    makeIntent(nodeSelection, singleFile, singlePlan),
 		"direct-tree-result-root":    makeIntent(nodeSelection, resultArtifact, resultPlan),
-		"direct-tree-path-selection": makeIntent(pathSelection, catalogTree, directTree),
+		"direct-tree-path-selection": makeIntent(pathSelection, syntheticTree, directTree),
 	}
 }

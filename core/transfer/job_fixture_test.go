@@ -250,7 +250,10 @@ func testReceiveIntent(
 	if err != nil {
 		t.Fatal(err)
 	}
-	artifact := receivecontract.NewCatalogRootDirectoryTree()
+	artifact, err := receivecontract.NewResultRootDirectoryTree(receivecontract.NewSyntheticSelectionResultRoot())
+	if err != nil {
+		t.Fatal(err)
+	}
 	identityMaterial := append(share.Bytes(), root.Bytes()...)
 	operationDigest := sha256.Sum256(append([]byte("windshare/test-operation/v1\x00"), identityMaterial...))
 	reservationDigest := sha256.Sum256(append([]byte("windshare/test-reservation/v1\x00"), identityMaterial...))
@@ -269,8 +272,9 @@ func testReceiveIntent(
 	if err != nil {
 		t.Fatal(err)
 	}
-	reservation, err := receivecontract.NewNativeContainerRootReservation(
+	reservation, err := receivecontract.NewNativeNamedEntryReservation(
 		operation, reservationID, artifact, authority,
+		receivecontract.DefaultResultRootName, receivecontract.DefaultResultRootName, 0,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -436,13 +440,6 @@ func (o *jobOutput) AdmitDirectory(_ context.Context, request DirectoryMateriali
 	if o.admitErr != nil {
 		return DirectoryAdmission{}, o.admitErr
 	}
-	sourcePath := directory.SourcePath.String()
-	if failure := o.ensureFailures[sourcePath]; failure != nil {
-		return DirectoryAdmission{}, failure
-	}
-	if o.ensureErr != nil {
-		return DirectoryAdmission{}, o.ensureErr
-	}
 	materialization, projected := request.Directory()
 	if !projected {
 		return DirectoryAdmission{}, ErrInvalidDirectoryAdmission
@@ -451,10 +448,17 @@ func (o *jobOutput) AdmitDirectory(_ context.Context, request DirectoryMateriali
 	if err != nil {
 		return DirectoryAdmission{}, err
 	}
+	path := admission.Path()
+	if failure := o.ensureFailures[path]; failure != nil {
+		return DirectoryAdmission{}, failure
+	}
+	if o.ensureErr != nil {
+		return DirectoryAdmission{}, o.ensureErr
+	}
 	o.mu.Lock()
-	o.directories = append(o.directories, sourcePath)
+	o.directories = append(o.directories, path)
 	o.directoryAdmissions = append(o.directoryAdmissions, admission)
-	o.events = append(o.events, "ensure:"+sourcePath)
+	o.events = append(o.events, "ensure:"+path)
 	result := o.directoryAdmission
 	o.mu.Unlock()
 	if result != nil {

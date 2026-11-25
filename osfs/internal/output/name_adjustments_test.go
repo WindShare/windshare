@@ -318,11 +318,22 @@ func TestBindDirectoryPersistsMappingOnlyAfterCreationAndRollsBack(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	art := receivecontract.NewCatalogRootDirectoryTree()
-	res, err := receivecontract.NewNativeContainerRootReservation(opID, resID, art, authRef)
+	art, err := receivecontract.NewResultRootDirectoryTree(receivecontract.NewSyntheticSelectionResultRoot())
 	if err != nil {
 		t.Fatal(err)
 	}
+	res, err := receivecontract.NewNativeNamedEntryReservation(
+		opID, resID, art, authRef,
+		receivecontract.DefaultResultRootName, receivecontract.DefaultResultRootName, 0,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		aliasLogical   = receivecontract.DefaultResultRootName + "/sub"
+		claimedLogical = receivecontract.DefaultResultRootName + "/other"
+		claimedPhys    = "sub"
+	)
 
 	t.Run("failed create skips persist and trace", func(t *testing.T) {
 		t.Parallel()
@@ -344,15 +355,17 @@ func TestBindDirectoryPersistsMappingOnlyAfterCreationAndRollsBack(t *testing.T)
 		if err != nil {
 			t.Fatal(err)
 		}
+		mapper.claims[claimedPhys] = claimedLogical
 
 		boom := errors.New("injected mkdir failure")
-		_, err = mapper.bindDirectory(ControlDirName, rootDir, func(*Dir, string) (*Dir, error) {
+		_, err = mapper.bindDirectory(aliasLogical, rootDir, func(*Dir, string) (*Dir, error) {
 			return nil, boom
 		}, ensureSubdirNoAlias)
 		if !errors.Is(err, boom) {
 			t.Fatalf("bindDirectory error = %v, want %v", err, boom)
 		}
-		if len(persisted) != 0 || len(traced) != 0 || len(mapper.mappings) != 0 || len(mapper.claims) != 0 {
+		if len(persisted) != 0 || len(traced) != 0 || len(mapper.mappings) != 0 ||
+			len(mapper.claims) != 1 || mapper.claims[claimedPhys] != claimedLogical {
 			t.Fatalf("failed create mutated state: persisted=%v traced=%v mappings=%v claims=%v",
 				persisted, traced, mapper.mappings, mapper.claims)
 		}
@@ -367,7 +380,7 @@ func TestBindDirectoryPersistsMappingOnlyAfterCreationAndRollsBack(t *testing.T)
 		}
 		defer rootDir.Close()
 
-		wantAttempt1, err := SanitizeCandidate(opID.Bytes(), ControlDirName, 1)
+		wantAttempt1, err := SanitizeCandidate(opID.Bytes(), aliasLogical, 1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -382,9 +395,10 @@ func TestBindDirectoryPersistsMappingOnlyAfterCreationAndRollsBack(t *testing.T)
 		if err != nil {
 			t.Fatal(err)
 		}
+		mapper.claims[claimedPhys] = claimedLogical
 
 		calls := 0
-		dir, err := mapper.bindDirectory(ControlDirName, rootDir, func(parent *Dir, name string) (*Dir, error) {
+		dir, err := mapper.bindDirectory(aliasLogical, rootDir, func(parent *Dir, name string) (*Dir, error) {
 			calls++
 			if calls == 1 {
 				return nil, ErrNamespaceCollision
@@ -417,7 +431,7 @@ func TestBindDirectoryPersistsMappingOnlyAfterCreationAndRollsBack(t *testing.T)
 		}
 		defer rootDir.Close()
 
-		wantAttempt0, err := SanitizeCandidate(opID.Bytes(), ControlDirName, 0)
+		wantAttempt0, err := SanitizeCandidate(opID.Bytes(), aliasLogical, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -431,15 +445,17 @@ func TestBindDirectoryPersistsMappingOnlyAfterCreationAndRollsBack(t *testing.T)
 		if err != nil {
 			t.Fatal(err)
 		}
+		mapper.claims[claimedPhys] = claimedLogical
 
-		_, err = mapper.bindDirectory(ControlDirName, rootDir, createFreshSubdir, ensureSubdirNoAlias)
+		_, err = mapper.bindDirectory(aliasLogical, rootDir, createFreshSubdir, ensureSubdirNoAlias)
 		if !errors.Is(err, persistErr) {
 			t.Fatalf("bindDirectory error = %v, want %v", err, persistErr)
 		}
 		if _, statErr := os.Stat(filepath.Join(rootPath, wantAttempt0)); !os.IsNotExist(statErr) {
 			t.Fatalf("rolled-back directory still exists: %v", statErr)
 		}
-		if len(traced) != 0 || len(mapper.mappings) != 0 || len(mapper.claims) != 0 {
+		if len(traced) != 0 || len(mapper.mappings) != 0 ||
+			len(mapper.claims) != 1 || mapper.claims[claimedPhys] != claimedLogical {
 			t.Fatalf("failed persist mutated state: traced=%v mappings=%v claims=%v",
 				traced, mapper.mappings, mapper.claims)
 		}
@@ -454,12 +470,12 @@ func TestBindDirectoryPersistsMappingOnlyAfterCreationAndRollsBack(t *testing.T)
 		}
 		defer rootDir.Close()
 
-		comp, err := SanitizeCandidate(opID.Bytes(), ControlDirName, 0)
+		comp, err := SanitizeCandidate(opID.Bytes(), aliasLogical, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
 		existing := []NameMapping{{
-			LogicalPath:       ControlDirName,
+			LogicalPath:       aliasLogical,
 			PhysicalComponent: comp,
 			Attempt:           0,
 			Directory:         true,
@@ -473,7 +489,7 @@ func TestBindDirectoryPersistsMappingOnlyAfterCreationAndRollsBack(t *testing.T)
 		}
 
 		openErr := errors.New("injected reopen failure")
-		if _, err := mapper.bindDirectory(ControlDirName, rootDir, createFreshSubdir, func(*Dir, string) (*Dir, error) {
+		if _, err := mapper.bindDirectory(aliasLogical, rootDir, createFreshSubdir, func(*Dir, string) (*Dir, error) {
 			return nil, openErr
 		}); !errors.Is(err, openErr) {
 			t.Fatalf("failed reopen error = %v, want %v", err, openErr)
@@ -482,7 +498,7 @@ func TestBindDirectoryPersistsMappingOnlyAfterCreationAndRollsBack(t *testing.T)
 			t.Fatalf("failed reopen emitted trace: %+v", traced)
 		}
 
-		reopened, err := mapper.bindDirectory(ControlDirName, rootDir, createFreshSubdir, ensureSubdirNoAlias)
+		reopened, err := mapper.bindDirectory(aliasLogical, rootDir, createFreshSubdir, ensureSubdirNoAlias)
 		if err != nil {
 			t.Fatalf("reopen error = %v", err)
 		}

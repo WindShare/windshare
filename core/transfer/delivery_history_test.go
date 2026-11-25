@@ -29,7 +29,7 @@ func TestDeliveryReceiptSkipsSourceAcquisitionDespiteRevisionDrift(t *testing.T)
 	for _, unavailable := range []bool{false, true} {
 		t.Run(map[bool]string{false: "changed source", true: "missing source"}[unavailable], func(t *testing.T) {
 			output := &historicalJobOutput{jobOutput: newJobOutput(share), receipt: HistoricalDelivery{
-				FileID: file, FileRevision: transferID[content.FileRevision](4), MaterializationPath: "done.bin", Size: 4,
+				FileID: file, FileRevision: transferID[content.FileRevision](4), MaterializationPath: "windshare/done.bin", Size: 4,
 			}}
 			revisions := &jobRevisionClient{opened: map[catalog.FileID]OpenedRevision{}, failures: map[catalog.FileID]error{}}
 			if unavailable {

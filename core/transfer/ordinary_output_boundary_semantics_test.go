@@ -81,9 +81,13 @@ func TestOrdinaryOutputRequestsExposeNoSecondPathMappingAuthority(t *testing.T) 
 	}
 	rootDirectory, ok := rootRequest.Directory()
 	if !ok {
-		t.Fatal("catalog root did not project materialization authority")
+		t.Fatal("synthetic root did not project materialization authority")
 	}
 	rootAdmission, err := NewDirectoryAdmission(rootDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootClaim, err := NewMaterializedDirectoryClaim(rootAdmission, rootRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,13 +96,13 @@ func TestOrdinaryOutputRequestsExposeNoSecondPathMappingAuthority(t *testing.T) 
 		rootAdmission, "folder", catalog.ModifiedTime{},
 	)
 	request, err := NewDirectoryMaterializationRequest(
-		intent, childSource, ordinaryoutput.SourceNodeSelected, MaterializedDirectoryClaim{},
+		intent, childSource, ordinaryoutput.SourceNodeSelected, rootClaim,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	artifact, materialized := request.Projection().ArtifactPath()
-	if !materialized || artifact.String() != "folder" ||
+	if !materialized || artifact.String() != "windshare/folder" ||
 		!DirectoryMaterializationMatchesIntent(intent, request) {
 		t.Fatalf("closed directory projection = (%q, %t)", artifact.String(), materialized)
 	}
@@ -126,7 +130,7 @@ func TestOrdinaryOutputRequestsExposeNoSecondPathMappingAuthority(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	relativePath, err := NewMaterializationRootRelativePath("folder/file.bin")
+	relativePath, err := NewMaterializationRootRelativePath("windshare/folder/file.bin")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +140,7 @@ func TestOrdinaryOutputRequestsExposeNoSecondPathMappingAuthority(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if file.ArtifactPath().String() != "folder/file.bin" ||
+	if file.ArtifactPath().String() != "windshare/folder/file.bin" ||
 		file.Target().Locator().CanonicalPath() != file.ArtifactPath().String() ||
 		!MaterializationFileMatchesIntent(intent, file) {
 		t.Fatalf("closed file projection = (%q, %+v)", file.ArtifactPath().String(), file.Target().Locator())

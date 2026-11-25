@@ -417,9 +417,11 @@ func (discovery *incrementalDirectoryDiscovery) admitDirectory(
 		return DirectoryAdmission{}, MaterializedDirectoryClaim{}, false,
 			discovery.run.recordSelectedProjectionRejection(projection)
 	case ordinaryoutput.ArtifactTraverseOnly:
-		if !materialized {
-			return DirectoryAdmission{}, MaterializedDirectoryClaim{}, true, nil
+		if materialized {
+			return DirectoryAdmission{}, MaterializedDirectoryClaim{}, false,
+				fault.DependencyContract(ErrOutputContract)
 		}
+		return DirectoryAdmission{}, MaterializedDirectoryClaim{}, true, nil
 	case ordinaryoutput.ArtifactMaterialize:
 		if !materialized {
 			return DirectoryAdmission{}, MaterializedDirectoryClaim{}, false,
@@ -431,9 +433,6 @@ func (discovery *incrementalDirectoryDiscovery) admitDirectory(
 	}
 	admission, err := discovery.run.admitIncrementalDirectory(ctx, request)
 	if err == nil {
-		if _, projectedArtifact := request.Projection().ArtifactPath(); !projectedArtifact {
-			return admission, MaterializedDirectoryClaim{}, true, nil
-		}
 		claim, claimErr := NewMaterializedDirectoryClaim(admission, request)
 		if claimErr != nil {
 			return DirectoryAdmission{}, MaterializedDirectoryClaim{}, false, fault.DependencyContract(claimErr)
