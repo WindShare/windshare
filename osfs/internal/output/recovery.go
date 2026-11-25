@@ -203,6 +203,22 @@ func inspectOperationDir(opID receivecontract.OperationID, opDir *Dir) (Recovery
 	}
 
 	state, _, err := readJournalState(opDir)
+	if errors.Is(err, fs.ErrNotExist) {
+		// Directory retirement is inherently two-step (unlink state.log, then
+		// rmdir <opID>). Under dirLock, an empty valid-opID directory with no
+		// journal represents a scratch directory whose final rmdir failed (e.g.,
+		// due to a transient Windows directory handle) or was interrupted, and
+		// stays retryable instead of poisoning sibling discards via unknownEntries.
+		if empty, emptyErr := isEmptyDir(opDir); emptyErr == nil && empty {
+			return RecoverySummary{
+				valid:           true,
+				operationID:     opID,
+				stateGeneration: initialStateGeneration,
+				state:           RecoveryOperationCleanupPending,
+				attention:       AttentionCleanup,
+			}, true
+		}
+	}
 	if err != nil || !state.hasMeta {
 		return RecoverySummary{}, false
 	}

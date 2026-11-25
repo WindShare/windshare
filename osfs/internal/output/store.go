@@ -348,7 +348,26 @@ func (a *Authority) claimOpUnderDirLock(
 		}
 		return claimedTask{}, ActiveLookup{}, wrapOutputFault(ctx, transferfault.OutputOwnership, opLabel, err)
 	}
-	taskLock, _, lockErr := acquireLockFile(opDir, taskLockFileName, false)
+	taskLock, _, lockErr := acquireLockFile(opDir, taskLockFileName, true)
+	if errors.Is(lockErr, fs.ErrNotExist) {
+		// Do not create task.lock inside an already-emptied operation directory
+		// whose final rmdir failed; creating a lock file there would turn a
+		// retryable empty cleanup-pending directory into a non-empty unknown entry.
+		if empty, emptyErr := isEmptyDir(opDir); emptyErr == nil && empty {
+			_ = opDir.Close()
+			a.stage = stageStopped
+			opID, _ := isValidOpDirName(opDirName)
+			emitTrace(a.diagnostics, traceEvent{
+				component:   "session",
+				operation:   "select_operation",
+				decision:    "cleanup_pending",
+				bindingID:   a.bindingID,
+				operationID: opID,
+			})
+			return claimedTask{}, ActiveLookup{authority: a, kind: LookupNeedsAttention, attention: AttentionCleanup}, nil
+		}
+		taskLock, _, lockErr = acquireLockFile(opDir, taskLockFileName, false)
+	}
 	if errors.Is(lockErr, ErrNamespaceLockBusy) {
 		_ = opDir.Close()
 		a.stage = stageStopped

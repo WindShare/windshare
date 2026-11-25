@@ -151,3 +151,117 @@ func TestRemoveOperationDirectoryDefersJournalOnUnixChildFailure(t *testing.T) {
 		t.Fatalf("control dir survived retry discard: %v", statErr)
 	}
 }
+
+func TestEmptyOperationDirListedAsCleanupPendingAndStaysRetryable(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	selA, intentA, _ := createPausedSingleFileOp(t, root, 0x9a)
+	_, intentB, _ := createPausedSingleFileOp(t, root, 0x9e)
+	opIDA := intentA.OperationID()
+	opIDB := intentB.OperationID()
+	opDirA := filepath.Join(root, ControlDirName, hex.EncodeToString(opIDA.Bytes()))
+
+	// Simulate final rmdir failing or crashing right after state.log was unlinked.
+	entries, err := os.ReadDir(opDirA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if err := os.RemoveAll(filepath.Join(opDirA, entry.Name())); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	inv, err := ListOperations(ctx, root)
+	if err != nil {
+		t.Fatalf("ListOperations = %v", err)
+	}
+	if inv.Status() != RecoveryListReady || inv.UnknownEntries() || len(inv.Summaries()) != 2 {
+		t.Fatalf("inventory = (status=%v unknown=%t count=%d)", inv.Status(), inv.UnknownEntries(), len(inv.Summaries()))
+	}
+	var gotA, gotB RecoverySummary
+	for _, s := range inv.Summaries() {
+		switch s.OperationID() {
+		case opIDA:
+			gotA = s
+		case opIDB:
+			gotB = s
+		}
+	}
+	if !gotA.Valid() || gotA.State() != RecoveryOperationCleanupPending ||
+		gotA.NeedsAttentionReason() != AttentionCleanup || len(gotA.Items()) != 0 {
+		t.Fatalf("empty opA summary = %+v, want cleanup-pending with cleanup-uncertain", gotA)
+	}
+	if !gotB.Valid() || gotB.State() != RecoveryOperationResumable {
+		t.Fatalf("sibling opB summary = %+v, want resumable", gotB)
+	}
+	if _, statErr := os.Stat(opDirA); statErr != nil {
+		t.Fatalf("read-only ListOperations mutated empty opDirA: %v", statErr)
+	}
+
+	// Explicit reopen by ID must refuse resurrection without creating task.lock inside opDirA.
+	byID, err := receivecontract.SelectOperationID(opIDA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authByID, err := New(Config{RootPath: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer authByID.Close()
+	if err := authByID.BindDestination(ctx); err != nil {
+		t.Fatal(err)
+	}
+	lookupByID, err := authByID.SelectOperation(ctx, selA, byID)
+	if err != nil || lookupByID.Kind() != LookupNeedsAttention || lookupByID.Attention() != AttentionCleanup {
+		t.Fatalf("SelectOperation(by_id) = (kind=%v attn=%q err=%v), want LookupNeedsAttention(%q)",
+			lookupByID.Kind(), lookupByID.Attention(), err, AttentionCleanup)
+	}
+	afterEntries, err := os.ReadDir(opDirA)
+	if err != nil || len(afterEntries) != 0 {
+		t.Fatalf("SelectOperation(by_id) mutated empty opDirA: entries=%v err=%v", afterEntries, err)
+	}
+
+	// Automatic selection sees no journal left and stays free to create a fresh download.
+	authAuto, err := New(Config{RootPath: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer authAuto.Close()
+	if err := authAuto.BindDestination(ctx); err != nil {
+		t.Fatal(err)
+	}
+	lookupAuto, err := authAuto.SelectOperation(ctx, selA, receivecontract.AutomaticOperation())
+	if err != nil || lookupAuto.Kind() != LookupCreateReady {
+		t.Fatalf("SelectOperation(automatic) = (kind=%v err=%v), want LookupCreateReady", lookupAuto.Kind(), err)
+	}
+
+	if summary, err := DiscardOperation(ctx, root, opIDB); err != nil || summary.State() != RecoveryOperationDiscarded {
+		t.Fatalf("DiscardOperation(opB) = (%+v, %v)", summary, err)
+	}
+	if summary, err := DiscardOperation(ctx, root, opIDA); err != nil || summary.State() != RecoveryOperationDiscarded {
+		t.Fatalf("DiscardOperation(opA) = (%+v, %v)", summary, err)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, ControlDirName)); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Fatalf("control dir survived empty opA discard: %v", statErr)
+	}
+}
+
+func TestNonEmptyOperationDirWithoutJournalRemainsUnknown(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	_, intent, _ := createPausedSingleFileOp(t, root, 0x9f)
+	opDir := filepath.Join(root, ControlDirName, hex.EncodeToString(intent.OperationID().Bytes()))
+	if err := os.Remove(filepath.Join(opDir, journalFileName)); err != nil {
+		t.Fatal(err)
+	}
+
+	inv, err := ListOperations(ctx, root)
+	if err != nil {
+		t.Fatalf("ListOperations = %v", err)
+	}
+	if inv.Status() != RecoveryListNeedsAttention || !inv.UnknownEntries() || len(inv.Summaries()) != 0 {
+		t.Fatalf("inventory for non-empty dir missing state.log = (status=%v unknown=%t count=%d), want unknown",
+			inv.Status(), inv.UnknownEntries(), len(inv.Summaries()))
+	}
+}

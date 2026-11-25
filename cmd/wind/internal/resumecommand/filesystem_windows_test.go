@@ -120,6 +120,101 @@ func TestWindowsCLIResumeDiscardRetriesAfterPartHandleReleased(t *testing.T) {
 	}
 }
 
+func TestWindowsCLIResumeDiscardRetriesAfterOpDirHandleReleased(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	opIDA := createPausedCLISingleFileOp(t, ctx, root, 0x51, "locked-dir.bin")
+	opIDB := createPausedCLISingleFileOp(t, ctx, root, 0x61, "sibling-dir.bin")
+	opHexA := hex.EncodeToString(opIDA.Bytes())
+	opHexB := hex.EncodeToString(opIDB.Bytes())
+
+	opDirA := filepath.Join(root, ".windshare-tmp", opHexA)
+	lockHandle := openDirWithoutDeleteShare(t, opDirA)
+	closed := false
+	closeLock := func() {
+		if !closed {
+			closed = true
+			_ = windows.CloseHandle(lockHandle)
+		}
+	}
+	t.Cleanup(closeLock)
+
+	application, err := engine.New(engine.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := application.Close(context.Background()); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+
+	runCLI := func(confirmLine string, args ...string) (command.ExitCode, string, string) {
+		stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+		logger := logFunc(func(format string, values ...any) { _, _ = fmt.Fprintf(stderr, format+"\n", values...) })
+		runner := newRunner(resumeDependencies{
+			inventories:  filesystemResumeStateInventoryOpener{recovery: application},
+			confirmation: &fakeResumeConfirmationTerminal{interactive: true, line: confirmLine},
+			parser:       flagRequestParser{logger: logger},
+			renderer:     textRenderer{},
+			output:       streamResumeOutput{result: stdout, usage: testDiagnosticOutput{writer: stderr}},
+			logger:       logger,
+		})
+		code := runner.Run(ctx, args)
+		return code, stdout.String(), stderr.String()
+	}
+
+	code, listOut, listErr := runCLI("", "list", "-o", root)
+	if code != command.ExitOK || !strings.Contains(listOut, `resume_list_status="ready" operations=2 registry_unknown=false`) {
+		t.Fatalf("initial list = (code=%d stdout=%q stderr=%q)", code, listOut, listErr)
+	}
+	itemA := itemNumberForOperation(t, listOut, opHexA)
+
+	// 1. Discard while opDirA itself is held without FILE_SHARE_DELETE:
+	//    state.log is removed, final rmdir fails -> cleanup-pending.
+	code, discardOut, discardErr := runCLI(fmt.Sprintf("discard %d", itemA), "discard", "-o", root, "--item", fmt.Sprintf("%d", itemA))
+	if code != command.ExitFailure ||
+		!strings.Contains(discardOut, `resume_discard_status="cleanup-pending"`) ||
+		!strings.Contains(discardOut, `reason="cleanup-uncertain"`) {
+		t.Fatalf("locked opDir discard = (code=%d stdout=%q stderr=%q)", code, discardOut, discardErr)
+	}
+
+	// 2. List must keep empty opDirA visible as cleanup-pending and NOT mark registry_unknown=true.
+	code, listOut, listErr = runCLI("", "list", "-o", root)
+	if code != command.ExitOK ||
+		!strings.Contains(listOut, `resume_list_status="ready" operations=2 registry_unknown=false`) ||
+		!strings.Contains(listOut, fmt.Sprintf(`state="cleanup-pending" operation_id=%q`, opHexA)) {
+		t.Fatalf("list after locked opDir discard = (code=%d stdout=%q stderr=%q)", code, listOut, listErr)
+	}
+
+	// 3. Sibling discard in the same destination must stay unblocked.
+	itemB := itemNumberForOperation(t, listOut, opHexB)
+	code, discardOut, discardErr = runCLI(fmt.Sprintf("discard %d", itemB), "discard", "-o", root, "--item", fmt.Sprintf("%d", itemB))
+	if code != command.ExitOK || !strings.Contains(discardOut, `resume_discard_status="discarded"`) {
+		t.Fatalf("sibling discard = (code=%d stdout=%q stderr=%q)", code, discardOut, discardErr)
+	}
+
+	// 4. Release directory handle and retry discard through the ordinary CLI.
+	closeLock()
+	code, listOut, listErr = runCLI("", "list", "-o", root)
+	if code != command.ExitOK ||
+		!strings.Contains(listOut, `resume_list_status="ready" operations=1 registry_unknown=false`) ||
+		!strings.Contains(listOut, fmt.Sprintf(`resume_operation=1 state="cleanup-pending" operation_id=%q`, opHexA)) {
+		t.Fatalf("list after opDir release = (code=%d stdout=%q stderr=%q)", code, listOut, listErr)
+	}
+	code, discardOut, discardErr = runCLI("discard 1", "discard", "-o", root, "--item", "1")
+	if code != command.ExitOK || !strings.Contains(discardOut, `resume_discard_status="discarded"`) {
+		t.Fatalf("retry discard = (code=%d stdout=%q stderr=%q)", code, discardOut, discardErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, ".windshare-tmp")); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Fatalf(".windshare-tmp survived retry discard: %v", statErr)
+	}
+	code, listOut, listErr = runCLI("", "list", "-o", root)
+	if code != command.ExitOK || !strings.Contains(listOut, `resume_list_status="ready" operations=0 registry_unknown=false`) {
+		t.Fatalf("final list = (code=%d stdout=%q stderr=%q)", code, listOut, listErr)
+	}
+}
+
 func createPausedCLISingleFileOp(
 	t *testing.T,
 	ctx context.Context,
@@ -246,6 +341,27 @@ func openFileWithoutDeleteShare(t *testing.T, path string) windows.Handle {
 	)
 	if err != nil {
 		t.Fatalf("CreateFile(%q): %v", path, err)
+	}
+	return h
+}
+
+func openDirWithoutDeleteShare(t *testing.T, path string) windows.Handle {
+	t.Helper()
+	encoded, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := windows.CreateFile(
+		encoded,
+		windows.GENERIC_READ,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
+		nil,
+		windows.OPEN_EXISTING,
+		windows.FILE_FLAG_BACKUP_SEMANTICS,
+		0,
+	)
+	if err != nil {
+		t.Fatalf("CreateFile dir(%q): %v", path, err)
 	}
 	return h
 }

@@ -40,6 +40,29 @@ func openWithoutDeleteShare(t *testing.T, path string) windows.Handle {
 	return h
 }
 
+func openDirWithoutDeleteShare(t *testing.T, path string) windows.Handle {
+	t.Helper()
+	encoded, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Hold a directory handle without FILE_SHARE_DELETE so children (including
+	// state.log) unlink normally while the final rmdir fails with SHARING_VIOLATION.
+	h, err := windows.CreateFile(
+		encoded,
+		windows.GENERIC_READ,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
+		nil,
+		windows.OPEN_EXISTING,
+		windows.FILE_FLAG_BACKUP_SEMANTICS,
+		0,
+	)
+	if err != nil {
+		t.Fatalf("CreateFile dir(%q) without FILE_SHARE_DELETE: %v", path, err)
+	}
+	return h
+}
+
 func findSinglePartFile(t *testing.T, opDir string) string {
 	t.Helper()
 	entries, err := os.ReadDir(opDir)
@@ -308,5 +331,161 @@ func TestWindowsDiscardWhenJournalLockedPreservesIdentityForRetry(t *testing.T) 
 	}
 	if _, statErr := os.Stat(filepath.Join(root, ControlDirName)); !errors.Is(statErr, fs.ErrNotExist) {
 		t.Fatalf("control dir survived retry discard: %v", statErr)
+	}
+}
+
+func TestWindowsDiscardWhenOpDirLockedWithoutDeleteShareRemainsRetryable(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	selA, intentA, _ := createPausedSingleFileOp(t, root, 0xc8)
+	_, intentB, _ := createPausedSingleFileOp(t, root, 0xcc)
+	opIDA := intentA.OperationID()
+	opIDB := intentB.OperationID()
+	opDirA := filepath.Join(root, ControlDirName, hex.EncodeToString(opIDA.Bytes()))
+
+	lockHandle := openDirWithoutDeleteShare(t, opDirA)
+	closed := false
+	closeLock := func() {
+		if !closed {
+			closed = true
+			_ = windows.CloseHandle(lockHandle)
+		}
+	}
+	t.Cleanup(closeLock)
+
+	summary, err := DiscardOperation(ctx, root, opIDA)
+	if err == nil || summary.State() != RecoveryOperationCleanupPending ||
+		summary.NeedsAttentionReason() != AttentionCleanup {
+		t.Fatalf("DiscardOperation while opDir locked = (%+v, %v), want cleanup-pending with error", summary, err)
+	}
+	entries, readErr := os.ReadDir(opDirA)
+	if readErr != nil || len(entries) != 0 {
+		t.Fatalf("locked opDirA after failed rmdir = (entries=%v err=%v), want empty dir", entries, readErr)
+	}
+
+	inv, err := ListOperations(ctx, root)
+	if err != nil {
+		t.Fatalf("ListOperations = %v", err)
+	}
+	if inv.Status() != RecoveryListReady || inv.UnknownEntries() || len(inv.Summaries()) != 2 {
+		t.Fatalf("inventory while opDir locked = (status=%v unknown=%t count=%d)",
+			inv.Status(), inv.UnknownEntries(), len(inv.Summaries()))
+	}
+	foundA := false
+	for _, s := range inv.Summaries() {
+		if s.OperationID() == opIDA {
+			foundA = true
+			if s.State() != RecoveryOperationCleanupPending ||
+				s.NeedsAttentionReason() != AttentionCleanup || len(s.Items()) != 0 {
+				t.Fatalf("opA summary = %+v, want cleanup-pending", s)
+			}
+		}
+	}
+	if !foundA {
+		t.Fatal("opA disappeared from ListOperations after locked rmdir")
+	}
+
+	// Sibling operations in the same destination stay discardable.
+	if sibSummary, sibErr := DiscardOperation(ctx, root, opIDB); sibErr != nil ||
+		sibSummary.State() != RecoveryOperationDiscarded {
+		t.Fatalf("sibling DiscardOperation = (%+v, %v), want discarded", sibSummary, sibErr)
+	}
+
+	// Explicit reopen by ID must fail closed as cleanup-pending without recreating task.lock.
+	byID, err := receivecontract.SelectOperationID(opIDA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopen, err := New(Config{RootPath: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reopen.BindDestination(ctx); err != nil {
+		_ = reopen.Close()
+		t.Fatal(err)
+	}
+	lookup, lookupErr := reopen.SelectOperation(ctx, selA, byID)
+	_ = reopen.Close()
+	if lookupErr != nil || lookup.Kind() != LookupNeedsAttention || lookup.Attention() != AttentionCleanup {
+		t.Fatalf("SelectOperation(by_id) on empty locked opDir = (kind=%v attn=%q err=%v)",
+			lookup.Kind(), lookup.Attention(), lookupErr)
+	}
+
+	// Retrying discard while still locked stays cleanup-pending and non-unknown.
+	if retrySummary, retryErr := DiscardOperation(ctx, root, opIDA); retryErr == nil ||
+		retrySummary.State() != RecoveryOperationCleanupPending {
+		t.Fatalf("second DiscardOperation while opDir locked = (%+v, %v)", retrySummary, retryErr)
+	}
+	inv, err = ListOperations(ctx, root)
+	if err != nil || inv.Status() != RecoveryListReady || inv.UnknownEntries() || len(inv.Summaries()) != 1 {
+		t.Fatalf("inventory after second locked attempt = (%+v, %v)", inv, err)
+	}
+
+	closeLock()
+	finalSummary, finalErr := DiscardOperation(ctx, root, opIDA)
+	if finalErr != nil || finalSummary.State() != RecoveryOperationDiscarded {
+		t.Fatalf("retry DiscardOperation after opDir unlocked = (%+v, %v)", finalSummary, finalErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, ControlDirName)); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Fatalf("control dir survived retry discard: %v", statErr)
+	}
+}
+
+func TestWindowsFinalizeTreeSuccessWhenOpDirLockedRemainsRetryable(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	auth, op, intent := openActiveSingleFileOp(t, root, 0xd1)
+	defer auth.Close()
+	session, err := auth.OpenOperation(ctx, op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileID := testID16[catalog.FileID](0xd3)
+	f := testSingleFileMaterialization(t, session, intent, fileID, 0xd4, retirementFileName, uint64(len(retirementFullPayload)))
+	start, err := session.BeginFile(ctx, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, _, ok := start.Transaction()
+	if !ok {
+		t.Fatal("expected transaction")
+	}
+	if err := tx.WriteRange(ctx, 0, []byte(retirementFullPayload)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	opDir := filepath.Join(root, ControlDirName, hex.EncodeToString(intent.OperationID().Bytes()))
+	lockHandle := openDirWithoutDeleteShare(t, opDir)
+	closed := false
+	closeLock := func() {
+		if !closed {
+			closed = true
+			_ = windows.CloseHandle(lockHandle)
+		}
+	}
+	t.Cleanup(closeLock)
+
+	if _, err := session.FinalizeTree(ctx, transfer.DirectTreeOutcomeSuccess); err == nil {
+		t.Fatal("FinalizeTree(Success) succeeded while opDir was locked without delete share")
+	}
+	inv, err := ListOperations(ctx, root)
+	if err != nil || inv.Status() != RecoveryListReady || inv.UnknownEntries() ||
+		len(inv.Summaries()) != 1 || inv.Summaries()[0].State() != RecoveryOperationCleanupPending {
+		t.Fatalf("ListOperations after locked FinalizeTree opDir = (%+v, %v)", inv, err)
+	}
+	closeLock()
+	if summary, err := DiscardOperation(ctx, root, intent.OperationID()); err != nil ||
+		summary.State() != RecoveryOperationDiscarded {
+		t.Fatalf("retry DiscardOperation after locked FinalizeTree = (%+v, %v)", summary, err)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, ControlDirName)); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Fatalf("control dir survived retry discard: %v", statErr)
+	}
+	got, err := os.ReadFile(filepath.Join(root, retirementFileName))
+	if err != nil || string(got) != retirementFullPayload {
+		t.Fatalf("published file after cleanup retry = (%q, %v)", got, err)
 	}
 }

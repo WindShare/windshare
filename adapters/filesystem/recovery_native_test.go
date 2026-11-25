@@ -365,6 +365,64 @@ func TestFilesystemResumeInventoryListsSiblingWhenRunningOperationHasRevisionCon
 	}
 }
 
+func TestFilesystemRecoveryProjectsEmptyCleanupPendingOpDirAndUnblocksSibling(t *testing.T) {
+	ctx := context.Background()
+	root := newResumeCertifiedOutputTestRoot(t)
+
+	opAuthA, intentA := createNativeResumeOperation(t, ctx, root, 70)
+	if err := opAuthA.Close(); err != nil {
+		t.Fatal(err)
+	}
+	opAuthB, intentB := createNativeResumeOperation(t, ctx, root, 80)
+	if err := opAuthB.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	opDirA := filepath.Join(root, nativeResumeControlDirectoryName, hex.EncodeToString(intentA.OperationID().Bytes()))
+	entries, err := os.ReadDir(opDirA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if err := os.RemoveAll(filepath.Join(opDirA, entry.Name())); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	inventory, err := recovery.Inspect(ctx, Recovery(root))
+	if err != nil {
+		t.Fatalf("Inspect() over empty opDir = %v", err)
+	}
+	snapshot, err := inventory.Snapshot()
+	if err != nil || snapshot.RegistryUnknown || len(snapshot.Operations) != 2 {
+		t.Fatalf("snapshot = (%+v, %v), want 2 operations with RegistryUnknown=false", snapshot, err)
+	}
+	var gotA recovery.Operation
+	for _, op := range snapshot.Operations {
+		if op.ID == intentA.OperationID() {
+			gotA = op
+		}
+	}
+	if gotA.ID != intentA.OperationID() || gotA.State != recovery.OperationCleanupPending ||
+		gotA.Attention != recovery.AttentionCleanup {
+		t.Fatalf("projected empty opA = %+v, want cleanup-pending(cleanup-uncertain)", gotA)
+	}
+	if siblingRes := inventory.Discard(ctx, intentB.OperationID()); !siblingRes.Successful() {
+		t.Fatalf("sibling discard = %+v, want success", siblingRes)
+	}
+	if retryRes := inventory.Discard(ctx, intentA.OperationID()); !retryRes.Successful() {
+		t.Fatalf("retry empty opA discard = %+v, want success", retryRes)
+	}
+	after, err := recovery.Inspect(ctx, Recovery(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterSnap, err := after.Snapshot()
+	if err != nil || afterSnap.RegistryUnknown || len(afterSnap.Operations) != 0 {
+		t.Fatalf("final snapshot = (%+v, %v), want empty ready inventory", afterSnap, err)
+	}
+}
+
 func openRunningConflictedNativeOperation(
 	t *testing.T,
 	ctx context.Context,

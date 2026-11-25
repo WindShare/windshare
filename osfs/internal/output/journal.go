@@ -442,9 +442,18 @@ func partFileName(fileID catalog.FileID, locatorDigest transfer.MaterializationL
 // removeOperationDirectory deletes an operation's scratch directory while
 // keeping state.log until every other entry is removed. Deleting the journal
 // last ensures a transient lock on a .part file leaves the operation
-// identifiable for CLI retry instead of turning it into registry_unknown.
+// identifiable for CLI retry, while inspectOperationDir recognizes an empty
+// leftover <opID> directory as cleanup-pending if the final rmdir fails.
 func removeOperationDirectory(ctrlDir *Dir, opDirName string) error {
 	return removeChildTreeDeferred(ctrlDir, opDirName, journalFileName)
+}
+
+func isEmptyDir(dir *Dir) (bool, error) {
+	names, err := readDirNames(dir)
+	if err != nil {
+		return false, err
+	}
+	return len(names) == 0, nil
 }
 
 func removeChildTree(parent *Dir, name string) error {

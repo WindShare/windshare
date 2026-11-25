@@ -80,8 +80,11 @@ func projectRecoveryInventory(inventory osfs.RecoveryInventory) (recovery.Snapsh
 }
 
 func projectRecoverySummary(summary osfs.RecoverySummary) (recovery.Operation, error) {
-	if !summary.Valid() || summary.OperationID().IsZero() ||
-		summary.ReceiveIntentDigest().IsZero() || summary.StateGeneration() == 0 {
+	// An empty operation directory whose final rmdir failed after state.log was
+	// unlinked has no journal left to derive an intent digest from, matching
+	// projectDiscardSummary's contract for journal-less cleanup states.
+	if !summary.Valid() || summary.OperationID().IsZero() || summary.StateGeneration() == 0 ||
+		(summary.State() != osfs.RecoveryOperationCleanupPending && summary.ReceiveIntentDigest().IsZero()) {
 		return recovery.Operation{}, recovery.ErrContract
 	}
 	state, err := projectOperationState(summary.State())
