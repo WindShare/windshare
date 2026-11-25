@@ -175,6 +175,8 @@ export class ReceiverController {
 
   ensureDownloads(): Promise<void> { return this.#receive.ensureRetained() }
 
+  refreshDownloads(): Promise<void> { return this.#receive.refreshRetained() }
+
   openLocation(captured: CapturedLocation): void {
     if (this.#disposed) return
     try { this.#capabilityIntake?.accept(captured) } catch {

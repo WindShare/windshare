@@ -143,7 +143,7 @@ export class ReceiveCoordinator {
       onSettledRecord: record => this.#inventory.upsertRecord(record),
       onSessionFinished: () => {
         void this.#capabilities.refreshStorageEstimate()
-        void this.loadRetained()
+        void this.refreshRetained()
       },
       reportError: error => this.#reportError(error),
       dispatchAsyncError: (error, custom) => this.#dispatchAsyncError(error, custom),
@@ -293,6 +293,10 @@ export class ReceiveCoordinator {
 
   ensureRetained(): Promise<void> {
     return this.#inventory.ensureAll()
+  }
+
+  refreshRetained(): Promise<void> {
+    return this.#inventory.refreshAll()
   }
 
   saveLocalBlob(blob: Blob, suggestedName: string, mediaType = ORIGINAL_FILE_MEDIA_TYPE): boolean {

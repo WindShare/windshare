@@ -198,7 +198,7 @@ export class RetainedTaskActions {
       if (this.#options.isDisposed()) return
       this.#applyLocalOutcome(token, taskId, action, outcome.updated, callbacks)
       this.#options.refreshStorageEstimate()
-      await this.#options.inventory.loadAll()
+      await this.#options.inventory.refreshAll()
     } catch (error) {
       await this.#handleLocalError(token, taskId, action, error, callbacks)
     }
@@ -245,7 +245,7 @@ export class RetainedTaskActions {
     this.#options.execution.releaseTransferIfOwned(token)
     if (isNotFoundError(error)) this.#options.inventory.removeTask(taskId)
     this.#options.publish()
-    await this.#options.inventory.loadAll()
+    await this.#options.inventory.refreshAll()
     const mapped = error instanceof TaskBusyError ? new ReceiveBlockedError('activeInAnotherTab') : error
     this.#options.dispatchAsyncError(mapped, callbacks?.onError)
   }
@@ -267,7 +267,7 @@ export class RetainedTaskActions {
     if (notFound) this.#options.inventory.removeTask(taskId)
     this.#options.publish()
     if (notFound || isPermissionDeniedError(error) || error instanceof TaskBusyError) {
-      await this.#options.inventory.loadAll()
+      await this.#options.inventory.refreshAll()
     }
     const mapped = error instanceof TaskBusyError ? new ReceiveBlockedError('activeInAnotherTab') : error
     this.#options.dispatchAsyncError(mapped, callbacks?.onError)

@@ -1,10 +1,13 @@
 import type { BrowserOutputWindow } from '../../output/backends/contract'
 import type { OPFSEnvironment } from '../../output/backends/opfs'
-import type { OutputTraceSource } from '../../output/diagnostics'
+import { emitOutputTrace, type OutputTraceSource } from '../../output/diagnostics'
 import type { ReceiveTaskRecord } from '../../output/store/types'
+import { classifyNativeError } from '../../transfer/fault'
 import type { PendingRetainedAction, RetainedInventorySnapshot, RetainedTaskSnapshot } from './contracts'
 import type { ReceiveStorage, ReceiveStoreAccess } from './receive-storage'
 import { resolveRetainedCandidates, retainedSnapshot, retainedTaskEnvironment } from './retained'
+
+type InventoryLoadMode = 'foreground' | 'silent'
 
 type ResolvedInventoryEntry = Readonly<{
   snapshot: RetainedTaskSnapshot
@@ -76,18 +79,32 @@ export class RetainedTaskInventory {
   }
 
   loadAll(): Promise<void> {
-    if (this.#isDisposed()) return Promise.resolve()
-    const epoch = ++this.#fullLoadEpoch
-    const startSeq = this.#mutationSeq
-    this.#inFlightLoads += 1
-    return this.#storage.run(access => this.#loadFull(access, epoch, startSeq))
-      .finally(() => this.#finishInFlightLoad())
+    return this.#startLoad('foreground')
   }
 
   async ensureAll(): Promise<void> {
     if (this.#fullKind === 'unloaded' || this.#fullKind === 'failed') {
       await this.loadAll()
     }
+  }
+
+  /**
+   * Reconciles the cached inventory against IndexedDB and cross-tab Web Locks.
+   * Revalidates silently when a settled snapshot already exists so reopening Downloads
+   * never flashes a loading state or clears existing tasks on transient errors.
+   */
+  refreshAll(): Promise<void> {
+    const settled = this.#fullKind === 'available' || this.#fullKind === 'empty'
+    return this.#startLoad(settled ? 'silent' : 'foreground')
+  }
+
+  #startLoad(mode: InventoryLoadMode): Promise<void> {
+    if (this.#isDisposed()) return Promise.resolve()
+    const epoch = ++this.#fullLoadEpoch
+    const startSeq = this.#mutationSeq
+    this.#inFlightLoads += 1
+    return this.#storage.run(access => this.#loadFull(access, epoch, startSeq, mode))
+      .finally(() => this.#finishInFlightLoad())
   }
 
   upsertRecord(record: ReceiveTaskRecord): void {
@@ -117,53 +134,107 @@ export class RetainedTaskInventory {
     }
   }
 
-  async #loadFull(access: ReceiveStoreAccess, epoch: number, startSeq: number): Promise<void> {
-    if (this.#isDisposed() || epoch !== this.#fullLoadEpoch) return
+  async #loadFull(
+    access: ReceiveStoreAccess,
+    epoch: number,
+    startSeq: number,
+    mode: InventoryLoadMode,
+  ): Promise<void> {
+    if (this.#isStaleLoad(epoch)) return
     await access.waitForTaskWrites()
-    if (this.#isDisposed() || epoch !== this.#fullLoadEpoch) return
+    if (this.#isStaleLoad(epoch)) return
     const store = await access.openStoreOptional()
-    if (this.#isDisposed() || epoch !== this.#fullLoadEpoch) return
+    if (this.#isStaleLoad(epoch)) return
     if (store === undefined) {
-      this.#commitFullEntries(new Map(), startSeq)
-      this.#onChange()
+      this.#handleStoreUnavailable(startSeq, mode)
       return
     }
-    this.#fullKind = 'loading'
-    this.#onChange()
+    if (mode === 'foreground') {
+      this.#fullKind = 'loading'
+      this.#onChange()
+    }
     try {
       const env = retainedTaskEnvironment(store, this.#envPorts(), this.#signal)
       const records = await store.listTasks()
-      if (this.#isDisposed() || epoch !== this.#fullLoadEpoch) return
+      if (this.#isStaleLoad(epoch)) return
       const snapshots = await resolveRetainedCandidates(env, records, this.#isLocalTask)
-      if (this.#isDisposed() || epoch !== this.#fullLoadEpoch) return
-      const updatedAtById = new Map(records.map(record => [record.taskId, record.updatedAt]))
-      const entries = new Map<string, ResolvedInventoryEntry>()
-      for (const snapshot of snapshots) {
-        entries.set(snapshot.taskId, Object.freeze({
-          snapshot,
-          updatedAt: updatedAtById.get(snapshot.taskId) ?? snapshot.display?.createdAtMilliseconds ?? 0,
-        }))
+      if (this.#isStaleLoad(epoch)) return
+      if (this.#commitFullEntries(buildEntriesMap(records, snapshots), startSeq)) {
+        this.#onChange()
       }
-      this.#commitFullEntries(entries, startSeq)
-      this.#onChange()
-    } catch {
-      if (this.#isDisposed() || epoch !== this.#fullLoadEpoch) return
-      this.#fullEntries = new Map()
-      this.#fullTasksCache = Object.freeze([])
-      this.#fullKind = 'failed'
+    } catch (error) {
+      if (this.#isStaleLoad(epoch)) return
+      this.#handleLoadFailure(mode, error)
+    }
+  }
+
+  #isStaleLoad(epoch: number): boolean {
+    return this.#isDisposed() || epoch !== this.#fullLoadEpoch
+  }
+
+  #handleStoreUnavailable(startSeq: number, mode: InventoryLoadMode): void {
+    if (mode === 'silent') {
+      if (this.#fullEntries.size > 0) {
+        emitOutputTrace(this.#outputTrace, 'continuation', { transition: 'inventory_refresh_store_unavailable' })
+      }
+      return
+    }
+    if (this.#commitFullEntries(new Map(), startSeq)) {
       this.#onChange()
     }
   }
 
-  #commitFullEntries(entries: Map<string, ResolvedInventoryEntry>, startSeq: number): void {
+  #handleLoadFailure(mode: InventoryLoadMode, error: unknown): void {
+    if (mode === 'silent') {
+      emitOutputTrace(this.#outputTrace, 'continuation', {
+        transition: 'inventory_refresh_failed',
+        error_class: classifyNativeError(error),
+      })
+      return
+    }
+    this.#fullEntries = new Map()
+    this.#fullTasksCache = Object.freeze([])
+    this.#fullKind = 'failed'
+    this.#onChange()
+  }
+
+  #commitFullEntries(entries: Map<string, ResolvedInventoryEntry>, startSeq: number): boolean {
     for (const [taskId, op] of this.#mutationOverlay) {
       if (op.seq <= startSeq) continue
       if (op.kind === 'remove') entries.delete(taskId)
       else entries.set(taskId, Object.freeze({ snapshot: op.snapshot, updatedAt: op.updatedAt }))
     }
+    const nextKind: RetainedInventorySnapshot['kind'] = entries.size === 0 ? 'empty' : 'available'
+    const orderedEntries = [...entries.values()].sort((left, right) => right.updatedAt - left.updatedAt)
+    if (this.#matchesCurrent(nextKind, orderedEntries)) {
+      return false
+    }
     this.#fullEntries = entries
-    this.#fullKind = entries.size === 0 ? 'empty' : 'available'
-    this.#rebuildFullTasksCache()
+    this.#fullKind = nextKind
+    this.#fullTasksCache = Object.freeze(orderedEntries.map(entry => entry.snapshot))
+    return true
+  }
+
+  #matchesCurrent(
+    nextKind: RetainedInventorySnapshot['kind'],
+    orderedEntries: readonly ResolvedInventoryEntry[],
+  ): boolean {
+    if (this.#fullKind !== nextKind || this.#fullTasksCache.length !== orderedEntries.length) {
+      return false
+    }
+    for (let index = 0; index < orderedEntries.length; index += 1) {
+      const nextEntry = orderedEntries[index]!
+      const currentSnapshot = this.#fullTasksCache[index]!
+      const currentEntry = this.#fullEntries.get(currentSnapshot.taskId)
+      if (
+        currentEntry === undefined ||
+        currentEntry.updatedAt !== nextEntry.updatedAt ||
+        !equalInventoryValue(currentSnapshot, nextEntry.snapshot)
+      ) {
+        return false
+      }
+    }
+    return true
   }
 
   #rebuildFullTasksCache(): void {
@@ -187,4 +258,44 @@ export class RetainedTaskInventory {
       ...(this.#outputTrace === undefined ? {} : { outputTrace: this.#outputTrace }),
     }
   }
+}
+
+function buildEntriesMap(
+  records: readonly ReceiveTaskRecord[],
+  snapshots: readonly RetainedTaskSnapshot[],
+): Map<string, ResolvedInventoryEntry> {
+  const updatedAtById = new Map(records.map(record => [record.taskId, record.updatedAt]))
+  const entries = new Map<string, ResolvedInventoryEntry>()
+  for (const snapshot of snapshots) {
+    entries.set(snapshot.taskId, Object.freeze({
+      snapshot,
+      updatedAt: updatedAtById.get(snapshot.taskId) ?? snapshot.display?.createdAtMilliseconds ?? 0,
+    }))
+  }
+  return entries
+}
+
+function equalInventoryValue(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true
+  if (typeof left !== 'object' || typeof right !== 'object' || left === null || right === null) {
+    return false
+  }
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return Array.isArray(left) && Array.isArray(right) && equalInventoryArrays(left, right)
+  }
+  return equalInventoryRecords(left as Record<string, unknown>, right as Record<string, unknown>)
+}
+
+function equalInventoryArrays(left: readonly unknown[], right: readonly unknown[]): boolean {
+  return left.length === right.length && left.every((item, index) => equalInventoryValue(item, right[index]))
+}
+
+function equalInventoryRecords(
+  left: Readonly<Record<string, unknown>>,
+  right: Readonly<Record<string, unknown>>,
+): boolean {
+  const leftKeys = Object.keys(left)
+  const rightKeys = Object.keys(right)
+  if (leftKeys.length !== rightKeys.length) return false
+  return leftKeys.every(key => Object.hasOwn(right, key) && equalInventoryValue(left[key], right[key]))
 }

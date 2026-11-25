@@ -10,7 +10,7 @@ function deferred<T>() {
 function runtime(): DocumentRuntime {
   return { View: () => null, Downloads: () => null,
     surface: { subscribe: () => () => undefined, getSnapshot: () => true },
-    openLocation: vi.fn(), ensureDownloads: vi.fn(async () => undefined), dispose: vi.fn(async () => undefined) }
+    openLocation: vi.fn(), refreshDownloads: vi.fn(async () => undefined), dispose: vi.fn(async () => undefined) }
 }
 const location = (capabilityInput: string | null) => ({ capabilityInput, pageUrl: 'https://receiver.test/' })
 
@@ -30,8 +30,14 @@ describe('document runtime ownership', () => {
     module.resolve(() => loaded)
     await vi.waitFor(() => expect(owner.getSnapshot().runtime).toBe(loaded))
     expect(loaded.openLocation).toHaveBeenCalledExactlyOnceWith(location('latest'))
-    expect(loaded.ensureDownloads).toHaveBeenCalledTimes(1)
+    expect(loaded.refreshDownloads).toHaveBeenCalledTimes(1)
     expect(owner.getSnapshot().downloadsOpen).toBe(true)
+    // Duplicate open while already open is a no-op; closing and reopening refreshes again.
+    owner.setDownloadsOpen(true)
+    expect(loaded.refreshDownloads).toHaveBeenCalledTimes(1)
+    owner.setDownloadsOpen(false)
+    owner.setDownloadsOpen(true)
+    expect(loaded.refreshDownloads).toHaveBeenCalledTimes(2)
     await owner.dispose()
     expect(loaded.dispose).toHaveBeenCalledTimes(1)
   })

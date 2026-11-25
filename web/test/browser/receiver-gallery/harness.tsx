@@ -55,6 +55,7 @@ class GalleryController {
   #presentedSeconds = 0
   readonly presentation: ReceiverProjections
   ensureDownloads = async () => undefined
+  refreshDownloads = async () => undefined
 
   constructor(snapshot: GallerySnapshot) {
     this.#output = snapshot.output

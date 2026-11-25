@@ -9,6 +9,7 @@ import { SelectionPolicy } from '../../src/catalog/selection'
 import * as outputContract from '../../src/output/backends/contract'
 import type { BrowserOutputWindow } from '../../src/output/backends/contract'
 import { ReceiveStore } from '../../src/output/store/database'
+import type { OutputTraceEvent } from '../../src/output/diagnostics'
 import { taskLockName } from '../../src/output/store/tab-lock'
 import type { ReceiveTaskRecord } from '../../src/output/store/types'
 import { initialReceiveState, transitionReceiveState } from '../../src/transfer/state'
@@ -527,6 +528,156 @@ describe('receive slot lifecycle, cross-tab locks, and disposal invariants', () 
     })
     await exported2.promise
     expect(new Uint8Array(await downloads.at(-1)!.blob.arrayBuffer())).toEqual(new Uint8Array([9, 9, 9, 9]))
+    await coordinator.dispose()
+  })
+
+  it('revalidates cross-tab locks and persisted states silently without loading flicker or redundant publishes', async () => {
+    const fileA = makeFileEntry(31, 'paused-elsewhere.bin', 16n)
+    const fileB = makeFileEntry(32, 'crashed-elsewhere.bin', 16n)
+    const fileC = makeFileEntry(33, 'ready-elsewhere.bin', 8n)
+    const dir = makeDir('root-1', 34, 'Shared')
+    const store = new MemoryReceiveStore()
+    await store.putTask(makeOpfsRecord('tab-a-paused', 'share-1', fileA, dir, 'downloading', 1_000))
+    await store.putTask(makeOpfsRecord('tab-a-crashed', 'share-1', fileB, dir, 'downloading', 2_000))
+    await store.putTask(makeOpfsRecord('tab-a-ready', 'share-1', fileC, dir, 'ready-to-save', 3_000))
+
+    const fakeLocks = makeFakeLockManager()
+    fakeLocks.holdExternal('tab-a-paused')
+    fakeLocks.holdExternal('tab-a-crashed')
+    fakeLocks.holdExternal('tab-a-ready')
+
+    const { env } = createMemoryOPFSEnv()
+    const listTasksSpy = vi.spyOn(store, 'listTasks')
+    vi.spyOn(ReceiveStore, 'open').mockResolvedValue(Object.assign(store, { close: vi.fn() }) as unknown as ReceiveStore)
+    vi.spyOn(outputContract, 'probeBrowserOutputCapabilities').mockResolvedValue(Object.freeze({
+      indexedDb: true, fsa: false, opfs: true, portable: true, availableStorageBytes: 64n * 1024n * 1024n,
+    }))
+    const { windowPort: baseWin } = createMockDownloadWindow()
+    const windowPort: BrowserOutputWindow = {
+      ...baseWin,
+      indexedDB: { open: vi.fn() } as unknown as IDBFactory,
+      navigator: { locks: fakeLocks.locks },
+    }
+    const coordinator = new ReceiveCoordinator({
+      windowPort,
+      opfsEnv: { ...env, locks: fakeLocks.locks },
+      currentJoinedShare: () => makeJoinedShare('share-1', fileA),
+    })
+
+    // First ensure loads once; repeated ensure stays an idempotent no-op for directory navigation.
+    await coordinator.ensureRetained()
+    await coordinator.ensureRetained()
+    expect(listTasksSpy).toHaveBeenCalledTimes(1)
+    expect(coordinator.getSnapshot().retained.tasks.every(task => task.activeElsewhere)).toBe(true)
+    const lockedReady = coordinator.getSnapshot().retained.tasks.find(t => t.taskId === 'tab-a-ready')!
+    expect(coordinator.retainedActionAdmission(lockedReady, 'save')).toEqual({ allowed: false, reason: 'activeInAnotherTab' })
+
+    // Unchanged silent refresh must neither emit loading nor replace the cached tasks reference.
+    const unchangedBefore = coordinator.getSnapshot().retained.tasks
+    let unchangedPublishes = 0
+    const stopUnchanged = coordinator.subscribe(() => { unchangedPublishes += 1 })
+    await coordinator.refreshRetained()
+    stopUnchanged()
+    expect(unchangedPublishes).toBe(0)
+    expect(coordinator.getSnapshot().retained.tasks).toBe(unchangedBefore)
+
+    // Another tab pauses one task, crashes on another, and finishes using the third.
+    await store.putTask(makeOpfsRecord('tab-a-paused', 'share-1', fileA, dir, 'paused', 4_000))
+    fakeLocks.releaseExternal('tab-a-paused')
+    fakeLocks.releaseExternal('tab-a-crashed')
+    fakeLocks.releaseExternal('tab-a-ready')
+
+    const observedKinds: string[] = []
+    const stopRefresh = coordinator.subscribe(() => {
+      observedKinds.push(coordinator.getSnapshot().retained.kind)
+    })
+    await coordinator.refreshRetained()
+    stopRefresh()
+
+    expect(observedKinds).toEqual(['available'])
+    const refreshed = coordinator.getSnapshot().retained.tasks
+    const pausedTask = refreshed.find(t => t.taskId === 'tab-a-paused')!
+    const crashedTask = refreshed.find(t => t.taskId === 'tab-a-crashed')!
+    const readyTask = refreshed.find(t => t.taskId === 'tab-a-ready')!
+    expect(pausedTask.activeElsewhere).toBe(false)
+    expect(pausedTask.lifecycle.kind).toBe('paused')
+    expect(coordinator.retainedActionAdmission(pausedTask, 'continue')).toEqual({ allowed: true, reason: null })
+    expect(crashedTask.activeElsewhere).toBe(false)
+    expect(crashedTask.lifecycle.kind).toBe('paused')
+    expect(crashedTask.lifecycle.kind === 'paused' ? crashedTask.lifecycle.reason : null).toBe('interrupted')
+    expect(coordinator.retainedActionAdmission(crashedTask, 'continue')).toEqual({ allowed: true, reason: null })
+    expect(readyTask.activeElsewhere).toBe(false)
+    expect(coordinator.retainedActionAdmission(readyTask, 'save')).toEqual({ allowed: true, reason: null })
+    await coordinator.dispose()
+  })
+
+  it('preserves settled inventory on silent refresh failure and keeps in-flight local mutations intact', async () => {
+    const file = makeFileEntry(35, 'keep.bin', 8n)
+    const dir = makeDir('root-1', 36, 'Keep')
+    const store = new MemoryReceiveStore()
+    const record = makeOpfsRecord('keep-task', 'share-1', file, dir, 'ready-to-save', 1_000)
+    await store.putTask(record)
+
+    const { env, root } = createMemoryOPFSEnv()
+    const tasksDir = await root.getDirectoryHandle('windshare-tasks', { create: true })
+    const opfsFile = await tasksDir.getFileHandle('keep-task.part', { create: true })
+    opfsFile.bytes = new Uint8Array(8)
+
+    const traceEvents: OutputTraceEvent[] = []
+    vi.spyOn(ReceiveStore, 'open').mockResolvedValue(Object.assign(store, { close: vi.fn() }) as unknown as ReceiveStore)
+    const { windowPort: baseWin } = createMockDownloadWindow()
+    const windowPort: BrowserOutputWindow = {
+      ...baseWin,
+      indexedDB: { open: vi.fn() } as unknown as IDBFactory,
+    }
+    const coordinator = new ReceiveCoordinator({
+      windowPort,
+      opfsEnv: env,
+      outputTrace: { current: event => { traceEvents.push(event) } },
+      currentJoinedShare: () => makeJoinedShare('share-1', file),
+    })
+
+    // Initial refresh from unloaded runs in foreground mode (shows loading -> available).
+    const initialKinds: string[] = []
+    const stopInitial = coordinator.subscribe(() => { initialKinds.push(coordinator.getSnapshot().retained.kind) })
+    await coordinator.refreshRetained()
+    stopInitial()
+    expect(initialKinds).toEqual(['loading', 'available'])
+
+    // Transient IDB error during silent refresh keeps existing list intact and emits a trace event.
+    const settledTasks = coordinator.getSnapshot().retained.tasks
+    vi.spyOn(store, 'listTasks').mockRejectedValueOnce(new Error('transient refresh error'))
+    let failedRefreshPublishes = 0
+    const stopFailed = coordinator.subscribe(() => { failedRefreshPublishes += 1 })
+    await coordinator.refreshRetained()
+    stopFailed()
+    expect(failedRefreshPublishes).toBe(0)
+    expect(coordinator.getSnapshot().retained.kind).toBe('available')
+    expect(coordinator.getSnapshot().retained.tasks).toBe(settledTasks)
+    expect(traceEvents).toContainEqual(expect.objectContaining({
+      eventName: 'continuation',
+      payload: expect.objectContaining({ transition: 'inventory_refresh_failed' }),
+    }))
+
+    // Slow silent refresh must not flicker to loading or resurrect a task discarded mid-flight.
+    const slowRefreshGate = deferred<readonly ReceiveTaskRecord[]>()
+    const realListTasks = store.listTasks.bind(store)
+    vi.spyOn(store, 'listTasks').mockImplementationOnce(() => slowRefreshGate.promise)
+    const refreshKinds: string[] = []
+    const stopSlow = coordinator.subscribe(() => { refreshKinds.push(coordinator.getSnapshot().retained.kind) })
+    const slowRefresh = coordinator.refreshRetained()
+
+    coordinator.performRetainedAction(settledTasks[0]!, 'discard')
+    await waitForSnapshot(coordinator, s => s.retained.pending === null && s.retained.tasks.length === 0)
+
+    vi.spyOn(store, 'listTasks').mockImplementation(realListTasks)
+    slowRefreshGate.resolve([record])
+    await slowRefresh
+    stopSlow()
+
+    expect(refreshKinds).not.toContain('loading')
+    expect(coordinator.getSnapshot().retained.kind).toBe('empty')
+    expect(coordinator.getSnapshot().retained.tasks).toHaveLength(0)
     await coordinator.dispose()
   })
 })

@@ -35,6 +35,10 @@ export function ReceiverApp({ controller, report }: { readonly controller: Recei
   const source = controller.presentation.shareScope
   const { kind, visitId } = useSyncExternalStore(source.subscribe, source.getSnapshot, source.getSnapshot)
   const [downloadsOpen, setDownloadsOpen] = useState(false)
+  const handleDownloadsOpenChange = (open: boolean) => {
+    if (open && !downloadsOpen) void controller.refreshDownloads()
+    setDownloadsOpen(open)
+  }
   // Scope dismissals to each monotonic share visit so A -> B -> A resets immediately with zero effect flash.
   const [dismissedState, setDismissedState] = useState<Readonly<{
     visitId: number
@@ -60,7 +64,7 @@ export function ReceiverApp({ controller, report }: { readonly controller: Recei
           {report && <ReportLink source={report} />}
           <LanguageSelect className="receiver-language" />
           <AppearanceToggle />
-          <ReceiverDownloads controller={controller} open={downloadsOpen} onOpenChange={setDownloadsOpen} />
+          <ReceiverDownloads controller={controller} open={downloadsOpen} onOpenChange={handleDownloadsOpenChange} />
         </div>
       </div>
     </header>
@@ -68,7 +72,7 @@ export function ReceiverApp({ controller, report }: { readonly controller: Recei
       <ReceiverHeading controller={controller} actions={<ReceiverPrimarySaving controller={controller} dismissedTaskKeys={dismissedTaskKeys} />} />
       <ReceiverActivity
         controller={controller}
-        openDownloads={() => setDownloadsOpen(true)}
+        openDownloads={() => handleDownloadsOpenChange(true)}
         dismissedTaskKeys={dismissedTaskKeys}
         onDismissTask={dismissTask}
       />

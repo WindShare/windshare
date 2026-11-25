@@ -11,7 +11,7 @@ export interface DocumentRuntime {
   }>
   readonly surface: { subscribe(listener: () => void): () => void; getSnapshot(): boolean }
   openLocation(location: CapturedLocation): void
-  ensureDownloads(): Promise<void>
+  refreshDownloads(): Promise<void>
   dispose(): Promise<void>
 }
 
@@ -75,9 +75,10 @@ export class DocumentOwner {
 
   readonly setDownloadsOpen = (open: boolean): void => {
     if (this.#state.kind === 'disposed') return
+    const opening = open && !this.#downloadsOpen
     this.#downloadsOpen = open
-    if (open) {
-      if (this.#state.kind === 'ready') void this.#state.runtime.ensureDownloads()
+    if (opening) {
+      if (this.#state.kind === 'ready') void this.#state.runtime.refreshDownloads()
       else if (this.#state.kind === 'unloaded') this.#start(null)
     }
     this.#publish()
@@ -122,7 +123,7 @@ export class DocumentOwner {
         throw error
       }
       this.#record('ready', current.intent)
-      if (this.#downloadsOpen) void runtime.ensureDownloads()
+      if (this.#downloadsOpen) void runtime.refreshDownloads()
       this.#publish()
     }).catch((error: unknown) => {
       const pending = this.#state
