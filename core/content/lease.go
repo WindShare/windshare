@@ -448,24 +448,77 @@ func (s *RevisionStore) finishRead(revision *revisionState, comparison RevisionC
 	return drifted, cleanups, retire, invalidate
 }
 
-func (s *RevisionStore) reap(now time.Time) {
-	cleanups := make([]revisionCleanup, 0)
-	retired := make([]revisionIdentity, 0)
-	type detachedLeaseTrace struct {
-		identity revisionIdentity
-		leaseID  LeaseID
-		session  SessionID
+type detachedLeaseTrace struct {
+	store    *RevisionStore
+	identity revisionIdentity
+	leaseID  LeaseID
+	session  SessionID
+}
+
+type retiredRevisionEffect struct {
+	store    *RevisionStore
+	identity revisionIdentity
+}
+
+type reapEffects struct {
+	stores   []*RevisionStore
+	cleanups []revisionCleanup
+	retired  []retiredRevisionEffect
+	detached []detachedLeaseTrace
+}
+
+func (e *reapEffects) run() {
+	if len(e.stores) == 0 {
+		return
 	}
-	detached := make([]detachedLeaseTrace, 0)
+	defer func() {
+		for _, store := range e.stores {
+			store.closeWG.Done()
+		}
+	}()
+	for _, cleanup := range e.cleanups {
+		_ = cleanup.run()
+	}
+	for _, item := range e.retired {
+		item.store.retireRevisionCache(item.identity)
+	}
+	for _, trace := range e.detached {
+		trace.store.traceLeaseRevision(
+			RevisionTraceStageLeaseSettlement, RevisionTraceCauseDetached,
+			trace.identity.file, trace.identity.revision, trace.leaseID, trace.session,
+		)
+	}
+	for _, item := range e.retired {
+		item.store.traceRevision(
+			RevisionTraceStageCleanRelease, RevisionTraceCauseDetached,
+			item.identity.file, item.identity.revision,
+		)
+	}
+}
+
+func (s *RevisionStore) reap(now time.Time) {
+	var effects reapEffects
 	s.pool.mu.Lock()
-	expired := make([]LeaseID, 0)
+	s.reapLocked(now, &effects)
+	s.pool.mu.Unlock()
+	effects.run()
+}
+
+func (s *RevisionStore) reapLocked(now time.Time, effects *reapEffects) bool {
+	if s.closed {
+		return false
+	}
+	beforeCleanups := len(effects.cleanups)
+	beforeRetired := len(effects.retired)
+	beforeDetached := len(effects.detached)
+	var expired []LeaseID
 	for id, lease := range s.leases {
 		if lease.status == leaseActive && !now.Before(lease.expiresAt) {
 			sessionID := lease.session.SessionID()
 			s.endLeaseLocked(lease, LeaseDetached, lease.expiresAt)
 			expired = append(expired, id)
-			detached = append(detached, detachedLeaseTrace{
-				identity: lease.revision.identity(), leaseID: id, session: sessionID,
+			effects.detached = append(effects.detached, detachedLeaseTrace{
+				store: s, identity: lease.revision.identity(), leaseID: id, session: sessionID,
 			})
 		}
 	}
@@ -479,26 +532,21 @@ func (s *RevisionStore) reap(now time.Time) {
 		cleanup, retireID, wasRetired := s.retireRevisionIfIdleLocked(revision, now)
 		if wasRetired {
 			delete(s.revisions, file)
-			retired = append(retired, retireID)
+			effects.retired = append(effects.retired, retiredRevisionEffect{store: s, identity: retireID})
 			if cleanup.source != nil || cleanup.handleHold.Units() != 0 {
-				cleanups = append(cleanups, cleanup)
+				effects.cleanups = append(effects.cleanups, cleanup)
 			}
 		}
 	}
-	s.pool.mu.Unlock()
-	for _, cleanup := range cleanups {
-		_ = cleanup.run()
+	reaped := len(effects.cleanups) > beforeCleanups ||
+		len(effects.retired) > beforeRetired ||
+		len(effects.detached) > beforeDetached
+	if reaped {
+		// Pin store.Close() until detached StableFile closes, cache retirements,
+		// and traces complete outside pool.mu. Checking s.closed under pool.mu
+		// guarantees this Add happens before closeStore() can reach closeWG.Wait().
+		s.closeWG.Add(1)
+		effects.stores = append(effects.stores, s)
 	}
-	for _, identity := range retired {
-		s.retireRevisionCache(identity)
-	}
-	for _, trace := range detached {
-		s.traceLeaseRevision(
-			RevisionTraceStageLeaseSettlement, RevisionTraceCauseDetached,
-			trace.identity.file, trace.identity.revision, trace.leaseID, trace.session,
-		)
-	}
-	for _, identity := range retired {
-		s.traceRevision(RevisionTraceStageCleanRelease, RevisionTraceCauseDetached, identity.file, identity.revision)
-	}
+	return reaped
 }

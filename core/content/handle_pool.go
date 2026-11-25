@@ -273,51 +273,77 @@ func (e *evictedRevision) close() error {
 	return closeErr
 }
 
+// reapAllStoresLocked lazily settles expired leases and grace-expired handles
+// across every registered store so an inactive sibling cannot starve process
+// capacity. Each store is evaluated against its own clock under pool.mu while
+// callers run the returned file-close and observer effects outside the lock.
+func (p *HandlePool) reapAllStoresLocked(effects *reapEffects) bool {
+	reaped := false
+	for store := range p.stores {
+		if store.reapLocked(store.clock.Now(), effects) {
+			reaped = true
+		}
+	}
+	return reaped
+}
+
 // reserveNewRevisionLocked atomically reserves a new physical handle, active
 // lease, and per-session file slot. When the handle ceiling is reached, the
 // oldest idle grace-period handle is detached under the same lock so the caller
-// can close it outside the lock before opening the replacement file.
+// can close it outside the lock before opening the replacement file. When
+// allowPoolReap is true and a process-scoped ceiling blocks admission, it asks
+// the caller to reap sibling stores before denying or evicting live grace state.
 func (s *RevisionStore) reserveNewRevisionLocked(
 	session *RevisionSession,
 	identity revisionIdentity,
-) (newRevisionReservation, *evictedRevision, *capacityTracePublication, error) {
+	allowPoolReap bool,
+) (newRevisionReservation, *evictedRevision, *capacityTracePublication, bool, error) {
 	pool := s.pool
 	if pool.closed {
-		return newRevisionReservation{}, nil, nil, ErrHandlePoolClosed
+		return newRevisionReservation{}, nil, nil, false, ErrHandlePoolClosed
 	}
 	if s.closed {
-		return newRevisionReservation{}, nil, nil, ErrRevisionStoreClosed
+		return newRevisionReservation{}, nil, nil, false, ErrRevisionStoreClosed
 	}
 	if session == nil || session.store != s {
-		return newRevisionReservation{}, nil, nil, errors.New("revision session belongs to another store")
+		return newRevisionReservation{}, nil, nil, false, errors.New("revision session belongs to another store")
 	}
 	if session.closed {
-		return newRevisionReservation{}, nil, nil, ErrSessionClosed
+		return newRevisionReservation{}, nil, nil, false, ErrSessionClosed
 	}
 	revisionID := capacityRevisionID(identity)
 	leaseHold, ok := session.leaseLedger.Reserve(1)
 	if !ok {
-		busy, trace := pool.denyLocked(s, session, revisionID, CapacityResourceActiveLease, pool.leaseBlockScopeLocked(s, session))
-		return newRevisionReservation{}, nil, trace, busy
+		scope := pool.leaseBlockScopeLocked(s, session)
+		if allowPoolReap && scope == CapacityScopeProcess {
+			return newRevisionReservation{}, nil, nil, true, nil
+		}
+		busy, trace := pool.denyLocked(s, session, revisionID, CapacityResourceActiveLease, scope)
+		return newRevisionReservation{}, nil, trace, false, busy
 	}
 	fileHold, ok := session.fileLedger.Reserve(1)
 	if !ok {
 		leaseHold.Release()
 		busy, trace := pool.denyLocked(s, session, revisionID, CapacityResourceStableHandle, CapacityScopeSession)
-		return newRevisionReservation{}, nil, trace, busy
+		return newRevisionReservation{}, nil, trace, false, busy
 	}
-	attempt := s.reserveHandleWithEvictionLocked(session)
+	attempt := s.reserveHandleWithEvictionLocked(session, allowPoolReap)
+	if attempt.needPoolReap {
+		fileHold.Release()
+		leaseHold.Release()
+		return newRevisionReservation{}, nil, nil, true, nil
+	}
 	if !attempt.admitted {
 		fileHold.Release()
 		leaseHold.Release()
 		busy, trace := pool.denyLocked(s, session, revisionID, CapacityResourceStableHandle, attempt.blockedScope)
-		return newRevisionReservation{}, attempt.evicted, trace, busy
+		return newRevisionReservation{}, attempt.evicted, trace, false, busy
 	}
 	session.pending++
 	trace := pool.makeTraceLocked(CapacityTraceAdmitted, attempt.decisionID, s, session, revisionID, nil)
 	return newRevisionReservation{
 		session: session, handleHold: attempt.hold, leaseHold: leaseHold, fileHold: fileHold, decisionID: attempt.decisionID,
-	}, attempt.evicted, trace, nil
+	}, attempt.evicted, trace, false, nil
 }
 
 type handleReservationAttempt struct {
@@ -326,13 +352,20 @@ type handleReservationAttempt struct {
 	decisionID   CapacityDecisionID
 	blockedScope CapacityScope
 	admitted     bool
+	needPoolReap bool
 }
 
-func (s *RevisionStore) reserveHandleWithEvictionLocked(session *RevisionSession) handleReservationAttempt {
+func (s *RevisionStore) reserveHandleWithEvictionLocked(
+	session *RevisionSession,
+	allowPoolReap bool,
+) handleReservationAttempt {
 	if hold, ok := s.handleLedger.Reserve(1); ok {
 		return handleReservationAttempt{hold: hold, decisionID: s.pool.nextDecisionIDLocked(), admitted: true}
 	}
 	shareBlocked := s.handleLedger.Snapshot().Used >= s.handleLedger.Limit()
+	if !shareBlocked && allowPoolReap {
+		return handleReservationAttempt{needPoolReap: true}
+	}
 	victim, scope := s.pool.idle.head, CapacityScopeProcess
 	if shareBlocked {
 		victim, scope = s.idle.head, CapacityScopeShare

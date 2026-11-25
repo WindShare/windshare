@@ -51,19 +51,17 @@ func (s *RevisionStore) OpenRevision(
 	}
 	s.reap(s.clock.Now())
 
+	reapedPool := false
 	for {
 		s.pool.mu.Lock()
 		if s.closed {
 			s.pool.mu.Unlock()
 			return RevisionLease{}, ErrRevisionStoreClosed
 		}
-		if revision := s.revisions[file]; revision != nil && revision.lifecycle == revisionLifecycleActive && !revision.closed && !revision.closing {
-			lease, trace, err := s.openResidentLocked(revision, session)
-			s.pool.mu.Unlock()
-			s.pool.emitTrace(trace)
-			if err == nil {
-				descriptor := lease.Descriptor()
-				s.traceRevision(RevisionTraceStageActiveReuse, RevisionTraceCauseUnknown, descriptor.FileID(), descriptor.FileRevision())
+		if revision := s.activeResidentLocked(file); revision != nil {
+			lease, retry, err := s.openResidentUnlock(ctx, revision, session, &reapedPool)
+			if retry {
+				continue
 			}
 			return lease, err
 		}
@@ -88,31 +86,71 @@ func (s *RevisionStore) OpenRevision(
 	}
 }
 
+func (s *RevisionStore) activeResidentLocked(file catalog.FileID) *revisionState {
+	revision := s.revisions[file]
+	if revision == nil || revision.lifecycle != revisionLifecycleActive || revision.closed || revision.closing {
+		return nil
+	}
+	return revision
+}
+
+func (s *RevisionStore) openResidentUnlock(
+	ctx context.Context,
+	revision *revisionState,
+	session *RevisionSession,
+	reapedPool *bool,
+) (RevisionLease, bool, error) {
+	var effects reapEffects
+	lease, trace, needPoolReap, err := s.openResidentLocked(revision, session, !*reapedPool)
+	if needPoolReap {
+		reaped := s.pool.reapAllStoresLocked(&effects)
+		*reapedPool = true
+		if reaped && (len(effects.cleanups) > 0 || s.activeResidentLocked(revision.descriptor.FileID()) != revision) {
+			s.pool.mu.Unlock()
+			effects.run()
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return RevisionLease{}, false, ctxErr
+			}
+			return RevisionLease{}, true, nil
+		}
+		lease, trace, _, err = s.openResidentLocked(revision, session, false)
+	}
+	s.pool.mu.Unlock()
+	effects.run()
+	s.pool.emitTrace(trace)
+	if err == nil {
+		descriptor := lease.Descriptor()
+		s.traceRevision(RevisionTraceStageActiveReuse, RevisionTraceCauseUnknown, descriptor.FileID(), descriptor.FileRevision())
+	}
+	return lease, false, err
+}
+
 // openResidentLocked admits a new lease on an already-open (active or idle
 // grace-period) revision in a single critical section.
 func (s *RevisionStore) openResidentLocked(
 	revision *revisionState,
 	session *RevisionSession,
-) (RevisionLease, *capacityTracePublication, error) {
+	allowPoolReap bool,
+) (RevisionLease, *capacityTracePublication, bool, error) {
 	pool := s.pool
 	if pool.closed {
-		return RevisionLease{}, nil, ErrHandlePoolClosed
+		return RevisionLease{}, nil, false, ErrHandlePoolClosed
 	}
 	if session == nil || session.store != s {
-		return RevisionLease{}, nil, errors.New("revision session belongs to another store")
+		return RevisionLease{}, nil, false, errors.New("revision session belongs to another store")
 	}
 	if session.closed {
-		return RevisionLease{}, nil, ErrSessionClosed
-	}
-	leaseID, err := s.newLeaseIDLocked()
-	if err != nil {
-		return RevisionLease{}, nil, err
+		return RevisionLease{}, nil, false, ErrSessionClosed
 	}
 	revisionID := capacityRevisionID(revision.identity())
 	leaseHold, ok := session.leaseLedger.Reserve(1)
 	if !ok {
-		busy, trace := pool.denyLocked(s, session, revisionID, CapacityResourceActiveLease, pool.leaseBlockScopeLocked(s, session))
-		return RevisionLease{}, trace, busy
+		scope := pool.leaseBlockScopeLocked(s, session)
+		if allowPoolReap && scope == CapacityScopeProcess {
+			return RevisionLease{}, nil, true, nil
+		}
+		busy, trace := pool.denyLocked(s, session, revisionID, CapacityResourceActiveLease, scope)
+		return RevisionLease{}, trace, false, busy
 	}
 	var fileHold capacityledger.Hold
 	if revision.sessionHandles[session] == nil {
@@ -120,19 +158,25 @@ func (s *RevisionStore) openResidentLocked(
 		if !ok {
 			leaseHold.Release()
 			busy, trace := pool.denyLocked(s, session, revisionID, CapacityResourceStableHandle, CapacityScopeSession)
-			return RevisionLease{}, trace, busy
+			return RevisionLease{}, trace, false, busy
 		}
+	}
+	leaseID, err := s.newLeaseIDLocked()
+	if err != nil {
+		leaseHold.Release()
+		fileHold.Release()
+		return RevisionLease{}, nil, false, err
 	}
 	pool.unlinkIdleLocked(revision)
 	lease, err := s.publishLeaseLocked(revision, session, s.clock.Now(), leaseID, leaseHold, fileHold)
 	if err != nil {
 		leaseHold.Release()
 		fileHold.Release()
-		return RevisionLease{}, nil, err
+		return RevisionLease{}, nil, false, err
 	}
 	decision := pool.nextDecisionIDLocked()
 	trace := pool.makeTraceLocked(CapacityTraceAdmitted, decision, s, session, revisionID, nil)
-	return lease, trace, nil
+	return lease, trace, false, nil
 }
 
 func (s *RevisionStore) awaitOpen(
@@ -198,28 +242,7 @@ func (s *RevisionStore) runOpen(ctx context.Context, attempt *openAttempt) {
 		return
 	}
 
-	s.pool.mu.Lock()
-	current := s.opening[attempt.file] == attempt && !s.closed
-	var (
-		err     error
-		evicted *evictedRevision
-		trace   *capacityTracePublication
-	)
-	if current {
-		var revisionID FileRevision
-		revisionID, err = s.newFileRevisionLocked(attempt.file)
-		if err == nil {
-			result.identity = revisionIdentity{file: attempt.file, revision: revisionID}
-			result.leaseID, err = s.newLeaseIDLocked()
-		}
-		if err == nil {
-			result.reservation, evicted, trace, err = s.reserveNewRevisionLocked(attempt.ownerSession, result.identity)
-			if err == nil {
-				result.reserved = true
-			}
-		}
-	}
-	s.pool.mu.Unlock()
+	current, evicted, trace, err := s.reserveForOpen(attempt, &result)
 	s.pool.emitTrace(trace)
 	// Always finish closing a detached victim even if the requester canceled or
 	// admission failed, so victimStore.Close() joins cleanly and no FD leaks.
@@ -282,6 +305,64 @@ func (s *RevisionStore) runOpen(ctx context.Context, attempt *openAttempt) {
 	}
 	result.descriptor = BindRevisionMetadata(result.descriptor, result.metadata)
 	result.comparison = RevisionComparisonMetadataAgreement
+}
+
+func (s *RevisionStore) reserveForOpen(
+	attempt *openAttempt,
+	result *openWorkResult,
+) (bool, *evictedRevision, *capacityTracePublication, error) {
+	reapedPool := false
+	for {
+		s.pool.mu.Lock()
+		current := s.opening[attempt.file] == attempt && !s.closed
+		if !current {
+			s.pool.mu.Unlock()
+			return false, nil, nil, nil
+		}
+		if result.identity.revision.IsZero() {
+			revisionID, err := s.newFileRevisionLocked(attempt.file)
+			if err != nil {
+				s.pool.mu.Unlock()
+				return true, nil, nil, err
+			}
+			result.identity = revisionIdentity{file: attempt.file, revision: revisionID}
+		}
+		if result.leaseID.IsZero() {
+			leaseID, err := s.newLeaseIDLocked()
+			if err != nil {
+				s.pool.mu.Unlock()
+				return true, nil, nil, err
+			}
+			result.leaseID = leaseID
+		}
+		reservation, evicted, trace, needPoolReap, err := s.reserveNewRevisionLocked(attempt.ownerSession, result.identity, !reapedPool)
+		if needPoolReap {
+			var effects reapEffects
+			reaped := s.pool.reapAllStoresLocked(&effects)
+			reapedPool = true
+			if reaped && len(effects.cleanups) > 0 {
+				// Detached grace-expired StableFiles release handleHold only after
+				// Close returns, so run them outside pool.mu before retrying.
+				s.pool.mu.Unlock()
+				effects.run()
+				continue
+			}
+			reservation, evicted, trace, _, err = s.reserveNewRevisionLocked(attempt.ownerSession, result.identity, false)
+			if err == nil {
+				result.reservation = reservation
+				result.reserved = true
+			}
+			s.pool.mu.Unlock()
+			effects.run()
+			return true, evicted, trace, err
+		}
+		if err == nil {
+			result.reservation = reservation
+			result.reserved = true
+		}
+		s.pool.mu.Unlock()
+		return true, evicted, trace, err
+	}
 }
 
 func (s *RevisionStore) resolveOpenIdentity(
