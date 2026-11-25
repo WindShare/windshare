@@ -34,15 +34,6 @@
   min-width: 0;
 }
 
-/* Keep payment controls visible while browsing a long supporter wall, only when
-   the viewport has enough height so the sticky card never clips its own bottom actions. */
-@media (min-width: 901px) and (min-height: 760px) {
-  .donate-actions-card {
-    position: sticky;
-    top: calc(84px + 24px);
-  }
-}
-
 .donate-header {
   margin-bottom: 22px;
 }
