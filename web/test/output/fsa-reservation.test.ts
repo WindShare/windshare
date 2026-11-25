@@ -7,7 +7,7 @@ import { deterministicSafeCandidates } from '../../src/output/backends/safe-name
 import type { OutputTraceEvent } from '../../src/output/diagnostics'
 import type { ReceiveStore } from '../../src/output/store/database'
 import type { ReceiveTaskRecord } from '../../src/output/store/types'
-import { OutputFaultCode, isPermissionDeniedError } from '../../src/transfer/fault'
+import { FileDestinationConflictError, OutputFaultCode, isPermissionDeniedError } from '../../src/transfer/fault'
 import type { SettledTransferJobResult } from '../../src/transfer/job'
 import { initialReceiveState, transitionReceiveState, type SafeRenamedSummary } from '../../src/transfer/state'
 import { FakeDirectoryHandle, FakeFileHandle, MemoryReceiveStore } from './fsa-fixture'
@@ -678,5 +678,230 @@ describe('FSA write-path SecurityError safe-name fallback and permission boundar
     const discardError = await discardFSATask(paused, store as unknown as ReceiveStore).catch((error: unknown) => error)
     expect(isPermissionDeniedError(discardError)).toBe(true)
     expect(discardError).toMatchObject({ fault: { code: OutputFaultCode.PermissionDenied } })
+  })
+})
+
+describe('FSA single-file reserved slot reopen boundaries', () => {
+  it('maps direct and raced single-file TypeMismatchError to FileDestinationConflictError without safe-renaming or drifting reservedName', async () => {
+    const store = new MemoryReceiveStore()
+    const parent = new FakeDirectoryHandle('Downloads', store.events)
+    const signal = new AbortController().signal
+    const traces: OutputTraceEvent[] = []
+    const diagnostics = {
+      backend: 'file_system_access' as const,
+      trace: { current: (event: OutputTraceEvent) => traces.push(event) },
+    }
+
+    // 1. Direct TypeMismatchError: reserved single-file placeholder replaced with a directory before reopen.
+    const initial = await openNewFSASession({
+      task: singleFileTask('single-dir-conflict', 'report.pdf'),
+      parentHandle: parent as unknown as FileSystemDirectoryHandle,
+      store: store as unknown as ReceiveStore,
+      diagnostics,
+    })
+    const paused = await initial.settle(pausedEmpty)
+    await initial.close()
+
+    await parent.removeEntry('report.pdf')
+    const userDir = await parent.getDirectoryHandle('report.pdf', { create: true })
+
+    const reopened = await reopenFSASession({
+      task: paused,
+      store: store as unknown as ReceiveStore,
+      allowPermissionPrompt: false,
+      diagnostics,
+    })
+    const directError = await reopened.transferOutput.openFile({
+      fileId: 'file-single-dir-conflict',
+      path: ['report.pdf'],
+      sourcePath: ['report.pdf'],
+      revision: 'rev-1',
+      exactSize: 4n,
+    }, signal).catch((error: unknown) => error)
+
+    expect(directError).toBeInstanceOf(FileDestinationConflictError)
+    expect(directError).toMatchObject({
+      destinationPath: 'Downloads/report.pdf',
+      fault: { code: OutputFaultCode.TargetCollision },
+    })
+    expect((directError as Error).cause).toMatchObject({ name: 'TypeMismatchError' })
+    expect(parent.children.get('report.pdf')).toBe(userDir)
+    expect([...parent.children.keys()]).toEqual(['report.pdf'])
+    expect(reopened.transferOutput.safeRenamedSummary?.()).toBeUndefined()
+    expect(reservedNameOf(reopened.record)).toBe('report.pdf')
+    const conflictTrace = traces.find(event => event.payload.transition === 'single_file_type_mismatch')
+    expect(conflictTrace).toEqual({
+      eventName: 'output_reservation',
+      payload: {
+        backend: 'file_system_access',
+        task_id: 'single-dir-conflict',
+        file_id: 'file-single-dir-conflict',
+        transition: 'single_file_type_mismatch',
+      },
+    })
+    expect(JSON.stringify(conflictTrace!.payload)).not.toContain('report.pdf')
+    await reopened.close()
+
+    // 2. Raced TypeMismatchError: placeholder is missing at first probe, then a directory appears before locked recreation.
+    const raceInitial = await openNewFSASession({
+      task: singleFileTask('single-race-conflict', 'archive.zip'),
+      parentHandle: parent as unknown as FileSystemDirectoryHandle,
+      store: store as unknown as ReceiveStore,
+      diagnostics,
+    })
+    const racePaused = await raceInitial.settle(pausedEmpty)
+    await raceInitial.close()
+    await parent.removeEntry('archive.zip')
+
+    const raceReopened = await reopenFSASession({
+      task: racePaused,
+      store: store as unknown as ReceiveStore,
+      allowPermissionPrompt: false,
+      diagnostics,
+    })
+    const origGetFile = parent.getFileHandle.bind(parent)
+    let injectedRace = false
+    const raceSpy = vi.spyOn(parent, 'getFileHandle').mockImplementation(async (name, options) => {
+      if (!injectedRace && name === 'archive.zip' && !options?.create) {
+        injectedRace = true
+        await parent.getDirectoryHandle('archive.zip', { create: true })
+        throw new DOMException('missing', 'NotFoundError')
+      }
+      return origGetFile(name, options)
+    })
+    try {
+      const raceError = await raceReopened.transferOutput.openFile({
+        fileId: 'file-single-race-conflict',
+        path: ['archive.zip'],
+        sourcePath: ['archive.zip'],
+        revision: 'rev-1',
+        exactSize: 4n,
+      }, signal).catch((error: unknown) => error)
+
+      expect(raceError).toBeInstanceOf(FileDestinationConflictError)
+      expect(raceError).toMatchObject({
+        destinationPath: 'Downloads/archive.zip',
+        fault: { code: OutputFaultCode.TargetCollision },
+      })
+      expect((raceError as Error).cause).toMatchObject({ name: 'TypeMismatchError' })
+      expect(parent.children.get('archive.zip')).toBeInstanceOf(FakeDirectoryHandle)
+      expect([...parent.children.keys()].sort()).toEqual(['archive.zip', 'report.pdf'])
+      expect(raceReopened.transferOutput.safeRenamedSummary?.()).toBeUndefined()
+      expect(reservedNameOf(raceReopened.record)).toBe('archive.zip')
+    } finally {
+      raceSpy.mockRestore()
+      await raceReopened.close()
+    }
+  })
+
+  it('propagates SecurityError and NotAllowedError on single-file placeholder recreation without child safe-rename drift, and cleanly recreates deleted root-renamed slots', async () => {
+    const store = new MemoryReceiveStore()
+    const parent = new FakeDirectoryHandle('Downloads', store.events, name => /\.exe$/i.test(name))
+    const signal = new AbortController().signal
+
+    // 1. Policy SecurityError during locked recreation propagates without creating a child-scoped safe-renamed orphan.
+    const policyInit = await openNewFSASession({
+      task: singleFileTask('single-policy-recreate', 'notes.txt'),
+      parentHandle: parent as unknown as FileSystemDirectoryHandle,
+      store: store as unknown as ReceiveStore,
+    })
+    const policyPaused = await policyInit.settle(pausedEmpty)
+    await policyInit.close()
+    await parent.removeEntry('notes.txt')
+
+    const policyReopened = await reopenFSASession({
+      task: policyPaused,
+      store: store as unknown as ReceiveStore,
+      allowPermissionPrompt: false,
+    })
+    const origGetFile = parent.getFileHandle.bind(parent)
+    const secSpy = vi.spyOn(parent, 'getFileHandle').mockImplementation(async (name, options) => {
+      if (name === 'notes.txt' && options?.create) {
+        throw new DOMException('Blocked by write-path policy', 'SecurityError')
+      }
+      return origGetFile(name, options)
+    })
+    try {
+      await expect(policyReopened.transferOutput.openFile({
+        fileId: 'file-single-policy-recreate',
+        path: ['notes.txt'],
+        sourcePath: ['notes.txt'],
+        revision: 'rev-1',
+        exactSize: 4n,
+      }, signal)).rejects.toMatchObject({ name: 'SecurityError' })
+      expect(parent.children.size).toBe(0)
+      expect(policyReopened.transferOutput.safeRenamedSummary?.()).toBeUndefined()
+      expect(reservedNameOf(policyReopened.record)).toBe('notes.txt')
+    } finally {
+      secSpy.mockRestore()
+    }
+
+    // 2. Permission loss (NotAllowedError) stays PermissionDenied rather than FileDestinationConflictError.
+    const permSpy = vi.spyOn(parent, 'getFileHandle').mockRejectedValueOnce(new DOMException('denied', 'NotAllowedError'))
+    try {
+      const permError = await policyReopened.transferOutput.openFile({
+        fileId: 'file-single-policy-recreate',
+        path: ['notes.txt'],
+        sourcePath: ['notes.txt'],
+        revision: 'rev-1',
+        exactSize: 4n,
+      }, signal).catch((error: unknown) => error)
+      expect(isPermissionDeniedError(permError)).toBe(true)
+      expect(permError).not.toBeInstanceOf(FileDestinationConflictError)
+    } finally {
+      permSpy.mockRestore()
+      await policyReopened.close()
+    }
+
+    // 3. Recreating a deleted root-safe-renamed single-file placeholder preserves reservedName, summary count, and restore plan.
+    const exeInit = await openNewFSASession({
+      task: singleFileTask('single-root-safe-recreate', 'setup.exe'),
+      parentHandle: parent as unknown as FileSystemDirectoryHandle,
+      store: store as unknown as ReceiveStore,
+    })
+    const [, expectedSafeName] = await deterministicSafeCandidates({
+      taskId: 'single-root-safe-recreate',
+      logicalPath: ['setup.exe'],
+      entryKind: 'file',
+      collisionIndex: 0,
+    })
+    expect(reservedNameOf(exeInit.record)).toBe(expectedSafeName)
+    const exePaused = await exeInit.settle(pausedEmpty)
+    await exeInit.close()
+
+    await parent.removeEntry(expectedSafeName!)
+    expect(parent.children.has(expectedSafeName!)).toBe(false)
+
+    const exeReopened = await reopenFSASession({
+      task: exePaused,
+      store: store as unknown as ReceiveStore,
+      allowPermissionPrompt: false,
+    })
+    const writer = await exeReopened.transferOutput.openFile({
+      fileId: 'file-single-root-safe-recreate',
+      path: ['setup.exe'],
+      sourcePath: ['setup.exe'],
+      revision: 'rev-1',
+      exactSize: 4n,
+    }, signal)
+    await writer.writeAt(0n, Uint8Array.of(1, 2, 3, 4))
+    await writer.commit([byteRange(0n, 4n)])
+    const saved = await exeReopened.settle({
+      status: 'completed',
+      completedFiles: 1n,
+      completedBytes: 4n,
+      discoveredFiles: 1n,
+      discoveredBytes: 4n,
+      discoveryComplete: true,
+      failedFiles: 0n,
+      failedDirectories: 0n,
+    })
+    await exeReopened.close()
+
+    expect(reservedNameOf(saved)).toBe(expectedSafeName)
+    expect(saved.safeRenamed?.count).toBe(1)
+    expect([...(parent.children.get(expectedSafeName!) as FakeFileHandle).bytes]).toEqual([1, 2, 3, 4])
+    const plan = await loadFSARestorePlan(store as unknown as ReceiveStore, 'single-root-safe-recreate', 'windows')
+    expect(plan.restorable.map(step => [step.fromName, step.toName])).toEqual([[expectedSafeName, 'setup.exe']])
   })
 })

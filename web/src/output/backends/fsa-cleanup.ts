@@ -40,9 +40,13 @@ export function isMissingFSAEntry(error: unknown): boolean {
   return error instanceof DOMException && error.name === 'NotFoundError'
 }
 
+export function isFSATypeMismatch(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'TypeMismatchError'
+}
+
 function entryFailure(error: unknown): 'missing' | 'changed' {
   if (isMissingFSAEntry(error)) return 'missing'
-  if (error instanceof DOMException && error.name === 'TypeMismatchError') return 'changed'
+  if (isFSATypeMismatch(error)) return 'changed'
   throw error
 }
 

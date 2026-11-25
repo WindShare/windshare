@@ -207,7 +207,7 @@ export async function openFSAFile(
   }
 }
 
-async function openOrCreateFSAFile(
+export async function openOrCreateFSAFile(
   parent: FileSystemDirectoryHandle,
   name: string,
 ): Promise<{ handle: FileSystemFileHandle; created: boolean }> {

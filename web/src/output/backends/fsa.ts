@@ -34,13 +34,14 @@ import {
   type StartBackendTaskInput,
 } from './contract'
 import {
-  cleanupFSATaskEntries, isMissingFSAEntry, isUncommittedEmptyPlaceholder,
+  cleanupFSATaskEntries, isFSATypeMismatch, isMissingFSAEntry, isUncommittedEmptyPlaceholder,
   matchesFSADiskFingerprint, readFSADiskFingerprint, sameFSAEntry, settleFSATerminalCleanup,
 } from './fsa-cleanup'
 import { destinationChanged, FSAOutputFile, verifyExistingFSAFile, type FSAFileOrigin } from './fsa-file'
 import {
   buildFSATargetRecord, collectFSATopLevelClaims, ensureFSAPermission, openFSADirectory, openFSAFile,
-  reserveFSATarget, retainsFSAReservationClaim, rollbackFSATaskTarget, rollbackReservedTarget, type FSADirectory,
+  openOrCreateFSAFile, reserveFSATarget, retainsFSAReservationClaim, rollbackFSATaskTarget,
+  rollbackReservedTarget, type FSADirectory,
 } from './fsa-reservation'
 import { nextFSALifecycle } from './fsa-settlement'
 import {
@@ -481,7 +482,7 @@ class FSASessionHandle implements OutputSessionHandle {
   > {
     const target = this.#record.target
     const entry = target.singleFile
-      ? await this.#openSingleFileEntry(parent.handle, request.path, leaf)
+      ? await this.#openSingleFileEntry(parent.handle, target.reservedName, request.fileId)
       : await openFSAFile(parent.handle, request.path, leaf, this.#safeNames, this.taskId)
     const candidatePath = this.#displayPath([...parent.physicalPath, entry.handle.name])
     const releaseReserved = () => { this.#reservedPlaceholderActive = false }
@@ -519,19 +520,35 @@ class FSASessionHandle implements OutputSessionHandle {
 
   async #openSingleFileEntry(
     parent: FileSystemDirectoryHandle,
-    logicalPath: readonly string[],
-    leaf: string,
+    reservedName: string,
+    fileId: string,
   ): Promise<{ handle: FileSystemFileHandle; created: boolean }> {
     try {
-      return { handle: await parent.getFileHandle(leaf), created: false }
+      return { handle: await parent.getFileHandle(reservedName), created: false }
     } catch (error) {
+      if (isFSATypeMismatch(error)) throw this.#singleFileTypeMismatch(reservedName, fileId, error)
       if (!isMissingFSAEntry(error)) throw error
     }
-    // Coordinate recreating a deleted/retired single-file placeholder with new root allocations.
-    return withFSAReservationLock(
-      () => openFSAFile(parent, logicalPath, leaf, this.#safeNames, this.taskId),
-      this.#locks,
-    )
+    // Single-file reservations are negotiated once at openNewFSASession; recreate the
+    // exact reserved slot under the reservation lock without child-scoped safe renaming.
+    return withFSAReservationLock(async () => {
+      try {
+        return await openOrCreateFSAFile(parent, reservedName)
+      } catch (error) {
+        if (isFSATypeMismatch(error)) throw this.#singleFileTypeMismatch(reservedName, fileId, error)
+        throw error
+      }
+    }, this.#locks)
+  }
+
+  #singleFileTypeMismatch(reservedName: string, fileId: string, cause: unknown): TransferFaultError {
+    emitOutputTrace(this.#diagnostics?.trace, 'output_reservation', {
+      backend: 'file_system_access',
+      task_id: this.taskId,
+      file_id: fileId,
+      transition: 'single_file_type_mismatch',
+    })
+    return destinationChanged(this.#displayPath([reservedName]), cause)
   }
 
   #claimReservedFile(
@@ -606,6 +623,7 @@ class FSASessionHandle implements OutputSessionHandle {
   async #refreshReservedFile(handle: FileSystemFileHandle, displayPath: string): Promise<FSADiskFingerprint> {
     const target = this.#record.target
     if (!target.singleFile) throw new TypeError('Cannot refresh reserved file on a directory FSA task')
+    if (handle.name !== target.reservedName) throw destinationChanged(displayPath)
     const fingerprint = await readFSADiskFingerprint(handle).catch((cause: unknown) => {
       throw destinationChanged(displayPath, cause)
     })
