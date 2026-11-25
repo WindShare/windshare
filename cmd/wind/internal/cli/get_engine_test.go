@@ -39,7 +39,7 @@ func TestReceiveTaskCompletionReportsDroppedObservationsInTraceSummary(t *testin
 	result.Outcome = engine.OutcomeFailed
 	result.FailureClass = engine.FailureLocal
 	result.Err = engine.ReceiveFailure{Code: engine.ReceiveFailureInvalidInput}
-	if code := app.reportReceiveTask(result, receiveSelection{}, runtime); code != ExitFailure {
+	if code := app.reportReceiveTask(result, receiveSelection{}, runtime, nil); code != ExitFailure {
 		t.Fatalf("exit=%d", code)
 	}
 	runtime.Close()

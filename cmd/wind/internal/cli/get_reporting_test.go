@@ -336,7 +336,7 @@ func (a *App) reportTransferResultWithAdmission(
 	if err != nil {
 		t.Fatal(err)
 	}
-	return a.reportEngineReceive(settled, receiveSelection{}, runtime)
+	return a.reportEngineReceive(settled, receiveSelection{}, runtime, nil)
 }
 
 func TestMissingSelectionEchoesTypedOnlyValuesInCommandLineOrder(t *testing.T) {
@@ -402,7 +402,7 @@ func TestMissingSelectionEchoesTypedOnlyValuesInCommandLineOrder(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			code := app.reportEngineReceive(settled, test.selection, runtime)
+			code := app.reportEngineReceive(settled, test.selection, runtime, nil)
 			runtime.Close()
 			output := stderr.String()
 			want := strings.Join(append(test.wantLines, "Correct --only and run wind get with the intended selection."), "\n") + "\n"
@@ -462,7 +462,7 @@ func TestGetResultReportsNameAdjustmentsWithoutChangingSuccessExit(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if code := app.reportEngineReceive(settled, receiveSelection{}, runtime); code != ExitOK {
+	if code := app.reportEngineReceive(settled, receiveSelection{}, runtime, nil); code != ExitOK {
 		t.Fatalf("exit=%d, want %d", code, ExitOK)
 	}
 	runtime.Close()

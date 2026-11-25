@@ -19,7 +19,7 @@ func (a *App) runResume(ctx context.Context, args []string) (code int) {
 	if err != nil {
 		return ExitFailure
 	}
-	defer closeApp(&code)
+	defer a.closeCommandApplication(closeApp, &code)
 	runner := resumecommand.NewFilesystemRunner(resumecommand.FilesystemConfig{
 		Recovery: a.application,
 		Input:    a.Stdin,

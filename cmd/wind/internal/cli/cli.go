@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"sync"
 	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/accountcommand"
@@ -214,7 +215,7 @@ func (a *App) runAccount(ctx context.Context, args []string) (code int) {
 	if err != nil {
 		return ExitFailure
 	}
-	defer closeApp(&code)
+	defer a.closeCommandApplication(closeApp, &code)
 	runner := accountcommand.Runner{Input: a.Stdin, Output: a.stderrLines(), JSONOutput: a.Stdout}
 	if service := a.application.Accounts(); service != nil {
 		runner.Service = service
@@ -224,11 +225,11 @@ func (a *App) runAccount(ctx context.Context, args []string) (code int) {
 
 // ensureApplication constructs a command-scoped engine after flags and trace
 // streams are parsed so startup directory and frontend checks enter the trace.
-// Deferring the returned closer after commandRuntime.Close joins engine loops
-// before the diagnostic stream seals.
-func (a *App) ensureApplication(diagnosticSink diagnostics.Sink) (func(*int), error) {
+// The returned closer is idempotent and must run before commandRuntime.Close
+// seals the diagnostic stream.
+func (a *App) ensureApplication(diagnosticSink diagnostics.Sink) (func() error, error) {
 	if a.application != nil {
-		return func(*int) {}, nil
+		return func() error { return nil }, nil
 	}
 	application, err := a.newApplication(diagnosticSink)
 	if err != nil {
@@ -236,15 +237,47 @@ func (a *App) ensureApplication(diagnosticSink diagnostics.Sink) (func(*int), er
 		return nil, err
 	}
 	a.application = application
-	return func(code *int) {
-		if err := application.Close(context.Background()); err != nil {
-			a.writeCompleteLine("%s: close application: %v", command.Name, err)
-			if code != nil && *code == ExitOK {
-				*code = ExitFailure
-			}
-		}
-		a.application = nil
+	var (
+		closeOnce sync.Once
+		closeErr  error
+	)
+	return func() error {
+		closeOnce.Do(func() {
+			closeErr = application.Close(context.Background())
+			a.application = nil
+		})
+		return closeErr
 	}, nil
+}
+
+// closeCommandApplication settles a command-scoped engine for subcommands
+// without a commandRuntime (account, relay, resume list/discard).
+func (a *App) closeCommandApplication(closeApp func() error, code *int) {
+	if err := closeApp(); err != nil {
+		a.writeCompleteLine("%s: close application: %v", command.Name, err)
+		if code != nil && *code == ExitOK {
+			*code = ExitFailure
+		}
+	}
+}
+
+// observeApplicationClose wraps an engine closer for share/get so shutdown runs
+// at most once, writes concrete close details to stderr before commandRuntime
+// renders the final panel, and still fires via defer on early error returns.
+func (a *App) observeApplicationClose(closeApp func() error) func() error {
+	var (
+		once     sync.Once
+		closeErr error
+	)
+	return func() error {
+		once.Do(func() {
+			closeErr = closeApp()
+			if closeErr != nil {
+				a.writeCompleteLine("%s: close application: %v", command.Name, closeErr)
+			}
+		})
+		return closeErr
+	}
 }
 
 type engineCommandClock struct{ commandClock }

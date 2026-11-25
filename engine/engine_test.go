@@ -13,6 +13,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/engine/internal/task"
 	"github.com/windshare/windshare/engine/relayprofile"
 )
@@ -273,3 +274,76 @@ type engineTestClock struct {
 }
 
 func (c engineTestClock) Now() time.Time { return c.now() }
+
+func TestEngineCloseEmitsShutdownDiagnosticOnlyOnFailure(t *testing.T) {
+	t.Run("clean close emits no failure diagnostic", func(t *testing.T) {
+		stream, err := diagnostics.NewStream(16, time.Now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		application, err := New(Config{Diagnostics: stream.Sink()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := application.Close(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		stream.Close()
+		for rec := range stream.Records() {
+			if rec.Name() == "engine_shutdown_failed" {
+				t.Fatalf("clean close emitted %+v", rec)
+			}
+		}
+	})
+
+	t.Run("unreleased catalog budget emits structured shutdown diagnostic", func(t *testing.T) {
+		stream, err := diagnostics.NewStream(16, time.Now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		application, err := New(Config{Diagnostics: stream.Sink()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		shareBudget, err := catalog.NewBudgetAccount("test-share", catalog.DefaultShareBudgetLimits())
+		if err != nil {
+			t.Fatal(err)
+		}
+		sessionBudget, err := catalog.NewBudgetAccount("test-session", catalog.DefaultSessionBudgetLimits())
+		if err != nil {
+			t.Fatal(err)
+		}
+		reservation, err := catalog.ReserveHierarchy(
+			catalog.BudgetHierarchy{Process: application.catalog, Share: shareBudget, Session: sessionBudget},
+			catalog.ResourceUsage{Entries: 1, MemoryBytes: 64},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer reservation.Release()
+
+		closeErr := application.Close(context.Background())
+		var unreleased *UnreleasedResourcesError
+		if !errors.As(closeErr, &unreleased) {
+			t.Fatalf("close error = %v, want UnreleasedResourcesError", closeErr)
+		}
+		stream.Close()
+		var records []diagnostics.Record
+		for rec := range stream.Records() {
+			if rec.Name() == "engine_shutdown_failed" {
+				records = append(records, rec)
+			}
+		}
+		if len(records) != 1 {
+			t.Fatalf("engine_shutdown_failed records = %d, want 1", len(records))
+		}
+		rec := records[0]
+		if rec.Scope().EngineID == "" {
+			t.Fatal("engine_shutdown_failed missing engine_id scope")
+		}
+		retained := rec.Payload().Get("retained_catalog")
+		if retained.Get("entries").Text() != "1" || retained.Get("memory_bytes").Text() != "64" {
+			t.Fatalf("retained_catalog payload = %+v", rec.Payload())
+		}
+	})
+}

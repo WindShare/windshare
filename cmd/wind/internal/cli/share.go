@@ -12,7 +12,7 @@ import (
 	"github.com/windshare/windshare/engine/account"
 )
 
-func (a *App) runShare(ctx context.Context, args []string) (code int) {
+func (a *App) runShare(ctx context.Context, args []string) int {
 	request, parse := a.parseShareRequest(args)
 	if parse != requestParseReady {
 		return parse.exitCode()
@@ -27,9 +27,11 @@ func (a *App) runShare(ctx context.Context, args []string) (code int) {
 	defer runtime.Close()
 	closeApp, err := a.ensureApplication(runtime.diagnosticSink())
 	if err != nil {
+		runtime.StageCommandFailure(ExitFailure, classifyFailure(err))
 		return ExitFailure
 	}
-	defer closeApp(&code)
+	closeEngine := a.observeApplicationClose(closeApp)
+	defer func() { _ = closeEngine() }()
 
 	// Ctrl+C means explicitly stop publishing this share. Its cleanup lifetime
 	// belongs to the engine and therefore outlives this command's canceled wait.
@@ -93,7 +95,10 @@ func (a *App) runShare(ctx context.Context, args []string) (code int) {
 		runtime.StageCommandFailure(ExitNetwork, engine.Failure{Code: engine.FailureRelayAccessDenied})
 		return ExitNetwork
 	}
-	return reportShareResult(runtime, result, publicationErr)
+	// Close the engine before staging the final command result so shutdown
+	// failures align across exit code, trace, and human summary while
+	// diagnostics remain open.
+	return reportShareResult(runtime, result, publicationErr, closeEngine())
 }
 
 // awaitShareStartup resolves initial publication for the CLI. Unlike the
@@ -150,7 +155,7 @@ func (a *App) publishEngineShare(ready engine.ShareReady, presentation shareLink
 	return nil
 }
 
-func reportShareResult(runtime *commandRuntime, result engine.TaskResult[engine.ShareResult], publicationErr error) int {
+func reportShareResult(runtime *commandRuntime, result engine.TaskResult[engine.ShareResult], publicationErr, closeErr error) int {
 	if publicationErr != nil {
 		// The engine settles service shutdown separately. Its stop outcome and
 		// cleanup failures cannot turn an output error into success or usage error.
@@ -166,12 +171,16 @@ func reportShareResult(runtime *commandRuntime, result engine.TaskResult[engine.
 		return ExitFailure
 	}
 	code := exitCodeForClass(result.FailureClass)
-	if !result.Value.Ready && (result.Err != nil || result.CleanupError != nil) {
+	cause := result.Err
+	if cause == nil {
+		cause = result.CleanupError
+	}
+	if code == ExitOK && closeErr != nil {
+		code = ExitFailure
+		cause = closeErr
+	}
+	if !result.Value.Ready && cause != nil {
 		if code != ExitOK {
-			cause := result.Err
-			if cause == nil {
-				cause = result.CleanupError
-			}
 			runtime.StageCommandFailure(code, classifyFailure(cause))
 		}
 		return code
@@ -179,10 +188,6 @@ func reportShareResult(runtime *commandRuntime, result engine.TaskResult[engine.
 	stoppedCleanly := code == ExitOK
 	var failure *engine.Failure
 	if !stoppedCleanly {
-		cause := result.Err
-		if cause == nil {
-			cause = result.CleanupError
-		}
 		f := classifyFailure(cause)
 		failure = &f
 	}

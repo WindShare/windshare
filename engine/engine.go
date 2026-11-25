@@ -60,6 +60,7 @@ type Engine struct {
 	relaySetup      *relaysetup.Service
 	networkState    *networkstate.Watcher
 	network         *networkruntime.Runtime
+	diagnostics     diagnostics.Sink
 	mu              sync.Mutex
 	config          Config
 	random          *lockedReader
@@ -143,6 +144,7 @@ func New(config Config) (*Engine, error) {
 	return &Engine{
 		networkState: networkState,
 		network:      network,
+		diagnostics:  engineDiagnostics,
 		relaySetup:   relaysetup.New(config.RelaySetup),
 		config:       config, random: random, identity: engineID,
 		revisions: revisions, catalog: catalogBudget, cache: cacheBudget, connectivity: connectivity,
@@ -243,10 +245,49 @@ func (engine *Engine) shutdown(active []managedTask) {
 		retainedErr = &UnreleasedResourcesError{CatalogUsage: catalogUsage, CacheBytes: cacheBytes, cause: cacheErr}
 	}
 	engine.mu.Lock()
+	taskCleanupErrors := uint64(len(engine.cleanupErrors))
 	engine.closeErr = errors.Join(append(engine.cleanupErrors, capacityErr, receiveCapacityErr, retainedErr)...)
 	engine.cleanupErrors = nil
+	closeErr := engine.closeErr
 	engine.mu.Unlock()
+	if closeErr != nil && engine.diagnostics.Enabled() {
+		// Emit privacy-safe shutdown accounting before closing engine.closed so
+		// hosts that seal diagnostics after Engine.Close still retain why close failed.
+		engine.diagnostics.Record(engineShutdownFailure{
+			taskCleanupErrors:     taskCleanupErrors,
+			revisionCapacityError: capacityErr != nil,
+			receiveCapacityError:  receiveCapacityErr != nil,
+			retainedCatalog:       catalogUsage,
+			retainedCacheBytes:    cacheBytes,
+		})
+	}
 	close(engine.closed)
+}
+
+type engineShutdownFailure struct {
+	taskCleanupErrors     uint64
+	revisionCapacityError bool
+	receiveCapacityError  bool
+	retainedCatalog       catalog.ResourceUsage
+	retainedCacheBytes    uint64
+}
+
+func (f engineShutdownFailure) DiagnosticRecord() diagnostics.Record {
+	fields := diagnostics.Fields{
+		"task_cleanup_errors":      diagnostics.Uint(f.taskCleanupErrors),
+		"revision_capacity_failed": diagnostics.Bool(f.revisionCapacityError),
+		"receive_capacity_failed":  diagnostics.Bool(f.receiveCapacityError),
+		"retained_cache_bytes":     diagnostics.Uint(f.retainedCacheBytes),
+	}
+	if f.retainedCatalog != (catalog.ResourceUsage{}) {
+		fields["retained_catalog"] = diagnostics.Object(diagnostics.Fields{
+			"active_scans": diagnostics.Uint(f.retainedCatalog.ActiveScans),
+			"scan_work":    diagnostics.Uint(f.retainedCatalog.ScanWork),
+			"entries":      diagnostics.Uint(f.retainedCatalog.Entries),
+			"memory_bytes": diagnostics.Uint(f.retainedCatalog.MemoryBytes),
+		})
+	}
+	return diagnostics.New("engine_shutdown_failed", fields)
 }
 
 func (engine *Engine) shutdownError() error {

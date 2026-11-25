@@ -44,7 +44,7 @@ func (a *App) runGet(ctx context.Context, args []string) int {
 	return a.runReceive(ctx, receiveGet, args)
 }
 
-func (a *App) runReceive(ctx context.Context, command receiveCommand, args []string) (code int) {
+func (a *App) runReceive(ctx context.Context, command receiveCommand, args []string) int {
 	request, parsed := a.parseReceiveRequest(ctx, command, args)
 	if parsed != requestParseReady {
 		return parsed.exitCode()
@@ -56,9 +56,11 @@ func (a *App) runReceive(ctx context.Context, command receiveCommand, args []str
 	defer runtime.Close()
 	closeApp, err := a.ensureApplication(runtime.diagnosticSink())
 	if err != nil {
+		runtime.StageCommandFailure(ExitFailure, classifyFailure(err))
 		return ExitFailure
 	}
-	defer closeApp(&code)
+	closeEngine := a.observeApplicationClose(closeApp)
+	defer func() { _ = closeEngine() }()
 	destination, err := filepath.Abs(request.outDir)
 	if err != nil {
 		runtime.StageCommandFailure(ExitFailure, classifyFailure(err))
@@ -93,7 +95,10 @@ func (a *App) runReceive(ctx context.Context, command receiveCommand, args []str
 		runtime.StageCommandFailure(ExitFailure, classifyFailure(err))
 		return ExitFailure
 	}
-	return a.reportReceiveTask(result, request.selection, runtime)
+	// Close the engine before staging the final transfer outcome so shutdown
+	// failures align across exit code, trace, and human summary without erasing
+	// published transfer facts.
+	return a.reportReceiveTask(result, request.selection, runtime, closeEngine())
 }
 
 const (

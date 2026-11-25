@@ -36,11 +36,15 @@ func (a *App) receiveDependencies() engine.ReceiveDependencies {
 	return dependencies
 }
 
-func (a *App) reportEngineReceive(result engine.TaskCompletion[engine.ReceiveResult], selection receiveSelection, runtime *commandRuntime) int {
+func (a *App) reportEngineReceive(result engine.TaskCompletion[engine.ReceiveResult], selection receiveSelection, runtime *commandRuntime, closeErr error) int {
 	code := exitCodeForClass(result.FailureClass)
 	cause := result.Err
 	if cause == nil {
 		cause = result.CleanupError
+	}
+	if code == ExitOK && closeErr != nil {
+		code = ExitFailure
+		cause = closeErr
 	}
 	failure, hasFailure := engine.DescribeFailure(cause)
 	if result.Outcome != engine.OutcomeSuccess {
@@ -58,6 +62,15 @@ func (a *App) reportEngineReceive(result engine.TaskCompletion[engine.ReceiveRes
 		return code
 	}
 	transferResult := buildTransferResult(result, failure, hasFailure)
+	if code != ExitOK && transferResult.Status == humanoutput.ResultSuccess {
+		// Preserve published destination, file counts, and connectivity metrics
+		// while refusing to report a green completion when engine close failed.
+		transferResult.Status = humanoutput.ResultFailed
+		if !hasFailure {
+			failure = engine.Failure{Code: engine.FailureUnexpected}
+		}
+		transferResult.Failure = &failure
+	}
 	finalProgress := engine.TransferProgress{
 		Operation:           result.Value.Operation,
 		Job:                 result.Value.Job,
@@ -123,9 +136,9 @@ func saturatingAddUint64(left, right uint64) uint64 {
 	return left + right
 }
 
-func (a *App) reportReceiveTask(result engine.TaskResult[engine.ReceiveResult], selection receiveSelection, runtime *commandRuntime) int {
+func (a *App) reportReceiveTask(result engine.TaskResult[engine.ReceiveResult], selection receiveSelection, runtime *commandRuntime, closeErr error) int {
 	runtime.AddDropped(result.Observations.CapacityDropped)
-	return a.reportEngineReceive(result.Completion, selection, runtime)
+	return a.reportEngineReceive(result.Completion, selection, runtime, closeErr)
 }
 
 func (a *App) reportReceiveRecovery(result engine.ReceiveResult, selection receiveSelection) {

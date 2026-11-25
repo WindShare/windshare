@@ -59,7 +59,7 @@ func (app *App) runRelay(ctx context.Context, args []string) (code int) {
 		if err != nil {
 			return ExitFailure
 		}
-		defer closeApp(&code)
+		defer app.closeCommandApplication(closeApp, &code)
 		if err := app.application.CancelRelaySetup(ctx, address); err != nil {
 			app.writeCompleteLine("relay cancel: %v", err)
 			return relayCancelExitCode(err)
@@ -118,7 +118,7 @@ func (app *App) runRelaySetup(ctx context.Context, command relaySetupCommand) (c
 	if err != nil {
 		return ExitFailure
 	}
-	defer closeApp(&code)
+	defer app.closeCommandApplication(closeApp, &code)
 	current, err := app.application.StartRelaySetup(ctx, command.request)
 	if err != nil {
 		return app.writeRelaySetupFailure(err)

@@ -92,3 +92,70 @@ func TestNetworkUnavailableStartupPreservesStatusAndTrace(t *testing.T) {
 		})
 	}
 }
+
+func TestApplicationInitializationFailurePreservesStatusAndTrace(t *testing.T) {
+	capability := newGetOutputPreparationCapability(t, "https://relay.example")
+	encoded, err := capability.URL("https://front.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		command string
+		args    []string
+	}{
+		{"share", []string{t.TempDir(), "--relay", "https://relay.example", "--front-url", "https://front.example"}},
+		{"get", []string{encoded, "-o", t.TempDir()}},
+	} {
+		t.Run(test.command, func(t *testing.T) {
+			tracePath := filepath.Join(t.TempDir(), "trace.ndjson")
+			stdout, stderr := new(bytes.Buffer), new(bytes.Buffer)
+			app := &App{Stdout: stdout, Stderr: stderr, Stdin: strings.NewReader("")}
+			app.engineConfig.CleanupTimeout = -1
+			t.Cleanup(app.closeTerminalOutput)
+			args := append([]string{test.command}, test.args...)
+			args = append(args, "--trace", tracePath)
+			if code := app.Run(context.Background(), args); code != ExitFailure || stdout.Len() != 0 {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+			output := stderr.String()
+			initIdx := strings.Index(output, "initialize application:")
+			errIdx := strings.Index(output, "Error:")
+			if initIdx < 0 || errIdx < 0 || initIdx >= errIdx {
+				t.Fatalf("stderr order = %q", output)
+			}
+			raw, err := os.ReadFile(tracePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			type traceRecord struct {
+				Event   string `json:"event"`
+				Command string `json:"command"`
+				Payload struct {
+					ExitCode int `json:"exit_code"`
+					Failure  struct {
+						Code string `json:"code"`
+					} `json:"failure"`
+				} `json:"payload"`
+			}
+			var events []string
+			var failed []traceRecord
+			for line := range strings.SplitSeq(strings.TrimSpace(string(raw)), "\n") {
+				var record traceRecord
+				if err := json.Unmarshal([]byte(line), &record); err != nil {
+					t.Fatalf("trace line %q: %v", line, err)
+				}
+				events = append(events, record.Event)
+				if record.Event == "command_failed" {
+					failed = append(failed, record)
+				}
+			}
+			if len(failed) != 1 || failed[0].Command != test.command || failed[0].Payload.ExitCode != ExitFailure ||
+				failed[0].Payload.Failure.Code != "unexpected" {
+				t.Fatalf("trace lost engine initialization failure: %+v\n%s", failed, raw)
+			}
+			if len(events) < 2 || events[len(events)-2] != "command_failed" || events[len(events)-1] != "trace_summary" {
+				t.Fatalf("trace tail = %v\n%s", events, raw)
+			}
+		})
+	}
+}
