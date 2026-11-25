@@ -12,7 +12,8 @@ export function presentTaskProgress(facts: TaskFacts, language: Language = 'en')
   const paused = facts.lifecycle.kind === 'paused'
   if (progress === null || (paused && progress.transferJobId === '')) return retainedProgress(facts, language)
   const materialized = paused ? facts.lifecycle.retainedBytes : progress.materializedBytes
-  const files = ` · ${t.completedFiles(progress.completedFiles)}`
+  const completedFiles = paused ? Number(facts.lifecycle.completedFiles) : progress.completedFiles
+  const files = ` · ${t.completedFiles(completedFiles)}`
   const details = progressDetails(facts, language)
   const percentage = exactPercentage(facts, materialized)
   const exact = progress.discovery === 'complete'
@@ -79,7 +80,10 @@ function progressDetails(facts: TaskFacts, language: Language): string[] {
     details.push(progress.discovery === 'complete'
       ? t.total(progress.discoveredFiles, formatBytes(progress.discoveredBytes))
       : t.atLeast(progress.discoveredFiles, formatBytes(progress.discoveredBytes)))
-    details.push(t.completeBytes(formatBytes(progress.completedBytes)))
+    const completedBytes = facts.lifecycle.kind === 'paused'
+      ? facts.lifecycle.completedBytes
+      : progress.completedBytes
+    details.push(t.completeBytes(formatBytes(completedBytes)))
     details.push(t.newBytes(formatBytes(progress.writtenBytes)))
     if (progress.discovery === 'failed') details.push(t.failedDirectories(progress.failedDirectories))
   }

@@ -16,9 +16,9 @@ import { ObjectCheckpointCoordinator } from '../native-object/coordinator'
 import type { ReceiveStore } from '../store/database'
 import { acquireTaskLock, type TaskLock } from '../store/tab-lock'
 import {
-  completedTuplesBytes,
   fileRecordId,
   fromRangeTuples,
+  summarizeStoredTaskFiles,
   toRangeTuples,
   type OPFSTargetRecord,
   type ReceiveFileRecord,
@@ -478,21 +478,13 @@ class OPFSSessionHandle implements OutputSessionHandle {
     truncatedLength?: bigint,
   ): Promise<ReceiveTaskRecord> {
     const files = knownFiles ?? await this.#store.listTaskFiles(this.taskId)
-    let retainedBytes = 0n
-    let storedCompletedFiles = 0n
-    let storedCompletedBytes = 0n
-    for (const file of files) {
-      retainedBytes += completedTuplesBytes(file.completedRanges)
-      if (file.status === 'completed' && file.zipEntry?.kind !== 'directory') {
-        storedCompletedFiles += 1n
-        storedCompletedBytes += file.size
-      }
-    }
+    const stored = summarizeStoredTaskFiles(files)
 
     const nextLifecycle = nextOPFSIncompleteLifecycle(this.#record.lifecycle, status, result, {
       isZip: this.#zip !== undefined,
-      retainedBytes,
-      storedCompletedFiles, storedCompletedBytes,
+      retainedBytes: stored.retainedBytes,
+      storedCompletedFiles: stored.completedFiles,
+      storedCompletedBytes: stored.completedBytes,
     })
 
     const currentTarget = this.#record.target as OPFSTargetRecord
@@ -523,7 +515,7 @@ class OPFSSessionHandle implements OutputSessionHandle {
     })
     await this.#store.putTask(updated)
     this.#record = updated
-    if (nextLifecycle.kind === 'failed' && storedCompletedFiles === 0n) {
+    if (nextLifecycle.kind === 'failed' && stored.completedFiles === 0n) {
       // Persist the terminal decision before reclaiming bytes; Discard retries any interrupted removal.
       try {
         await removePrivateObject(this.#directory, target.objectName)
@@ -539,7 +531,7 @@ class OPFSSessionHandle implements OutputSessionHandle {
       task_id: this.taskId,
       job_status: status,
       lifecycle: nextLifecycle.kind,
-      completed_files: String(storedCompletedFiles),
+      completed_files: String(stored.completedFiles),
       failed_files: String(result.failedFiles + result.failedDirectories),
       ...(sourceOmittedEntries === undefined ? {} : { source_omitted_entries: String(sourceOmittedEntries) }),
     })

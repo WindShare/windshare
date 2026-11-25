@@ -131,6 +131,45 @@ export function fromRangeTuples(tuples: readonly CompletedRangeTuple[]): readonl
   return Object.freeze(tuples.map(([start, end]) => Object.freeze({ start, end })))
 }
 
+export interface StoredTaskFileSummary {
+  readonly fileCount: bigint
+  readonly totalBytes: bigint
+  readonly completedFiles: bigint
+  readonly completedBytes: bigint
+  readonly retainedBytes: bigint
+  readonly hasUnfinished: boolean
+}
+
+/** Summarizes durable per-file rows in IndexedDB, excluding ZIP directory placeholders. */
+export function summarizeStoredTaskFiles(files: readonly ReceiveFileRecord[]): StoredTaskFileSummary {
+  let fileCount = 0n
+  let totalBytes = 0n
+  let completedFiles = 0n
+  let completedBytes = 0n
+  let retainedBytes = 0n
+  let hasUnfinished = false
+  for (const file of files) {
+    if (file.zipEntry?.kind === 'directory') continue
+    fileCount += 1n
+    totalBytes += file.size
+    retainedBytes += completedTuplesBytes(file.completedRanges)
+    if (file.status === 'completed') {
+      completedFiles += 1n
+      completedBytes += file.size
+    } else {
+      hasUnfinished = true
+    }
+  }
+  return Object.freeze({
+    fileCount,
+    totalBytes,
+    completedFiles,
+    completedBytes,
+    retainedBytes,
+    hasUnfinished,
+  })
+}
+
 export function completedTuplesBytes(tuples: readonly CompletedRangeTuple[]): bigint {
   let total = 0n
   for (const [start, end] of tuples) {

@@ -2,10 +2,8 @@ import {
   FaultScope,
   OutputFaultCode,
   TransferFaultError,
-  catalogCapacityReason,
   classifyNativeError,
   outputFault,
-  transferFailureReason,
 } from '../../transfer/fault'
 import type { SettledTransferJobResult } from '../../transfer/job'
 import type {
@@ -20,7 +18,7 @@ import { emitOutputTrace, type OutputDiagnosticsPorts } from '../diagnostics'
 import type { ReceiveStore } from '../store/database'
 import { acquireTaskLock, withFSAReservationLock, type TaskLock } from '../store/tab-lock'
 import {
-  completedTuplesBytes, fileRecordId,
+  fileRecordId, summarizeStoredTaskFiles,
   type FSADiskFingerprint,
   type FSAReservedFile,
   type FSATargetRecord,
@@ -44,6 +42,7 @@ import {
   buildFSATargetRecord, collectFSATopLevelClaims, ensureFSAPermission, openFSADirectory, openFSAFile,
   reserveFSATarget, retainsFSAReservationClaim, rollbackFSATaskTarget, rollbackReservedTarget, type FSADirectory,
 } from './fsa-reservation'
+import { nextFSALifecycle } from './fsa-settlement'
 import {
   SafeNameRegistry, applySafeRenamedFields, collectSafeRenamedFromRecords,
   mergeRenamedDirectories,
@@ -348,16 +347,12 @@ class FSASessionHandle implements OutputSessionHandle {
   async settle(result: SettledTransferJobResult): Promise<ReceiveTaskRecord> {
     this.#outputTouched = true
     const files = await this.#store.listTaskFiles(this.taskId)
-    let retainedBytes = 0n
-    let hasUnfinished = false
-    for (const file of files) {
-      retainedBytes += completedTuplesBytes(file.completedRanges)
-      if (file.status !== 'completed') hasUnfinished = true
-    }
+    const stored = summarizeStoredTaskFiles(files)
 
-    const nextLifecycle = nextFSALifecycle(
-      this.#record.lifecycle, result, retainedBytes, hasUnfinished, files.length > 0,
-    )
+    const nextLifecycle = nextFSALifecycle(this.#record.lifecycle, result, {
+      singleFile: this.#record.target.singleFile,
+      stored,
+    })
     const candidateDirs = mergeRenamedDirectories(this.#record.safeRenamedDirectories, this.#safeNames.renamedDirectories())
     const initialSafe = nextLifecycle.kind === 'failed'
       ? { summary: undefined, directories: undefined }
@@ -397,6 +392,15 @@ class FSASessionHandle implements OutputSessionHandle {
       })
       this.#record = nextRecord
     }
+    emitOutputTrace(this.#diagnostics?.trace, 'settlement', {
+      backend: 'file_system_access',
+      task_id: this.taskId,
+      job_status: result.status,
+      lifecycle: nextRecord.lifecycle.kind,
+      completed_files: String(stored.completedFiles),
+      failed_files: String(result.failedFiles + result.failedDirectories),
+      ...(sourceOmittedEntries === undefined ? {} : { source_omitted_entries: String(sourceOmittedEntries) }),
+    })
     return nextRecord
   }
 
@@ -677,63 +681,5 @@ class FSASessionHandle implements OutputSessionHandle {
     }
     if (result.directory.created) this.#createdDirectories.add(result.directory.handle)
     return result.directory
-  }
-}
-
-function nextFSALifecycle(
-  current: ReceiveTaskRecord['lifecycle'],
-  result: SettledTransferJobResult,
-  retainedBytes: bigint,
-  hasUnfinished: boolean,
-  hasFileRecords: boolean,
-): ReceiveTaskRecord['lifecycle'] {
-  const warning = result.contentWarning ?? null
-  const failedCleanupPending = hasUnfinished || !hasFileRecords ? { cleanupPending: true as const } : {}
-  switch (result.status) {
-    case 'completed':
-      return transitionReceiveState(current, {
-        kind: 'saved',
-        savedFiles: result.completedFiles,
-        savedBytes: result.completedBytes,
-        contentWarning: warning,
-      })
-    case 'paused':
-      return transitionReceiveState(current, {
-        kind: 'paused',
-        reason: result.pauseReason ?? 'user',
-        completedFiles: result.completedFiles,
-        completedBytes: result.completedBytes,
-        retainedBytes,
-        discoveredFiles: result.discoveredFiles,
-        discoveredBytes: result.discoveredBytes,
-        discoveryComplete: result.discoveryComplete,
-        contentWarning: warning,
-      })
-    case 'partial':
-      return transitionReceiveState(current, {
-        kind: 'partial',
-        reason: catalogCapacityReason(result.error) ??
-          (result.failedFiles > 0n || result.failedDirectories > 0n ? 'failures' : 'stopped'),
-        savedFiles: result.completedFiles,
-        failedFiles: result.failedFiles + result.failedDirectories,
-        ...(hasUnfinished ? { cleanupPending: true as const } : {}),
-        contentWarning: warning,
-      })
-    case 'stopped':
-      return transitionReceiveState(current, { kind: 'failed', reason: 'cancelled', contentWarning: null, ...failedCleanupPending })
-    case 'source-changed':
-      return transitionReceiveState(current, { kind: 'failed', reason: 'source-changed', contentWarning: warning, ...failedCleanupPending })
-    case 'source-busy':
-      return transitionReceiveState(current, { kind: 'failed', reason: 'source-busy', contentWarning: warning, ...failedCleanupPending })
-    case 'failed': {
-      const reason = transferFailureReason(result.error)
-      return transitionReceiveState(current, {
-        kind: 'failed',
-        reason,
-        ...(reason === 'error' && result.error instanceof Error ? { detail: result.error.message } : {}),
-        contentWarning: warning,
-        ...failedCleanupPending,
-      })
-    }
   }
 }

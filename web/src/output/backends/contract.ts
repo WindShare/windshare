@@ -8,7 +8,7 @@ import type { ResolvedArtifactSpec, SelectionSpec } from '../../transfer/selecti
 import { transitionReceiveState, type ReceiveLifecycleState, type SafeRenamedSummary } from '../../transfer/state'
 import type { SettledTransferJobResult } from '../../transfer/job'
 import type { ReceiveStore } from '../store/database'
-import { completedTuplesBytes, type ReceiveTaskRecord, type TaskTargetRecord } from '../store/types'
+import { summarizeStoredTaskFiles, type ReceiveTaskRecord, type TaskTargetRecord } from '../store/types'
 import { supportsBrowserDownload, type BrowserDownloadWindow } from './browser-handoff'
 
 const MEBIBYTE = 1024n * 1024n
@@ -383,22 +383,13 @@ export async function restoreReopenedTaskRecord(
   prior: ReceiveTaskRecord,
   store: Pick<ReceiveStore, 'listTaskFiles' | 'putTask'>,
 ): Promise<ReceiveTaskRecord> {
-  const files = await store.listTaskFiles(prior.taskId)
-  let completedFiles = 0n
-  let completedBytes = 0n
-  let retainedBytes = 0n
-  let discoveredFiles = 0n
-  let discoveredBytes = 0n
-  for (const file of files) {
-    if (file.zipEntry?.kind === 'directory') continue
-    discoveredFiles += 1n
-    discoveredBytes += file.size
-    retainedBytes += completedTuplesBytes(file.completedRanges)
-    if (file.status === 'completed') {
-      completedFiles += 1n
-      completedBytes += file.size
-    }
-  }
+  const {
+    fileCount: discoveredFiles,
+    totalBytes: discoveredBytes,
+    completedFiles,
+    completedBytes,
+    retainedBytes,
+  } = summarizeStoredTaskFiles(await store.listTaskFiles(prior.taskId))
   const lifecycle = prior.lifecycle.kind === 'paused'
     ? Object.freeze({ ...prior.lifecycle, completedFiles, completedBytes, retainedBytes })
     : transitionReceiveState(prior.lifecycle, {

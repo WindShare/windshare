@@ -16,7 +16,7 @@ import {
 import { diagnosticBackendName, emitOutputTrace, type OutputDiagnosticsPorts, type OutputTraceSource } from '../../output/diagnostics'
 import type { ReceiveStore } from '../../output/store/database'
 import { acquireTaskLock, isTaskLockedElsewhere, TaskBusyError } from '../../output/store/tab-lock'
-import { completedTuplesBytes, type ReceiveTaskRecord } from '../../output/store/types'
+import { summarizeStoredTaskFiles, type ReceiveTaskRecord } from '../../output/store/types'
 import { classifyNativeError, storagePauseReason } from '../../transfer/fault'
 import type { JoinedBrowserShare } from '../browser-share/gateway'
 import { closeUnactivatedOutputSession } from './session-opener'
@@ -393,22 +393,13 @@ async function normalizeAbandonedTask(
 
 async function readCheckpointCounts(record: ReceiveTaskRecord, store: ReceiveStore) {
   const files = await store.listTaskFiles(record.taskId)
-  let completedFiles = 0n
-  let completedBytes = 0n
-  let retainedBytes = 0n
-  let discoveredFiles = 0n
-  let discoveredBytes = 0n
-  for (const file of files) {
-    if (file.zipEntry?.kind === 'directory') continue
-    discoveredFiles += 1n
-    discoveredBytes += file.size
-    const bytes = completedTuplesBytes(file.completedRanges)
-    retainedBytes += bytes
-    if (file.status === 'completed') {
-      completedFiles += 1n
-      completedBytes += file.size
-    }
-  }
+  const {
+    fileCount: discoveredFiles,
+    totalBytes: discoveredBytes,
+    completedFiles,
+    completedBytes,
+    retainedBytes,
+  } = summarizeStoredTaskFiles(files)
   return {
     files,
     counts: { completedFiles, completedBytes, retainedBytes, discoveredFiles, discoveredBytes, discoveryComplete: record.discoveryComplete },
