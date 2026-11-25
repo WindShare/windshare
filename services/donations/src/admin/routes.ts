@@ -44,7 +44,11 @@ import {
   queryAfdianOrders,
   queryAfdianSponsorPage,
 } from '../providers'
-import { parseFixedPointAmount, sanitizePlainText, type ParsedMoney } from '../sanitize'
+import {
+  parseFixedPointAmount,
+  sanitizeAndTruncatePlainText,
+  type ParsedMoney,
+} from '../sanitize'
 import { constantTimeEqual, hmacSha256Hex, type AfdianOrderRecord } from '../verify'
 import {
   commitDonationsBatchToWall,
@@ -94,7 +98,7 @@ function parseProviderFilter(raw: string | null): DonationProvider | undefined {
 function parseAdminDonationsFilter(searchParams: URLSearchParams): AdminDonationsFilter | undefined {
   const visibility = parseVisibilityFilter(searchParams.get('visibility'))
   const provider = parseProviderFilter(searchParams.get('provider'))
-  const query = sanitizePlainText(searchParams.get('q'), MAX_ADMIN_SEARCH_CODEPOINTS) ?? undefined
+  const query = sanitizeAndTruncatePlainText(searchParams.get('q'), MAX_ADMIN_SEARCH_CODEPOINTS) ?? undefined
   if (visibility === undefined && provider === undefined && query === undefined) {
     return undefined
   }
@@ -216,7 +220,7 @@ function parseVisibilityCommand(data: Record<string, unknown>): AdminVisibilityC
   if (data.action === 'approve') return { action: 'approve' }
   if (data.action === 'restore') return { action: 'restore' }
   if (data.action === 'hide') {
-    const reason = sanitizePlainText(
+    const reason = sanitizeAndTruncatePlainText(
       typeof data.reason === 'string' ? data.reason : null,
       MAX_HIDE_REASON_CODEPOINTS,
     )

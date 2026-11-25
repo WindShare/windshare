@@ -20,7 +20,7 @@ import { createNowPaymentsInvoice, type FetchLike } from './providers'
 import {
   formatUsdMinorForInvoice,
   parseCryptoUsdAmount,
-  sanitizePlainText,
+  sanitizeAndTruncatePlainText,
 } from './sanitize'
 import {
   handleAfdianWebhook,
@@ -156,11 +156,11 @@ async function handleCreateCryptoIntent(
     return jsonResponse({ error: 'invalid_amount' }, 400, cors)
   }
 
-  const displayName = sanitizePlainText(
+  const displayName = sanitizeAndTruncatePlainText(
     typeof parsed.displayName === 'string' ? parsed.displayName : null,
     MAX_DISPLAY_NAME_CODEPOINTS,
   )
-  const message = sanitizePlainText(
+  const message = sanitizeAndTruncatePlainText(
     typeof parsed.message === 'string' ? parsed.message : null,
     MAX_MESSAGE_CODEPOINTS,
   )

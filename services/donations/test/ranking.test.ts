@@ -3,6 +3,9 @@ import { parseManualDonationInput } from '../src/admin/manual'
 import {
   KNOWN_CURRENCIES,
   KNOWN_CURRENCY_DECIMALS,
+  MAX_DISPLAY_NAME_CODEPOINTS,
+  MAX_MANUAL_EXTERNAL_ID_CODEPOINTS,
+  MAX_MESSAGE_CODEPOINTS,
   PUBLIC_WALL_LIMIT,
   type PublicWallEntry,
   type PublicWallResponse,
@@ -354,6 +357,48 @@ describe('WallStore long-term Top 3 persistence and manual donations', () => {
     })).toEqual({
       ok: false,
       code: 'invalid_manual_donation',
+    })
+  })
+
+  it('rejects overlong manual text even when whitespace sits at the maxCodePoints boundary', () => {
+    const overlongCases: readonly Record<string, unknown>[] = [
+      { displayName: `${'a'.repeat(MAX_DISPLAY_NAME_CODEPOINTS)} overflow` },
+      { displayName: `${'a'.repeat(MAX_DISPLAY_NAME_CODEPOINTS - 5)}${' '.repeat(8)}overflow` },
+      { displayName: `${'😀'.repeat(MAX_DISPLAY_NAME_CODEPOINTS)} extra` },
+      { message: `${'x'.repeat(MAX_MESSAGE_CODEPOINTS)}\nSecond paragraph` },
+      { message: `${'x'.repeat(MAX_MESSAGE_CODEPOINTS)}\u2028Second paragraph` },
+      { externalId: `${'0'.repeat(MAX_MANUAL_EXTERNAL_ID_CODEPOINTS)}\ttrailing-hash` },
+    ]
+    for (const fields of overlongCases) {
+      expect(parseManualDonationInput({ amount: '10', currency: 'USD', ...fields })).toEqual({
+        ok: false,
+        code: 'invalid_manual_donation',
+      })
+    }
+
+    // Inputs that normalize to <= maxCodePoints after stripping invisibles and trimming remain valid.
+    const exactName = '😀'.repeat(MAX_DISPLAY_NAME_CODEPOINTS)
+    const exactMessage = `${'x'.repeat(MAX_MESSAGE_CODEPOINTS - 2)} y`
+    const exactExternalId = 'a'.repeat(MAX_MANUAL_EXTERNAL_ID_CODEPOINTS)
+    expect(parseManualDonationInput({
+      amount: '10',
+      currency: 'USD',
+      displayName: `  \u200B${exactName}\u202E  `,
+      message: `  ${'x'.repeat(MAX_MESSAGE_CODEPOINTS - 2)}\r\n\ty  `,
+      externalId: `  ${exactExternalId}   `,
+    })).toEqual({
+      ok: true,
+      input: {
+        provider: 'direct',
+        externalId: exactExternalId,
+        displayName: exactName,
+        amountMinor: 1000,
+        currency: 'USD',
+        minorDigits: 2,
+        message: exactMessage,
+        donatedAt: null,
+        idempotencyKey: null,
+      },
     })
   })
 })

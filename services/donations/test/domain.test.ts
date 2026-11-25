@@ -28,7 +28,7 @@ import {
   formatUsdMinorForInvoice,
   parseCryptoUsdAmount,
   parseFixedPointAmount,
-  sanitizePlainText,
+  sanitizeAndTruncatePlainText,
 } from '../src/sanitize'
 import {
   buildAfdianSignedBody,
@@ -567,7 +567,7 @@ describe('WallStore SQLite persistence, caching, rate limiting, and pagination',
     const first = store.commitDonation({
       provider: 'afdian',
       externalId: 'ORD-1',
-      displayName: sanitizePlainText('Alice', 32),
+      displayName: sanitizeAndTruncatePlainText('Alice', 32),
       amountMinor: 1000,
       currency: 'CNY',
       minorDigits: 2,

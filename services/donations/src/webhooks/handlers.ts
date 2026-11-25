@@ -29,7 +29,11 @@ import {
   queryAfdianOrders,
   type FetchLike,
 } from '../providers'
-import { parseFixedPointAmount, sanitizePlainText, type ParsedMoney } from '../sanitize'
+import {
+  parseFixedPointAmount,
+  sanitizeAndTruncatePlainText,
+  type ParsedMoney,
+} from '../sanitize'
 import {
   constantTimeEqual,
   isSupportedKofiType,
@@ -115,11 +119,11 @@ export function toAfdianCommitInput(
   return {
     provider: 'afdian',
     externalId: order.outTradeNo,
-    displayName: sanitizePlainText(rawDisplayName, MAX_DISPLAY_NAME_CODEPOINTS),
+    displayName: sanitizeAndTruncatePlainText(rawDisplayName, MAX_DISPLAY_NAME_CODEPOINTS),
     amountMinor: money.amountMinor,
     currency: money.currency,
     minorDigits: money.minorDigits,
-    message: sanitizePlainText(order.remark, MAX_MESSAGE_CODEPOINTS),
+    message: sanitizeAndTruncatePlainText(order.remark, MAX_MESSAGE_CODEPOINTS),
     isPublic: true,
     donatedAt: order.donatedAt,
   }
@@ -333,10 +337,10 @@ export async function handleKofiWebhook(
   }
 
   const displayName = payload.isPublic
-    ? sanitizePlainText(payload.fromName, MAX_DISPLAY_NAME_CODEPOINTS)
+    ? sanitizeAndTruncatePlainText(payload.fromName, MAX_DISPLAY_NAME_CODEPOINTS)
     : null
   const message = payload.isPublic
-    ? sanitizePlainText(payload.message, MAX_MESSAGE_CODEPOINTS)
+    ? sanitizeAndTruncatePlainText(payload.message, MAX_MESSAGE_CODEPOINTS)
     : null
 
   await commitDonationToWall(

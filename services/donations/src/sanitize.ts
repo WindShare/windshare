@@ -53,21 +53,26 @@ function stripControlChars(value: string): string {
   return result
 }
 
-export function sanitizePlainText(
-  raw: string | null | undefined,
-  maxCodePoints: number,
-): string | null {
+export function sanitizePlainText(raw: string | null | undefined): string | null {
   if (raw === null || raw === undefined) return null
-  const cleaned = stripControlChars(raw)
+  const sanitized = stripControlChars(raw)
     .replace(INVISIBLE_FORMAT_PATTERN, '')
     .replace(BIDI_CONTROL_PATTERN, '')
     .replace(COLLAPSIBLE_WHITESPACE_PATTERN, ' ')
     .trim()
-  if (cleaned.length === 0) return null
-  const codePoints = Array.from(cleaned)
+  return sanitized.length === 0 ? null : sanitized
+}
+
+export function sanitizeAndTruncatePlainText(
+  raw: string | null | undefined,
+  maxCodePoints: number,
+): string | null {
+  const sanitized = sanitizePlainText(raw)
+  if (sanitized === null) return null
+  const codePoints = Array.from(sanitized)
   const truncated = codePoints.length > maxCodePoints
     ? codePoints.slice(0, maxCodePoints).join('').trimEnd()
-    : cleaned
+    : sanitized
   return truncated.length === 0 ? null : truncated
 }
 

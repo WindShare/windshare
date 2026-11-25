@@ -17,6 +17,7 @@ import {
   containsExternalUrl,
   determineInitialVisibility,
   parseFixedPointAmount,
+  sanitizeAndTruncatePlainText,
   sanitizePlainText,
 } from '../src/sanitize'
 import {
@@ -57,24 +58,29 @@ describe('donations worker scaffold', () => {
     expect([...origins]).toEqual(['https://ws.ourworld.top', 'https://windshare.cc'])
   })
 
-  it('sanitizes plain text by stripping control characters and enforcing code-point limits', () => {
-    expect(sanitizePlainText('  hello\u0000\u200B\nworld  ', 32)).toBe('hello world')
-    expect(sanitizePlainText('😀😀😀😀', 3)).toBe('😀😀😀')
-    expect(sanitizePlainText('   \n\t  ', 32)).toBeNull()
+  it('sanitizes plain text without truncating and truncates explicitly when bounded', () => {
+    expect(sanitizePlainText('  hello\u0000\u200B\nworld  ')).toBe('hello world')
+    expect(sanitizePlainText('😀😀😀😀')).toBe('😀😀😀😀')
+    expect(sanitizePlainText('   \n\t  ')).toBeNull()
+
+    expect(sanitizeAndTruncatePlainText('  hello\u0000\u200B\nworld  ', 32)).toBe('hello world')
+    expect(sanitizeAndTruncatePlainText('😀😀😀😀', 3)).toBe('😀😀😀')
+    expect(sanitizeAndTruncatePlainText('abc   def', 5)).toBe('abc')
+    expect(sanitizeAndTruncatePlainText('   \n\t  ', 32)).toBeNull()
   })
 
   it('strips Unicode BiDi controls and soft hyphens and collapses LS/PS before moderation checks', () => {
     const allBidiControls = '\u061C\u200E\u200F\u202A\u202B\u202C\u202D\u202E\u2066\u2067\u2068\u2069'
-    expect(sanitizePlainText(`${allBidiControls}Alice\u00AD`, 32)).toBe('Alice')
-    expect(sanitizePlainText(`${allBidiControls}\u2028\u2029`, 32)).toBeNull()
-    expect(sanitizePlainText('line1\u2028line2\u2029line3', 32)).toBe('line1 line2 line3')
-    expect(sanitizePlainText('a\r\n\u2028\u2029b', 32)).toBe('a b')
+    expect(sanitizePlainText(`${allBidiControls}Alice\u00AD`)).toBe('Alice')
+    expect(sanitizePlainText(`${allBidiControls}\u2028\u2029`)).toBeNull()
+    expect(sanitizePlainText('line1\u2028line2\u2029line3')).toBe('line1 line2 line3')
+    expect(sanitizePlainText('a\r\n\u2028\u2029b')).toBe('a b')
 
-    const bidiUrl = sanitizePlainText('https:\u200E//spam.example', 140)
-    const softHyphenUrl = sanitizePlainText('https:\u00AD//spam.example', 140)
-    const bidiEmail = sanitizePlainText('a\u200E@b.com', 140)
-    const bidiPhone = sanitizePlainText('138\u200E1234\u00AD5678', 140)
-    const separatorPhone = sanitizePlainText('138\u20281234\u20295678', 140)
+    const bidiUrl = sanitizeAndTruncatePlainText('https:\u200E//spam.example', 140)
+    const softHyphenUrl = sanitizeAndTruncatePlainText('https:\u00AD//spam.example', 140)
+    const bidiEmail = sanitizeAndTruncatePlainText('a\u200E@b.com', 140)
+    const bidiPhone = sanitizeAndTruncatePlainText('138\u200E1234\u00AD5678', 140)
+    const separatorPhone = sanitizeAndTruncatePlainText('138\u20281234\u20295678', 140)
 
     expect(bidiUrl).toBe('https://spam.example')
     expect(softHyphenUrl).toBe('https://spam.example')
@@ -92,7 +98,7 @@ describe('donations worker scaffold', () => {
     expect(determineInitialVisibility({
       amountMinor: MIN_PUBLIC_USD_MINOR,
       currency: 'USD',
-      displayName: sanitizePlainText('\u202EAlice', 32),
+      displayName: sanitizeAndTruncatePlainText('\u202EAlice', 32),
       message: bidiUrl,
       isPublic: true,
       config,

@@ -43,16 +43,16 @@ function parseOptionalBoundedText(
   if (typeof raw !== 'string') {
     return { ok: false }
   }
-  // Sanitize up to maxCodePoints + 1 so overlong operator input fails explicitly
-  // instead of silently truncating donor notes or on-chain transaction hashes.
-  const cleaned = sanitizePlainText(raw, maxCodePoints + 1)
-  if (cleaned === null) {
+  // Sanitize without truncating so overlong operator input fails explicitly
+  // instead of silently dropping donor notes or on-chain transaction hashes.
+  const sanitized = sanitizePlainText(raw)
+  if (sanitized === null) {
     return { ok: true, value: null }
   }
-  if (Array.from(cleaned).length > maxCodePoints) {
+  if (Array.from(sanitized).length > maxCodePoints) {
     return { ok: false }
   }
-  return { ok: true, value: cleaned }
+  return { ok: true, value: sanitized }
 }
 
 function parseOptionalDonatedAt(
