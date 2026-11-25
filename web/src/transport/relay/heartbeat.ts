@@ -53,11 +53,13 @@ export class RelayHeartbeat {
   readonly #fail: (error: unknown) => void
   readonly #trace: ((event: RelayHeartbeatTrace) => void) | undefined
   #probeTimer: ReturnType<typeof setTimeout> | undefined
+  #probeDueAt: number | undefined
   #silenceTimer: ReturnType<typeof setTimeout> | undefined
   #verifyTimer: ReturnType<typeof setTimeout> | undefined
   #verifyDeadlineAt: number | undefined
   #round = 0n
   #acknowledged = 0n
+  #inboundSequence = 0n
   #tracked: TrackedProbe[] = []
   #lastProbeSentAt = -Infinity
   // Calendar corrections must not postpone relay loss or revoke a healthy path.
@@ -74,6 +76,7 @@ export class RelayHeartbeat {
 
   /** Records a frame the connection accepted; the silence timer rereads it lazily. */
   observeInbound(): void {
+    this.#inboundSequence += 1n
     this.#lastInboundAt = performance.now()
     this.#clearVerify()
   }
@@ -86,21 +89,25 @@ export class RelayHeartbeat {
    */
   probeNow(deadlineMilliseconds?: number): void {
     if (this.#closed) return
+    const inboundBeforeProbe = this.#inboundSequence
     const now = performance.now()
-    if (now - this.#lastProbeSentAt >= MINIMUM_ON_DEMAND_PROBE_INTERVAL_MILLISECONDS) {
-      globalThis.clearTimeout(this.#probeTimer)
-      this.#probeTimer = undefined
+    const cooldownUntil = this.#lastProbeSentAt + MINIMUM_ON_DEMAND_PROBE_INTERVAL_MILLISECONDS
+    if (now >= cooldownUntil) {
+      this.#clearProbe()
       this.#probe()
-      if (this.#closed) return
+      if (this.#closed || this.#inboundSequence !== inboundBeforeProbe) return
     }
-    if (deadlineMilliseconds === undefined || deadlineMilliseconds <= 0) return
-    const targetDeadline = now + deadlineMilliseconds
+    if (deadlineMilliseconds === undefined || !Number.isFinite(deadlineMilliseconds) || deadlineMilliseconds <= 0) {
+      return
+    }
+    const verificationStartAt = this.#ensureProbeInFlight(now, cooldownUntil)
+    const targetDeadline = verificationStartAt + deadlineMilliseconds
     if (this.#verifyDeadlineAt !== undefined && this.#verifyDeadlineAt <= targetDeadline) return
     this.#clearVerify()
     this.#verifyDeadlineAt = targetDeadline
-    const requestedAt = now
+    const expectedInboundSequence = this.#inboundSequence
     this.#verifyTimer = globalThis.setTimeout(
-      () => this.#checkVerify(requestedAt),
+      () => this.#checkVerify(expectedInboundSequence),
       Math.max(0, Math.ceil(targetDeadline - performance.now())),
     )
   }
@@ -129,9 +136,18 @@ export class RelayHeartbeat {
   close(): void {
     this.#closed = true
     this.#tracked = []
-    globalThis.clearTimeout(this.#probeTimer)
+    this.#clearProbe()
     globalThis.clearTimeout(this.#silenceTimer)
+    this.#silenceTimer = undefined
     this.#clearVerify()
+  }
+
+  #clearProbe(): void {
+    if (this.#probeTimer !== undefined) {
+      globalThis.clearTimeout(this.#probeTimer)
+      this.#probeTimer = undefined
+    }
+    this.#probeDueAt = undefined
   }
 
   #clearVerify(): void {
@@ -142,8 +158,26 @@ export class RelayHeartbeat {
     this.#verifyDeadlineAt = undefined
   }
 
-  #scheduleProbe(): void {
-    this.#probeTimer = globalThis.setTimeout(() => this.#probe(), RELAY_HEARTBEAT_INTERVAL_MILLISECONDS)
+  // Never arm a verification deadline with no probe on the wire: when rate
+  // limiting skips immediate transmission after all earlier probes were already
+  // acknowledged, defer the next probe to the cooldown boundary so healthy idle
+  // connections still have an opportunity to reply.
+  #ensureProbeInFlight(now: number, cooldownUntil: number): number {
+    if (now >= cooldownUntil || this.#acknowledged < this.#round) return now
+    if (this.#probeDueAt === undefined || this.#probeDueAt > cooldownUntil) {
+      this.#clearProbe()
+      this.#scheduleProbe(cooldownUntil - performance.now(), cooldownUntil)
+    }
+    return cooldownUntil
+  }
+
+  #scheduleProbe(delay = RELAY_HEARTBEAT_INTERVAL_MILLISECONDS, dueAt = performance.now() + delay): void {
+    this.#probeDueAt = dueAt
+    this.#probeTimer = globalThis.setTimeout(() => {
+      this.#probeTimer = undefined
+      this.#probeDueAt = undefined
+      this.#probe()
+    }, Math.max(0, Math.ceil(delay)))
   }
 
   #armSilence(delay: number): void {
@@ -166,13 +200,14 @@ export class RelayHeartbeat {
       this.#failed(error, now - this.#lastInboundAt)
       return
     }
+    if (this.#closed) return
     this.#scheduleProbe()
   }
 
-  #checkVerify(requestedAt: number): void {
+  #checkVerify(expectedInboundSequence: bigint): void {
     this.#verifyTimer = undefined
     this.#verifyDeadlineAt = undefined
-    if (this.#closed || this.#lastInboundAt >= requestedAt) return
+    if (this.#closed || this.#inboundSequence !== expectedInboundSequence) return
     this.#failed(new RelayHeartbeatError('Relay liveness probe timed out'), performance.now() - this.#lastInboundAt)
   }
 

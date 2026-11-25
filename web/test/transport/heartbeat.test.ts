@@ -171,4 +171,152 @@ describe('relay heartbeat ownership', () => {
     }
     expect(vi.getTimerCount()).toBe(0)
   })
+
+  it('enforces verification deadlines even when probeNow shares a clock tick with open or prior inbound traffic', async () => {
+    vi.useFakeTimers()
+    // Same tick as construction (no time advanced before probeNow).
+    const immediateFailed = vi.fn()
+    const immediate = new RelayHeartbeat({ bufferedAmount: 0, send: vi.fn() }, immediateFailed)
+    try {
+      immediate.probeNow(5_000)
+      await vi.advanceTimersByTimeAsync(4_999)
+      expect(immediateFailed).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(immediateFailed).toHaveBeenCalledExactlyOnceWith(expect.any(RelayHeartbeatError))
+    } finally {
+      immediate.close()
+    }
+
+    // Same tick as an immediately preceding inbound frame.
+    const drainedFailed = vi.fn()
+    const drained = new RelayHeartbeat({ bufferedAmount: 0, send: vi.fn() }, drainedFailed)
+    try {
+      await vi.advanceTimersByTimeAsync(2_000)
+      drained.observeInbound()
+      drained.probeNow(5_000)
+      await vi.advanceTimersByTimeAsync(4_999)
+      expect(drainedFailed).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(drainedFailed).toHaveBeenCalledExactlyOnceWith(expect.any(RelayHeartbeatError))
+    } finally {
+      drained.close()
+    }
+
+    // An inbound frame accepted on the same tick *after* probeNow clears verification.
+    const aliveFailed = vi.fn()
+    const alive = new RelayHeartbeat({ bufferedAmount: 0, send: vi.fn() }, aliveFailed)
+    try {
+      alive.probeNow(5_000)
+      alive.observeInbound()
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(aliveFailed).not.toHaveBeenCalled()
+    } finally {
+      alive.close()
+    }
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('treats synchronous inbound replies during probe transmission as satisfying verification', async () => {
+    vi.useFakeTimers()
+    const failed = vi.fn()
+    const heartbeat = new RelayHeartbeat({
+      bufferedAmount: 0,
+      send: (data) => {
+        const nonce = decodeConnectionProbe(data)
+        heartbeat.receive(encodeConnectionProbeAck(nonce))
+        heartbeat.observeInbound()
+      },
+    }, failed)
+    try {
+      heartbeat.probeNow(5_000)
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(failed).not.toHaveBeenCalled()
+    } finally {
+      heartbeat.close()
+    }
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('ignores non-finite and non-positive verification deadlines without disturbing active verification', async () => {
+    vi.useFakeTimers()
+    const failed = vi.fn()
+    const heartbeat = new RelayHeartbeat({ bufferedAmount: 0, send: vi.fn() }, failed)
+    try {
+      for (const invalid of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 0, -100]) {
+        heartbeat.probeNow(invalid)
+      }
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(failed).not.toHaveBeenCalled()
+
+      heartbeat.probeNow(5_000)
+      heartbeat.probeNow(Number.NaN)
+      heartbeat.probeNow(Number.POSITIVE_INFINITY)
+      await vi.advanceTimersByTimeAsync(4_999)
+      expect(failed).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(failed).toHaveBeenCalledExactlyOnceWith(expect.any(RelayHeartbeatError))
+    } finally {
+      heartbeat.close()
+    }
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('defers a fresh probe to the cooldown boundary when verification starts with no probe in flight', async () => {
+    vi.useFakeTimers()
+    const healthySocket = { bufferedAmount: 0, send: vi.fn() }
+    const healthyFailed = vi.fn()
+    const healthy = new RelayHeartbeat(healthySocket, healthyFailed)
+    try {
+      await vi.advanceTimersByTimeAsync(2_000)
+      healthy.probeNow()
+      expect(healthySocket.send).toHaveBeenCalledTimes(1)
+
+      await vi.advanceTimersByTimeAsync(50)
+      expect(healthy.receive(encodeConnectionProbeAck(1n))).toBe(true)
+      healthy.observeInbound()
+
+      // Within the 1 s rate-limit window and with no probe in flight, verification
+      // defers transmission until cooldown expires instead of starving an idle link.
+      await vi.advanceTimersByTimeAsync(150)
+      healthy.probeNow(5_000)
+      expect(healthySocket.send).toHaveBeenCalledTimes(1)
+
+      await vi.advanceTimersByTimeAsync(800)
+      expect(healthySocket.send).toHaveBeenCalledTimes(2)
+      expect(decodeConnectionProbe(healthySocket.send.mock.calls[1]?.[0] as Uint8Array)).toBe(2n)
+
+      await vi.advanceTimersByTimeAsync(50)
+      expect(healthy.receive(encodeConnectionProbeAck(2n))).toBe(true)
+      healthy.observeInbound()
+
+      await vi.advanceTimersByTimeAsync(6_000)
+      expect(healthyFailed).not.toHaveBeenCalled()
+    } finally {
+      healthy.close()
+    }
+
+    const deadSocket = { bufferedAmount: 0, send: vi.fn() }
+    const deadFailed = vi.fn()
+    const dead = new RelayHeartbeat(deadSocket, deadFailed)
+    try {
+      await vi.advanceTimersByTimeAsync(2_000)
+      dead.probeNow()
+      await vi.advanceTimersByTimeAsync(50)
+      expect(dead.receive(encodeConnectionProbeAck(1n))).toBe(true)
+      dead.observeInbound()
+
+      await vi.advanceTimersByTimeAsync(150)
+      dead.probeNow(5_000)
+      await vi.advanceTimersByTimeAsync(800)
+      expect(deadSocket.send).toHaveBeenCalledTimes(2)
+
+      await vi.advanceTimersByTimeAsync(4_999)
+      expect(deadFailed).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(deadFailed).toHaveBeenCalledExactlyOnceWith(expect.any(RelayHeartbeatError))
+    } finally {
+      dead.close()
+    }
+    expect(vi.getTimerCount()).toBe(0)
+  })
 })
