@@ -104,6 +104,10 @@ jobs:
             const mode = readDeploymentMode(process.env);
             (mode === 'frontend' ? readFrontendInputs : readInputs)(process.env);
           "
+      # full and relay-only already ran these deployment and frontend Worker tests in verify.
+      - name: Check deployment lifecycle
+        if: env.CLOUDFLARE_DEPLOYMENT_MODE == 'frontend'
+        run: node --test scripts/deploy/cloudflare/*.test.mjs
       - uses: pnpm/action-setup@v6
         if: env.CLOUDFLARE_DEPLOYMENT_MODE != 'relay-only'
         with:
