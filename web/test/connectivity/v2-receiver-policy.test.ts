@@ -659,7 +659,7 @@ function fixture(
     ...(options.onContentLaneDetached === undefined
       ? {}
       : { onContentLaneDetached: options.onContentLaneDetached }),
-    peerRecovery: { tabAdmission: new PeerTabAdmission(), ...options.peerRecovery },
+    peerRecovery: { tabAdmission: new PeerTabAdmission(), turnTabAdmission: new PeerTabAdmission(), ...options.peerRecovery },
     ...(onContentLaneAdmitted === undefined ? {} : { onContentLaneAdmitted }),
   })
   return { connectivity, errors, lanes, session }

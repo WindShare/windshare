@@ -167,6 +167,13 @@ export function browserPeerTabAdmission(): PeerTabAdmission {
   tabAdmission ??= new PeerTabAdmission()
   return tabAdmission
 }
+// TURN attempts use an isolated tab-wide admission pool so parallel TURN
+// setup or refresh cannot block direct negotiation or spend direct rate budget.
+let turnTabAdmission: PeerTabAdmission | undefined
+export function browserTurnTabAdmission(): PeerTabAdmission {
+  turnTabAdmission ??= new PeerTabAdmission()
+  return turnTabAdmission
+}
 function capacityTimeout(): PeerTabCapacityTimeoutError {
   return new PeerTabCapacityTimeoutError()
 }

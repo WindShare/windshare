@@ -1,5 +1,5 @@
 import { TURNPaths } from './turn-paths'
-import { PeerTabAdmission } from './peer-set/tab-admission'
+import { browserTurnTabAdmission } from './peer-set/tab-admission'
 import { DEFAULT_PEER_NEGOTIATION_BUDGET_MILLISECONDS, DEFAULT_PEER_ADMISSION_BUDGET_MILLISECONDS } from './peer-set/contract'
 import {
   LaneSet,
@@ -52,7 +52,6 @@ import { PeerRecoveryTrace } from './peer-set/trace'
 import { ThroughputController, THROUGHPUT_SAMPLE_MS, type ThroughputDecision, type ThroughputPath } from './peer-set/throughput'
 
 const MAXIMUM_THROUGHPUT_PATHS = 3
-const turnAdmission = new PeerTabAdmission()
 
 export type ConnectivityPolicy = 'auto' | 'relay-only' | 'p2p-only'
 
@@ -210,7 +209,10 @@ export class ReceiverConnectivity {
       hasDelivered: lane => this.#lanes.hasDelivered(lane.laneId, lane.laneEpoch),
       start: (grant, identity, ordinal) => new BrowserPeerAttemptExecutor({
         session: this.#session, offers: this.#offers, peerPathIdentity: identity.copyBytes(), clock,
-        tabAdmission: turnAdmission, admissionReceiver: this, turnGrant: grant,
+        // Keep TURN admission isolated from direct tabAdmission so parallel TURN
+        // paths never starve direct negotiation, while staying injectable for tests.
+        tabAdmission: this.#peerRecoveryOptions.turnTabAdmission ?? browserTurnTabAdmission(),
+        admissionReceiver: this.#peerRecoveryOptions.budget ?? this, turnGrant: grant,
         publish: candidate => this.#publishPeer(candidate, 'turn'),
         ...(this.#randomBytes === undefined ? {} : { randomBytes: this.#randomBytes }),
         ...(this.#connectivityTrace === undefined ? {} : { trace: this.#connectivityTrace }),
