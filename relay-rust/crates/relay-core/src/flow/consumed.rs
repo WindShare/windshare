@@ -1,4 +1,4 @@
-//! Cumulative WS2B wire feedback, staged for the coordinated client cutover.
+//! Cumulative WS2B delivery-consumption wire feedback.
 
 use super::{
     Counts,

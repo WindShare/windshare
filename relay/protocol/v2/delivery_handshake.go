@@ -5,8 +5,8 @@ import (
 	"encoding/binary"
 )
 
-// Explicit staged codecs: runtime activation requires cumulative consumption and
-// settlement together. Neither parser accepts the live capacity-less handshake.
+// Live v2 delivery handshake codecs bind immutable receive capacity to WS2R and
+// WS2J frames; neither parser accepts the capacity-less prefix alone.
 const ReceiveCapacityBytes = 16
 const DeliveryRegisterInitBytes = RegisterInitBytes + ReceiveCapacityBytes
 const DeliveryJoinBytes = JoinBytes + ReceiveCapacityBytes

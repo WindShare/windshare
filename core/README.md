@@ -13,7 +13,7 @@ The pre-v1 package API makes no compatibility promise; a separate module would o
 | `link/`, `urlhost/`, `networkendpoint/` | Capability links, IDNA host normalization, relay/STUN/WebSocket endpoint normalization |
 | `nodedirectory/`, `serviceauthority/` | Signed network directory, account ticket, and node descriptor verification (no I/O) |
 | `senderobject/`, `senderauth/` | Sealed sender-object envelopes and canonical Ed25519 signature acceptance |
-| `catalog/` | Directory generations/pages, durable catalog backend and spill, path policy, source errors/omissions |
+| `catalog/` | Directory generations/pages, bounded in-memory catalog store, path policy, source errors/omissions |
 | `content/`, `content/records/` | File revisions, range leases, key tree, authenticated records, single-lock handle pool |
 | `framechannel/`, `session/` | Transport-neutral channels, `sendersession`/`receiversession` runtimes, `catalogflow`/`contentflow`, peer path controls |
 | `transfer/` | Receive contracts (`receivecontract/`, `ordinaryoutput/`), job lifecycle, `BlockBroker`, `lanes/` scheduling, `fault/` |

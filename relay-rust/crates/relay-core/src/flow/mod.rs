@@ -13,9 +13,9 @@
 //! without payloads. Aggregate recovery validates open routes against reinstated
 //! sessions and retains retired flows until cleanup. A surviving connection must
 //! never be assigned an empty replacement ledger. This module defines accounting
-//! contracts; [`DeliveryConsumed`] freezes cumulative feedback bytes for the
-//! coordinated client cutover. [`SettlementNotice`] and [`SettlementAck`] carry
-//! frozen retirement totals separately from ordinary consumption.
+//! contracts: [`DeliveryConsumed`] carries cumulative consumption feedback, while
+//! [`SettlementNotice`] and [`SettlementAck`] carry frozen retirement totals
+//! separately from ordinary consumption.
 
 mod accounting;
 mod capacity;

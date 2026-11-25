@@ -47,7 +47,7 @@
 
 WindShare is an open-source E2EE file/folder sharing tool. WindShare makes sharing local files and folders feel instant: select, generate a link, and let anyone browse and download in their browser, without waiting for uploads or a full directory scan. End-to-end encryption keeps both content and file metadata private from relays. Prioritize reliable P2P connectivity, seamless relay fallback, and resumable transfers that preserve progress without unnecessary disk usage. Keep everyday sharing effortless, use shared infrastructure efficiently, and give users control through open source and self-hosting. Technical complexity should serve the experience, never burden it.
 
-The root `go.mod` owns WindShare's production Go packages; pinned Pion dependency modules live under `third_party/pion/`. Within the root module, `core/**` is the network-free domain and protocol package boundary; dependency-graph gates prevent core packages from importing non-core WindShare packages or concrete networking and transport capabilities. `engine/**` composes those contracts with native connectivity and owns application tasks and shared capacity. The CLI and desktop host consume engine APIs and inject native filesystem adapters; shared engine code does not import `osfs/**` or `adapters/**`.
+The root `go.mod` owns WindShare's production Go packages; the pinned Pion SCTP dependency lives under `third_party/pion/`. Within the root module, `core/**` is the network-free domain and protocol package boundary; dependency-graph gates prevent core packages from importing non-core WindShare packages or concrete networking and transport capabilities. `engine/**` composes those contracts with native connectivity and owns application tasks and shared capacity. The CLI and desktop host consume engine APIs and inject native filesystem adapters; shared engine code does not import `osfs/**` or `adapters/**`.
 
 ```text
 .
@@ -57,12 +57,12 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 ├── osfs/                         Native file sources, filesystem output, checkpoints/recovery
 ├── adapters/filesystem/          Native output/recovery assembly and provider diagnostics
 ├── engine/                       Shared native application API, tasks, observations, aggregate budgets
-│   ├── observation/              Typed product observation contracts
 │   ├── output/, recovery/        Platform-neutral destination and recovery inventory ports
 │   ├── account/                  Official network account registration, login, and credentials
 │   ├── builtinnetwork/, networkconfig/, networkdirectory/ Built-in network wiring, trust config, and directory refresh
 │   ├── relayprofile/              Relay selection and saved credentials
 │   ├── relayconfig/, relaysetup/  Saved relay/frontend settings, discovery, device enrollment, and installation
+│   ├── turnissuer/               Managed TURN credential issuance
 │   └── internal/                 Share/receive/recovery workflows, native connectivity, and network runtime
 ├── host/desktop/                 Go engine ownership, share/setup commands, authenticated loopback control
 ├── cmd/
@@ -96,11 +96,11 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 │   ├── src/                      Protocol/crypto, session/connectivity, transfer/output, network/document, preview, and UI
 │   └── scripts/, test/, e2e/     Boundary/evidence scripts, unit/contract tests, and Playwright scenarios
 ├── internal/                     Connection liveness, platform setup, process ownership, performance evidence, test support
-├── integration/                  Native relayv2, v2peer, and Direct ZIP integration scenarios
+├── integration/                  Native relayv2 and v2peer integration scenarios
 ├── e2e/                          Process-level Go end-to-end tests
 ├── spikes/                       R0 feasibility and isolated Pion↔Chromium evidence
 ├── testdata/                     Browser/output evidence, ICE policy/topology, and provider capabilities
-├── third_party/pion/              Pinned ICE/WebRTC/SCTP sources, patches, and reproducibility manifest
+├── third_party/pion/              Pinned SCTP sources, patch, and reproducibility manifest
 ├── deploy/
 │   ├── network/                  Signed network manifests, history, and Caddy templates
 │   └── wsrelay/                  Native relay container image

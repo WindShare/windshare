@@ -14,6 +14,7 @@
 | `socketauthority/` | Bounded, independent per-path UDP/TCP socket ownership and leases |
 | `reachability/`, `reachability/gateway/` | Gateway port-mapping leases and reachability refresh |
 | `iceconfig/`, `icepolicy/` | Immutable ICE inputs and candidate/endpoint selection policy |
+| `turnsession/` | Demand-driven TURN offer coordination and sender-side credential grants |
 | `relayplan/` | Bounded deterministic relay candidate selection |
 | `relayset/` | Per-relay sender/receiver registration, recovery, and coordinated multi-relay session admission |
 
