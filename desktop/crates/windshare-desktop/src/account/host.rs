@@ -64,17 +64,34 @@ impl Desktop {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let source = match &self.runtime {
+        let (source, initial_error) = match &self.runtime {
             Runtime::Native(session) => {
                 if session.model(cx).account.is_none() {
                     return;
                 }
                 session.controller(cx).reload_account_selection();
-                AccountSource::Native(session.host.clone())
+                let handoff = self.account_ui.prepare_modal(page, session.model(cx));
+                if let Some(ref handoff) = handoff {
+                    tracing::info!(
+                        event = "desktop.account_registration_attached",
+                        session = std::process::id(),
+                        request_id = handoff.request_id,
+                        surface = "modal",
+                    );
+                }
+                (
+                    AccountSource::Native(session.host.clone()),
+                    handoff.map(|handoff| handoff.error),
+                )
             }
-            Runtime::Preview(preview) => AccountSource::Preview(Box::new(preview.account.clone())),
+            Runtime::Preview(preview) => {
+                self.account_ui.clear();
+                (
+                    AccountSource::Preview(Box::new(preview.account.clone())),
+                    None,
+                )
+            }
         };
-        self.account_ui.clear();
         let origin =
             if self.page == Page::Settings && self.settings_section == SettingsSection::Account {
                 AccountOrigin::Settings
@@ -82,8 +99,17 @@ impl Desktop {
                 AccountOrigin::Standalone
             };
         let scope = cx.focus_handle();
-        let dialog =
-            cx.new(|cx| AccountDialog::new(page, source, origin, scope.clone(), window, cx));
+        let dialog = cx.new(|cx| {
+            AccountDialog::new(
+                page,
+                source,
+                origin,
+                initial_error,
+                scope.clone(),
+                window,
+                cx,
+            )
+        });
         let initial_focus = dialog.read(cx).focus_target(cx);
         let subscription = cx.subscribe_in(&dialog, window, |this, dialog, event, window, cx| {
             this.handle_account_dialog_event(dialog, event, window, cx);
@@ -204,6 +230,7 @@ impl Desktop {
                     event = "desktop.account_registration_attached",
                     session = std::process::id(),
                     request_id,
+                    surface = "settings",
                 );
             }
         } else if let Some(request_id) = self.account_ui.leave_settings(model) {

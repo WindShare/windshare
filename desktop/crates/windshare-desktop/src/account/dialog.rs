@@ -64,6 +64,7 @@ impl AccountDialog {
         initial_page: AccountPage,
         source: AccountSource,
         origin: AccountOrigin,
+        initial_error: Option<AccountFormError>,
         overlay_scope: FocusHandle,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -124,7 +125,10 @@ impl AccountDialog {
         };
         // Defer window focus to Desktop::open_scoped_overlay so it captures the
         // pre-dialog return focus before moving focus into this modal.
-        dialog.apply_page(initial_page, cx);
+        if dialog.apply_page(initial_page, cx) {
+            // Attach any unseen background failure after apply_page resets form state.
+            dialog.feedback = initial_error.map(Err);
+        }
         dialog
     }
 
@@ -555,6 +559,7 @@ impl AccountDialog {
             }
             AccountScreen::Registration if view.status.state == AccountState::EmailRequired => {
                 self.page = EmailPurpose::Registration.entry(view);
+                self.feedback = None;
             }
             AccountScreen::Email(EmailPurpose::Registration, _)
                 if view.status.state != AccountState::EmailRequired =>

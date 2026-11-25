@@ -158,7 +158,7 @@ impl AccountPage {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AccountFormError {
     AccountChanged,
     Command(Failure),
@@ -181,6 +181,12 @@ pub const fn can_register_account(view: &AccountView, busy: bool) -> bool {
             view.status.state,
             AccountState::Registering { .. } | AccountState::Denied | AccountState::StorageError
         )
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RegistrationFailureHandoff {
+    pub request_id: String,
+    pub error: AccountFormError,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -219,6 +225,54 @@ impl AccountSettingsState {
         }
     }
 
+    fn unseen_registration_failure(id: &str, model: &Model) -> Option<AccountFormError> {
+        let onboarding = model
+            .account
+            .as_ref()
+            .is_some_and(|view| view.status.account.is_empty());
+        if !onboarding {
+            return None;
+        }
+        match &model.account_request {
+            AccountRequest::Failed {
+                id: failed_id,
+                error,
+            } if failed_id == id => Some(AccountFormError::from(error.clone())),
+            _ => None,
+        }
+    }
+
+    /// Reconciles settings/background state before opening an account modal.
+    ///
+    /// Opening `AccountPage::Registration` shows the same registration surface
+    /// as Settings, so an unseen background failure is consumed once and handed
+    /// off to the dialog instead of being discarded or deferred to Settings.
+    pub fn prepare_modal(
+        &mut self,
+        page: AccountPage,
+        model: &Model,
+    ) -> Option<RegistrationFailureHandoff> {
+        if page == AccountPage::Registration {
+            return match std::mem::take(self) {
+                Self::BackgroundRegistration(request_id) => {
+                    Self::unseen_registration_failure(&request_id, model)
+                        .map(|error| RegistrationFailureHandoff { request_id, error })
+                }
+                _ => None,
+            };
+        }
+        let retain = matches!(
+            self,
+            Self::BackgroundRegistration(id)
+                if model.in_flight_registration_id() == Some(id.as_str())
+                    || Self::unseen_registration_failure(id, model).is_some()
+        );
+        if !retain {
+            *self = Self::Idle;
+        }
+        None
+    }
+
     pub fn observe_overlay_dismissed(
         &mut self,
         model: &Model,
@@ -251,20 +305,11 @@ impl AccountSettingsState {
             }
             return None;
         }
-        if let Self::BackgroundRegistration(id) = std::mem::take(self) {
-            let onboarding = model
-                .account
-                .as_ref()
-                .is_some_and(|view| view.status.account.is_empty());
-            if onboarding
-                && matches!(
-                    &model.account_request,
-                    AccountRequest::Failed { id: failed_id, .. } if failed_id == &id
-                )
-            {
-                *self = Self::Registration(id);
-                return self.tracked_id();
-            }
+        if let Self::BackgroundRegistration(id) = std::mem::take(self)
+            && Self::unseen_registration_failure(&id, model).is_some()
+        {
+            *self = Self::Registration(id);
+            return self.tracked_id();
         }
         *self = Self::Idle;
         None

@@ -262,3 +262,172 @@ fn dialog_page_only_reattaches_to_its_own_pending_action() {
     );
     assert!(!AccountPage::Overview.matches_pending_action(AccountAction::Register));
 }
+
+#[test]
+fn reopening_registration_modal_consumes_unseen_background_failure_once() {
+    let pending = model_with(
+        "",
+        AccountState::Registering {
+            registration_permille: 450,
+        },
+        AccountRequest::Pending {
+            id: "account:10".into(),
+            action: AccountAction::Register,
+        },
+    );
+    let failed = model_with(
+        "",
+        AccountState::RegistrationRequired,
+        AccountRequest::Failed {
+            id: "account:10".into(),
+            error: failure("account_service_unreachable", "unreachable"),
+        },
+    );
+
+    let mut state = AccountSettingsState::default();
+    assert_eq!(
+        state.observe_overlay_dismissed(&pending, false),
+        Some("account:10")
+    );
+    assert_eq!(
+        state,
+        AccountSettingsState::BackgroundRegistration("account:10".into())
+    );
+
+    // Reopening the Registration modal from Share surfaces and consumes the unseen failure.
+    let handoff = state.prepare_modal(AccountPage::Registration, &failed);
+    assert_eq!(
+        handoff,
+        Some(RegistrationFailureHandoff {
+            request_id: "account:10".into(),
+            error: AccountFormError::Command(failure("account_service_unreachable", "unreachable")),
+        })
+    );
+    assert_eq!(state, AccountSettingsState::Idle);
+
+    // Neither dismissing the modal and visiting Settings nor reopening the modal resurfaces it.
+    assert_eq!(state.observe_overlay_dismissed(&failed, false), None);
+    assert_eq!(state.enter_settings(&failed), None);
+    assert!(state.inline_feedback(&failed).is_none());
+    assert_eq!(
+        state.prepare_modal(AccountPage::Registration, &failed),
+        None
+    );
+}
+
+#[test]
+fn reopening_registration_modal_while_pending_hands_back_to_dialog() {
+    let pending = model_with(
+        "",
+        AccountState::Registering {
+            registration_permille: 200,
+        },
+        AccountRequest::Pending {
+            id: "account:11".into(),
+            action: AccountAction::Register,
+        },
+    );
+
+    let mut state = AccountSettingsState::BackgroundRegistration("account:11".into());
+    assert_eq!(
+        state.prepare_modal(AccountPage::Registration, &pending),
+        None
+    );
+    assert_eq!(state, AccountSettingsState::Idle);
+
+    // Dismissing again while still running resumes background tracking.
+    assert_eq!(
+        state.observe_overlay_dismissed(&pending, false),
+        Some("account:11")
+    );
+    assert_eq!(
+        state,
+        AccountSettingsState::BackgroundRegistration("account:11".into())
+    );
+}
+
+#[test]
+fn non_registration_modals_preserve_unseen_background_failure_and_clear_viewed_inline_errors() {
+    let failed_registration = model_with(
+        "",
+        AccountState::RegistrationRequired,
+        AccountRequest::Failed {
+            id: "account:12".into(),
+            error: failure("rate_limited", "slow down"),
+        },
+    );
+
+    // An unseen background failure survives opening an unrelated modal until viewed.
+    let mut state = AccountSettingsState::BackgroundRegistration("account:12".into());
+    assert_eq!(
+        state.prepare_modal(AccountPage::Login, &failed_registration),
+        None
+    );
+    assert_eq!(
+        state,
+        AccountSettingsState::BackgroundRegistration("account:12".into())
+    );
+    assert_eq!(
+        state.enter_settings(&failed_registration),
+        Some("account:12")
+    );
+
+    // Settled background registration (e.g. advanced to EmailRequired) clears on modal open.
+    let email_required = model_with(
+        "",
+        AccountState::EmailRequired,
+        AccountRequest::Succeeded {
+            id: "account:13".into(),
+        },
+    );
+    let mut state = AccountSettingsState::BackgroundRegistration("account:13".into());
+    assert_eq!(
+        state.prepare_modal(
+            AccountPage::Email(EmailPurpose::Registration, EmailStep::Address),
+            &email_required
+        ),
+        None
+    );
+    assert_eq!(state, AccountSettingsState::Idle);
+
+    // Already-viewed inline errors on Settings still clear when opening another modal.
+    let mut viewed_registration = AccountSettingsState::Registration("account:12".into());
+    assert_eq!(
+        viewed_registration.prepare_modal(AccountPage::Login, &failed_registration),
+        None
+    );
+    assert_eq!(viewed_registration, AccountSettingsState::Idle);
+
+    let failed_refresh = model_with(
+        "acct-1",
+        AccountState::TemporarilyUnavailable,
+        AccountRequest::Failed {
+            id: "account:14".into(),
+            error: failure("account_service_unreachable", "offline"),
+        },
+    );
+    let mut viewed_refresh = AccountSettingsState::Refresh("account:14".into());
+    assert_eq!(
+        viewed_refresh.prepare_modal(AccountPage::Nickname(()), &failed_refresh),
+        None
+    );
+    assert_eq!(viewed_refresh, AccountSettingsState::Idle);
+}
+
+#[test]
+fn reopening_registration_modal_drops_background_failure_after_external_login() {
+    let external_login = model_with(
+        "acct-cli",
+        AccountState::Ready,
+        AccountRequest::Failed {
+            id: "account:15".into(),
+            error: failure("account_service_unreachable", "stale"),
+        },
+    );
+    let mut state = AccountSettingsState::BackgroundRegistration("account:15".into());
+    assert_eq!(
+        state.prepare_modal(AccountPage::Registration, &external_login),
+        None
+    );
+    assert_eq!(state, AccountSettingsState::Idle);
+}
