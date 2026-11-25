@@ -20,6 +20,7 @@ type dirState struct {
 	materialized  bool
 	isSessionRoot bool
 	dir           *Dir
+	activeFiles   int
 	finalized     bool
 	settlement    transfer.DirectorySettlement
 }
@@ -44,6 +45,10 @@ const (
 
 // Session implements transfer.DirectTreeSession and transfer.DeliveryHistory
 // directly over an active Operation's journal and open directory handles.
+//
+// Session entry points serialize state transitions and shared directory handle
+// lifetimes under s.mu (order: tx.mu -> s.mu -> nameMapper.mu -> journal.mu),
+// while per-file data writes and publication run independently under tx.mu.
 type Session struct {
 	authority    *Authority
 	op           *Operation
@@ -151,9 +156,8 @@ func (s *Session) LookupDelivery(
 		return transfer.HistoricalDelivery{}, false, err
 	}
 	s.mu.Lock()
-	closed := s.closed
-	s.mu.Unlock()
-	if closed {
+	defer s.mu.Unlock()
+	if s.closed {
 		return transfer.HistoricalDelivery{}, false, transfer.ErrDirectTreeSessionFatal
 	}
 	canonical, err := catalog.CanonicalPath(materializationRelativePath)
@@ -328,6 +332,9 @@ func (s *Session) FinalizeDirectory(
 	}
 	if state.finalized {
 		return state.settlement, nil
+	}
+	if state.activeFiles > 0 {
+		return transfer.DirectorySettlement{}, transfer.ErrInvalidOutputBinding
 	}
 	var settlement transfer.DirectorySettlement
 	var err error
@@ -589,12 +596,37 @@ func (s *Session) bindTarget(target transfer.FileMaterializationTarget) (transfe
 	return transfer.BindFileMaterializationTarget(target, objectID)
 }
 
+func (s *Session) registerActiveFileLocked(canonicalPath string, tx *fileTransaction) {
+	s.activeFiles[canonicalPath] = tx
+	if tx.parentState != nil {
+		tx.parentState.activeFiles++
+	}
+}
+
+func (s *Session) detachActiveFileLocked(canonicalPath string, tx *fileTransaction) {
+	if tx == nil || s.activeFiles[canonicalPath] != tx {
+		return
+	}
+	delete(s.activeFiles, canonicalPath)
+	if tx.parentState != nil && tx.parentState.activeFiles > 0 {
+		tx.parentState.activeFiles--
+	}
+}
+
+func (s *Session) releaseActiveFile(canonicalPath string, tx *fileTransaction) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.detachActiveFileLocked(canonicalPath, tx)
+}
+
 func (s *Session) recordSettledOutcome(canonicalPath string, tx *fileTransaction, outcome settledFileOutcome) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if tx != nil && s.activeFiles[canonicalPath] == tx {
-		delete(s.activeFiles, canonicalPath)
-	}
+	s.recordSettledOutcomeLocked(canonicalPath, tx, outcome)
+}
+
+func (s *Session) recordSettledOutcomeLocked(canonicalPath string, tx *fileTransaction, outcome settledFileOutcome) {
+	s.detachActiveFileLocked(canonicalPath, tx)
 	if s.settledOutcomes == nil {
 		s.settledOutcomes = make(map[string]settledFileOutcome)
 	}

@@ -191,6 +191,7 @@ type fileTransaction struct {
 	session       *Session
 	binding       transfer.MaterializedFileBinding
 	canonicalPath string
+	parentState   *dirState
 	parentDir     *Dir
 	physLeaf      string
 	partName      string
@@ -214,7 +215,7 @@ func newFileTransaction(
 	session *Session,
 	binding transfer.MaterializedFileBinding,
 	canonicalPath string,
-	parentDir *Dir,
+	parent fileParent,
 	physLeaf string,
 	partName string,
 	file *os.File,
@@ -225,7 +226,8 @@ func newFileTransaction(
 		session:        session,
 		binding:        binding,
 		canonicalPath:  canonicalPath,
-		parentDir:      parentDir,
+		parentState:    parent.state,
+		parentDir:      parent.dir,
 		physLeaf:       physLeaf,
 		partName:       partName,
 		exactSize:      binding.ExactSize(),

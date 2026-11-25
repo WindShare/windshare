@@ -15,6 +15,11 @@ import (
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
+type fileParent struct {
+	state *dirState
+	dir   *Dir
+}
+
 func (s *Session) BeginFile(
 	ctx context.Context,
 	file transfer.MaterializationFile,
@@ -31,25 +36,21 @@ func (s *Session) BeginFile(
 	}
 
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed {
-		s.mu.Unlock()
 		return transfer.FileStart{}, transfer.ErrDirectTreeSessionFatal
 	}
 	canonicalPath := file.MaterializationRelativePath().String()
 	if outcome, exists := s.settledOutcomes[canonicalPath]; exists {
-		s.mu.Unlock()
 		return s.replaySettledOutcome(outcome, file.Target())
 	}
 	if _, active := s.activeFiles[canonicalPath]; active {
-		s.mu.Unlock()
 		return transfer.FileStart{}, transfer.ErrInvalidOutputBinding
 	}
-	parentDir, err := s.resolveFileParentLocked(file)
+	parent, err := s.resolveFileParentLocked(file)
 	if err != nil {
-		s.mu.Unlock()
 		return transfer.FileStart{}, err
 	}
-	s.mu.Unlock()
 
 	desc := file.Descriptor()
 	target := file.Target()
@@ -77,43 +78,43 @@ func (s *Session) BeginFile(
 		return transfer.NewFileSettlementStart(settlement)
 	}
 
-	// Resolve physical filename inside parentDir (reusing any persisted mapping).
-	physLeaf, err := s.names.bindFileLeaf(canonicalPath, parentDir)
+	// Resolve physical filename inside parent.dir (reusing any persisted mapping).
+	physLeaf, err := s.names.bindFileLeaf(canonicalPath, parent.dir)
 	if err != nil {
 		return transfer.FileStart{}, wrapFileFault(ctx, transferfault.OutputNamespaceUnsafe, "map file name", err)
 	}
 
 	// 2. Reconcile an interrupted publish (renamed or pending rename before receipt).
 	if pub, hasPub := s.op.journal.lookupPublishing(canonicalPath); hasPub {
-		return s.reconcilePublishingFile(ctx, file, binding, parentDir, physLeaf, pub)
+		return s.reconcilePublishingFileLocked(ctx, file, binding, parent, physLeaf, pub)
 	}
 
 	// 3. Check existing partial progress in the journal.
 	if partial, hasPartial := s.op.journal.lookupPartial(canonicalPath); hasPartial {
-		return s.resumePartialFile(ctx, file, binding, parentDir, physLeaf, partial)
+		return s.resumePartialFileLocked(ctx, file, binding, parent, physLeaf, partial)
 	}
 
 	// 4. Fresh file: preflight collision before allocating a .part file.
-	return s.beginFreshFile(ctx, file, binding, parentDir, physLeaf)
+	return s.beginFreshFileLocked(ctx, file, binding, parent, physLeaf)
 }
 
-func (s *Session) beginFreshFile(
+func (s *Session) beginFreshFileLocked(
 	ctx context.Context,
 	file transfer.MaterializationFile,
 	binding transfer.MaterializedFileBinding,
-	parentDir *Dir,
+	parent fileParent,
 	physLeaf string,
 ) (transfer.FileStart, error) {
 	desc := file.Descriptor()
 	target := file.Target()
 	canonicalPath := file.MaterializationRelativePath().String()
 
-	occupied, statErr := destinationOccupied(ctx, parentDir, physLeaf)
+	occupied, statErr := destinationOccupied(ctx, parent.dir, physLeaf)
 	if statErr != nil {
 		return transfer.FileStart{}, statErr
 	}
 	if occupied {
-		return s.settleCollision(canonicalPath, target)
+		return s.settleCollisionLocked(canonicalPath, target)
 	}
 
 	partName := partFileName(desc.FileID(), target.Locator().Digest())
@@ -129,17 +130,15 @@ func (s *Session) beginFreshFile(
 		_ = removeChild(s.op.opDir, partName, false)
 		return transfer.FileStart{}, err
 	}
-	tx := newFileTransaction(s, binding, canonicalPath, parentDir, physLeaf, partName, partFile, emptyRanges, 0)
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
+	tx := newFileTransaction(s, binding, canonicalPath, parent, physLeaf, partName, partFile, emptyRanges, 0)
+	start, err := transfer.NewFileTransactionStart(tx, durable)
+	if err != nil {
 		_ = partFile.Close()
 		_ = removeChild(s.op.opDir, partName, false)
-		return transfer.FileStart{}, transfer.ErrDirectTreeSessionFatal
+		return transfer.FileStart{}, err
 	}
-	s.activeFiles[canonicalPath] = tx
-	s.mu.Unlock()
-	return transfer.NewFileTransactionStart(tx, durable)
+	s.registerActiveFileLocked(canonicalPath, tx)
+	return start, nil
 }
 
 func destinationOccupied(ctx context.Context, parentDir *Dir, physLeaf string) (bool, error) {
@@ -150,12 +149,12 @@ func destinationOccupied(ctx context.Context, parentDir *Dir, physLeaf string) (
 	return kind != EntryAbsent, nil
 }
 
-func (s *Session) settleCollision(canonicalPath string, target transfer.FileMaterializationTarget) (transfer.FileStart, error) {
+func (s *Session) settleCollisionLocked(canonicalPath string, target transfer.FileMaterializationTarget) (transfer.FileStart, error) {
 	settlement, err := transfer.NewCollisionFileSettlement(target)
 	if err != nil {
 		return transfer.FileStart{}, err
 	}
-	s.recordSettledOutcome(canonicalPath, nil, settledFileOutcome{
+	s.recordSettledOutcomeLocked(canonicalPath, nil, settledFileOutcome{
 		fileID:   target.FileID(),
 		revision: target.FileRevision(),
 		kind:     transfer.FileCollision,
@@ -262,7 +261,7 @@ func (s *Session) tracePublicationMismatch(fileID catalog.FileID) {
 // preflightRecoveredStageCollision rejects an already-occupied destination
 // before resuming or publishing a verified stage so no extra network transfer
 // or redundant journal writes occur while the staged .part stays intact.
-func (s *Session) preflightRecoveredStageCollision(
+func (s *Session) preflightRecoveredStageCollisionLocked(
 	ctx context.Context,
 	file transfer.MaterializationFile,
 	parentDir *Dir,
@@ -296,14 +295,14 @@ func (s *Session) preflightRecoveredStageCollision(
 		recoveryReason:     reason,
 		retainedBytes:      retainedBytes,
 	})
-	start, err := s.settleCollision(file.MaterializationRelativePath().String(), file.Target())
+	start, err := s.settleCollisionLocked(file.MaterializationRelativePath().String(), file.Target())
 	return start, true, err
 }
 
-func (s *Session) admitRecoveredTransaction(
+func (s *Session) admitRecoveredTransactionLocked(
 	file transfer.MaterializationFile,
 	binding transfer.MaterializedFileBinding,
-	parentDir *Dir,
+	parent fileParent,
 	physLeaf string,
 	partName string,
 	partFile *os.File,
@@ -334,23 +333,21 @@ func (s *Session) admitRecoveredTransaction(
 		_ = partFile.Close()
 		return transfer.FileStart{}, err
 	}
-	tx := newFileTransaction(s, binding, canonicalPath, parentDir, physLeaf, partName, partFile, persisted, checkpointGen)
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
+	tx := newFileTransaction(s, binding, canonicalPath, parent, physLeaf, partName, partFile, persisted, checkpointGen)
+	start, err := transfer.NewFileTransactionStart(tx, durable)
+	if err != nil {
 		_ = partFile.Close()
-		return transfer.FileStart{}, transfer.ErrDirectTreeSessionFatal
+		return transfer.FileStart{}, err
 	}
-	s.activeFiles[canonicalPath] = tx
-	s.mu.Unlock()
-	return transfer.NewFileTransactionStart(tx, durable)
+	s.registerActiveFileLocked(canonicalPath, tx)
+	return start, nil
 }
 
-func (s *Session) reconcilePublishingFile(
+func (s *Session) reconcilePublishingFileLocked(
 	ctx context.Context,
 	file transfer.MaterializationFile,
 	binding transfer.MaterializedFileBinding,
-	parentDir *Dir,
+	parent fileParent,
 	physLeaf string,
 	pub publishingEntry,
 ) (transfer.FileStart, error) {
@@ -361,7 +358,7 @@ func (s *Session) reconcilePublishingFile(
 	if pub.FileID != desc.FileID() {
 		_ = removeChild(s.op.opDir, pub.PartName, false)
 		_ = s.op.journal.recordRetired(pub.FileID, canonicalPath)
-		return s.beginFreshFile(ctx, file, binding, parentDir, physLeaf)
+		return s.beginFreshFileLocked(ctx, file, binding, parent, physLeaf)
 	}
 
 	partKind, _, partErr := lstatChild(s.op.opDir, pub.PartName)
@@ -369,7 +366,7 @@ func (s *Session) reconcilePublishingFile(
 		return transfer.FileStart{}, wrapFileFault(ctx, transferfault.OutputStateIO, "inspect staged file", partErr)
 	}
 	if partKind == EntryAbsent && pub.BlockedReason == 0 {
-		return s.reconcilePublishedWithoutStage(ctx, file, binding, parentDir, physLeaf, pub)
+		return s.reconcilePublishedWithoutStageLocked(ctx, file, binding, parent, physLeaf, pub)
 	}
 
 	// Stage still exists (interrupted before rename completed), or the publishing
@@ -382,7 +379,7 @@ func (s *Session) reconcilePublishingFile(
 	}
 	comparison := content.CompareRevisionMetadata(prevEvidence, desc.SourceEvidence())
 	if !comparison.AllowsReuse() {
-		return s.handleRevisionMismatch(file, prevEvidence, comparison, pub.ExactSize, func() {
+		return s.handleRevisionMismatchLocked(file, prevEvidence, comparison, pub.ExactSize, func() {
 			pub.BlockedReason = transfer.ItemBlockRevisionConflict
 			_ = s.op.journal.recordPublishing(pub, true)
 		})
@@ -393,20 +390,20 @@ func (s *Session) reconcilePublishingFile(
 		return transfer.FileStart{}, err
 	}
 	if !validStage {
-		occupied, statErr := destinationOccupied(ctx, parentDir, physLeaf)
+		occupied, statErr := destinationOccupied(ctx, parent.dir, physLeaf)
 		if statErr != nil {
 			return transfer.FileStart{}, statErr
 		}
 		if occupied {
-			return s.settleCollision(canonicalPath, target)
+			return s.settleCollisionLocked(canonicalPath, target)
 		}
 		_ = removeChild(s.op.opDir, pub.PartName, false)
 		_ = s.op.journal.recordRetired(pub.FileID, canonicalPath)
-		return s.beginFreshFile(ctx, file, binding, parentDir, physLeaf)
+		return s.beginFreshFileLocked(ctx, file, binding, parent, physLeaf)
 	}
 
-	if start, settled, err := s.preflightRecoveredStageCollision(
-		ctx, file, parentDir, physLeaf, partFile, prevEvidence.FileRevision, comparison.Reason, pub.ExactSize,
+	if start, settled, err := s.preflightRecoveredStageCollisionLocked(
+		ctx, file, parent.dir, physLeaf, partFile, prevEvidence.FileRevision, comparison.Reason, pub.ExactSize,
 	); settled {
 		return start, err
 	}
@@ -422,8 +419,8 @@ func (s *Session) reconcilePublishingFile(
 		_ = partFile.Close()
 		return transfer.FileStart{}, err
 	}
-	return s.admitRecoveredTransaction(
-		file, binding, parentDir, physLeaf, pub.PartName, partFile, fullSet,
+	return s.admitRecoveredTransactionLocked(
+		file, binding, parent, physLeaf, pub.PartName, partFile, fullSet,
 		pub.CheckpointGen, prevEvidence.FileRevision, comparison.Reason, pub.ExactSize,
 	)
 }
@@ -446,7 +443,7 @@ func (s *Session) openValidatedPublishingStage(ctx context.Context, pub publishi
 	return nil, false, nil
 }
 
-func (s *Session) handleRevisionMismatch(
+func (s *Session) handleRevisionMismatchLocked(
 	file transfer.MaterializationFile,
 	prevEvidence content.RevisionSourceEvidence,
 	comparison content.RevisionComparisonEvidence,
@@ -497,7 +494,7 @@ func (s *Session) handleRevisionMismatch(
 	if err != nil {
 		return transfer.FileStart{}, err
 	}
-	s.recordSettledOutcome(canonicalPath, nil, settledFileOutcome{
+	s.recordSettledOutcomeLocked(canonicalPath, nil, settledFileOutcome{
 		fileID:          target.FileID(),
 		revision:        target.FileRevision(),
 		kind:            transfer.FileItemBlocked,
@@ -506,16 +503,16 @@ func (s *Session) handleRevisionMismatch(
 	return transfer.NewFileSettlementStart(settlement)
 }
 
-func (s *Session) reconcilePublishedWithoutStage(
+func (s *Session) reconcilePublishedWithoutStageLocked(
 	ctx context.Context,
 	file transfer.MaterializationFile,
 	binding transfer.MaterializedFileBinding,
-	parentDir *Dir,
+	parent fileParent,
 	physLeaf string,
 	pub publishingEntry,
 ) (transfer.FileStart, error) {
 	canonicalPath := file.MaterializationRelativePath().String()
-	reconciled, collided, err := s.tryReconcilePublished(ctx, pub, parentDir, physLeaf)
+	reconciled, collided, err := s.tryReconcilePublished(ctx, pub, parent.dir, physLeaf)
 	if err != nil {
 		return transfer.FileStart{}, err
 	}
@@ -528,10 +525,10 @@ func (s *Session) reconcilePublishedWithoutStage(
 	}
 	if collided {
 		s.tracePublicationMismatch(pub.FileID)
-		return s.settleCollision(canonicalPath, file.Target())
+		return s.settleCollisionLocked(canonicalPath, file.Target())
 	}
 	_ = s.op.journal.recordRetired(pub.FileID, canonicalPath)
-	return s.beginFreshFile(ctx, file, binding, parentDir, physLeaf)
+	return s.beginFreshFileLocked(ctx, file, binding, parent, physLeaf)
 }
 
 func validatePartialStage(partFile *os.File, exactSize uint64, ranges []content.Range, fingerprint [stageFingerprintBytes]byte) bool {
@@ -553,11 +550,11 @@ func validatePartialStage(partFile *os.File, exactSize uint64, ranges []content.
 	return fpErr == nil && actualFP == fingerprint
 }
 
-func (s *Session) restartInvalidPartialStage(
+func (s *Session) restartInvalidPartialStageLocked(
 	ctx context.Context,
 	file transfer.MaterializationFile,
 	binding transfer.MaterializedFileBinding,
-	parentDir *Dir,
+	parent fileParent,
 	physLeaf string,
 	partial partialEntry,
 	stageMissing bool,
@@ -577,7 +574,7 @@ func (s *Session) restartInvalidPartialStage(
 	}
 	// Preflight destination collision before discarding or recreating .part so
 	// an already-occupied destination path never triggers a wasted download.
-	occupied, statErr := destinationOccupied(ctx, parentDir, physLeaf)
+	occupied, statErr := destinationOccupied(ctx, parent.dir, physLeaf)
 	if statErr != nil {
 		return transfer.FileStart{}, statErr
 	}
@@ -594,7 +591,7 @@ func (s *Session) restartInvalidPartialStage(
 				fileID:             file.Descriptor().FileID(),
 			})
 		}
-		return s.settleCollision(canonicalPath, file.Target())
+		return s.settleCollisionLocked(canonicalPath, file.Target())
 	}
 	if !stageMissing {
 		if err := removeChild(s.op.opDir, partial.PartName, false); err != nil {
@@ -602,14 +599,14 @@ func (s *Session) restartInvalidPartialStage(
 		}
 	}
 	_ = s.op.journal.recordRetired(partial.FileID, canonicalPath)
-	return s.beginFreshFile(ctx, file, binding, parentDir, physLeaf)
+	return s.beginFreshFileLocked(ctx, file, binding, parent, physLeaf)
 }
 
-func (s *Session) resumePartialFile(
+func (s *Session) resumePartialFileLocked(
 	ctx context.Context,
 	file transfer.MaterializationFile,
 	binding transfer.MaterializedFileBinding,
-	parentDir *Dir,
+	parent fileParent,
 	physLeaf string,
 	partial partialEntry,
 ) (transfer.FileStart, error) {
@@ -619,7 +616,7 @@ func (s *Session) resumePartialFile(
 	if partial.FileID != desc.FileID() {
 		_ = removeChild(s.op.opDir, partial.PartName, false)
 		_ = s.op.journal.recordRetired(partial.FileID, canonicalPath)
-		return s.beginFreshFile(ctx, file, binding, parentDir, physLeaf)
+		return s.beginFreshFileLocked(ctx, file, binding, parent, physLeaf)
 	}
 
 	prevEvidence := content.RevisionSourceEvidence{
@@ -629,7 +626,7 @@ func (s *Session) resumePartialFile(
 	}
 	comparison := content.CompareRevisionMetadata(prevEvidence, desc.SourceEvidence())
 	if !comparison.AllowsReuse() {
-		return s.handleRevisionMismatch(file, prevEvidence, comparison, rangeTotalBytes(partial.Ranges), func() {
+		return s.handleRevisionMismatchLocked(file, prevEvidence, comparison, rangeTotalBytes(partial.Ranges), func() {
 			partial.BlockedReason = transfer.ItemBlockRevisionConflict
 			_ = s.op.journal.recordPartial(partial, true)
 		})
@@ -645,12 +642,12 @@ func (s *Session) resumePartialFile(
 		if partFile != nil {
 			_ = partFile.Close()
 		}
-		return s.restartInvalidPartialStage(ctx, file, binding, parentDir, physLeaf, partial, stageMissing)
+		return s.restartInvalidPartialStageLocked(ctx, file, binding, parent, physLeaf, partial, stageMissing)
 	}
 
 	reusedBytes := rangeTotalBytes(persistedSet.Ranges())
-	if start, settled, err := s.preflightRecoveredStageCollision(
-		ctx, file, parentDir, physLeaf, partFile, prevEvidence.FileRevision, comparison.Reason, reusedBytes,
+	if start, settled, err := s.preflightRecoveredStageCollisionLocked(
+		ctx, file, parent.dir, physLeaf, partFile, prevEvidence.FileRevision, comparison.Reason, reusedBytes,
 	); settled {
 		return start, err
 	}
@@ -665,31 +662,31 @@ func (s *Session) resumePartialFile(
 		_ = s.op.journal.recordPartial(partial, true)
 	}
 
-	return s.admitRecoveredTransaction(
-		file, binding, parentDir, physLeaf, partial.PartName, partFile, persistedSet,
+	return s.admitRecoveredTransactionLocked(
+		file, binding, parent, physLeaf, partial.PartName, partFile, persistedSet,
 		partial.CheckpointGen, prevEvidence.FileRevision, comparison.Reason, reusedBytes,
 	)
 }
 
-func (s *Session) resolveFileParentLocked(file transfer.MaterializationFile) (*Dir, error) {
+func (s *Session) resolveFileParentLocked(file transfer.MaterializationFile) (fileParent, error) {
 	parent := file.Parent()
 	if parent.Kind() == transfer.MaterializationFileParentReference {
-		return s.op.resultDir, nil
+		return fileParent{dir: s.op.resultDir}, nil
 	}
 	state, ok := s.dirsByLogical[parent.Admission().Path()]
 	if !ok || !state.admission.Equal(parent.Admission()) || !state.materialized {
-		return nil, transfer.ErrInvalidOutputBinding
+		return fileParent{}, transfer.ErrInvalidOutputBinding
 	}
 	if state.dir != nil {
-		return state.dir, nil
+		return fileParent{state: state, dir: state.dir}, nil
 	}
 	// Parent directory was already finalized or evicted; reopen from resultDir.
 	reopened, err := s.reopenLogicalDirLocked(state.logicalPath)
 	if err != nil {
-		return nil, err
+		return fileParent{}, err
 	}
 	state.dir = reopened
-	return reopened, nil
+	return fileParent{state: state, dir: reopened}, nil
 }
 
 func (s *Session) reopenLogicalDirLocked(logicalPath string) (*Dir, error) {
@@ -724,14 +721,6 @@ func fullRangeSet(size uint64) (content.RangeSet, error) {
 		return content.NewRangeSet(nil)
 	}
 	return content.NewRangeSet([]content.Range{{Offset: 0, End: size}})
-}
-
-func (s *Session) releaseActiveFile(canonicalPath string, tx *fileTransaction) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.activeFiles[canonicalPath] == tx {
-		delete(s.activeFiles, canonicalPath)
-	}
 }
 
 func ownedObjectIDFor(opID receivecontract.OperationID, locator transfer.MaterializationLocatorDigest) transfer.OwnedObjectID {
