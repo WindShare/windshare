@@ -134,6 +134,9 @@ func classifyError(cause error) (Failure, bool) {
 	if f, ok := classifySentinelError(cause); ok {
 		return f, true
 	}
+	if _, ok := output.FindDiagnostic(cause); ok {
+		return Failure{Code: FailureOutputFailed}, true
+	}
 	return classifyStdlibError(cause)
 }
 

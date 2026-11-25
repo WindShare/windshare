@@ -36,6 +36,12 @@ type settledFileOutcome struct {
 	itemBlockReason transfer.ItemBlockReason
 }
 
+const (
+	sessionCloseNone uint8 = iota
+	sessionClosePaused
+	sessionCloseFinalized
+)
+
 // Session implements transfer.DirectTreeSession and transfer.DeliveryHistory
 // directly over an active Operation's journal and open directory handles.
 type Session struct {
@@ -49,8 +55,11 @@ type Session struct {
 
 	mu              sync.Mutex
 	closed          bool
+	closeKind       uint8
+	closeOutcome    transfer.DirectTreeOutcome
 	closeSettlement transfer.DirectTreeSettlement
-	closeKind       uint8 // 1 = paused, 2 = finalized
+	closeErr        error
+	closeDone       chan struct{}
 	rootSettled     bool
 	dirsByLogical   map[string]*dirState
 	activeFiles     map[string]*fileTransaction
@@ -361,20 +370,65 @@ func (s *Session) FinalizeDirectory(
 	return settlement, nil
 }
 
+func (s *Session) waitForCloseLocked() {
+	for s.closeDone != nil {
+		done := s.closeDone
+		s.mu.Unlock()
+		<-done
+		s.mu.Lock()
+	}
+}
+
+func (s *Session) completeClose(done chan struct{}, settlement transfer.DirectTreeSettlement, err error) {
+	s.mu.Lock()
+	if err != nil {
+		s.closeErr = err
+	} else {
+		s.closeSettlement = settlement
+	}
+	s.closeDone = nil
+	s.mu.Unlock()
+	close(done)
+}
+
+func (s *Session) emitCloseFailureTrace(operation, decision string, stage FailureStage, cause error) {
+	nativeClass, _ := ClassifyNativeError(cause)
+	emitTrace(s.authority.diagnostics, traceEvent{
+		component:    "session",
+		operation:    operation,
+		decision:     decision,
+		failed:       true,
+		failureStage: stage,
+		nativeClass:  nativeClass,
+		bindingID:    s.authority.bindingID,
+		operationID:  s.intent.OperationID(),
+		intentDigest: s.intent.Digest(),
+		sessionID:    s.sessionID,
+	})
+}
+
 func (s *Session) PauseTree(ctx context.Context) (transfer.DirectTreeSettlement, error) {
 	if ctx == nil {
 		return transfer.DirectTreeSettlement{}, transfer.ErrInvalidOutputBinding
 	}
 	s.mu.Lock()
 	if s.closed {
-		if s.closeKind == 1 {
-			settled := s.closeSettlement
+		s.waitForCloseLocked()
+		if s.closeKind == sessionClosePaused {
+			settled, closeErr := s.closeSettlement, s.closeErr
 			s.mu.Unlock()
+			if closeErr != nil {
+				return transfer.DirectTreeSettlement{}, closeErr
+			}
 			return settled, nil
 		}
 		s.mu.Unlock()
 		return transfer.DirectTreeSettlement{}, transfer.ErrDirectTreeSessionFatal
 	}
+	done := make(chan struct{})
+	s.closed = true
+	s.closeKind = sessionClosePaused
+	s.closeDone = done
 	active := make([]*fileTransaction, 0, len(s.activeFiles))
 	for _, tx := range s.activeFiles {
 		active = append(active, tx)
@@ -387,21 +441,25 @@ func (s *Session) PauseTree(ctx context.Context) (transfer.DirectTreeSettlement,
 			pauseErr = errors.Join(pauseErr, err)
 		}
 	}
-	flushErr := s.op.journal.flush()
+	flushErr := wrapOutputFaultError(transferfault.OutputStateIO, "flush task journal", s.op.journal.flush())
 	s.op.refreshNameAdjustments()
 
 	s.mu.Lock()
 	s.closeDirHandlesLocked()
-	settlement, settleErr := transfer.NewDirectTreeSettlement(transfer.DirectTreeSettlementPaused)
-	s.closed = true
-	s.closeKind = 1
-	s.closeSettlement = settlement
 	s.mu.Unlock()
 
 	s.authority.mu.Lock()
 	s.op.opened = false
 	s.authority.mu.Unlock()
 
+	settlement, settleErr := transfer.NewDirectTreeSettlement(transfer.DirectTreeSettlementPaused)
+	if err := errors.Join(pauseErr, flushErr, settleErr); err != nil {
+		finalErr := DiagnoseFailure(FailureDurability, err)
+		s.completeClose(done, transfer.DirectTreeSettlement{}, finalErr)
+		s.emitCloseFailureTrace("pause_tree", "failed", FailureDurability, finalErr)
+		return transfer.DirectTreeSettlement{}, finalErr
+	}
+	s.completeClose(done, settlement, nil)
 	emitTrace(s.authority.diagnostics, traceEvent{
 		component:    "session",
 		operation:    "pause_tree",
@@ -410,10 +468,28 @@ func (s *Session) PauseTree(ctx context.Context) (transfer.DirectTreeSettlement,
 		intentDigest: s.intent.Digest(),
 		sessionID:    s.sessionID,
 	})
-	if err := errors.Join(pauseErr, flushErr, settleErr); err != nil {
-		return transfer.DirectTreeSettlement{}, DiagnoseFailure(FailureDurability, err)
-	}
 	return settlement, nil
+}
+
+func (s *Session) retireCompletedOperation() error {
+	// Completed transfer: acquire the directory lock before releasing
+	// journal/task.lock and deleting .windshare-tmp/<opID> so no concurrent
+	// receiver can reopen the completed operation before removal.
+	s.authority.mu.Lock()
+	s.op.opened = false
+	s.op.completed = true
+	root := s.authority.root
+	op := s.op
+	opDirName := op.opDirName
+	if s.authority.operation == op {
+		s.authority.operation = nil
+	}
+	s.authority.mu.Unlock()
+
+	if root != nil {
+		return retireControlDir(root, opDirName, op.closeResources)
+	}
+	return op.closeResources()
 }
 
 func (s *Session) FinalizeTree(
@@ -425,9 +501,13 @@ func (s *Session) FinalizeTree(
 	}
 	s.mu.Lock()
 	if s.closed {
-		if s.closeKind == 2 {
-			settled := s.closeSettlement
+		s.waitForCloseLocked()
+		if s.closeKind == sessionCloseFinalized && s.closeOutcome == outcome {
+			settled, closeErr := s.closeSettlement, s.closeErr
 			s.mu.Unlock()
+			if closeErr != nil {
+				return transfer.DirectTreeSettlement{}, closeErr
+			}
 			return settled, nil
 		}
 		s.mu.Unlock()
@@ -465,51 +545,27 @@ func (s *Session) FinalizeTree(
 		s.mu.Unlock()
 		return transfer.DirectTreeSettlement{}, err
 	}
+	done := make(chan struct{})
 	s.closeDirHandlesLocked()
 	s.closed = true
-	s.closeKind = 2
-	s.closeSettlement = settlement
+	s.closeKind = sessionCloseFinalized
+	s.closeOutcome = outcome
+	s.closeDone = done
 	s.mu.Unlock()
 
 	s.op.refreshNameAdjustments()
 
 	if outcome == transfer.DirectTreeOutcomeSuccess {
-		// Completed transfer: acquire the directory lock before releasing
-		// journal/task.lock and deleting .windshare-tmp/<opID> so no concurrent
-		// receiver can reopen the completed operation before removal.
-		s.authority.mu.Lock()
-		s.op.opened = false
-		s.op.completed = true
-		root := s.authority.root
-		op := s.op
-		opDirName := op.opDirName
-		if s.authority.operation == op {
-			s.authority.operation = nil
+		if cleanupErr := s.retireCompletedOperation(); cleanupErr != nil {
+			finalErr := DiagnoseFailure(
+				FailureClose,
+				wrapOutputFaultError(transferfault.OutputStateIO, "retire operation control directory", cleanupErr),
+			)
+			s.completeClose(done, transfer.DirectTreeSettlement{}, finalErr)
+			s.emitCloseFailureTrace("finalize_tree", "cleanup_pending", FailureClose, cleanupErr)
+			return transfer.DirectTreeSettlement{}, finalErr
 		}
-		s.authority.mu.Unlock()
-
-		var cleanupErr error
-		if root != nil {
-			cleanupErr = retireControlDir(root, opDirName, op.closeResources)
-		} else {
-			cleanupErr = op.closeResources()
-		}
-		if cleanupErr != nil {
-			nativeClass, _ := ClassifyNativeError(cleanupErr)
-			emitTrace(s.authority.diagnostics, traceEvent{
-				component:    "session",
-				operation:    "finalize_tree",
-				decision:     "cleanup_pending",
-				failed:       true,
-				failureStage: FailureClose,
-				nativeClass:  nativeClass,
-				bindingID:    s.authority.bindingID,
-				operationID:  s.intent.OperationID(),
-				intentDigest: s.intent.Digest(),
-				sessionID:    s.sessionID,
-			})
-			return transfer.DirectTreeSettlement{}, DiagnoseFailure(FailureClose, cleanupErr)
-		}
+		s.completeClose(done, settlement, nil)
 		return settlement, nil
 	}
 
@@ -519,8 +575,15 @@ func (s *Session) FinalizeTree(
 	s.op.opened = false
 	s.authority.mu.Unlock()
 	if flushErr != nil {
-		return transfer.DirectTreeSettlement{}, DiagnoseFailure(FailureDurability, flushErr)
+		finalErr := DiagnoseFailure(
+			FailureDurability,
+			wrapOutputFaultError(transferfault.OutputStateIO, "flush task journal", flushErr),
+		)
+		s.completeClose(done, transfer.DirectTreeSettlement{}, finalErr)
+		s.emitCloseFailureTrace("finalize_tree", "failed", FailureDurability, flushErr)
+		return transfer.DirectTreeSettlement{}, finalErr
 	}
+	s.completeClose(done, settlement, nil)
 	return settlement, nil
 }
 

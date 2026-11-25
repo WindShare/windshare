@@ -189,7 +189,16 @@ func settleRetainedOutput(completed *task.Completion[Result], retained *getOutpu
 	result.Operation = retained.operation.Intent.OperationID()
 	result.Recovery.Retention = RetentionCheckpoints
 	control := retained.operation.Control
-	if control == nil || !control.Idle() {
+	if control == nil {
+		return nil
+	}
+	if !control.Idle() {
+		// A retained operation that did not return to idle (for example,
+		// FinalizeTree(Success) transitioning into cleanup-pending) cannot be
+		// resumed via retry; require inspection instead of advising retry.
+		if result.Recovery.Retryable() {
+			result.Recovery.Reason = RecoveryNeedsInspection
+		}
 		return nil
 	}
 	if result.Recovery.ShareStopped() {

@@ -289,8 +289,12 @@ func buildDiagnostic(stage FailureStage, cause error) Diagnostic {
 	if native, ok := ClassifyNativeError(cause); ok {
 		diagnostic.NativeErrorClass = native
 	}
-	if value, ok := transferfault.NormalizeBoundaryError(cause).Fault(); ok {
-		diagnostic.Fault = value
+	// Preserve an explicit boundary fault without synthesizing
+	// SessionDependencyContract for raw OS errors from non-transfer operations.
+	if transferfault.BoundaryCancellation(cause) == nil {
+		if boundary, ok := errors.AsType[*transferfault.BoundaryError](cause); ok && boundary != nil && boundary.Fault().Valid() {
+			diagnostic.Fault = boundary.Fault()
+		}
 	}
 	return diagnostic
 }
@@ -301,6 +305,15 @@ func wrapOutputFault(ctx context.Context, code transferfault.OutputCode, op stri
 	}
 	if ctx != nil && ctx.Err() != nil {
 		return ctx.Err()
+	}
+	return wrapOutputFaultError(code, op, cause)
+}
+
+// wrapOutputFaultError wraps a raw output I/O error without letting caller
+// cancellation obscure durability or cleanup failures during tree settlement.
+func wrapOutputFaultError(code transferfault.OutputCode, op string, cause error) error {
+	if cause == nil {
+		return nil
 	}
 	if errors.Is(cause, context.Canceled) || errors.Is(cause, context.DeadlineExceeded) {
 		return cause

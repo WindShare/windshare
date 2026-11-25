@@ -205,3 +205,42 @@ func TestStoppedShareRecoveryUsesRetainedOutputAuthority(t *testing.T) {
 		})
 	}
 }
+
+func TestNonIdleRetainedOutputRequiresInspectionInsteadOfAdvisingRetry(t *testing.T) {
+	outputIO, err := transferfault.NewOutput(transferfault.ScopeOutputPause, transferfault.OutputStateIO)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, authority := recoveryTestPreparation(t)
+	// Mirrors FinalizeTree(Success) failing during control-dir retirement:
+	// the operation transitioned out of idle into cleanup-pending and cannot
+	// be resumed via wind resume retry.
+	authority.busy = true
+	prompts := 0
+	request := Request{
+		Capability:   link.Link{Suite: link.SuiteSenderAuthenticated},
+		Connectivity: ConnectivityRelayOnly,
+		OnPause: func(context.Context, Pause) (RecoveryAction, error) {
+			prompts++
+			return RecoveryRetry, nil
+		},
+	}
+	completed := runOperation(t.Context(), request, Dependencies{}, func(_ context.Context, _ preparedRequest, _ Dependencies, retained *getOutputPreparation) task.Completion[Result] {
+		*retained = prepared
+		result, settleErr := Settle(SettlementInput{Result: transfer.JobResult{
+			Outcome:           transfer.DirectTreeOutcomePaused,
+			SettlementFailure: transferfault.Wrap(outputIO, errors.New("retire control dir failed")),
+			SettlementFault:   outputIO,
+		}})
+		if settleErr != nil {
+			t.Fatal(settleErr)
+		}
+		return result
+	})
+	if prompts != 0 || completed.Value.Recovery.Reason != RecoveryNeedsInspection || completed.Value.Recovery.Retryable() {
+		t.Fatalf("non-idle output failure recovery = %+v prompts=%d, want RecoveryNeedsInspection (non-retryable)", completed.Value.Recovery, prompts)
+	}
+	if !errors.Is(completed.Err, completed.Value.Transfer.SettlementFailure) {
+		t.Fatalf("settlement failure lost from completion error: %v", completed.Err)
+	}
+}

@@ -39,6 +39,8 @@ func TestDescribeFailureCoversDomainCategoriesAndContext(t *testing.T) {
 	}
 	faultCheckpoint, _ := transferfault.NewCheckpoint(transferfault.ScopeOutputPause, transferfault.CheckpointStateIO)
 	sealedOutput, _ := output.SealFailure(errors.New("disk"), output.FailureDiagnostic{Stage: output.FailureCheckpoint, Fault: faultCheckpoint})
+	sealedCloseNoFault, _ := output.SealFailure(errors.New("close handle failed"), output.FailureDiagnostic{Stage: output.FailureClose})
+	sealedBusyNoFault, _ := output.SealFailure(errors.Join(output.ErrBusy, errors.New("lock held")), output.FailureDiagnostic{Stage: output.FailureOpen})
 	faultDrift, _ := transferfault.NewSource(transferfault.ScopeFileLocal, transferfault.SourceRevisionChanged)
 	faultBusy, _ := transferfault.NewOutput(transferfault.ScopeFileLocal, transferfault.OutputFileAlreadyActive)
 	faultCat, _ := transferfault.NewCatalog(transferfault.ScopeDirectoryLocal, transferfault.CatalogUnavailable)
@@ -70,6 +72,8 @@ func TestDescribeFailureCoversDomainCategoriesAndContext(t *testing.T) {
 		{"receive code", receive.Failure{Code: receive.FailureOutputOperationAlreadyRunning}, FailureOutputOperationAlreadyRunning},
 		{"receive wrapped", receive.Failure{Cause: context.DeadlineExceeded}, FailureDeadline},
 		{"sealed output", sealedOutput, FailureCheckpointFailed},
+		{"sealed close without fault", sealedCloseNoFault, FailureOutputFailed},
+		{"sealed busy without fault", sealedBusyNoFault, FailureOutputBusy},
 		{"route 404", &relayv2.WebSocketRouteError{BaseHint: hint}, FailureRelayRouteNotFound},
 		{"relay rejected", &relayv2.RelayError{Code: v2.ErrorInvalidProof}, FailureRelayRejected},
 		{"relay not found", &relayv2.RelayError{Code: v2.ErrorNotFound}, FailureRelayNotFound},
