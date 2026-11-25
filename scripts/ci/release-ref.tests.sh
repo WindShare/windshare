@@ -54,35 +54,69 @@ resolve_output="$test_root/resolve.out"
   INPUT_COMMIT_SHA="$main_sha" \
   INPUT_VERSION=v1.2.3 \
   DEFAULT_BRANCH=main \
+  WORKFLOW_REF=refs/heads/main \
     bash "$script_path" resolve
 )
 grep -Fxq "commit_sha=$main_sha" "$resolve_output"
 grep -Fxq "version=v1.2.3" "$resolve_output"
 
+expect_failure "must run from refs/heads/main (got refs/heads/side)" \
+  env GITHUB_OUTPUT="$test_root/wrong-branch.out" \
+      INPUT_COMMIT_SHA="$main_sha" \
+      INPUT_VERSION=v1.2.3 \
+      DEFAULT_BRANCH=main \
+      WORKFLOW_REF=refs/heads/side \
+      bash -c 'cd "$1" && bash "$2" resolve' _ "$repository" "$script_path"
+expect_failure "must run from refs/heads/main (got refs/tags/v1.2.3)" \
+  env GITHUB_OUTPUT="$test_root/wrong-tag.out" \
+      INPUT_COMMIT_SHA="$main_sha" \
+      INPUT_VERSION=v1.2.3 \
+      DEFAULT_BRANCH=main \
+      WORKFLOW_REF=refs/tags/v1.2.3 \
+      bash -c 'cd "$1" && bash "$2" resolve' _ "$repository" "$script_path"
+expect_failure "must run from refs/heads/main (got <empty>)" \
+  env GITHUB_OUTPUT="$test_root/empty-ref.out" \
+      INPUT_COMMIT_SHA="$main_sha" \
+      INPUT_VERSION=v1.2.3 \
+      DEFAULT_BRANCH=main \
+      WORKFLOW_REF= \
+      bash -c 'cd "$1" && bash "$2" resolve' _ "$repository" "$script_path"
 expect_failure "reachable from origin/main" \
   env GITHUB_OUTPUT="$test_root/side.out" \
       INPUT_COMMIT_SHA="$side_sha" \
       INPUT_VERSION=v1.2.3 \
       DEFAULT_BRANCH=main \
+      WORKFLOW_REF=refs/heads/main \
       bash -c 'cd "$1" && bash "$2" resolve' _ "$repository" "$script_path"
 expect_failure "exact lowercase 40-character SHA" \
   env GITHUB_OUTPUT="$test_root/bad-sha.out" \
       INPUT_COMMIT_SHA=HEAD \
       INPUT_VERSION=v1.2.3 \
       DEFAULT_BRANCH=main \
+      WORKFLOW_REF=refs/heads/main \
       bash -c 'cd "$1" && bash "$2" resolve' _ "$repository" "$script_path"
 expect_failure "form vX.Y.Z" \
   env GITHUB_OUTPUT="$test_root/bad-version.out" \
       INPUT_COMMIT_SHA="$main_sha" \
       INPUT_VERSION=v01.2.3 \
       DEFAULT_BRANCH=main \
+      WORKFLOW_REF=refs/heads/main \
       bash -c 'cd "$1" && bash "$2" resolve' _ "$repository" "$script_path"
+
+expect_failure "must run from refs/heads/main (got refs/heads/side)" \
+  env RELEASE_VERSION=v1.2.3 \
+      RELEASE_COMMIT_SHA="$main_sha" \
+      DEFAULT_BRANCH=main \
+      WORKFLOW_REF=refs/heads/side \
+      bash -c 'cd "$1" && bash "$2" publish' _ "$repository" "$script_path"
+! git --git-dir="$remote" rev-parse --verify refs/tags/v1.2.3 >/dev/null 2>&1
 
 (
   cd "$repository"
   RELEASE_VERSION=v1.2.3 \
   RELEASE_COMMIT_SHA="$main_sha" \
   DEFAULT_BRANCH=main \
+  WORKFLOW_REF=refs/heads/main \
     bash "$script_path" publish
 )
 [ "$(git --git-dir="$remote" rev-parse refs/tags/v1.2.3)" = "$main_sha" ]
@@ -93,6 +127,7 @@ expect_failure "form vX.Y.Z" \
   RELEASE_VERSION=v1.2.3 \
   RELEASE_COMMIT_SHA="$main_sha" \
   DEFAULT_BRANCH=main \
+  WORKFLOW_REF=refs/heads/main \
     bash "$script_path" publish
 )
 
@@ -102,11 +137,13 @@ expect_failure "refusing to validate a move" \
       INPUT_COMMIT_SHA="$main_sha" \
       INPUT_VERSION=v1.2.4 \
       DEFAULT_BRANCH=main \
+      WORKFLOW_REF=refs/heads/main \
       bash -c 'cd "$1" && bash "$2" resolve' _ "$repository" "$script_path"
 expect_failure "refusing to move it" \
   env RELEASE_VERSION=v1.2.4 \
       RELEASE_COMMIT_SHA="$main_sha" \
       DEFAULT_BRANCH=main \
+      WORKFLOW_REF=refs/heads/main \
       bash -c 'cd "$1" && bash "$2" publish' _ "$repository" "$script_path"
 [ "$(git --git-dir="$remote" rev-parse refs/tags/v1.2.4)" = "$side_sha" ]
 

@@ -46,6 +46,7 @@ jobs:
           INPUT_COMMIT_SHA: ${{ inputs.commit_sha }}
           INPUT_VERSION: ${{ inputs.version }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          WORKFLOW_REF: ${{ github.ref }}
         run: bash scripts/ci/release-ref.sh resolve
 
   console-bundle:
@@ -319,6 +320,7 @@ jobs:
           RELEASE_VERSION: ${{ needs.release.outputs.version }}
           RELEASE_COMMIT_SHA: ${{ needs.release.outputs.commit_sha }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          WORKFLOW_REF: ${{ github.ref }}
         run: bash scripts/ci/release-ref.sh publish
       - name: Publish source and binary release
         env:

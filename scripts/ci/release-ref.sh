@@ -33,16 +33,33 @@ require_commit_object() {
   fi
 }
 
+validate_default_branch() {
+  local default_branch="$1"
+  if [ -z "$default_branch" ] ||
+     ! git check-ref-format "refs/heads/$default_branch" >/dev/null 2>&1; then
+    fail "DEFAULT_BRANCH must name a valid branch"
+  fi
+}
+
+require_default_branch_workflow_ref() {
+  local default_branch="${DEFAULT_BRANCH:-}"
+  local workflow_ref="${WORKFLOW_REF:-}"
+  local expected_ref
+
+  validate_default_branch "$default_branch"
+  expected_ref="refs/heads/$default_branch"
+  if [ "$workflow_ref" != "$expected_ref" ]; then
+    fail "release workflow must run from $expected_ref (got ${workflow_ref:-<empty>})"
+  fi
+}
+
 require_default_branch_reachability() {
   local commit_sha="$1"
   local default_branch="${DEFAULT_BRANCH:-}"
   local remote_name="${RELEASE_REMOTE:-origin}"
   local default_ref
 
-  if [ -z "$default_branch" ] ||
-     ! git check-ref-format "refs/heads/$default_branch" >/dev/null 2>&1; then
-    fail "DEFAULT_BRANCH must name a valid branch"
-  fi
+  validate_default_branch "$default_branch"
   if ! git remote get-url "$remote_name" >/dev/null 2>&1; then
     fail "release remote does not exist: $remote_name"
   fi
@@ -61,6 +78,7 @@ resolve_release() {
   local remote_name="${RELEASE_REMOTE:-origin}"
   local release_ref
 
+  require_default_branch_workflow_ref
   validate_sha "$commit_sha"
   validate_version "$version"
   require_commit_object "$commit_sha" "release commit"
@@ -74,8 +92,8 @@ resolve_release() {
     fail "GITHUB_OUTPUT is required"
   fi
 
-  printf 'release resolve: version=%s commit=%s authority=%s/%s\n' \
-    "$version" "$commit_sha" "${RELEASE_REMOTE:-origin}" "$DEFAULT_BRANCH"
+  printf 'release resolve: version=%s commit=%s authority=%s/%s workflow_ref=%s\n' \
+    "$version" "$commit_sha" "${RELEASE_REMOTE:-origin}" "$DEFAULT_BRANCH" "$WORKFLOW_REF"
   printf 'commit_sha=%s\nversion=%s\n' "$commit_sha" "$version" >>"$GITHUB_OUTPUT"
 }
 
@@ -138,6 +156,7 @@ publish_release() {
   local remote_name="${RELEASE_REMOTE:-origin}"
   local release_ref
 
+  require_default_branch_workflow_ref
   validate_version "$version"
   validate_sha "$commit_sha"
   require_commit_object "$commit_sha" "release commit"

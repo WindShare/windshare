@@ -37,6 +37,7 @@ assert_precedes() {
 }
 
 workflow=.github/workflows/release.yml
+official_network=.github/workflows/official-network.yml
 console_bundle=.github/workflows/console-bundle.yml
 weekly=.github/workflows/weekly.yml
 ci=.github/workflows/ci.yml
@@ -51,6 +52,12 @@ assert_contains "$workflow" 'version:'
 assert_contains "$workflow" 'ref: ${{ github.event.repository.default_branch }}'
 assert_contains "$workflow" 'run: bash scripts/ci/release-ref.sh resolve'
 assert_contains "$workflow" 'run: bash scripts/ci/release-ref.sh publish'
+[ "$(grep -Fc 'WORKFLOW_REF: ${{ github.ref }}' "$workflow")" -eq 2 ] ||
+  fail "$workflow must pass WORKFLOW_REF to both resolve and publish"
+assert_contains "$official_network" 'WORKFLOW_REF: ${{ github.ref }}'
+assert_contains "$official_network" 'DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}'
+assert_precedes "$official_network" 'Verify default-branch workflow authority' \
+  'Verify immutable release identity and provisioned trust'
 assert_contains "$workflow" 'uses: ./.github/workflows/console-bundle.yml'
 assert_contains "$workflow" 'ref: ${{ needs.release.outputs.commit_sha }}'
 assert_contains "$workflow" '- console-bundle'
