@@ -15,9 +15,10 @@ import {
 import { decideCollisionName } from '../names/policy'
 import { buildSafeNameRestorePlan, renderRestoreArtifact } from '../names/restore-plan'
 import type { ReceiveStore } from '../store/database'
-import { acquireTaskLock } from '../store/tab-lock'
+import { acquireTaskLock, withFSAReservationLock } from '../store/tab-lock'
+import type { FSADiskFingerprint } from '../store/types'
 import { ensureFSAPermission } from './fsa'
-import { isMissingFSAEntry } from './fsa-cleanup'
+import { isMissingFSAEntry, readFSADiskFingerprint, removeVerifiedFSALeaf } from './fsa-cleanup'
 import { entryExists } from './fsa-reservation'
 
 const MAX_ARTIFACT_COLLISION_ATTEMPTS = 1_000
@@ -86,6 +87,7 @@ export async function writeFSARestoreArtifact(
       artifact.suggestedName,
       artifact.fallbackName,
       artifact.content,
+      locks,
       signal,
     )
 
@@ -139,68 +141,101 @@ async function writeArtifactWithPolicyFallback(
   suggestedName: string,
   fallbackName: string | null,
   content: string,
+  locks: LockManager | undefined,
   signal?: AbortSignal,
 ): Promise<{ readonly fileName: string; readonly usedFallback: boolean }> {
   try {
-    const fileName = await writeUniqueTextFile(dir, suggestedName, content, signal)
+    const fileName = await writeUniqueTextFile(dir, suggestedName, content, locks, signal)
     return { fileName, usedFallback: false }
   } catch (error) {
     if (fallbackName === null || !isNameOrPolicyRejection(error, signal)) {
       throw error
     }
-    const fileName = await writeUniqueTextFile(dir, fallbackName, content, signal)
+    const fileName = await writeUniqueTextFile(dir, fallbackName, content, locks, signal)
     return { fileName, usedFallback: true }
   }
+}
+
+interface ReservedArtifactFile {
+  readonly fileName: string
+  readonly handle: FileSystemFileHandle
+  readonly fingerprint: FSADiskFingerprint
 }
 
 async function writeUniqueTextFile(
   dir: FileSystemDirectoryHandle,
   suggestedName: string,
   content: string,
+  locks: LockManager | undefined,
   signal?: AbortSignal,
 ): Promise<string> {
-  const allocated = await allocateUniqueFileName(dir, suggestedName, signal)
-  let created = false
+  const reserved = await reserveUniqueArtifactFile(dir, suggestedName, locks, signal)
   let writer: FileSystemWritableFileStream | undefined
   try {
     signal?.throwIfAborted()
-    const handle = await dir.getFileHandle(allocated, { create: true })
-    created = true
-    signal?.throwIfAborted()
-    writer = await handle.createWritable()
+    writer = await reserved.handle.createWritable()
     signal?.throwIfAborted()
     await writer.write({ type: 'write', position: 0, data: TEXT_ENCODER.encode(content) })
     await writer.close()
-    return allocated
+    return reserved.fileName
   } catch (error) {
     if (writer !== undefined) {
       await writer.abort(error).catch(() => undefined)
     }
-    if (created) {
-      await dir.removeEntry(allocated).catch(() => undefined)
-    }
+    // Verify identity and untouched 0-byte fingerprint so rollback never deletes a concurrently replaced file.
+    await removeVerifiedFSALeaf(dir, reserved.fileName, reserved.handle, reserved.fingerprint).catch(() => undefined)
     throw error
   }
 }
 
-async function allocateUniqueFileName(
+/**
+ * Serializes artifact filename allocation across tasks (and with top-level download reservations)
+ * because File System Access lacks atomic `O_EXCL` creation. Only placeholder reservation holds
+ * the global lock; streaming the payload runs outside it so slow disk flushes cannot block new downloads.
+ */
+async function reserveUniqueArtifactFile(
   dir: FileSystemDirectoryHandle,
   suggestedName: string,
+  locks: LockManager | undefined,
   signal?: AbortSignal,
-): Promise<string> {
-  for (let collisionIndex = 0; collisionIndex < MAX_ARTIFACT_COLLISION_ATTEMPTS; collisionIndex += 1) {
-    signal?.throwIfAborted()
-    const candidate = decideCollisionName(suggestedName, 'file', collisionIndex)
-    const state = await entryExists(dir, candidate)
-    if (state === 'missing') return candidate
-    if (state === 'invalid-name') {
-      throw new TypeError(`Browser rejected filename "${candidate}"`)
+): Promise<ReservedArtifactFile> {
+  signal?.throwIfAborted()
+  return withFSAReservationLock(async () => {
+    for (let collisionIndex = 0; collisionIndex < MAX_ARTIFACT_COLLISION_ATTEMPTS; collisionIndex += 1) {
+      signal?.throwIfAborted()
+      const candidate = decideCollisionName(suggestedName, 'file', collisionIndex)
+      const reserved = await tryReserveArtifactCandidate(dir, candidate, signal)
+      if (reserved !== 'exists') return reserved
     }
+    throw new TransferFaultError(
+      outputFault(FaultScope.Job, OutputFaultCode.TargetCollision),
+      'Could not allocate a unique filename in the destination folder',
+    )
+  }, locks)
+}
+
+async function tryReserveArtifactCandidate(
+  dir: FileSystemDirectoryHandle,
+  candidate: string,
+  signal?: AbortSignal,
+): Promise<ReservedArtifactFile | 'exists'> {
+  const state = await entryExists(dir, candidate)
+  if (state === 'exists') return 'exists'
+  if (state === 'invalid-name') {
+    throw new TypeError(`Browser rejected filename "${candidate}"`)
   }
-  throw new TransferFaultError(
-    outputFault(FaultScope.Job, OutputFaultCode.TargetCollision),
-    'Could not allocate a unique filename in the destination folder',
-  )
+  signal?.throwIfAborted()
+  let handle: FileSystemFileHandle
+  try {
+    handle = await dir.getFileHandle(candidate, { create: true })
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'TypeMismatchError') return 'exists'
+    throw error
+  }
+  const fingerprint = await readFSADiskFingerprint(handle)
+  // An external writer can populate the same path after entryExists; never adopt or overwrite non-empty bytes.
+  if (fingerprint.size !== 0) return 'exists'
+  return { fileName: candidate, handle, fingerprint }
 }
 
 function isNameOrPolicyRejection(error: unknown, signal?: AbortSignal): boolean {

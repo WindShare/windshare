@@ -13,7 +13,7 @@ import { deterministicSafeComponent } from '../../src/output/backends/safe-name'
 import type { OutputTraceEvent } from '../../src/output/diagnostics'
 import { FSARestoreTargetMissingError } from '../../src/output/model/safe-name-restore'
 import type { ReceiveStore } from '../../src/output/store/database'
-import { acquireTaskLock, TaskBusyError } from '../../src/output/store/tab-lock'
+import { acquireTaskLock, TaskBusyError, withFSAReservationLock } from '../../src/output/store/tab-lock'
 import { FileDestinationConflictError } from '../../src/transfer/fault'
 import type { SettledTransferJobResult } from '../../src/transfer/job'
 import { initialReceiveState, transitionReceiveState, type SafeRenamedSummary } from '../../src/transfer/state'
@@ -24,17 +24,26 @@ import { FakeDirectoryHandle, FakeFileHandle, MemoryReceiveStore } from './fsa-f
 const SIGNAL = new AbortController().signal
 
 function createFakeLockManager(): LockManager {
-  const held = new Set<string>()
+  const queues = new Map<string, Promise<void>>()
   return {
     request: async <T>(name: string, options: LockOptions, callback: LockGrantedCallback<T>) => {
-      if (options.ifAvailable && held.has(name)) {
+      const current = queues.get(name)
+      if (options.ifAvailable && current !== undefined) {
         return callback(null)
       }
-      held.add(name)
+      let release!: () => void
+      const tail = new Promise<void>(resolve => { release = resolve })
+      queues.set(name, tail)
+      if (current !== undefined) {
+        await current
+      }
       try {
         return await callback({ name, mode: options.mode ?? 'exclusive' })
       } finally {
-        held.delete(name)
+        if (queues.get(name) === tail) {
+          queues.delete(name)
+        }
+        release()
       }
     },
     query: async () => ({ held: [], pending: [] }),
@@ -600,6 +609,129 @@ describe('writeFSARestoreArtifact concurrency, user-activation order, and POSIX 
     await expect(writeFSARestoreArtifact(selfAbort.store, 'export-task', 'posix', undefined, undefined, controller.signal))
       .rejects.toMatchObject({ name: 'AbortError' })
     expect(selfAbort.root.children.has('windshare-restore-names.txt')).toBe(false)
+  })
+
+  async function createSavedSingleFileTask(
+    memory: MemoryReceiveStore,
+    parent: FakeDirectoryHandle,
+    taskId: string,
+    fileName: string,
+  ) {
+    const store = memory as unknown as ReceiveStore
+    const session = await openNewFSASession({
+      task: {
+        taskId,
+        selectionKey: `sel-${taskId}`,
+        selection: { shareInstance: 's1', syntheticRoot: 'r1', defaultSelected: true, rules: [] },
+        artifact: { kind: 'original-file', name: fileName, singleFileId: `fid-${taskId}` },
+        lifecycle: initialReceiveState(taskId),
+      },
+      parentHandle: parent as unknown as FileSystemDirectoryHandle,
+      store,
+    })
+    const file = await session.transferOutput.openFile({
+      fileId: `fid-${taskId}`, path: [fileName], sourcePath: [fileName], revision: 'r1', exactSize: 4n,
+    }, SIGNAL)
+    await file.writeAt(0n, Uint8Array.of(1, 2, 3, 4))
+    await file.commit([byteRange(0n, 4n)])
+    await session.settle(settled('completed', { completedFiles: 1n, completedBytes: 4n }))
+    await session.close()
+  }
+
+  it('serializes concurrent single-file exports to a shared directory across tasks with or without Web Locks', async () => {
+    for (const locks of [createFakeLockManager(), undefined] as const) {
+      const memory = new MemoryReceiveStore()
+      const store = memory as unknown as ReceiveStore
+      const parent = new FakeDirectoryHandle('Downloads', memory.events, ['first.dll', 'second.dll'])
+      await createSavedSingleFileTask(memory, parent, 'single-1', 'first.dll')
+      await createSavedSingleFileTask(memory, parent, 'single-2', 'second.dll')
+
+      const [first, second] = await Promise.all([
+        writeFSARestoreArtifact(store, 'single-1', 'windows', locks),
+        writeFSARestoreArtifact(store, 'single-2', 'windows', locks),
+      ])
+
+      expect([first.fileName, second.fileName].sort()).toEqual([
+        'windshare-restore-names (1).json',
+        'windshare-restore-names.json',
+      ])
+      expect(first.runCommand).toContain(first.fileName)
+      expect(second.runCommand).toContain(second.fileName)
+      expect(first.runCommand).not.toBe(second.runCommand)
+
+      const firstJson = JSON.parse(new TextDecoder().decode((parent.children.get(first.fileName) as FakeFileHandle).bytes))
+      const secondJson = JSON.parse(new TextDecoder().decode((parent.children.get(second.fileName) as FakeFileHandle).bytes))
+      expect(firstJson.restorable[0].toName).toBe('first.dll')
+      expect(secondJson.restorable[0].toName).toBe('second.dll')
+    }
+  })
+
+  it('skips externally populated TOCTOU targets, verifies ownership before rollback delete, and requests permission before waiting on the reservation lock', async () => {
+    // 1. External non-empty file created after entryExists must not be overwritten.
+    const racing = new MemoryReceiveStore()
+    const racingStore = racing as unknown as ReceiveStore
+    const racingParent = new FakeDirectoryHandle('Downloads', racing.events, ['app.dll'])
+    await createSavedSingleFileTask(racing, racingParent, 'single-race', 'app.dll')
+
+    const origGetFile = racingParent.getFileHandle.bind(racingParent)
+    let injected = false
+    vi.spyOn(racingParent, 'getFileHandle').mockImplementation(async (name, options) => {
+      if (!injected && name === 'windshare-restore-names.json' && options?.create) {
+        injected = true
+        return racingParent.putUserFile(name, new TextEncoder().encode('external-data'))
+      }
+      return origGetFile(name, options)
+    })
+
+    const exported = await writeFSARestoreArtifact(racingStore, 'single-race', 'windows', createFakeLockManager())
+    expect(exported.fileName).toBe('windshare-restore-names (1).json')
+    expect(new TextDecoder().decode((racingParent.children.get('windshare-restore-names.json') as FakeFileHandle).bytes))
+      .toBe('external-data')
+    const writtenJson = JSON.parse(new TextDecoder().decode((racingParent.children.get(exported.fileName) as FakeFileHandle).bytes))
+    expect(writtenJson.restorable[0].toName).toBe('app.dll')
+
+    // 2. Rollback after a write failure must not delete a file replaced externally after reservation.
+    const rollback = await createSavedTaskWithRename()
+    const origRollbackGet = rollback.root.getFileHandle.bind(rollback.root)
+    vi.spyOn(rollback.root, 'getFileHandle').mockImplementation(async (name, options) => {
+      const handle = await origRollbackGet(name, options)
+      if (name === 'windshare-restore-names.json' && options?.create) {
+        vi.spyOn(handle, 'createWritable').mockImplementationOnce(async () => {
+          handle.overwriteExternally(new TextEncoder().encode('someone-elses-file'))
+          throw new DOMException('disk full', 'QuotaExceededError')
+        })
+      }
+      return handle
+    })
+
+    await expect(writeFSARestoreArtifact(rollback.store, 'export-task', 'windows', createFakeLockManager()))
+      .rejects.toMatchObject({ name: 'QuotaExceededError' })
+    expect(new TextDecoder().decode((rollback.root.children.get('windshare-restore-names.json') as FakeFileHandle).bytes))
+      .toBe('someone-elses-file')
+
+    // 3. Permission check runs before waiting on the cross-task reservation lock (preserves user activation).
+    const activation = await createSavedTaskWithRename()
+    const locks = createFakeLockManager()
+    let releaseReservationLock!: () => void
+    let lockEntered!: () => void
+    const enteredPromise = new Promise<void>(resolve => { lockEntered = resolve })
+    const heldLockPromise = withFSAReservationLock(async () => {
+      lockEntered()
+      await new Promise<void>(resolve => { releaseReservationLock = resolve })
+    }, locks)
+    await enteredPromise
+
+    const order: string[] = []
+    vi.spyOn(activation.parent, 'queryPermission').mockImplementation(async () => {
+      order.push('permission')
+      releaseReservationLock()
+      return 'granted'
+    })
+
+    const result = await writeFSARestoreArtifact(activation.store, 'export-task', 'windows', locks)
+    await heldLockPromise
+    expect(order).toEqual(['permission'])
+    expect(result.fileName).toBe('windshare-restore-names.json')
   })
 })
 
