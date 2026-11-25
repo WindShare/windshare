@@ -132,21 +132,104 @@ export function computePublicWallEtag(wallVersion: number, serializedJson: strin
   return `"wall-v${wallVersion}-${digest}"`
 }
 
-function normalizeEtag(raw: string): string {
-  const trimmed = raw.trim()
-  return trimmed.startsWith('W/') ? trimmed.slice(2).trim() : trimmed
+const HTTP_SP_CODE = 0x20
+const HTTP_HTAB_CODE = 0x09
+const ETAG_EXCLAMATION_CODE = 0x21
+const ETAG_HASH_CODE = 0x23
+const ETAG_TILDE_CODE = 0x7e
+const ETAG_OBS_TEXT_MIN_CODE = 0x80
+const ETAG_OBS_TEXT_MAX_CODE = 0xff
+const WEAK_ETAG_PREFIX = 'W/'
+const ETAG_QUOTE = '"'
+
+function isHttpOws(code: number): boolean {
+  return code === HTTP_SP_CODE || code === HTTP_HTAB_CODE
+}
+
+function isEtagChar(code: number): boolean {
+  return code === ETAG_EXCLAMATION_CODE
+    || (code >= ETAG_HASH_CODE && code <= ETAG_TILDE_CODE)
+    || (code >= ETAG_OBS_TEXT_MIN_CODE && code <= ETAG_OBS_TEXT_MAX_CODE)
+}
+
+function skipHttpOws(input: string, index: number): number {
+  let cursor = index
+  while (cursor < input.length && isHttpOws(input.charCodeAt(cursor))) {
+    cursor += 1
+  }
+  return cursor
+}
+
+function skipListSeparators(input: string, index: number): number {
+  let cursor = index
+  while (cursor < input.length) {
+    const code = input.charCodeAt(cursor)
+    if (!isHttpOws(code) && input[cursor] !== ',') {
+      break
+    }
+    cursor += 1
+  }
+  return cursor
+}
+
+// Parse one RFC 9110 §8.8.3 entity-tag starting at `start`: an optional case-sensitive
+// `W/` immediately followed by a quoted opaque-tag (no whitespace after `W/`, no escapes).
+function parseEntityTagAt(
+  input: string,
+  start: number,
+): { readonly opaqueTag: string; readonly nextIndex: number } | null {
+  let quoteStart = start
+  if (input.startsWith(WEAK_ETAG_PREFIX, quoteStart)) {
+    quoteStart += WEAK_ETAG_PREFIX.length
+  }
+  if (input[quoteStart] !== ETAG_QUOTE) return null
+
+  let cursor = quoteStart + 1
+  while (cursor < input.length && input[cursor] !== ETAG_QUOTE) {
+    if (!isEtagChar(input.charCodeAt(cursor))) return null
+    cursor += 1
+  }
+  if (cursor >= input.length) return null
+
+  return {
+    opaqueTag: input.slice(quoteStart, cursor + 1),
+    nextIndex: cursor + 1,
+  }
+}
+
+function parseSingleOpaqueTag(raw: string): string | null {
+  const start = skipHttpOws(raw, 0)
+  const parsed = parseEntityTagAt(raw, start)
+  if (parsed === null) return null
+  return skipHttpOws(raw, parsed.nextIndex) === raw.length ? parsed.opaqueTag : null
+}
+
+function isWildcardIfNoneMatch(header: string, start: number): boolean {
+  return header[start] === '*' && skipHttpOws(header, start + 1) === header.length
 }
 
 export function matchesIfNoneMatch(header: string | null, strongEtag: string): boolean {
-  if (header === null || header.trim().length === 0) return false
-  const target = normalizeEtag(strongEtag)
-  for (const part of header.split(',')) {
-    const candidate = part.trim()
-    if (candidate === '*' || normalizeEtag(candidate) === target) {
-      return true
-    }
+  if (header === null) return false
+  const target = parseSingleOpaqueTag(strongEtag)
+  if (target === null) return false
+
+  const start = skipHttpOws(header, 0)
+  if (start === header.length) return false
+  if (isWildcardIfNoneMatch(header, start)) return true
+
+  // Scan the entire RFC 9110 §13.1.2 #entity-tag list so quoted commas stay intact
+  // and trailing malformed tokens cannot produce order-dependent matches.
+  let matched = false
+  let cursor = skipListSeparators(header, start)
+  while (cursor < header.length) {
+    const parsed = parseEntityTagAt(header, cursor)
+    if (parsed === null) return false
+    matched ||= parsed.opaqueTag === target
+    const afterTag = skipHttpOws(header, parsed.nextIndex)
+    if (afterTag < header.length && header[afterTag] !== ',') return false
+    cursor = skipListSeparators(header, afterTag)
   }
-  return false
+  return matched
 }
 
 function isNullableString(value: unknown): value is string | null {
