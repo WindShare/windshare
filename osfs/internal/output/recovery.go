@@ -20,6 +20,8 @@ const (
 	RecoveryListNeedsAttention
 )
 
+const initialStateGeneration uint64 = 1
+
 type RecoveryOperationState uint8
 
 const (
@@ -179,9 +181,23 @@ func ListOperations(ctx context.Context, rootPath string) (RecoveryInventory, er
 }
 
 func inspectOperationDir(opID receivecontract.OperationID, opDir *Dir) (RecoverySummary, bool) {
-	busy := false
 	if lock, _, lockErr := acquireLockFile(opDir, taskLockFileName, true); errors.Is(lockErr, ErrNamespaceLockBusy) {
-		busy = true
+		// Another process owns task.lock and may be appending or compacting
+		// state.log; read only the immutable header and omit checkpoint details
+		// so running operations stay consistent with the recovery contract.
+		header, err := readJournalHeader(opDir)
+		if err != nil || header.Intent.OperationID() != opID {
+			return RecoverySummary{}, false
+		}
+		return RecoverySummary{
+			valid:           true,
+			operationID:     opID,
+			intentDigest:    header.Intent.Digest(),
+			stateGeneration: initialStateGeneration,
+			state:           RecoveryOperationIncomplete,
+			attention:       AttentionNone,
+			busy:            true,
+		}, true
 	} else if lock != nil {
 		_ = lock.Close()
 	}
@@ -209,7 +225,6 @@ func inspectOperationDir(opID receivecontract.OperationID, opDir *Dir) (Recovery
 			stateGeneration: meta.StateGen,
 			state:           RecoveryOperationCleanupPending,
 			attention:       attention,
-			busy:            busy,
 		}, true
 	}
 
@@ -265,7 +280,7 @@ func inspectOperationDir(opID receivecontract.OperationID, opDir *Dir) (Recovery
 			attention = AttentionOperation
 		}
 	default:
-		if hasResumable && !busy {
+		if hasResumable {
 			opState = RecoveryOperationResumable
 		}
 	}
@@ -277,7 +292,6 @@ func inspectOperationDir(opID receivecontract.OperationID, opDir *Dir) (Recovery
 		stateGeneration: meta.StateGen,
 		state:           opState,
 		attention:       attention,
-		busy:            busy,
 		items:           items,
 	}, true
 }
@@ -369,7 +383,7 @@ func DiscardOperation(
 	summary := RecoverySummary{
 		valid:           true,
 		operationID:     opID,
-		stateGeneration: max(state.meta.StateGen, 1),
+		stateGeneration: max(state.meta.StateGen, initialStateGeneration),
 		state:           RecoveryOperationDiscarded,
 		attention:       AttentionNone,
 	}

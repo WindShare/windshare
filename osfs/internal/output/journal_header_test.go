@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
@@ -506,6 +508,89 @@ func TestReopenReleasesDirLockBeforeJournalReplay(t *testing.T) {
 			t.Fatalf("DiscardOperation after rejected reopen = (%+v, %v), want discarded", summary, err)
 		}
 	})
+}
+
+func TestListOperationsUsesHeaderOnlyForRunningConflictedOperation(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	auth, session, intent, rootAdm := openTestResultRootSession(t, root, 0xf1)
+	closed := false
+	t.Cleanup(func() {
+		if !closed {
+			_ = auth.Close()
+		}
+	})
+
+	fileID := testID16[catalog.FileID](0xf3)
+	initial := testMaterializationFileWithIDs(
+		t, session, intent, fileID, testID16[content.FileRevision](0xf4), "drift.bin", 8, rootAdm,
+	)
+	start, err := session.BeginFile(ctx, initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, _, ok := start.Transaction()
+	if !ok {
+		t.Fatal("expected initial file transaction")
+	}
+	if err := tx.WriteRange(ctx, 0, []byte("1234")); err != nil {
+		t.Fatal(err)
+	}
+	if paused, err := tx.Pause(ctx); err != nil || paused.Kind() != transfer.FilePaused {
+		t.Fatalf("pause = (%v, %v)", paused.Kind(), err)
+	}
+
+	changed := testMaterializationFileWithIDs(
+		t, session, intent, fileID, testID16[content.FileRevision](0xf5), "drift.bin", 12, rootAdm,
+	)
+	blockedStart, err := session.BeginFile(ctx, changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settled, immediate := blockedStart.ImmediateSettlement()
+	if !immediate || settled.Kind() != transfer.FileItemBlocked {
+		t.Fatalf("changed revision start = (immediate=%t, kind=%v), want FileItemBlocked", immediate, settled.Kind())
+	}
+
+	// While task.lock is held, ListOperations must read only the header and
+	// omit per-item checkpoint details including blocked items.
+	runningInv, err := ListOperations(ctx, root)
+	if err != nil || runningInv.Status() != RecoveryListReady || runningInv.UnknownEntries() || len(runningInv.Summaries()) != 1 {
+		t.Fatalf("running inventory = (%+v, %v), want ready with 1 summary", runningInv, err)
+	}
+	runningSummary := runningInv.Summaries()[0]
+	if !runningSummary.Valid() || !runningSummary.Busy() ||
+		runningSummary.OperationID() != intent.OperationID() ||
+		runningSummary.ReceiveIntentDigest() != intent.Digest() ||
+		runningSummary.StateGeneration() != initialStateGeneration ||
+		runningSummary.State() != RecoveryOperationIncomplete ||
+		runningSummary.NeedsAttentionReason() != AttentionNone ||
+		len(runningSummary.Items()) != 0 {
+		t.Fatalf("running summary = %+v, want busy incomplete without items", runningSummary)
+	}
+
+	if _, err := session.PauseTree(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := auth.Close(); err != nil {
+		t.Fatal(err)
+	}
+	closed = true
+
+	// Once task.lock is released, full journal inspection surfaces the recorded conflict.
+	idleInv, err := ListOperations(ctx, root)
+	if err != nil || idleInv.Status() != RecoveryListReady || idleInv.UnknownEntries() || len(idleInv.Summaries()) != 1 {
+		t.Fatalf("idle inventory = (%+v, %v), want ready with 1 summary", idleInv, err)
+	}
+	idleSummary := idleInv.Summaries()[0]
+	items := idleSummary.Items()
+	wantPath := changed.MaterializationRelativePath().String()
+	if idleSummary.Busy() || len(items) != 1 ||
+		items[0].CanonicalPath() != wantPath ||
+		items[0].State() != RecoveryItemBlocked ||
+		items[0].BlockReason() != RecoveryItemBlockRevisionConflict {
+		t.Fatalf("idle summary = %+v items=%+v, want non-busy revision-conflict item %q", idleSummary, items, wantPath)
+	}
 }
 
 func newBoundAuthority(t *testing.T, root string) *Authority {

@@ -12,7 +12,9 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/engine/output"
 	"github.com/windshare/windshare/engine/recovery"
@@ -286,4 +288,236 @@ func TestFilesystemRecoveryDiscardRejectsReplacedOperationIdentityAndPreservesDa
 	if _, err := os.Lstat(lockPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("refused discard created task.lock in replaced dir: %v", err)
 	}
+}
+
+func TestFilesystemResumeInventoryListsSiblingWhenRunningOperationHasRevisionConflict(t *testing.T) {
+	ctx := context.Background()
+	root := newResumeCertifiedOutputTestRoot(t)
+
+	siblingAuth, siblingIntent := createNativeResumeOperation(t, ctx, root, 50)
+	if err := siblingAuth.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	conflictedAuth, conflictedSession, conflictedIntent, conflictPath := openRunningConflictedNativeOperation(t, ctx, root, 60)
+	closed := false
+	t.Cleanup(func() {
+		if !closed {
+			_ = conflictedAuth.Close()
+		}
+	})
+
+	inventory, err := recovery.Inspect(ctx, Recovery(root))
+	if err != nil {
+		t.Fatalf("Inspect() with running conflicted operation = %v, want nil", err)
+	}
+	snapshot, err := inventory.Snapshot()
+	if err != nil || snapshot.RegistryUnknown || len(snapshot.Operations) != 2 {
+		t.Fatalf("running snapshot = (%+v, %v), want 2 operations", snapshot, err)
+	}
+
+	byID := make(map[receivecontract.OperationID]recovery.Operation, len(snapshot.Operations))
+	for _, op := range snapshot.Operations {
+		byID[op.ID] = op
+	}
+	runningOp, ok := byID[conflictedIntent.OperationID()]
+	if !ok || !runningOp.Running || runningOp.State != recovery.OperationIncomplete ||
+		runningOp.Attention != recovery.AttentionNone || len(runningOp.BlockedItems) != 0 {
+		t.Fatalf("running conflicted op = (%+v, found=%t), want running incomplete without blocked items", runningOp, ok)
+	}
+	siblingOp, ok := byID[siblingIntent.OperationID()]
+	if !ok || siblingOp.Running || siblingOp.State != recovery.OperationIncomplete || len(siblingOp.BlockedItems) != 0 {
+		t.Fatalf("sibling op = (%+v, found=%t), want idle incomplete", siblingOp, ok)
+	}
+
+	if busyResult := inventory.Discard(ctx, runningOp.ID); busyResult.Failure == nil || busyResult.Failure.Kind != recovery.FailureBusy {
+		t.Fatalf("discard running conflicted op = %+v, want FailureBusy", busyResult)
+	}
+	if siblingResult := inventory.Discard(ctx, siblingOp.ID); !siblingResult.Successful() {
+		t.Fatalf("discard idle sibling while conflicted op runs = %+v, want success", siblingResult)
+	}
+
+	if _, err := conflictedSession.PauseTree(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := conflictedAuth.Close(); err != nil {
+		t.Fatal(err)
+	}
+	closed = true
+
+	afterClose, err := recovery.Inspect(ctx, Recovery(root))
+	if err != nil {
+		t.Fatalf("Inspect() after closing conflicted operation = %v", err)
+	}
+	afterSnapshot, err := afterClose.Snapshot()
+	if err != nil || len(afterSnapshot.Operations) != 1 {
+		t.Fatalf("idle snapshot = (%+v, %v), want 1 operation", afterSnapshot, err)
+	}
+	idleOp := afterSnapshot.Operations[0]
+	wantBlocked := recovery.BlockedItem{
+		ArtifactPath: conflictPath,
+		PathKnown:    true,
+		Reason:       recovery.BlockedRevisionConflict,
+	}
+	if idleOp.ID != conflictedIntent.OperationID() || idleOp.Running ||
+		len(idleOp.BlockedItems) != 1 || idleOp.BlockedItems[0] != wantBlocked {
+		t.Fatalf("idle conflicted op = %+v, want blocked item %+v", idleOp, wantBlocked)
+	}
+}
+
+func openRunningConflictedNativeOperation(
+	t *testing.T,
+	ctx context.Context,
+	root string,
+	seed byte,
+) (output.Authority, transfer.DirectTreeSession, transfer.ReceiveIntent, string) {
+	t.Helper()
+	authority, err := FilesystemOutput{RootPath: root, CreateRoot: true}.NewOutputAuthority(output.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var share catalog.ShareInstance
+	share[0] = seed
+	var syntheticRoot catalog.DirectoryID
+	syntheticRoot[0] = seed + 1
+	rules, err := transfer.NewSelectionRules(true, nil)
+	if err != nil {
+		_ = authority.Close()
+		t.Fatal(err)
+	}
+	selection, err := transfer.NewSelectionSpec(share, syntheticRoot, rules)
+	if err != nil {
+		_ = authority.Close()
+		t.Fatal(err)
+	}
+	if err := authority.BindDestination(ctx); err != nil {
+		_ = authority.Close()
+		t.Fatalf("BindDestination() = %v", err)
+	}
+	lookup, err := authority.SelectOperation(ctx, selection, receivecontract.AutomaticOperation())
+	if err != nil || lookup.Kind != output.OutputLookupCreateReady || lookup.Reservation == nil {
+		_ = authority.Close()
+		t.Fatalf("SelectOperation() = (%+v, %v)", lookup, err)
+	}
+	artifact, err := receivecontract.NewResultRootDirectoryTree(receivecontract.NewSyntheticSelectionResultRoot())
+	if err != nil {
+		_ = authority.Close()
+		t.Fatal(err)
+	}
+	operation, err := lookup.Reservation.Create(ctx, artifact)
+	if err != nil {
+		_ = authority.Close()
+		t.Fatal(err)
+	}
+	session, err := operation.Materializer.OpenDirectTree(ctx, operation.Intent)
+	if err != nil {
+		_ = authority.Close()
+		t.Fatal(err)
+	}
+
+	var dirGen catalog.DirectoryGeneration
+	dirGen[0] = seed + 2
+	rootReq, err := transfer.NewDirectoryMaterializationRequest(
+		operation.Intent,
+		transfer.AuthenticatedSourceDirectory{
+			DirectoryID: operation.Intent.SyntheticRoot(),
+			Generation:  dirGen,
+			SourcePath:  ordinaryoutput.EmptySourceCatalogPath(),
+		},
+		ordinaryoutput.SourceNodeSelected,
+		transfer.MaterializedDirectoryClaim{},
+	)
+	if err != nil {
+		_ = authority.Close()
+		t.Fatal(err)
+	}
+	rootAdm, err := session.AdmitDirectory(ctx, rootReq)
+	if err != nil {
+		_ = authority.Close()
+		t.Fatal(err)
+	}
+
+	var fileID catalog.FileID
+	fileID[0] = seed + 3
+	var rev1, rev2 content.FileRevision
+	rev1[0] = seed + 4
+	rev2[0] = seed + 5
+	initialFile := buildNativeMaterializationFile(t, operation.Intent, session.SessionID(), rootReq, rootAdm, fileID, rev1, "drift.bin", 8)
+	start, err := session.BeginFile(ctx, initialFile)
+	if err != nil {
+		_ = authority.Close()
+		t.Fatal(err)
+	}
+	tx, _, ok := start.Transaction()
+	if !ok {
+		_ = authority.Close()
+		t.Fatal("expected initial file transaction")
+	}
+	if err := tx.WriteRange(ctx, 0, []byte("1234")); err != nil {
+		_ = authority.Close()
+		t.Fatal(err)
+	}
+	if paused, err := tx.Pause(ctx); err != nil || paused.Kind() != transfer.FilePaused {
+		_ = authority.Close()
+		t.Fatalf("Pause() = (%v, %v)", paused.Kind(), err)
+	}
+
+	changedFile := buildNativeMaterializationFile(t, operation.Intent, session.SessionID(), rootReq, rootAdm, fileID, rev2, "drift.bin", 12)
+	blockedStart, err := session.BeginFile(ctx, changedFile)
+	if err != nil {
+		_ = authority.Close()
+		t.Fatal(err)
+	}
+	settled, immediate := blockedStart.ImmediateSettlement()
+	if !immediate || settled.Kind() != transfer.FileItemBlocked {
+		_ = authority.Close()
+		t.Fatalf("changed revision start = (immediate=%t, kind=%v), want FileItemBlocked", immediate, settled.Kind())
+	}
+	return authority, session, operation.Intent, changedFile.MaterializationRelativePath().String()
+}
+
+func buildNativeMaterializationFile(
+	t *testing.T,
+	intent transfer.ReceiveIntent,
+	sessionID transfer.OutputSessionID,
+	rootReq transfer.DirectoryMaterializationRequest,
+	rootAdm transfer.DirectoryAdmission,
+	fileID catalog.FileID,
+	rev content.FileRevision,
+	name string,
+	size uint64,
+) transfer.MaterializationFile {
+	t.Helper()
+	geom, err := content.NewFileGeometry(size, catalog.DefaultChunkSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	desc, err := content.NewFileRevisionDescriptor(intent.ShareInstance(), fileID, rev, geom, catalog.ModifiedTime{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourcePath, err := ordinaryoutput.NewSourceCatalogPath(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim, err := transfer.NewMaterializedDirectoryClaim(rootAdm, rootReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentSrc := rootReq.Source()
+	fileParent, err := transfer.NewDirectoryMaterializationFileParent(
+		parentSrc.DirectoryID, parentSrc.Generation, parentSrc.SourcePath, rootAdm, claim,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel, err := transfer.NewMaterializationRootRelativePath(rootAdm.Path() + "/" + name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := transfer.NewMaterializationFile(intent, sourcePath, rel, desc, sessionID, fileParent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return file
 }
