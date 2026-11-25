@@ -189,14 +189,29 @@ func (n *turnDialNet) resolveAddr(network, address string) (net.IP, int, string,
 		}
 		return ip, port, zone, nil
 	}
-	ips, err := n.hooks.lookupIP(n.ctx, ipLookupNetwork(network), host)
+	lookupNet := ipLookupNetwork(network)
+	ips, err := n.hooks.lookupIP(n.ctx, lookupNet, host)
 	if err != nil {
 		return nil, 0, "", err
 	}
 	if len(ips) == 0 {
 		return nil, 0, "", &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
 	}
-	return ips[0], port, "", nil
+	return selectResolvedIP(lookupNet, ips), port, "", nil
+}
+
+// Match net.Resolve{TCP,UDP}Addr (addrList.forResolve): wildcard "tcp"/"udp"
+// hostname lookups prefer IPv4 over RFC 6724's IPv6-first order, falling back
+// to the first address only when no IPv4 record is returned.
+func selectResolvedIP(lookupNet string, ips []net.IP) net.IP {
+	if lookupNet == "ip" {
+		for _, ip := range ips {
+			if ip.To4() != nil {
+				return ip
+			}
+		}
+	}
+	return ips[0]
 }
 
 func (n *turnDialNet) resolvePort(network, portText string) (int, error) {

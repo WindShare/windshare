@@ -238,3 +238,167 @@ func TestTURNDialNetLiveTCPConnectionSurvivesContextCancel(t *testing.T) {
 		t.Fatalf("post-cancel DialTCP err = %v, want context.Canceled", err)
 	}
 }
+
+func TestTURNDialNetResolveAddrPrefersIPv4ForWildcardNetworks(t *testing.T) {
+	ipv6First := net.ParseIP("2001:db8::1")
+	ipv6Second := net.ParseIP("2001:db8::2")
+	ipv4First := net.IPv4(198, 51, 100, 10)
+	ipv4Second := net.IPv4(198, 51, 100, 20)
+
+	cases := []struct {
+		name          string
+		resolveTCP    bool
+		network       string
+		address       string
+		lookupResult  []net.IP
+		wantLookupNet string
+		wantIP        net.IP
+		wantPort      int
+	}{
+		{
+			name:          "wildcard tcp prefers first IPv4 over leading IPv6",
+			resolveTCP:    true,
+			network:       "tcp",
+			address:       "turn.example:443",
+			lookupResult:  []net.IP{ipv6First, ipv4First, ipv4Second},
+			wantLookupNet: "ip",
+			wantIP:        ipv4First,
+			wantPort:      443,
+		},
+		{
+			name:          "empty tcp network prefers first IPv4 over leading IPv6",
+			resolveTCP:    true,
+			network:       "",
+			address:       "turn.example:443",
+			lookupResult:  []net.IP{ipv6First, ipv4First},
+			wantLookupNet: "ip",
+			wantIP:        ipv4First,
+			wantPort:      443,
+		},
+		{
+			name:          "wildcard udp prefers first IPv4 over leading IPv6",
+			resolveTCP:    false,
+			network:       "udp",
+			address:       "turn.example:3478",
+			lookupResult:  []net.IP{ipv6First, ipv4First, ipv4Second},
+			wantLookupNet: "ip",
+			wantIP:        ipv4First,
+			wantPort:      3478,
+		},
+		{
+			name:          "empty udp network prefers first IPv4 over leading IPv6",
+			resolveTCP:    false,
+			network:       "",
+			address:       "turn.example:3478",
+			lookupResult:  []net.IP{ipv6First, ipv4First},
+			wantLookupNet: "ip",
+			wantIP:        ipv4First,
+			wantPort:      3478,
+		},
+		{
+			name:          "wildcard tcp falls back to first IPv6 when no IPv4 exists",
+			resolveTCP:    true,
+			network:       "tcp",
+			address:       "ipv6-only.example:443",
+			lookupResult:  []net.IP{ipv6First, ipv6Second},
+			wantLookupNet: "ip",
+			wantIP:        ipv6First,
+			wantPort:      443,
+		},
+		{
+			name:          "wildcard udp falls back to first IPv6 when no IPv4 exists",
+			resolveTCP:    false,
+			network:       "udp",
+			address:       "ipv6-only.example:3478",
+			lookupResult:  []net.IP{ipv6First, ipv6Second},
+			wantLookupNet: "ip",
+			wantIP:        ipv6First,
+			wantPort:      3478,
+		},
+		{
+			name:          "explicit tcp6 keeps IPv6 lookup",
+			resolveTCP:    true,
+			network:       "tcp6",
+			address:       "turn.example:443",
+			lookupResult:  []net.IP{ipv6First},
+			wantLookupNet: "ip6",
+			wantIP:        ipv6First,
+			wantPort:      443,
+		},
+		{
+			name:          "explicit udp6 keeps IPv6 lookup",
+			resolveTCP:    false,
+			network:       "udp6",
+			address:       "turn.example:3478",
+			lookupResult:  []net.IP{ipv6First},
+			wantLookupNet: "ip6",
+			wantIP:        ipv6First,
+			wantPort:      3478,
+		},
+		{
+			name:       "wildcard tcp preserves IPv6 literal without DNS lookup",
+			resolveTCP: true,
+			network:    "tcp",
+			address:    "[2001:db8::1]:443",
+			wantIP:     ipv6First,
+			wantPort:   443,
+		},
+		{
+			name:       "wildcard udp preserves IPv6 literal without DNS lookup",
+			resolveTCP: false,
+			network:    "udp",
+			address:    "[2001:db8::1]:3478",
+			wantIP:     ipv6First,
+			wantPort:   3478,
+		},
+	}
+
+	var lookupResult []net.IP
+	var gotLookupNet string
+	var lookupCalled bool
+	hooks := defaultTURNDialHooks()
+	hooks.lookupIP = func(_ context.Context, network, _ string) ([]net.IP, error) {
+		lookupCalled = true
+		gotLookupNet = network
+		return lookupResult, nil
+	}
+	dialNet, err := newTURNDialNet(t.Context(), hooks)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			lookupResult = tc.lookupResult
+			gotLookupNet = ""
+			lookupCalled = false
+
+			var gotIP net.IP
+			var gotPort int
+			if tc.resolveTCP {
+				addr, resolveErr := dialNet.ResolveTCPAddr(tc.network, tc.address)
+				if resolveErr != nil {
+					t.Fatalf("ResolveTCPAddr(%q, %q) failed: %v", tc.network, tc.address, resolveErr)
+				}
+				gotIP, gotPort = addr.IP, addr.Port
+			} else {
+				addr, resolveErr := dialNet.ResolveUDPAddr(tc.network, tc.address)
+				if resolveErr != nil {
+					t.Fatalf("ResolveUDPAddr(%q, %q) failed: %v", tc.network, tc.address, resolveErr)
+				}
+				gotIP, gotPort = addr.IP, addr.Port
+			}
+
+			if tc.wantLookupNet == "" {
+				if lookupCalled {
+					t.Fatalf("unexpected DNS lookup for literal %q", tc.address)
+				}
+			} else if !lookupCalled || gotLookupNet != tc.wantLookupNet {
+				t.Fatalf("lookup network = %q (called=%v), want %q", gotLookupNet, lookupCalled, tc.wantLookupNet)
+			}
+			if !gotIP.Equal(tc.wantIP) || gotPort != tc.wantPort {
+				t.Fatalf("resolved = %v:%d, want %v:%d", gotIP, gotPort, tc.wantIP, tc.wantPort)
+			}
+		})
+	}
+}
