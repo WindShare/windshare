@@ -41,8 +41,6 @@ func CommandErrorCode(err error) string {
 				return "email_taken"
 			case "email_registration_disabled":
 				return "email_registration_disabled"
-			case "credentials_changed":
-				return "account_changed"
 			}
 			return "account_denied"
 		case "invalid":

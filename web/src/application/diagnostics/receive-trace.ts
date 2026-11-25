@@ -132,15 +132,6 @@ function projectExperiencePayload(
       reason: event.reason,
     }
   }
-  if (event.transition === 'ownership') {
-    return {
-      transition: 'ownership',
-      state: event.state,
-      operation_id: event.operationId,
-      generation: String(event.generation),
-      lifecycle_state: snake(event.lifecycleKind),
-    }
-  }
   return {
     transition: 'intent',
     action: event.action,

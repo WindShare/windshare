@@ -31,7 +31,6 @@ const messages: Readonly<Record<string, FaultMessage>> = {
   node_descriptor_expired: message(networkCopy, 'nodeDescriptorExpired'),
   node_descriptor_mismatch: message(networkCopy, 'nodeDescriptorMismatch'),
   credentials: message(networkCopy, 'invalidCredentials'),
-  credentials_changed: message(networkCopy, 'sessionChanged'),
   initialization_consumed: message(networkCopy, 'setupLinkUsed'),
   rate_limited: message(networkCopy, 'rateLimited'),
   account_not_found: message(networkCopy, 'accountNotFound'),

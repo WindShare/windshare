@@ -236,7 +236,6 @@ func (runtime *Runtime) protocolOperationTracingEnabled() bool {
 
 func retainProtocolOperationObservation(event sessionobs.ProtocolOperationObservation) bool {
 	if event.Stage == sessionobs.ProtocolOperationReceiverWaitingActiveCapacity ||
-		event.Stage == sessionobs.ProtocolOperationReceiverWaitingRetainedCapacity ||
 		event.Stage == sessionobs.ProtocolOperationReceiverAdmissionReady {
 		return true
 	}

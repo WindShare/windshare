@@ -21,7 +21,6 @@ const (
 	ProtocolOperationReceiverEnded
 	ProtocolOperationSenderRequestReceived
 	ProtocolOperationReceiverWaitingActiveCapacity
-	ProtocolOperationReceiverWaitingRetainedCapacity
 	ProtocolOperationReceiverAdmissionReady
 	ProtocolOperationSenderRequestBelowWindow
 )
@@ -214,8 +213,6 @@ func (value ProtocolOperationStage) DiagnosticName() string {
 		return "sender_request_received"
 	case ProtocolOperationReceiverWaitingActiveCapacity:
 		return "receiver_waiting_active_capacity"
-	case ProtocolOperationReceiverWaitingRetainedCapacity:
-		return "receiver_waiting_retained_capacity"
 	case ProtocolOperationReceiverAdmissionReady:
 		return "receiver_admission_ready"
 	case ProtocolOperationSenderRequestBelowWindow:

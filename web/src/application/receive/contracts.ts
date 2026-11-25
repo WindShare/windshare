@@ -157,11 +157,3 @@ export type ReceiverTraceEvent =
       operationId: string | null
       generation: bigint
     }>
-  | Readonly<{
-      name: 'receiver_experience'
-      transition: 'ownership'
-      state: 'releasing' | 'released' | 'release-failed'
-      operationId: string
-      generation: bigint
-      lifecycleKind: ReceiveLifecycleState['kind']
-    }>
