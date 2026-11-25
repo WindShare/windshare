@@ -690,3 +690,206 @@ func TestCancelledFailureCannotOverwriteSuccessorScan(t *testing.T) {
 		}
 	})
 }
+
+func TestFailurePersistenceAndAdmissionPreserveAtomicContentionSnapshot(t *testing.T) {
+	reserveShareHeadroom := func(t *testing.T, share *BudgetAccount, headroom uint64) *BudgetReservation {
+		t.Helper()
+		snap := share.Snapshot()
+		if snap.Limits.MemoryBytes <= snap.Used.MemoryBytes+headroom {
+			t.Fatalf("share budget %+v cannot leave headroom %d", snap, headroom)
+		}
+		filler, err := reserveAccounts(
+			[]*BudgetAccount{share},
+			ResourceUsage{MemoryBytes: snap.Limits.MemoryBytes - snap.Used.MemoryBytes - headroom},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return filler
+	}
+
+	t.Run("completeFailedAttempt preserves atomic contention after peer leaves parallel scan", func(t *testing.T) {
+		store, _, share := newStore(t, nil)
+		defer store.Close()
+
+		rootSession := generousBudget(t, "root-session")
+		dirs := prepareSelectedDirectories(t, store, rootSession, 205, 206, 207)
+		dirA, dirB := dirs[0], dirs[1]
+
+		const peerChildBytes = 32 << 10
+		filler := reserveShareHeadroom(t, share, peerChildBytes+failureEncodingReservationBytes)
+		defer filler.Release()
+
+		peerHolding := make(chan struct{})
+		releasePeer := make(chan struct{})
+		peerScanner := DirectoryScannerFunc(func(ctx context.Context, request ScanRequest) (ScanResult, error) {
+			if err := request.Children.Add(ctx, fixedSizeScannedFile(t, 208, "peer-big", peerChildBytes)); err != nil {
+				return ScanResult{}, err
+			}
+			close(peerHolding)
+			<-releasePeer
+			return ScanResult{}, NewPermanentScanError(errors.New("peer-aborted"))
+		})
+
+		peerSession := generousBudget(t, "peer-session")
+		peerDone := make(chan error, 1)
+		go func() {
+			_, err := store.ListChildren(context.Background(), dirB, peerSession, ScanOptions{}, peerScanner)
+			peerDone <- err
+		}()
+		<-peerHolding
+
+		sessionA := generousBudget(t, "attempt-a-session")
+		admissionA, err := ReserveHierarchy(store.hierarchy(sessionA), ResourceUsage{ActiveScans: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		meterA, err := newAttemptResourceMeter(store.hierarchy(sessionA))
+		if err != nil {
+			admissionA.Release()
+			t.Fatal(err)
+		}
+		attemptCtx, cancelAttempt := context.WithCancel(context.Background())
+		attemptA := &scanAttempt{
+			id:         idValue[ScanAttemptID](209),
+			generation: idValue[DirectoryGeneration](210),
+			directory:  dirA,
+			done:       make(chan struct{}),
+			ctx:        attemptCtx,
+			cancel:     cancelAttempt,
+			admission:  admissionA,
+			resources:  meterA,
+		}
+		store.mu.Lock()
+		store.attempts[dirA] = attemptA
+		store.mu.Unlock()
+
+		cause := NewTransientScanError(errors.New("transient-io"), MinScanRetryCooldown)
+		_, prepareErr := store.prepareAttemptFailure(attemptA, cause)
+		if !errors.Is(prepareErr, ErrBudgetExceeded) {
+			t.Fatalf("prepareAttemptFailure error = %v, want ErrBudgetExceeded under peer contention", prepareErr)
+		}
+
+		// Peer exits leaveParallelScan and completes before completeFailedAttempt
+		// locks s.mu, dropping store.activeScans back to 0.
+		close(releasePeer)
+		var peerFailure *DirectoryFailure
+		if err := <-peerDone; !errors.As(err, &peerFailure) {
+			t.Fatalf("peer scan error = %v, want DirectoryFailure", err)
+		}
+		store.mu.RLock()
+		activeAfterPeer := store.activeScans
+		store.mu.RUnlock()
+		if activeAfterPeer != 0 {
+			t.Fatalf("store.activeScans = %d after peer exited, want 0", activeAfterPeer)
+		}
+
+		store.completeFailedAttempt(attemptA, cause, nil, prepareErr, sessionA)
+		if !errors.Is(attemptA.err, ErrBudgetExceeded) || errors.Is(attemptA.err, ErrShareCapacityExceeded) {
+			t.Fatalf("completeFailedAttempt error = %v, want transient ErrBudgetExceeded (not ErrShareCapacityExceeded)", attemptA.err)
+		}
+		if sessionA.Snapshot().Used != (ResourceUsage{}) {
+			t.Fatalf("attempt A leaked session budget: %+v", sessionA.Snapshot().Used)
+		}
+	})
+
+	t.Run("admitAttempt preserves atomic contention while peer encodes failure with zero activeScans", func(t *testing.T) {
+		store, _, share := newStore(t, nil)
+		defer store.Close()
+
+		rootSession := generousBudget(t, "root-session")
+		dirs := prepareSelectedDirectories(t, store, rootSession, 211, 212, 213)
+		dirA, dirB := dirs[0], dirs[1]
+
+		encodeStarted := make(chan struct{})
+		releaseEncode := make(chan struct{})
+		store.failureEncoder = FailureEncoderFunc(func(DirectoryFailureRecord) (FailurePayload, error) {
+			close(encodeStarted)
+			<-releaseEncode
+			return NewFailurePayload([]byte("f"))
+		})
+
+		// Leave enough room for dirA's ledger + failure-encoding reservation plus
+		// 48 B (< ScanAttemptLedgerBytes), so dirB overflows shareBudget only
+		// while dirA holds its transient 1152 B encoding reservation.
+		filler := reserveShareHeadroom(t, share, ScanAttemptLedgerBytes+failureEncodingReservationBytes+ScanAttemptLedgerBytes/2)
+		defer filler.Release()
+
+		sessionA := generousBudget(t, "encode-peer-session")
+		dirADone := make(chan error, 1)
+		go func() {
+			_, err := store.ListChildren(context.Background(), dirA, sessionA, ScanOptions{}, DirectoryScannerFunc(
+				func(context.Context, ScanRequest) (ScanResult, error) {
+					return ScanResult{}, NewPermanentScanError(errors.New("dir-a-failed"))
+				},
+			))
+			dirADone <- err
+		}()
+		<-encodeStarted
+
+		store.mu.RLock()
+		activeDuringEncode := store.activeScans
+		store.mu.RUnlock()
+		if activeDuringEncode != 0 {
+			t.Fatalf("store.activeScans = %d while peer encodes failure, want 0", activeDuringEncode)
+		}
+
+		sessionB := generousBudget(t, "contended-admit-session")
+		emptyScanner := DirectoryScannerFunc(func(context.Context, ScanRequest) (ScanResult, error) {
+			return ScanResult{}, nil
+		})
+		_, dirBErr := store.ListChildren(context.Background(), dirB, sessionB, ScanOptions{}, emptyScanner)
+		if !errors.Is(dirBErr, ErrBudgetExceeded) || errors.Is(dirBErr, ErrShareCapacityExceeded) {
+			t.Fatalf("contended admitAttempt error = %v, want transient ErrBudgetExceeded (not ErrShareCapacityExceeded)", dirBErr)
+		}
+
+		close(releaseEncode)
+		var dirAFailure *DirectoryFailure
+		if err := <-dirADone; !errors.As(err, &dirAFailure) {
+			t.Fatalf("dirA error = %v, want persisted DirectoryFailure", err)
+		}
+
+		// Once dirA shrinks its failure-encoding reservation to its retained
+		// payload size, dirB commits cleanly without share exhaustion.
+		committedB, err := store.ListChildren(context.Background(), dirB, sessionB, ScanOptions{}, emptyScanner)
+		if err != nil || committedB.EntryCount() != 0 {
+			t.Fatalf("dirB after peer failure encoding = %+v err=%v", committedB, err)
+		}
+		if sessionA.Snapshot().Used != (ResourceUsage{}) || sessionB.Snapshot().Used != (ResourceUsage{}) {
+			t.Fatalf("leaked session budgets: A=%+v B=%+v", sessionA.Snapshot().Used, sessionB.Snapshot().Used)
+		}
+	})
+
+	t.Run("uncontended admitAttempt and failure persistence still promote share capacity exhaustion", func(t *testing.T) {
+		store, _, share := newStore(t, nil)
+		defer store.Close()
+
+		rootSession := generousBudget(t, "root-session")
+		dirs := prepareSelectedDirectories(t, store, rootSession, 214, 215, 216)
+		dirA, dirB := dirs[0], dirs[1]
+		session := generousBudget(t, "uncontended-session")
+
+		admitFiller := reserveShareHeadroom(t, share, ScanAttemptLedgerBytes-1)
+		_, admitErr := store.ListChildren(context.Background(), dirA, session, ScanOptions{}, DirectoryScannerFunc(
+			func(context.Context, ScanRequest) (ScanResult, error) { return ScanResult{}, nil },
+		))
+		admitFiller.Release()
+		if !errors.Is(admitErr, ErrShareCapacityExceeded) {
+			t.Fatalf("uncontended admitAttempt error = %v, want ErrShareCapacityExceeded", admitErr)
+		}
+
+		persistFiller := reserveShareHeadroom(t, share, ScanAttemptLedgerBytes+failureEncodingReservationBytes-1)
+		_, persistErr := store.ListChildren(context.Background(), dirB, session, ScanOptions{}, DirectoryScannerFunc(
+			func(context.Context, ScanRequest) (ScanResult, error) {
+				return ScanResult{}, NewTransientScanError(errors.New("transient-io"), MinScanRetryCooldown)
+			},
+		))
+		persistFiller.Release()
+		if !errors.Is(persistErr, ErrShareCapacityExceeded) {
+			t.Fatalf("uncontended failure persistence error = %v, want ErrShareCapacityExceeded", persistErr)
+		}
+		if session.Snapshot().Used != (ResourceUsage{}) {
+			t.Fatalf("uncontended errors leaked session budget: %+v", session.Snapshot().Used)
+		}
+	})
+}

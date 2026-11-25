@@ -303,7 +303,10 @@ func (s *CatalogStore) admitAttempt(directory DirectoryID, previous ScanAttemptI
 		[]*BudgetAccount{s.processBudget, s.shareBudget}, ResourceUsage{MemoryBytes: ScanAttemptLedgerBytes},
 	)
 	if err != nil {
-		return fail(s.classifyScanBudgetError(err, s.activeScans == 0))
+		// Rely on the atomic ActiveScans snapshot captured on overflow; this call
+		// already holds ActiveScans: 1, while s.activeScans excludes peers in
+		// prepareAttemptFailure holding transient failure-encoding reservations.
+		return fail(s.classifyScanBudgetError(err, false))
 	}
 	resources, err := newAttemptResourceMeter(s.hierarchy(session))
 	if err != nil {

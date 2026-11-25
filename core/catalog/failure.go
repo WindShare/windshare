@@ -216,7 +216,9 @@ func (s *CatalogStore) commitPreparedFailureLocked(
 // overflow (retained entries/memory or single-scan work) to
 // ErrShareCapacityExceeded. Committed directories remain resident until Close
 // and ShareBudget limits are immutable, so retrying within the same share
-// cannot succeed.
+// cannot succeed. Only an exclusive retry pass may bypass the atomic
+// ActiveScans snapshot captured at overflow, because queued peers can hold
+// admission slots with zero transient scan buffers while it runs.
 func (s *CatalogStore) classifyScanBudgetError(err error, exclusivePass bool) error {
 	if err == nil || errors.Is(err, ErrShareCapacityExceeded) {
 		return err
@@ -344,7 +346,10 @@ func (s *CatalogStore) completeFailedAttempt(
 		failure, persistErr = s.commitPreparedFailureLocked(attempt, *prepared, cause, session)
 	}
 	if persistErr != nil {
-		persistErr = s.classifyScanBudgetError(persistErr, s.activeScans == 0)
+		// Rely on the atomic ActiveScans snapshot captured when prepareAttemptFailure
+		// overflowed rather than s.activeScans, which excludes peers in failure
+		// preparation or peers that exited leaveParallelScan before s.mu locked.
+		persistErr = s.classifyScanBudgetError(persistErr, false)
 		attempt.err = errors.Join(cause, fmt.Errorf("persist catalog directory failure: %w", persistErr))
 		delete(s.attempts, attempt.directory)
 		return
