@@ -1,7 +1,7 @@
 import type { ReceiverControllerOptions } from '../controller/contracts'
 import type { ReceiverSnapshot } from '../model'
 import { compareTaskTransition, type TaskPresentationTransition } from '../tasks'
-import { composeTasks } from './task-composition'
+import type { TaskComposition } from './task-composition'
 import { compareSavingTransition, presentSavingActions, type SavingPresentationTransition } from '../saving'
 
 export class ReceiverExperienceObservability {
@@ -11,12 +11,12 @@ export class ReceiverExperienceObservability {
 
   constructor(source: ReceiverControllerOptions['trace']) { this.#source = source }
 
-  publish(snapshot: ReceiverSnapshot): void {
+  publish(snapshot: ReceiverSnapshot, composition: TaskComposition): void {
     const observer = this.#source?.current
     if (observer === undefined) return
     try {
       const tasks = new Map<string, TaskPresentationTransition>()
-      for (const task of composeTasks(snapshot).tasks) {
+      for (const task of composition.tasks) {
         const current = task.transition
         if (compareTaskTransition(this.#tasks.get(task.operationId) ?? null, current) !== null) {
           observer(Object.freeze({

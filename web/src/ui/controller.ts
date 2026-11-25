@@ -731,8 +731,9 @@ export class ReceiverController {
       startAdmission,
     })
     if (this.#disposed) return
-    this.#experienceTrace.publish(this.#snapshot)
-    this.presentation.commit(this.#snapshot)
+    const composition = this.presentation.stage(this.#snapshot)
+    this.#experienceTrace.publish(this.#snapshot, composition)
+    this.presentation.publish()
     for (const listener of this.#listeners) listener()
   }
 

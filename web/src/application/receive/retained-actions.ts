@@ -12,6 +12,7 @@ import { TaskBusyError } from '../../output/store/tab-lock'
 import { isPermissionDeniedError } from '../../transfer/fault'
 import { artifactRootPath, policyFromSelectionSpec } from '../../transfer/selection'
 import type { JoinedBrowserShare } from '../browser-share/gateway'
+import type { TerminalConnectionBlock } from './contracts'
 import type { ExecutionState, RetainedLocalCommand, WorkspaceTask } from './execution-state'
 import type { ReceiveStorage, ReceiveStoreAccess } from './receive-storage'
 import { executeRetainedTaskAction, reopenRetainedTask, retainedTaskEnvironment } from './retained'
@@ -35,6 +36,7 @@ export interface RetainedTaskActionsOptions {
   readonly outputTrace?: OutputTraceSource
   readonly signal: AbortSignal
   readonly currentJoinedShare: () => JoinedBrowserShare | undefined
+  readonly connectionBlock: () => TerminalConnectionBlock | null
   readonly isDisposed: () => boolean
   readonly publish: () => void
   readonly clearActiveTask: () => void
@@ -140,11 +142,20 @@ export class RetainedTaskActions {
     try {
       const store = (await access.openStoreOptional()) ?? (await access.requireStore())
       if (this.#options.isDisposed() || !this.#options.execution.ownsTransfer(token)) return
+      const prePromptBlock = this.#options.connectionBlock()
+      if (prePromptBlock !== null) throw new ReceiveBlockedError(prePromptBlock)
       const env = retainedTaskEnvironment(store, this.#envPorts(), this.#options.signal)
       const { joined, task, session } = await reopenRetainedTask(env, taskId, this.#options.currentJoinedShare)
       if (this.#options.isDisposed() || !this.#options.execution.ownsTransfer(token)) {
         await this.#options.closeUnactivated(session)
         return
+      }
+      // Re-check terminal connection state after the async reopen/permission prompt
+      // so a share that ended mid-prompt rolls back and reports the structured block reason.
+      const postPromptBlock = this.#options.connectionBlock()
+      if (postPromptBlock !== null) {
+        await this.#options.closeUnactivated(session)
+        throw new ReceiveBlockedError(postPromptBlock)
       }
       let sessionInput: SessionRunInput
       try {

@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react'
 import { canPreviewFile } from '../../preview/capability'
 import type { ReceiverController } from '../controller'
 import { DetailSheet } from '../controls/DetailSheet'
-import type { ReceiverFailure } from '../model'
+import type { BrowseRow, PreviewSnapshot, ReceiverFailure } from '../model'
 import { MediaPreview, type PreviewActions, type PreviewDownloadControl, type PreviewNavigation } from '../share-content/MediaPreview'
 import { PreviewTaskStrip } from '../share-content/PreviewTaskStrip'
 import { ShareContent } from '../share-content/ShareContent'
@@ -10,14 +10,32 @@ import { singleFileDownloadState, type SingleFileDownloadReadiness } from '../sh
 
 const STARTED_FEEDBACK_MS = 1_500
 
+type ActivePreviewSnapshot = Exclude<PreviewSnapshot, { state: 'idle' }>
+
 type PreviewModalError =
   | Readonly<{ kind: 'file'; fileId: string; failure: ReceiverFailure }>
   | Readonly<{ kind: 'task'; failure: ReceiverFailure }>
 
-export function ReceiverBrowsing({ controller }: { readonly controller: ReceiverController }) {
-  const source = controller.presentation.browsing
-  const snapshot = useSyncExternalStore(source.subscribe, source.getSnapshot, source.getSnapshot)
-  const invoker = useRef<HTMLButtonElement>(null)
+/**
+ * Owns ephemeral preview-modal feedback (`startedFeedback` and `modalError`) so
+ * external preview closure and share switches unmount and reset it automatically,
+ * while prev/next stepping inside an open modal preserves task-strip errors.
+ */
+function PreviewModal({
+  controller,
+  preview,
+  rows,
+  downloadReadiness,
+  returnFocus,
+  previewActions,
+}: {
+  readonly controller: ReceiverController
+  readonly preview: ActivePreviewSnapshot
+  readonly rows: readonly BrowseRow[]
+  readonly downloadReadiness: SingleFileDownloadReadiness
+  readonly returnFocus: RefObject<HTMLButtonElement | null>
+  readonly previewActions: PreviewActions
+}) {
   const [startedFeedback, setStartedFeedback] = useState<Readonly<{ fileId: string; nonce: number }> | null>(null)
   const [modalError, setModalError] = useState<PreviewModalError | null>(null)
 
@@ -26,11 +44,6 @@ export function ReceiverBrowsing({ controller }: { readonly controller: Receiver
     const timer = setTimeout(() => setStartedFeedback(null), STARTED_FEEDBACK_MS)
     return () => clearTimeout(timer)
   }, [startedFeedback])
-
-  const clearPreviewFeedback = () => {
-    setStartedFeedback(null)
-    setModalError(null)
-  }
 
   const handleTaskActionFailure = useCallback((failure: ReceiverFailure) => {
     setModalError({ kind: 'task', failure })
@@ -45,17 +58,77 @@ export function ReceiverBrowsing({ controller }: { readonly controller: Receiver
     setStartedFeedback(previous => ({ fileId, nonce: (previous?.nonce ?? 0) + 1 }))
   }
 
-  const openPreviewItem = (id: string) => {
+  const navigatePreviewItem = (id: string) => {
     setStartedFeedback(null)
     setModalError(previous => (previous?.kind === 'file' ? null : previous))
     controller.previewFile(id)
   }
 
-  const previewActions: PreviewActions = {
-    close: () => {
-      clearPreviewFeedback()
-      controller.cancelPreview()
+  const previewableRows = rows.filter(row => row.kind === 'file' && canPreviewFile(row.name, row.expectedSize))
+  const previewIndex = previewableRows.findIndex(row => row.id === preview.fileId)
+  const navigation: PreviewNavigation | undefined = previewableRows.length > 1 && previewIndex >= 0
+    ? {
+        index: previewIndex,
+        total: previewableRows.length,
+        previous: () => {
+          const target = previewableRows[previewIndex - 1]
+          if (target !== undefined) navigatePreviewItem(target.id)
+        },
+        next: () => {
+          const target = previewableRows[previewIndex + 1]
+          if (target !== undefined) navigatePreviewItem(target.id)
+        },
+      }
+    : undefined
+
+  const fileId = preview.fileId
+  const state = preview.state === 'image'
+    ? { downloading: false, disabledReason: null }
+    : singleFileDownloadState(fileId, downloadReadiness)
+  const previewDownload: PreviewDownloadControl = {
+    downloading: state.downloading,
+    started: startedFeedback?.fileId === fileId,
+    disabledReason: state.disabledReason,
+    onDownload: () => {
+      setModalError(null)
+      const result = controller.downloadPreviewedFile({
+        onAsyncFailure: failure => setModalError({ kind: 'file', fileId, failure }),
+      })
+      if (result.kind === 'saved-image') {
+        showStartedFeedback(fileId)
+      } else if (result.kind === 'failed') {
+        setModalError({ kind: 'file', fileId, failure: result.failure })
+      }
     },
+  }
+
+  const activeModalError = modalError !== null && (modalError.kind === 'task' || modalError.fileId === fileId)
+    ? modalError.failure
+    : null
+
+  return <DetailSheet title={preview.name} onClose={previewActions.close} returnFocus={returnFocus} className="preview-sheet">
+    <MediaPreview
+      preview={preview}
+      actions={previewActions}
+      {...(navigation === undefined ? {} : { navigation })}
+      download={previewDownload}
+      downloadError={activeModalError}
+      statusStrip={<PreviewTaskStrip
+        controller={controller}
+        onActionFailure={handleTaskActionFailure}
+        onClearActionFailure={handleClearTaskActionFailure}
+      />}
+    />
+  </DetailSheet>
+}
+
+export function ReceiverBrowsing({ controller }: { readonly controller: ReceiverController }) {
+  const source = controller.presentation.browsing
+  const snapshot = useSyncExternalStore(source.subscribe, source.getSnapshot, source.getSnapshot)
+  const invoker = useRef<HTMLButtonElement>(null)
+
+  const previewActions: PreviewActions = {
+    close: () => controller.cancelPreview(),
     seek: seconds => controller.seekPreview(seconds),
     presented: id => controller.previewMediaPresented(id),
     failed: id => controller.previewMediaFailed(id),
@@ -72,55 +145,6 @@ export function ReceiverBrowsing({ controller }: { readonly controller: Receiver
   }
 
   const preview = snapshot.preview
-  const previewableRows = snapshot.rows.filter(row => row.kind === 'file' && canPreviewFile(row.name, row.expectedSize))
-  const previewIndex = preview.state === 'idle'
-    ? -1
-    : previewableRows.findIndex(row => row.id === preview.fileId)
-  const navigation: PreviewNavigation | undefined = previewableRows.length > 1 && previewIndex >= 0
-    ? {
-        index: previewIndex,
-        total: previewableRows.length,
-        previous: () => {
-          const target = previewableRows[previewIndex - 1]
-          if (target !== undefined) openPreviewItem(target.id)
-        },
-        next: () => {
-          const target = previewableRows[previewIndex + 1]
-          if (target !== undefined) openPreviewItem(target.id)
-        },
-      }
-    : undefined
-
-  let previewDownload: PreviewDownloadControl | undefined
-  if (preview.state !== 'idle') {
-    const fileId = preview.fileId
-    const state = preview.state === 'image'
-      ? { downloading: false, disabledReason: null }
-      : singleFileDownloadState(fileId, downloadReadiness)
-    previewDownload = {
-      downloading: state.downloading,
-      started: startedFeedback?.fileId === fileId,
-      disabledReason: state.disabledReason,
-      onDownload: () => {
-        setModalError(null)
-        const result = controller.downloadPreviewedFile({
-          onAsyncFailure: failure => setModalError({ kind: 'file', fileId, failure }),
-        })
-        if (result.kind === 'saved-image') {
-          showStartedFeedback(fileId)
-        } else if (result.kind === 'failed') {
-          setModalError({ kind: 'file', fileId, failure: result.failure })
-        }
-      },
-    }
-  }
-
-  let activeModalError: ReceiverFailure | null = null
-  if (preview.state !== 'idle' && modalError !== null) {
-    if (modalError.kind === 'task' || modalError.fileId === preview.fileId) {
-      activeModalError = modalError.failure
-    }
-  }
 
   return <>
     <ShareContent share={share} preview={preview} previewActions={previewActions}
@@ -140,7 +164,7 @@ export function ReceiverBrowsing({ controller }: { readonly controller: Receiver
           showPage: page => controller.showPage(page),
           preview: (id, element) => {
             invoker.current = element
-            openPreviewItem(id)
+            controller.previewFile(id)
           },
           download: id => { controller.downloadFile(id) },
           toggle: id => controller.toggleSelection(id),
@@ -152,19 +176,14 @@ export function ReceiverBrowsing({ controller }: { readonly controller: Receiver
         },
       }} />
     {(share === null || share.kind === 'browser') && preview.state !== 'idle' &&
-      <DetailSheet title={preview.name} onClose={previewActions.close} returnFocus={invoker} className="preview-sheet">
-        <MediaPreview
-          preview={preview}
-          actions={previewActions}
-          {...(navigation === undefined ? {} : { navigation })}
-          {...(previewDownload === undefined ? {} : { download: previewDownload })}
-          downloadError={activeModalError}
-          statusStrip={<PreviewTaskStrip
-            controller={controller}
-            onActionFailure={handleTaskActionFailure}
-            onClearActionFailure={handleClearTaskActionFailure}
-          />}
-        />
-      </DetailSheet>}
+      <PreviewModal
+        key={share?.shareInstance ?? 'none'}
+        controller={controller}
+        preview={preview}
+        rows={snapshot.rows}
+        downloadReadiness={downloadReadiness}
+        returnFocus={invoker}
+        previewActions={previewActions}
+      />}
   </>
 }

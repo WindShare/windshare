@@ -93,7 +93,7 @@ export class ReceiverProjections {
     this.shareScope = new PresentationRegion(shareScope(snapshot, this.#shareVisitId))
     this.report = new PresentationRegion(snapshot.reportUrl)
   }
-  commit(snapshot: ReceiverSnapshot): void {
+  stage(snapshot: ReceiverSnapshot): TaskComposition {
     this.browsing.stage(browse(snapshot))
     this.connection.stage(connection(snapshot))
     const composition = this.#composer.compose(snapshot, this.#admission, this.#activeAdmission)
@@ -107,6 +107,9 @@ export class ReceiverProjections {
     }
     this.shareScope.stage(shareScope(snapshot, this.#shareVisitId))
     this.report.stage(snapshot.reportUrl)
+    return composition
+  }
+  publish(): void {
     this.browsing.publish()
     this.connection.publish()
     this.task.publish()
@@ -114,6 +117,11 @@ export class ReceiverProjections {
     this.surface.publish()
     this.shareScope.publish()
     this.report.publish()
+  }
+  commit(snapshot: ReceiverSnapshot): TaskComposition {
+    const composition = this.stage(snapshot)
+    this.publish()
+    return composition
   }
   close(): void {
     this.browsing.clear(); this.connection.clear(); this.task.clear(); this.surface.clear(); this.shareScope.clear(); this.downloads.clear(); this.report.clear()

@@ -165,6 +165,7 @@ export class ReceiveCoordinator {
       ...(options.outputTrace === undefined ? {} : { outputTrace: options.outputTrace }),
       signal: this.#lifetimeAbort.signal,
       currentJoinedShare: options.currentJoinedShare,
+      connectionBlock: () => this.#connectionBlock,
       isDisposed: () => this.#disposed,
       publish: () => this.#publish(),
       clearActiveTask: () => this.startNewDownload(),
@@ -644,7 +645,7 @@ export class ReceiveCoordinator {
       rootPath: artifactRootPath(choice.artifact),
       singleFileId: choice.artifact.singleFileId ?? null,
       isZipArchive: choice.artifact.kind === 'zip-archive',
-      display: display ?? null,
+      display: session.record?.display ?? display ?? null,
       initialLifecycle: initial,
       ...(callbacks === undefined ? {} : { callbacks }),
     })

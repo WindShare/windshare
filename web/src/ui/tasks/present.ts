@@ -133,7 +133,7 @@ export function presentTask(facts: TaskFacts, language: Language = 'en'): TaskPr
   const showProgress = ['preparing', 'downloading', 'waiting', 'paused', 'finishing'].includes(copy.stage)
   const details = collectTaskDetails(facts, progress, showProgress, language)
   const safeNameRestore = resolveSafeNameRestore(facts)
-  const transition = transitionFor(facts, copy, attention, safeNameRestore)
+  const transition = transitionFor(facts, copy, attention)
   return Object.freeze({
     operationId: facts.lifecycle.taskId,
     generation: facts.lifecycle.generation,
@@ -217,9 +217,10 @@ function transitionFor(
   facts: TaskFacts,
   copy: StageCopy,
   attention: boolean,
-  safeNameRestore: TaskSafeNameRestoreState,
 ): TaskPresentationTransition {
-  const actionFacts = facts.actions.map(action => `${action.id}:${action.disabledReason ?? ''}`).join('|')
+  const elapsed = receiveElapsedMilliseconds(facts.lifecycle.timing)
+  // Deduplicate on the exact fields emitted by receiver_experience task transitions so
+  // unrelated UI admission flips (e.g. another task starting) do not flood duplicate trace rows.
   return Object.freeze({
     name: 'receiver.task.presentation',
     operation_id: facts.lifecycle.taskId,
@@ -230,9 +231,8 @@ function transitionFor(
     publication: facts.publication,
     attention,
     fingerprint: [
-      facts.lifecycle.taskId, copy.stage, copy.reason, facts.completeness,
-      facts.publication, attention, safeNameRestore, facts.safeRenamed?.count ?? 0, facts.sourceOmittedEntries, actionFacts,
-      receiveElapsedMilliseconds(facts.lifecycle.timing),
+      facts.lifecycle.taskId, facts.lifecycle.generation, copy.stage, copy.reason,
+      facts.completeness, facts.publication, attention, elapsed ?? '',
     ].join(':'),
   })
 }

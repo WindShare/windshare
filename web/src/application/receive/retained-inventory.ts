@@ -5,14 +5,16 @@ import type { ReceiveTaskRecord } from '../../output/store/types'
 import { classifyNativeError } from '../../transfer/fault'
 import type { PendingRetainedAction, RetainedInventorySnapshot, RetainedTaskSnapshot } from './contracts'
 import type { ReceiveStorage, ReceiveStoreAccess } from './receive-storage'
-import { resolveRetainedCandidates, retainedSnapshot, retainedTaskEnvironment } from './retained'
+import {
+  resolveRetainedCandidates,
+  retainedSnapshot,
+  retainedTaskEnvironment,
+  type ResolvedRetainedCandidate,
+} from './retained'
 
 type InventoryLoadMode = 'foreground' | 'silent'
 
-type ResolvedInventoryEntry = Readonly<{
-  snapshot: RetainedTaskSnapshot
-  updatedAt: number
-}>
+type ResolvedInventoryEntry = ResolvedRetainedCandidate
 
 type MutationOverlayEntry =
   | Readonly<{ seq: number; kind: 'upsert'; snapshot: RetainedTaskSnapshot; updatedAt: number }>
@@ -157,9 +159,10 @@ export class RetainedTaskInventory {
       const env = retainedTaskEnvironment(store, this.#envPorts(), this.#signal)
       const records = await store.listTasks()
       if (this.#isStaleLoad(epoch)) return
-      const snapshots = await resolveRetainedCandidates(env, records, this.#isLocalTask)
+      const resolved = await resolveRetainedCandidates(env, records, this.#isLocalTask)
       if (this.#isStaleLoad(epoch)) return
-      if (this.#commitFullEntries(buildEntriesMap(records, snapshots), startSeq)) {
+      const entries = new Map(resolved.map(entry => [entry.snapshot.taskId, entry]))
+      if (this.#commitFullEntries(entries, startSeq)) {
         this.#onChange()
       }
     } catch (error) {
@@ -258,21 +261,6 @@ export class RetainedTaskInventory {
       ...(this.#outputTrace === undefined ? {} : { outputTrace: this.#outputTrace }),
     }
   }
-}
-
-function buildEntriesMap(
-  records: readonly ReceiveTaskRecord[],
-  snapshots: readonly RetainedTaskSnapshot[],
-): Map<string, ResolvedInventoryEntry> {
-  const updatedAtById = new Map(records.map(record => [record.taskId, record.updatedAt]))
-  const entries = new Map<string, ResolvedInventoryEntry>()
-  for (const snapshot of snapshots) {
-    entries.set(snapshot.taskId, Object.freeze({
-      snapshot,
-      updatedAt: updatedAtById.get(snapshot.taskId) ?? snapshot.display?.createdAtMilliseconds ?? 0,
-    }))
-  }
-  return entries
 }
 
 function equalInventoryValue(left: unknown, right: unknown): boolean {

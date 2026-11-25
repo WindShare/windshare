@@ -166,6 +166,11 @@ export function resolveWorkspaceRetainedMatch(input: WorkspaceRetainedMatchInput
   return Object.freeze({ kind: 'none' })
 }
 
+export type ResolvedRetainedCandidate = Readonly<{
+  snapshot: RetainedTaskSnapshot
+  updatedAt: number
+}>
+
 /**
  * Loads all persisted tasks from `ReceiveStore`, normalizing any abandoned `downloading`
  * task whose tab crashed (no active Web Lock) into `paused (interrupted)`.
@@ -175,7 +180,8 @@ export async function loadRetainedTasks(
   isLocalTask: (taskId: string) => boolean = () => false,
 ): Promise<readonly RetainedTaskSnapshot[]> {
   const records = await env.store.listTasks()
-  return resolveRetainedCandidates(env, records, isLocalTask)
+  const resolved = await resolveRetainedCandidates(env, records, isLocalTask)
+  return Object.freeze(resolved.map(entry => entry.snapshot))
 }
 
 /** Normalizes abandoned records and checks cross-tab locks only for the given candidate subset. */
@@ -183,21 +189,24 @@ export async function resolveRetainedCandidates(
   env: RetainedTaskEnvironment,
   records: readonly ReceiveTaskRecord[],
   isLocalTask: (taskId: string) => boolean,
-): Promise<readonly RetainedTaskSnapshot[]> {
-  const snapshots: RetainedTaskSnapshot[] = []
+): Promise<readonly ResolvedRetainedCandidate[]> {
+  const resolved: ResolvedRetainedCandidate[] = []
   for (const record of records) {
     env.signal?.throwIfAborted()
     try {
       const normalized = await normalizeAbandonedTask(record, env, isLocalTask)
       if (normalized === undefined) continue
       const activeElsewhere = !isLocalTask(normalized.taskId) && await isTaskLockedElsewhere(normalized.taskId, env.locks)
-      snapshots.push(retainedSnapshot(normalized, activeElsewhere))
+      resolved.push(Object.freeze({
+        snapshot: retainedSnapshot(normalized, activeElsewhere),
+        updatedAt: normalized.updatedAt,
+      }))
     } catch (error) {
       env.signal?.throwIfAborted()
       traceInventoryFailure(env, record, 'read_failed', error)
     }
   }
-  return Object.freeze(snapshots)
+  return Object.freeze(resolved)
 }
 
 export function retainedSnapshot(record: ReceiveTaskRecord, activeElsewhere: boolean): RetainedTaskSnapshot {
