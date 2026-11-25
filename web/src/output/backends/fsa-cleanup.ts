@@ -254,16 +254,18 @@ export async function settleFSATerminalCleanup(
       backend: 'file_system_access', task_id: record.taskId, transition: 'deferred',
     })
   })
-  if (record.lifecycle.kind !== 'partial') return record
+  if (record.lifecycle.kind !== 'partial' && record.lifecycle.kind !== 'failed') return record
 
   let next = record
   let changed = false
-  const { cleanupPending, ...settled } = record.lifecycle
-  if (cleanupSucceeded && cleanupPending) {
-    next = Object.freeze({ ...next, lifecycle: Object.freeze(settled) })
-    changed = true
+  if (cleanupSucceeded) {
+    const settled = clearCleanupPending(record.lifecycle)
+    if (settled !== undefined) {
+      next = Object.freeze({ ...next, lifecycle: settled })
+      changed = true
+    }
   }
-  if (initialSafe.directories !== undefined) {
+  if (record.lifecycle.kind === 'partial' && initialSafe.directories !== undefined) {
     const surviving = await filterExistingFSADirectories(rootHandle, initialSafe.directories)
       .catch(() => initialSafe.directories!)
     const reconciled = collectSafeRenamedFromRecords(next, files, surviving)
@@ -278,12 +280,23 @@ export async function settleFSATerminalCleanup(
     await store.putTask(persisted)
     return persisted
   } catch {
-    // The partial settlement is already durable; keep memory aligned with IndexedDB so retry remains reachable.
+    // The terminal settlement is already durable; keep memory aligned with IndexedDB so retry remains reachable.
     emitOutputTrace(diagnostics?.trace, 'cleanup', {
       backend: 'file_system_access', task_id: record.taskId, transition: 'reconcile_deferred',
     })
     return record
   }
+}
+
+function clearCleanupPending(
+  lifecycle: Extract<ReceiveTaskRecord['lifecycle'], { kind: 'partial' | 'failed' }>,
+): ReceiveTaskRecord['lifecycle'] | undefined {
+  if (lifecycle.kind === 'partial') {
+    const { cleanupPending, ...settled } = lifecycle
+    return cleanupPending ? Object.freeze(settled) : undefined
+  }
+  const { cleanupPending, ...settled } = lifecycle
+  return cleanupPending ? Object.freeze(settled) : undefined
 }
 
 export async function filterExistingFSADirectories(

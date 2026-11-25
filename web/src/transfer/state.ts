@@ -103,6 +103,8 @@ export type ReceiveLifecycleState =
       kind: 'failed'
       reason: ReceiveFailureReason
       detail?: string
+      /** Set while unfinished FSA files or reserved placeholders remain on disk after a deferred or interrupted terminal cleanup. */
+      cleanupPending?: true
     }>
 
 export type ReceiveLifecycleKind = ReceiveLifecycleState['kind']

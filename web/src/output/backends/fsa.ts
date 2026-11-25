@@ -42,7 +42,7 @@ import {
 import { destinationChanged, FSAOutputFile, verifyExistingFSAFile } from './fsa-file'
 import {
   buildFSATargetRecord, collectFSATopLevelClaims, openFSADirectory, openFSAFile,
-  reserveFSATarget, rollbackFSATaskTarget, rollbackReservedTarget, type FSADirectory,
+  reserveFSATarget, retainsFSAReservationClaim, rollbackFSATaskTarget, rollbackReservedTarget, type FSADirectory,
 } from './fsa-reservation'
 import {
   SafeNameRegistry, applySafeRenamedFields, collectSafeRenamedFromRecords,
@@ -228,18 +228,18 @@ export async function discardFSATask(
     signal?.throwIfAborted()
     const current = await store.getTask(task.taskId)
     if (current === undefined) return
-    if (current.target.kind === 'fsa') {
+    if (current.target.kind === 'fsa' && retainsFSAReservationClaim(current.lifecycle)) {
       const files = await store.listTaskFiles(task.taskId)
       const unfinished = files.some(file => file.status !== 'completed')
-      const hasReservedPlaceholder = files.length === 0 &&
-        current.lifecycle.kind !== 'saved' &&
-        current.lifecycle.kind !== 'partial'
+      // Partial results own their saved root directory even if no file rows remain;
+      // other claim-retaining states own an empty reserved directory or 0-byte file placeholder.
+      const hasReservedPlaceholder = files.length === 0 && current.lifecycle.kind !== 'partial'
       if (unfinished || hasReservedPlaceholder) {
-        const permission = await ensureFSAPermission(current.target.parentHandle, unfinished, signal)
+        const permission = await ensureFSAPermission(current.target.parentHandle, true, signal)
         signal?.throwIfAborted()
         if (permission === 'granted') {
           await cleanupFSATaskEntries(task.taskId, current.target, files, { store, diagnostics, beginRemoval })
-        } else if (unfinished) {
+        } else {
           emitOutputTrace(diagnostics?.trace, 'cleanup', {
             backend: 'file_system_access',
             task_id: task.taskId,
@@ -375,7 +375,9 @@ class FSASessionHandle implements OutputSessionHandle {
       if (file.status !== 'completed') hasUnfinished = true
     }
 
-    const nextLifecycle = nextFSALifecycle(this.#record.lifecycle, result, retainedBytes, hasUnfinished)
+    const nextLifecycle = nextFSALifecycle(
+      this.#record.lifecycle, result, retainedBytes, hasUnfinished, files.length > 0,
+    )
     const candidateDirs = mergeRenamedDirectories(this.#record.safeRenamedDirectories, this.#safeNames.renamedDirectories())
     const initialSafe = nextLifecycle.kind === 'failed'
       ? { summary: undefined, directories: undefined }
@@ -702,8 +704,10 @@ function nextFSALifecycle(
   result: SettledTransferJobResult,
   retainedBytes: bigint,
   hasUnfinished: boolean,
+  hasFileRecords: boolean,
 ): ReceiveTaskRecord['lifecycle'] {
   const warning = result.contentWarning ?? null
+  const failedCleanupPending = hasUnfinished || !hasFileRecords ? { cleanupPending: true as const } : {}
   switch (result.status) {
     case 'completed':
       return transitionReceiveState(current, {
@@ -735,15 +739,16 @@ function nextFSALifecycle(
         contentWarning: warning,
       })
     case 'stopped':
-      return transitionReceiveState(current, { kind: 'failed', reason: 'cancelled' })
+      return transitionReceiveState(current, { kind: 'failed', reason: 'cancelled', ...failedCleanupPending })
     case 'source-changed':
-      return transitionReceiveState(current, { kind: 'failed', reason: 'source-changed' })
+      return transitionReceiveState(current, { kind: 'failed', reason: 'source-changed', ...failedCleanupPending })
     case 'failed': {
       const reason = transferFailureReason(result.error)
       return transitionReceiveState(current, {
         kind: 'failed',
         reason,
         ...(reason === 'error' && result.error instanceof Error ? { detail: result.error.message } : {}),
+        ...failedCleanupPending,
       })
     }
   }

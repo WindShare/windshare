@@ -386,6 +386,8 @@ export class WorkspaceTask {
       kind: 'failed',
       reason,
       ...(reason === 'error' && error instanceof Error ? { detail: error.message } : {}),
+      // Unsettled FSA failures bypassed terminal disk cleanup, so keep Discard reachable.
+      ...(this.#backend === 'fsa' ? { cleanupPending: true as const } : {}),
     })
   }
 

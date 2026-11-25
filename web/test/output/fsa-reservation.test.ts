@@ -218,7 +218,9 @@ describe('FSA cross-task top-level reservation claims', () => {
     expect(reservedNameOf(decomposed.record)).toBe('Cafe\u0301 (1)')
     await decomposed.close()
   })
+})
 
+describe('FSA reservation claim lifecycle', () => {
   it('retains claims only for lifecycles that can still reopen or discard the reserved slot', async () => {
     const base = initialReceiveState('state-check')
     expect(retainsFSAReservationClaim(base)).toBe(true)
@@ -227,7 +229,10 @@ describe('FSA cross-task top-level reservation claims', () => {
       kind: 'paused', reason: 'user', completedFiles: 0n, completedBytes: 0n,
       retainedBytes: 0n, discoveredFiles: 0n, discoveredBytes: 0n, discoveryComplete: false,
     }))).toBe(true)
-    expect(retainsFSAReservationClaim(transitionReceiveState(base, { kind: 'failed', reason: 'cancelled' }))).toBe(true)
+    expect(retainsFSAReservationClaim(transitionReceiveState(base, {
+      kind: 'failed', reason: 'cancelled', cleanupPending: true,
+    }))).toBe(true)
+    expect(retainsFSAReservationClaim(transitionReceiveState(base, { kind: 'failed', reason: 'cancelled' }))).toBe(false)
     expect(retainsFSAReservationClaim(transitionReceiveState(base, {
       kind: 'partial', reason: 'failures', savedFiles: 1n, failedFiles: 1n, cleanupPending: true,
     }))).toBe(true)
@@ -322,7 +327,7 @@ describe('FSA cross-task top-level reservation claims', () => {
     expect(reservedNameOf(blockedByPending.record)).toBe('PartialPending (1)')
     await blockedByPending.close()
 
-    // 3. A failed task still in IndexedDB retains its claim until discarded so discard cannot delete a sibling's root.
+    // 3a. A cleanly settled failed task already removed its disk entry, so the name is immediately reusable.
     const failedSession = await openNewFSASession({
       task: folderTask('failed-task', 'RetryFolder'),
       parentHandle: parent as unknown as FileSystemDirectoryHandle,
@@ -334,24 +339,51 @@ describe('FSA cross-task top-level reservation claims', () => {
     })
     await failedSession.close()
     expect(parent.children.has('RetryFolder')).toBe(false)
+    expect(failedRecord.lifecycle.kind === 'failed' ? failedRecord.lifecycle.cleanupPending : undefined).toBeUndefined()
 
-    const siblingWhileFailed = await openNewFSASession({
+    const reusedAfterFailed = await openNewFSASession({
       task: folderTask('sibling-after-failed', 'RetryFolder'),
       parentHandle: parent as unknown as FileSystemDirectoryHandle,
       store: store as unknown as ReceiveStore,
     })
-    expect(reservedNameOf(siblingWhileFailed.record)).toBe('RetryFolder (1)')
+    expect(reservedNameOf(reusedAfterFailed.record)).toBe('RetryFolder')
+    // Discarding a stale snapshot of the already-cleaned failed task must never touch the sibling's folder.
     await discardFSATask(failedRecord, store as unknown as ReceiveStore)
-    expect(parent.children.has('RetryFolder (1)')).toBe(true)
-    await siblingWhileFailed.close()
+    expect(parent.children.has('RetryFolder')).toBe(true)
+    await reusedAfterFailed.close()
 
-    // Once the failed task is discarded, the original name becomes available again.
-    const afterDiscard = await openNewFSASession({
-      task: folderTask('after-failed-discard', 'RetryFolder'),
+    // 3b. A failed task whose terminal cleanup was deferred retains its claim until discarded.
+    const deferredSession = await openNewFSASession({
+      task: folderTask('failed-pending-task', 'DeferredFolder'),
       parentHandle: parent as unknown as FileSystemDirectoryHandle,
       store: store as unknown as ReceiveStore,
     })
-    expect(reservedNameOf(afterDiscard.record)).toBe('RetryFolder')
+    vi.spyOn(parent, 'removeEntry').mockRejectedValueOnce(new DOMException('denied', 'NotAllowedError'))
+    const deferredRecord = await deferredSession.settle({
+      status: 'stopped', completedFiles: 0n, completedBytes: 0n,
+      discoveredFiles: 0n, discoveredBytes: 0n, discoveryComplete: false, failedFiles: 0n, failedDirectories: 0n,
+    })
+    await deferredSession.close()
+    expect(deferredRecord.lifecycle).toMatchObject({ kind: 'failed', reason: 'cancelled', cleanupPending: true })
+    await parent.removeEntry('DeferredFolder')
+
+    const siblingWhilePending = await openNewFSASession({
+      task: folderTask('sibling-while-failed-pending', 'DeferredFolder'),
+      parentHandle: parent as unknown as FileSystemDirectoryHandle,
+      store: store as unknown as ReceiveStore,
+    })
+    expect(reservedNameOf(siblingWhilePending.record)).toBe('DeferredFolder (1)')
+    await discardFSATask(deferredRecord, store as unknown as ReceiveStore)
+    expect(parent.children.has('DeferredFolder (1)')).toBe(true)
+    await siblingWhilePending.close()
+
+    // Once the cleanup-pending failed task is discarded, the original name becomes available again.
+    const afterDiscard = await openNewFSASession({
+      task: folderTask('after-failed-discard', 'DeferredFolder'),
+      parentHandle: parent as unknown as FileSystemDirectoryHandle,
+      store: store as unknown as ReceiveStore,
+    })
+    expect(reservedNameOf(afterDiscard.record)).toBe('DeferredFolder')
     await afterDiscard.close()
   })
 

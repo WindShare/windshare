@@ -34,7 +34,7 @@ export interface ReservedFSATarget {
 
 /**
  * Whether a persisted FSA task can still reopen, write to, or discard its
- * top-level `reservedName`. Completed saves and settled partial results with
+ * top-level `reservedName`. Completed saves and settled terminal results with
  * no deferred cleanup never touch the reserved slot again.
  */
 export function retainsFSAReservationClaim(lifecycle: ReceiveLifecycleState): boolean {
@@ -42,8 +42,8 @@ export function retainsFSAReservationClaim(lifecycle: ReceiveLifecycleState): bo
     case 'preparing':
     case 'downloading':
     case 'paused':
-    case 'failed':
       return true
+    case 'failed':
     case 'partial':
       return lifecycle.cleanupPending === true
     case 'saved':

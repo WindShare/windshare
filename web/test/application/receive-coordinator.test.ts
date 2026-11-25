@@ -1096,6 +1096,12 @@ describe('FSA discard permission fallback', () => {
       reason: 'error',
       detail: 'io failed',
     })
+    const failedFsaPendingLifecycle = transitionReceiveState(initialReceiveState('fsa-failed-pending'), {
+      kind: 'failed',
+      reason: 'error',
+      detail: 'io failed',
+      cleanupPending: true,
+    })
     const pausedOpfsLifecycle = transitionReceiveState(initialReceiveState('opfs-paused'), {
       kind: 'paused',
       reason: 'user',
@@ -1107,11 +1113,13 @@ describe('FSA discard permission fallback', () => {
       discoveryComplete: true,
     })
 
-    // Default actions still prioritize discard; only FSA paused/failed permit record-only forget fallback.
+    // Default actions prioritize discard only while FSA disk entries remain; clean failed tasks use forget directly.
     expect(actionsForState(pausedFsaLifecycle, 'fsa')).toEqual(['continue', 'discard'])
-    expect(actionsForState(failedFsaLifecycle, 'fsa')).toEqual(['discard'])
+    expect(actionsForState(failedFsaLifecycle, 'fsa')).toEqual(['forget'])
+    expect(actionsForState(failedFsaPendingLifecycle, 'fsa')).toEqual(['discard'])
     expect(canForgetState(pausedFsaLifecycle, 'fsa')).toBe(true)
     expect(canForgetState(failedFsaLifecycle, 'fsa')).toBe(true)
+    expect(canForgetState(failedFsaPendingLifecycle, 'fsa')).toBe(true)
     expect(canForgetState(pausedOpfsLifecycle, 'opfs')).toBe(false)
 
     const baseSelection = { shareInstance: 'share-1', syntheticRoot: 'root-1', defaultSelected: true, rules: [] }

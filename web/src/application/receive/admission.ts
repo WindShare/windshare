@@ -48,25 +48,43 @@ export function actionsForState(
     case 'saved':
       return Object.freeze(['forget'])
     case 'partial':
-      // OPFS partial members stay inside browser storage until exported or explicitly discarded,
-      // unlike FSA partial results whose completed files already live in the user's folder.
-      // When an FSA partial settlement had to defer unfinished-file cleanup, expose `discard`
-      // so the user can retry removing unfinished files while keeping completed files intact.
-      if (backend === 'opfs') {
-        return Object.freeze([
-          ...(canSavePartial ? ['save-partial' as const] : []),
-          'discard',
-        ])
-      }
-      if (backend === 'fsa' && state.cleanupPending) {
-        return Object.freeze(['discard'])
-      }
-      return Object.freeze(['forget'])
+      return partialActions(state, backend, canSavePartial)
     case 'failed':
-      return state.reason === 'source-changed' || backend !== 'portable'
-        ? Object.freeze(['discard'])
-        : Object.freeze(['forget'])
+      return failedActions(state, backend)
   }
+}
+
+function partialActions(
+  state: Extract<ReceiveLifecycleState, { kind: 'partial' }>,
+  backend: SaveBackendKind,
+  canSavePartial: boolean,
+): readonly ReceiveAction[] {
+  // OPFS partial members stay inside browser storage until exported or explicitly discarded,
+  // unlike FSA partial results whose completed files already live in the user's folder.
+  // When an FSA partial settlement had to defer unfinished-file cleanup, expose `discard`
+  // so the user can retry removing unfinished files while keeping completed files intact.
+  if (backend === 'opfs') {
+    return Object.freeze([
+      ...(canSavePartial ? ['save-partial' as const] : []),
+      'discard',
+    ])
+  }
+  return backend === 'fsa' && state.cleanupPending
+    ? Object.freeze(['discard'])
+    : Object.freeze(['forget'])
+}
+
+function failedActions(
+  state: Extract<ReceiveLifecycleState, { kind: 'failed' }>,
+  backend: SaveBackendKind,
+): readonly ReceiveAction[] {
+  if (backend === 'opfs') return Object.freeze(['discard'])
+  // Cleanly settled FSA failures already removed their disk entries during settlement;
+  // only deferred or interrupted cleanups still need explicit `discard`.
+  if (backend === 'fsa') {
+    return state.cleanupPending ? Object.freeze(['discard']) : Object.freeze(['forget'])
+  }
+  return state.reason === 'source-changed' ? Object.freeze(['discard']) : Object.freeze(['forget'])
 }
 
 function interruptionActions(phase: 'receiving' | 'finalizing', backend: SaveBackendKind): readonly ReceiveAction[] {

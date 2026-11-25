@@ -346,7 +346,8 @@ describe('FSA terminal cleanup', () => {
 
     vi.spyOn(memory, 'deleteFiles').mockRejectedValueOnce(new Error('retirement interrupted'))
     const record = await session.settle(failure)
-    expect(record.lifecycle.kind).toBe('failed')
+    expect(record.lifecycle).toMatchObject({ kind: 'failed', cleanupPending: true })
+    expect(actionsForState(record.lifecycle, 'fsa')).toEqual(['discard'])
     expect(parent.children.has('Folder')).toBe(false)
     expect(await memory.getFile(session.taskId, 'large')).toBeDefined()
     await session.close()
@@ -354,6 +355,137 @@ describe('FSA terminal cleanup', () => {
     expect(await memory.getTask(session.taskId)).toBeUndefined()
     expect(await memory.getFile(session.taskId, 'large')).toBeUndefined()
   })
+
+  it.each(['directory', 'single-file'] as const)(
+    'prompts for permission and retains reserved %s placeholder until granted when paused before the first file record',
+    async mode => {
+      const memory = new MemoryReceiveStore()
+      const parent = new FakeDirectoryHandle('Downloads', memory.events)
+      const store = memory as unknown as ReceiveStore
+      const traces: OutputTraceEvent[] = []
+      const name = mode === 'single-file' ? 'clip.mkv' : 'Album'
+      const artifact = mode === 'single-file'
+        ? { kind: 'directory-tree' as const, name, singleFileId: 'f1' }
+        : { kind: 'directory-tree' as const, name }
+      const session = await openNewFSASession({
+        task: {
+          taskId: `paused-placeholder-${mode}`,
+          selectionKey: `sel-${mode}`,
+          selection: { shareInstance: 's1', syntheticRoot: 'root', defaultSelected: true, rules: [] },
+          artifact,
+          lifecycle: initialReceiveState(`paused-placeholder-${mode}`),
+        },
+        parentHandle: parent as unknown as FileSystemDirectoryHandle,
+        store,
+      })
+      const record = await session.settle({
+        status: 'paused', pauseReason: 'user',
+        completedFiles: 0n, completedBytes: 0n, discoveredFiles: 0n, discoveredBytes: 0n,
+        discoveryComplete: false, failedFiles: 0n, failedDirectories: 0n,
+      })
+      await session.close()
+
+      expect(await memory.listTaskFiles(record.taskId)).toEqual([])
+      expect(parent.children.has(name)).toBe(true)
+
+      const query = vi.spyOn(parent, 'queryPermission').mockResolvedValueOnce('prompt')
+      const prompt = vi.spyOn(parent, 'requestPermission').mockResolvedValueOnce('denied')
+      await expect(discardFSATask(record, store, undefined, {
+        backend: 'file_system_access',
+        trace: { current: event => traces.push(event) },
+      })).rejects.toMatchObject({ fault: { code: 'permission-denied' } })
+
+      expect(query).toHaveBeenCalledOnce()
+      expect(prompt).toHaveBeenCalledOnce()
+      expect(await memory.getTask(record.taskId)).toBeDefined()
+      expect(parent.children.has(name)).toBe(true)
+      expect(traces).toContainEqual({
+        eventName: 'cleanup',
+        payload: { backend: 'file_system_access', task_id: record.taskId, transition: 'permission_denied' },
+      })
+
+      // Once folder permission is granted on retry, both the reserved placeholder and task record are removed.
+      await discardFSATask(record, store)
+      expect(parent.children.has(name)).toBe(false)
+      expect(await memory.getTask(record.taskId)).toBeUndefined()
+    },
+  )
+
+  it.each(['directory', 'single-file'] as const)(
+    'clears cleanupPending on cleanly settled failed %s tasks and retains retryable discard when terminal cleanup is deferred',
+    async mode => {
+      const memory = new MemoryReceiveStore()
+      const parent = new FakeDirectoryHandle('Downloads', memory.events)
+      const store = memory as unknown as ReceiveStore
+      const makeTask = (taskId: string, name: string) => ({
+        taskId,
+        selectionKey: `sel-${taskId}`,
+        selection: { shareInstance: 's1', syntheticRoot: 'root', defaultSelected: true, rules: [] },
+        artifact: mode === 'single-file'
+          ? { kind: 'directory-tree' as const, name, singleFileId: `file-${taskId}` }
+          : { kind: 'directory-tree' as const, name },
+        lifecycle: initialReceiveState(taskId),
+      })
+
+      // 1. Cleanly settled failed task removes its placeholder during settle, switches to forget, and never prompts later.
+      const cleanName = mode === 'single-file' ? 'clean.bin' : 'CleanDir'
+      const cleanSession = await openNewFSASession({
+        task: makeTask(`clean-fail-${mode}`, cleanName),
+        parentHandle: parent as unknown as FileSystemDirectoryHandle,
+        store,
+      })
+      const cleanFailed = await cleanSession.settle({
+        status: 'stopped', completedFiles: 0n, completedBytes: 0n,
+        discoveredFiles: 0n, discoveredBytes: 0n, discoveryComplete: false, failedFiles: 0n, failedDirectories: 0n,
+      })
+      await cleanSession.close()
+
+      expect(parent.children.has(cleanName)).toBe(false)
+      expect(cleanFailed.lifecycle).toMatchObject({ kind: 'failed', reason: 'cancelled' })
+      expect(cleanFailed.lifecycle.kind === 'failed' ? cleanFailed.lifecycle.cleanupPending : undefined).toBeUndefined()
+      expect(actionsForState(cleanFailed.lifecycle, 'fsa')).toEqual(['forget'])
+
+      const cleanQuery = vi.spyOn(parent, 'queryPermission').mockResolvedValue('prompt')
+      const cleanPrompt = vi.spyOn(parent, 'requestPermission').mockResolvedValue('denied')
+      await discardFSATask(cleanFailed, store)
+      expect(cleanQuery).not.toHaveBeenCalled()
+      expect(cleanPrompt).not.toHaveBeenCalled()
+      expect(await memory.getTask(cleanFailed.taskId)).toBeUndefined()
+      cleanQuery.mockRestore()
+      cleanPrompt.mockRestore()
+
+      // 2. Failed task whose terminal placeholder cleanup fails keeps cleanupPending and retries with permission prompting.
+      const deferredName = mode === 'single-file' ? 'deferred.bin' : 'DeferredDir'
+      const deferredSession = await openNewFSASession({
+        task: makeTask(`deferred-fail-${mode}`, deferredName),
+        parentHandle: parent as unknown as FileSystemDirectoryHandle,
+        store,
+      })
+      vi.spyOn(parent, 'removeEntry').mockRejectedValueOnce(new DOMException('denied', 'NotAllowedError'))
+      const deferredFailed = await deferredSession.settle({
+        status: 'stopped', completedFiles: 0n, completedBytes: 0n,
+        discoveredFiles: 0n, discoveredBytes: 0n, discoveryComplete: false, failedFiles: 0n, failedDirectories: 0n,
+      })
+      await deferredSession.close()
+
+      expect(parent.children.has(deferredName)).toBe(true)
+      expect(deferredFailed.lifecycle).toMatchObject({ kind: 'failed', reason: 'cancelled', cleanupPending: true })
+      expect(actionsForState(deferredFailed.lifecycle, 'fsa')).toEqual(['discard'])
+      expect(canForgetState(deferredFailed.lifecycle, 'fsa')).toBe(true)
+
+      const deferredQuery = vi.spyOn(parent, 'queryPermission').mockResolvedValueOnce('prompt')
+      const deferredPrompt = vi.spyOn(parent, 'requestPermission').mockResolvedValueOnce('denied')
+      await expect(discardFSATask(deferredFailed, store)).rejects.toMatchObject({ fault: { code: 'permission-denied' } })
+      expect(deferredQuery).toHaveBeenCalledOnce()
+      expect(deferredPrompt).toHaveBeenCalledOnce()
+      expect(parent.children.has(deferredName)).toBe(true)
+      expect(await memory.getTask(deferredFailed.taskId)).toBeDefined()
+
+      await discardFSATask(deferredFailed, store)
+      expect(parent.children.has(deferredName)).toBe(false)
+      expect(await memory.getTask(deferredFailed.taskId)).toBeUndefined()
+    },
+  )
 
   it('keeps selected empty directories alongside a partial result and prunes abandoned file parents', async () => {
     const { session, root, open, memory } = await openFolderFixture()
