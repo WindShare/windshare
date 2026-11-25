@@ -333,3 +333,36 @@ func TestDiagnoseFailureDoesNotFabricateSessionDependencyContractForRawErrors(t 
 	wrappedIO := DiagnoseFailure(FailureDurability, wrapOutputFaultError(transferfault.OutputStateIO, "flush", errors.New("disk full")))
 	assertOutputStateIODiagnostic(t, wrappedIO, FailureDurability, wrappedIO)
 }
+
+func TestFreezeFailurePreservesNestedCloseCausesAndPrimaryStage(t *testing.T) {
+	primaryCause := errors.New("remove operation failed")
+	leaseCloseCause := errors.New("dir lock close failed")
+	rootCloseCause := errors.New("root handle close failed")
+
+	closeOnly := freezeFailure(nil, rootCloseCause)
+	if diag, ok := DiagnosticFor(closeOnly); !ok || diag.Stage != FailureClose || !errors.Is(closeOnly, rootCloseCause) {
+		t.Fatalf("close-only freezeFailure = (%+v, %t, %v)", diag, ok, closeOnly)
+	}
+
+	nested := freezeFailure(
+		freezeFailure(DiagnoseFailure(FailureDurability, primaryCause), leaseCloseCause),
+		rootCloseCause,
+	)
+	if diag, ok := DiagnosticFor(nested); !ok || diag.Stage != FailureDurability {
+		t.Fatalf("nested primary diagnostic = (%+v, %t), want FailureDurability", diag, ok)
+	}
+	durability := FailureForStage(nested, FailureDurability)
+	if !errors.Is(durability, primaryCause) || errors.Is(durability, leaseCloseCause) || errors.Is(durability, rootCloseCause) {
+		t.Fatalf("durability stage leaked close causes: %v", durability)
+	}
+	closeStage := FailureForStage(nested, FailureClose)
+	if !errors.Is(closeStage, leaseCloseCause) || !errors.Is(closeStage, rootCloseCause) || errors.Is(closeStage, primaryCause) {
+		t.Fatalf("close stage = %v, want both close causes without primary", closeStage)
+	}
+
+	chainedClose := freezeFailure(DiagnoseFailure(FailureClose, leaseCloseCause), rootCloseCause)
+	chainedStage := FailureForStage(chainedClose, FailureClose)
+	if !errors.Is(chainedStage, leaseCloseCause) || !errors.Is(chainedStage, rootCloseCause) {
+		t.Fatalf("chained close stage = %v, want both close causes", chainedStage)
+	}
+}

@@ -345,7 +345,7 @@ func DiscardOperation(
 	ctx context.Context,
 	rootPath string,
 	opID receivecontract.OperationID,
-) (RecoverySummary, error) {
+) (summary RecoverySummary, resultErr error) {
 	if ctx == nil || opID.IsZero() {
 		return RecoverySummary{}, ErrInvalidContract
 	}
@@ -359,7 +359,11 @@ func DiscardOperation(
 	if err != nil {
 		return RecoverySummary{}, DiagnoseFailure(FailureDestinationBinding, err)
 	}
-	defer root.Close()
+	// Preserve root close errors under FailureClose without clearing a valid
+	// summary so callers can distinguish completed cleanup from release failure.
+	defer func() {
+		resultErr = freezeFailure(resultErr, root.Close())
+	}()
 
 	// Hold the directory lock across control-dir lookup, task-lock
 	// verification, handle release, and directory removal so no concurrent
@@ -371,15 +375,14 @@ func DiscardOperation(
 	}
 	ctrlDir, err := openChildDir(root, ControlDirName)
 	if err != nil {
-		_ = dirLock.Close()
-		return RecoverySummary{}, DiagnoseFailure(FailureLookup, err)
+		return RecoverySummary{}, freezeFailure(DiagnoseFailure(FailureLookup, err), dirLock.Close())
 	}
 
 	opDirName := hex.EncodeToString(opID.Bytes())
 	opDir, err := openChildDir(ctrlDir, opDirName)
 	if err != nil {
-		_ = errors.Join(ctrlDir.Close(), dirLock.Close())
-		return RecoverySummary{}, DiagnoseFailure(FailureLookup, err)
+		closeErr := errors.Join(ctrlDir.Close(), dirLock.Close())
+		return RecoverySummary{}, freezeFailure(DiagnoseFailure(FailureLookup, err), closeErr)
 	}
 
 	// Probe an existing task lock without creating one under dirLock: every active
@@ -387,12 +390,12 @@ func DiscardOperation(
 	// proves no active owner and avoids mutating a replaced directory on refusal.
 	taskLock, _, lockErr := acquireLockFile(opDir, taskLockFileName, true)
 	if errors.Is(lockErr, ErrNamespaceLockBusy) {
-		_ = errors.Join(opDir.Close(), ctrlDir.Close(), dirLock.Close())
-		return RecoverySummary{}, DiagnoseFailure(FailureOpen, ErrBusy)
+		closeErr := errors.Join(opDir.Close(), ctrlDir.Close(), dirLock.Close())
+		return RecoverySummary{}, freezeFailure(DiagnoseFailure(FailureOpen, ErrBusy), closeErr)
 	}
 	if lockErr != nil && !errors.Is(lockErr, fs.ErrNotExist) {
-		_ = errors.Join(opDir.Close(), ctrlDir.Close(), dirLock.Close())
-		return RecoverySummary{}, DiagnoseFailure(FailureOpen, lockErr)
+		closeErr := errors.Join(opDir.Close(), ctrlDir.Close(), dirLock.Close())
+		return RecoverySummary{}, freezeFailure(DiagnoseFailure(FailureOpen, lockErr), closeErr)
 	}
 
 	state, _, readErr := readJournalState(opDir)
@@ -410,7 +413,7 @@ func DiscardOperation(
 	}
 
 	removeErr, closeErr := removeOperationLocked(root, ctrlDir, dirLock, opDirName)
-	summary := RecoverySummary{
+	summary = RecoverySummary{
 		valid:           true,
 		operationID:     opID,
 		stateGeneration: max(state.meta.StateGen, initialStateGeneration),
