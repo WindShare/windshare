@@ -352,6 +352,15 @@ func (handler *senderHandler) closeInbox() {
 	}
 }
 
+func (attempt *peerAttempt) recordNegotiationDeadlineExpired(err error) {
+	if !errors.Is(err, ErrPeerNegotiationTimeout) {
+		return
+	}
+	if phase, ok := attempt.phases.expiredNegotiationPhase(); ok {
+		attempt.recorder.phaseDeadlineExpired(phase)
+	}
+}
+
 func (attempt *peerAttempt) prepareNativeAttempt(ctx context.Context, request nativepeer.AttemptRequest) (*nativepeer.PreparedAttempt, error) {
 	var prepared *nativepeer.PreparedAttempt
 	err := attempt.phases.prepareResources(ctx, func(resourceContext context.Context) error {
@@ -369,6 +378,7 @@ func (attempt *peerAttempt) prepareNativeAttempt(ctx context.Context, request na
 	if cause := context.Cause(ctx); cause != nil && !errors.Is(err, socketauthority.ErrCapacity) {
 		err = cause
 	}
+	attempt.recordNegotiationDeadlineExpired(err)
 	return nil, err
 }
 
@@ -412,6 +422,7 @@ func (attempt *peerAttempt) run(ctx context.Context, grant turnsession.OfferGran
 		if cause := context.Cause(negotiationContext); cause != nil {
 			err = cause
 		}
+		attempt.recordNegotiationDeadlineExpired(err)
 		var cleanup error
 		if peer != nil {
 			cleanup = peer.Close()
@@ -425,6 +436,8 @@ func (attempt *peerAttempt) run(ctx context.Context, grant turnsession.OfferGran
 	result := execution.negotiate()
 	if result == nil {
 		result = execution.runEvents()
+	} else {
+		attempt.recordNegotiationDeadlineExpired(result)
 	}
 	cleanup := execution.close(result)
 	return attempt.finish(ctx, result, cleanup, execution.operationCanceled)

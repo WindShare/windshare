@@ -80,13 +80,36 @@ func validPeerPhaseBudgets(negotiation, admission time.Duration) bool {
 	return negotiation > 0 && admission > 0 && admission <= MaximumPeerAdmissionBudget
 }
 
-func peerPhaseTimeout(phase PeerAttemptPhase) error {
+// isNegotiationStage identifies the primary negotiation lifecycle phases whose
+// deadlines belong to the negotiation window (unstaged or ICE-staged),
+// excluding the nested resource-preparation sub-deadline and lane admission.
+func (phase PeerAttemptPhase) isNegotiationStage() bool {
+	_, ok := phase.negotiationStageBudget(0)
+	return ok
+}
+
+func (phase PeerAttemptPhase) negotiationStageBudget(unstagedBudget time.Duration) (time.Duration, bool) {
 	switch phase {
-	case PeerAttemptPhaseNegotiation, PeerAttemptPhasePreparation, PeerAttemptPhaseChecking, PeerAttemptPhaseEstablishing:
+	case PeerAttemptPhaseNegotiation:
+		return unstagedBudget, true
+	case PeerAttemptPhasePreparation:
+		return PeerSignalingPreparationBudget, true
+	case PeerAttemptPhaseChecking:
+		return PeerICECheckingBudget, true
+	case PeerAttemptPhaseEstablishing:
+		return PeerDataChannelEstablishmentBudget, true
+	default:
+		return 0, false
+	}
+}
+
+func peerPhaseTimeout(phase PeerAttemptPhase) error {
+	switch {
+	case phase.isNegotiationStage():
 		return ErrPeerNegotiationTimeout
-	case PeerAttemptPhaseResources:
+	case phase == PeerAttemptPhaseResources:
 		return errors.Join(ErrPeerResourcePreparationTimeout, context.DeadlineExceeded)
-	case PeerAttemptPhaseAdmission:
+	case phase == PeerAttemptPhaseAdmission:
 		return ErrPeerAdmissionTimeout
 	default:
 		return ErrConfig
@@ -402,6 +425,18 @@ func (lifecycle *peerPhaseLifecycle) admitted() bool {
 	lifecycle.mu.Lock()
 	defer lifecycle.mu.Unlock()
 	return lifecycle.state == peerPhaseAdmitted
+}
+
+// expiredNegotiationPhase reports the active negotiation stage whose deadline
+// fired when negotiation fails before entering the attempt event loop.
+func (lifecycle *peerPhaseLifecycle) expiredNegotiationPhase() (PeerAttemptPhase, bool) {
+	lifecycle.mu.Lock()
+	defer lifecycle.mu.Unlock()
+	if lifecycle.pendingExpiration.generation != 0 &&
+		lifecycle.pendingExpiration.phase.isNegotiationStage() {
+		return lifecycle.pendingExpiration.phase, true
+	}
+	return "", false
 }
 
 func (lifecycle *peerPhaseLifecycle) expirationEvents() <-chan peerPhaseExpiration {

@@ -425,7 +425,7 @@ func (execution *attemptExecution) handlePhaseExpiration(expiration peerPhaseExp
 	// Open and its phase transition are one logical event even when the timer
 	// notification is selected first. Reconcile the observable channel state so
 	// scheduler ordering cannot turn a timely negotiation into a timeout.
-	if expiration.phase == PeerAttemptPhaseNegotiation &&
+	if expiration.phase.isNegotiationStage() &&
 		execution.channel != nil && execution.openTransition != nil {
 		select {
 		case <-execution.channel.Opened():

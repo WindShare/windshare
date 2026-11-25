@@ -3,6 +3,7 @@ package v2peer
 import (
 	"context"
 	"errors"
+	"sync"
 
 	"github.com/fxamacker/cbor/v2"
 	pion "github.com/pion/webrtc/v4"
@@ -343,25 +344,27 @@ func (attempt *peerAttempt) awaitOpenAndAdmit(
 	channel *ownedPeerDataChannel,
 	openTransition chan<- struct{},
 ) {
+	// Every exit path must release handlePhaseExpiration's reconciliation barrier
+	// even if ctx cancels before Opened completes and Opened fires concurrently.
+	finishOpenTransition := sync.OnceFunc(func() { close(openTransition) })
+	defer finishOpenTransition()
 	if !awaitDataChannelOpen(ctx, channel) {
 		return
 	}
 	phaseContext, transitioned, err := attempt.phases.beginAdmission(ctx)
 	if err != nil {
-		close(openTransition)
+		finishOpenTransition()
 		attempt.push(attemptEvent{kind: attemptDataChannelOpen, err: err})
 		return
 	}
 	if !transitioned {
-		close(openTransition)
 		return
 	}
 	admissionContext, admitted := attempt.beginAdmission(phaseContext)
 	if !admitted {
-		close(openTransition)
 		return
 	}
-	close(openTransition)
+	finishOpenTransition()
 	// One goroutine owns Open and admission publication, so the public phase
 	// transition remains ordered even when authenticated settlement is immediate.
 	attempt.push(attemptEvent{

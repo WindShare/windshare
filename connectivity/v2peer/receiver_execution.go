@@ -332,7 +332,7 @@ func (execution *receiverExecution) settleAttemptContext() (bool, receiverWorkfl
 func (execution *receiverExecution) handlePhaseExpiration(
 	expiration peerPhaseExpiration,
 ) (bool, receiverWorkflowResult) {
-	if expiration.phase == PeerAttemptPhaseNegotiation {
+	if expiration.phase.isNegotiationStage() {
 		reconciled, reconcileErr := execution.reconcileOpen()
 		if reconcileErr != nil {
 			return true, receiverWorkflowResult{cause: reconcileErr}

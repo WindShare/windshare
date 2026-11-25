@@ -278,17 +278,21 @@ func (recorder *senderAttemptRecorder) phaseDeadlineExpired(phase PeerAttemptPha
 }
 
 func (recorder *senderAttemptRecorder) emitPhaseDeadlineExpiredLocked(phase PeerAttemptPhase) {
+	if recorder.deadlineExpired {
+		return
+	}
 	observation := SenderAttemptObservation{CandidateCounts: candidateCountsForStage(recorder.next, recorder.lastCounts)}
-	switch phase {
-	case PeerAttemptPhaseNegotiation:
+	switch {
+	case phase.isNegotiationStage():
+		budget, _ := phase.negotiationStageBudget(recorder.factory.negotiationBudget)
 		observation.Stage = SenderAttemptNegotiationDeadlineExpired
 		observation.Phase = SenderAttemptPhaseNegotiation
-		observation.DeadlineMillis = durationMilliseconds(recorder.factory.negotiationBudget)
-	case PeerAttemptPhaseResources:
+		observation.DeadlineMillis = durationMilliseconds(budget)
+	case phase == PeerAttemptPhaseResources:
 		observation.Stage = SenderAttemptNegotiationDeadlineExpired
 		observation.Phase = SenderAttemptPhaseNegotiation
 		observation.DeadlineMillis = durationMilliseconds(PeerSignalingPreparationBudget - PeerAnswerPreparationReserve)
-	case PeerAttemptPhaseAdmission:
+	case phase == PeerAttemptPhaseAdmission:
 		observation.Stage = SenderAttemptAdmissionDeadlineExpired
 		observation.Phase = SenderAttemptPhaseAdmission
 		observation.DeadlineMillis = durationMilliseconds(recorder.factory.admissionBudget)

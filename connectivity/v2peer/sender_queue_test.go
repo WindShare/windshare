@@ -253,4 +253,18 @@ func TestSenderPreparationExpiresWhileProcessCapacityRemainsQueued(t *testing.T)
 	if h.started.Load() != nativepeer.ConcurrentAttempts {
 		t.Fatal("expired preparation started a provider")
 	}
+	expirationObserved := false
+	for {
+		event := receiveTest(t, h.sender.config.factory.SenderAttemptObservations())
+		if event.Stage == SenderAttemptNegotiationDeadlineExpired {
+			expirationObserved = event.DeadlineMillis == durationMilliseconds(PeerSignalingPreparationBudget)
+		}
+		if event.Failure == nil {
+			continue
+		}
+		if !expirationObserved || !event.Failure.DeadlineExpired || event.Failure.Termination.Cause != "negotiation_timeout" {
+			t.Fatalf("preparation deadline missing from failure diagnostics: observed=%t failure=%+v", expirationObserved, event.Failure)
+		}
+		break
+	}
 }
