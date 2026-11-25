@@ -1,14 +1,19 @@
 import { FaultScope, OutputFaultCode, TransferFaultError, outputFault } from '../../transfer/fault'
-import type { FSADiskFingerprint } from '../store/types'
+import type { ReceiveLifecycleState } from '../../transfer/state'
+import { foldPortableName15 } from '../../unicode/case-fold'
+import type { ReceiveStore } from '../store/database'
+import type { FSADiskFingerprint, FSATargetRecord } from '../store/types'
 import {
   isMissingFSAEntry,
   readFSADiskFingerprint,
   removeDirectoryIfEmpty,
   removeVerifiedFSALeaf,
+  sameFSAEntry,
 } from './fsa-cleanup'
 import { SafeNameRegistry, decideCollisionName, deterministicSafeComponent } from './safe-name'
 
 const MAX_COLLISION_ATTEMPTS = 1_000
+const EMPTY_CLAIMED_NAMES: ReadonlySet<string> = new Set()
 
 export interface FSADirectory {
   readonly handle: FileSystemDirectoryHandle
@@ -23,7 +28,80 @@ export type ReservedRootEntry =
 export interface ReservedFSATarget {
   readonly reservedName: string
   readonly collisionIndex: number
+  readonly skippedClaimedNames: number
   readonly entry: ReservedRootEntry
+}
+
+/**
+ * Whether a persisted FSA task can still reopen, write to, or discard its
+ * top-level `reservedName`. Completed saves and settled partial results with
+ * no deferred cleanup never touch the reserved slot again.
+ */
+export function retainsFSAReservationClaim(lifecycle: ReceiveLifecycleState): boolean {
+  switch (lifecycle.kind) {
+    case 'preparing':
+    case 'downloading':
+    case 'paused':
+    case 'failed':
+      return true
+    case 'partial':
+      return lifecycle.cleanupPending === true
+    case 'saved':
+    case 'ready-to-save':
+    case 'download-started':
+      return false
+  }
+}
+
+/**
+ * Collects normalized top-level reserved names held by unfinished FSA tasks in
+ * `parentHandle` (mirroring Go's `existingTopLevelClaims`). Checking persisted
+ * reservations prevents another file or folder task from claiming a slot whose
+ * paused or cleanup-pending owner had its disk entry removed externally.
+ */
+export async function collectFSATopLevelClaims(
+  store: Pick<ReceiveStore, 'listTasks'>,
+  parentHandle: FileSystemDirectoryHandle,
+  excludeTaskId?: string,
+): Promise<ReadonlySet<string>> {
+  const tasks = await store.listTasks()
+  const claimed = new Set<string>()
+  for (const task of tasks) {
+    if (task.taskId === excludeTaskId || task.target.kind !== 'fsa') continue
+    if (!retainsFSAReservationClaim(task.lifecycle)) continue
+    if (!await sameFSAEntry(parentHandle, task.target.parentHandle).catch(() => false)) continue
+    claimed.add(foldPortableName15(task.target.reservedName))
+  }
+  return claimed
+}
+
+export function buildFSATargetRecord(
+  parentHandle: FileSystemDirectoryHandle,
+  reserved: ReservedFSATarget,
+  reservedAtMs: number,
+): FSATargetRecord {
+  if (reserved.entry.kind === 'file') {
+    return Object.freeze({
+      kind: 'fsa',
+      parentHandle,
+      reservedName: reserved.reservedName,
+      collisionIndex: reserved.collisionIndex,
+      singleFile: true,
+      reservedAtMs,
+      reservedFile: Object.freeze({
+        handle: reserved.entry.handle,
+        fingerprint: reserved.entry.fingerprint,
+      }),
+    })
+  }
+  return Object.freeze({
+    kind: 'fsa',
+    parentHandle,
+    reservedName: reserved.reservedName,
+    collisionIndex: reserved.collisionIndex,
+    singleFile: false,
+    reservedAtMs,
+  })
 }
 
 export function requiresSafeComponent(error: unknown): boolean {
@@ -107,11 +185,13 @@ export async function reserveFSATarget(
   singleFile: boolean,
   safeNames: SafeNameRegistry,
   taskId: string,
+  claimedNames: ReadonlySet<string> = EMPTY_CLAIMED_NAMES,
 ): Promise<ReservedFSATarget> {
   const kind = singleFile ? 'file' : 'directory'
+  let skippedClaimedNames = 0
   for (let collisionIndex = 0; collisionIndex < MAX_COLLISION_ATTEMPTS; collisionIndex++) {
     let reservedName = decideCollisionName(requestedName, kind, collisionIndex)
-    let entry = await reserveRootEntry(parentHandle, reservedName, singleFile)
+    let entry = await tryReserveCandidate(parentHandle, reservedName, singleFile, claimedNames)
     if (entry === 'invalid-name') {
       reservedName = await deterministicSafeComponent({
         taskId,
@@ -119,15 +199,29 @@ export async function reserveFSATarget(
         entryKind: kind,
         collisionIndex,
       })
-      entry = await reserveRootEntry(parentHandle, reservedName, singleFile)
+      entry = await tryReserveCandidate(parentHandle, reservedName, singleFile, claimedNames)
       if (typeof entry !== 'string') safeNames.recordRoot([requestedName], kind, reservedName)
     }
-    if (typeof entry !== 'string') return { reservedName, collisionIndex, entry }
+    if (entry === 'claimed') {
+      skippedClaimedNames += 1
+      continue
+    }
+    if (typeof entry !== 'string') return { reservedName, collisionIndex, skippedClaimedNames, entry }
   }
   throw new TransferFaultError(
     outputFault(FaultScope.Job, OutputFaultCode.TargetCollision),
     'Could not allocate a unique name in the selected folder',
   )
+}
+
+async function tryReserveCandidate(
+  parentHandle: FileSystemDirectoryHandle,
+  candidateName: string,
+  singleFile: boolean,
+  claimedNames: ReadonlySet<string>,
+): Promise<ReservedRootEntry | 'claimed' | 'exists' | 'invalid-name'> {
+  if (claimedNames.has(foldPortableName15(candidateName))) return 'claimed'
+  return reserveRootEntry(parentHandle, candidateName, singleFile)
 }
 
 export async function rollbackReservedTarget(

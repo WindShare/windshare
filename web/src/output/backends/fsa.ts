@@ -40,8 +40,8 @@ import {
 } from './fsa-cleanup'
 import { destinationChanged, FSAOutputFile, verifyExistingFSAFile } from './fsa-file'
 import {
-  openFSADirectory, openFSAFile, reserveFSATarget, rollbackReservedTarget,
-  type FSADirectory, type ReservedFSATarget,
+  buildFSATargetRecord, collectFSATopLevelClaims, openFSADirectory, openFSAFile,
+  reserveFSATarget, rollbackReservedTarget, type FSADirectory,
 } from './fsa-reservation'
 import {
   SafeNameRegistry, applySafeRenamedFields, collectSafeRenamedFromRecords,
@@ -93,67 +93,61 @@ export async function openNewFSASession(input: Readonly<{
   diagnostics?: OutputDiagnosticsPorts
 }>): Promise<OutputSessionHandle> {
   const lock = await acquireTaskLock(input.task.taskId, input.locks)
-  let reserved: ReservedFSATarget | undefined
   try {
     const singleFile = input.task.artifact.singleFileId !== undefined
     const safeNames = new SafeNameRegistry()
     const reservedAtMs = Date.now()
-    reserved = await withFSAReservationLock(
-      () => reserveFSATarget(input.parentHandle, input.task.artifact.name, singleFile, safeNames, input.task.taskId),
-      input.locks,
-    )
-    const target: FSATargetRecord = reserved.entry.kind === 'file'
-      ? Object.freeze({
-          kind: 'fsa',
-          parentHandle: input.parentHandle,
-          reservedName: reserved.reservedName,
-          collisionIndex: reserved.collisionIndex,
-          singleFile: true,
-          reservedAtMs,
-          reservedFile: Object.freeze({
-            handle: reserved.entry.handle,
-            fingerprint: reserved.entry.fingerprint,
-          }),
+    const { record, rootHandle, reserved } = await withFSAReservationLock(async () => {
+      const claimedNames = await collectFSATopLevelClaims(input.store, input.parentHandle, input.task.taskId)
+      const allocated = await reserveFSATarget(
+        input.parentHandle,
+        input.task.artifact.name,
+        singleFile,
+        safeNames,
+        input.task.taskId,
+        claimedNames,
+      )
+      try {
+        const target = buildFSATargetRecord(input.parentHandle, allocated, reservedAtMs)
+        const rootHandle = allocated.entry.kind === 'directory' ? allocated.entry.handle : input.parentHandle
+        const display = input.task.display === undefined
+          ? undefined
+          : Object.freeze({ ...input.task.display, destinationLabel: input.parentHandle.name })
+        const downloading = transitionReceiveState(input.task.lifecycle, {
+          kind: 'downloading',
+          phase: 'receiving',
         })
-      : Object.freeze({
-          kind: 'fsa',
-          parentHandle: input.parentHandle,
-          reservedName: reserved.reservedName,
-          collisionIndex: reserved.collisionIndex,
-          singleFile: false,
-          reservedAtMs,
+        const record: FSATaskRecord = Object.freeze({
+          taskId: input.task.taskId,
+          shareInstance: input.task.selection.shareInstance,
+          selectionKey: input.task.selectionKey,
+          selection: input.task.selection,
+          artifact: input.task.artifact,
+          backend: 'fsa',
+          lifecycle: downloading,
+          target,
+          ...(display === undefined ? {} : { display }),
+          discoveryComplete: false,
+          updatedAt: Date.now(),
         })
-    const rootHandle = reserved.entry.kind === 'directory' ? reserved.entry.handle : input.parentHandle
-    const display = input.task.display === undefined
-      ? undefined
-      : Object.freeze({ ...input.task.display, destinationLabel: input.parentHandle.name })
-    const downloading = transitionReceiveState(input.task.lifecycle, {
-      kind: 'downloading',
-      phase: 'receiving',
-    })
-    const record: FSATaskRecord = Object.freeze({
-      taskId: input.task.taskId,
-      shareInstance: input.task.selection.shareInstance,
-      selectionKey: input.task.selectionKey,
-      selection: input.task.selection,
-      artifact: input.task.artifact,
-      backend: 'fsa',
-      lifecycle: downloading,
-      target,
-      ...(display === undefined ? {} : { display }),
-      discoveryComplete: false,
-      updatedAt: Date.now(),
-    })
-    await input.store.putTask(record)
+        // Persist inside the reservation lock so concurrent opens observe freshly claimed names
+        // and failed writes roll back before another tab can claim the same slot.
+        await input.store.putTask(record)
+        return { record, rootHandle, reserved: allocated }
+      } catch (error) {
+        await rollbackReservedTarget(input.parentHandle, allocated).catch(() => undefined)
+        throw error
+      }
+    }, input.locks)
     emitOutputTrace(input.diagnostics?.trace, 'output_reservation', {
       backend: 'file_system_access',
+      task_id: input.task.taskId,
       transition: 'acquired',
+      collision_index: reserved.collisionIndex,
+      ...(reserved.skippedClaimedNames > 0 ? { skipped_claimed_names: reserved.skippedClaimedNames } : {}),
     })
     return new FSASessionHandle(record, rootHandle, input.store, lock, safeNames, input.locks, input.diagnostics)
   } catch (error) {
-    if (reserved !== undefined) {
-      await rollbackReservedTarget(input.parentHandle, reserved).catch(() => undefined)
-    }
     await lock.release()
     throw error
   }
