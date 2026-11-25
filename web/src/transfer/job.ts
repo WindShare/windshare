@@ -88,6 +88,7 @@ export class TransferJob {
   #discoveryComplete = false
   #discoveryFailed = false
   #sourceChangedCount = 0n
+  #sourceUnavailableCount = 0n
   readonly #sourceFailures: SourceRevisionFailure[] = []
   readonly #missingFiles: MissingFileWarning[] = []
   #completedFiles = 0n
@@ -382,6 +383,7 @@ export class TransferJob {
         return
       case 'source-unavailable':
         this.#failedFiles += 1n
+        this.#sourceUnavailableCount += 1n
         this.#firstError ??= outcome.error
         this.#tracker.observeFileFailed()
         this.#recordSourceFailure(file, 'source-unavailable')
@@ -427,11 +429,12 @@ export class TransferJob {
 
   #buildResult(): TransferJobResult {
     const safeRenamed = this.#options.output.safeRenamedSummary?.()
-    const sourceRevisionFailures: SourceRevisionFailures | undefined = this.#sourceFailures.length === 0
+    const sourceFailureCount = this.#sourceChangedCount + this.#sourceUnavailableCount
+    const sourceRevisionFailures: SourceRevisionFailures | undefined = sourceFailureCount === 0n
       ? undefined
       : Object.freeze({
           shareInstance: this.#options.descriptor.shareInstanceId,
-          count: this.#sourceChangedCount > 0n ? this.#sourceChangedCount : BigInt(this.#sourceFailures.length),
+          count: sourceFailureCount,
           files: Object.freeze([...this.#sourceFailures]),
         })
     const contentWarning: ReceiveContentWarning | undefined = this.#missingFiles.length === 0
