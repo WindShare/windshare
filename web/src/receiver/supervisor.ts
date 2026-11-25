@@ -259,34 +259,25 @@ export class ReceiverReconnectSupervisor implements ContentGenerationProvider {
   }
 
   async recover(
-    generation: ContentGeneration,
-    error: unknown,
-    signal: AbortSignal | undefined,
+    generation: ContentGeneration, routes: BlockRouteEligibility, error: unknown, signal: AbortSignal | undefined,
   ): Promise<boolean> {
-    signal?.throwIfAborted()
-    this.#throwIfTerminal()
     const managed = generation as ReceiverGeneration
-    if (!this.isCurrent(generation) || managed.retired) {
-      await this.#ready(signal)
-      return true
-    }
+    if (await this.#recoverRetiredGeneration(managed, routes, signal)) return true
     if (!isLaneRecoveryFailure(error)) return false
-    if (managed.lanes.size > 0) return this.#recoverStalledLanes(managed, error, signal)
-    return this.#awaitLaneRecovery(managed, signal)
+    if (managed.lanes.eligibleSize(routes) > 0) return this.#recoverStalledLanes(managed, routes, error, signal)
+    return this.#awaitLaneRecovery(managed, routes, signal)
   }
 
   async #recoverStalledLanes(
-    managed: ReceiverGeneration,
-    error: unknown,
-    signal: AbortSignal | undefined,
+    managed: ReceiverGeneration, routes: BlockRouteEligibility, error: unknown, signal: AbortSignal | undefined,
   ): Promise<boolean> {
     if (!hasBlockInactivityTimeout(error)) return false
     const attributed = stalledBlockLanes(error)
-    // Fall back to every admitted lane only when the timeout has no lane attribution;
-    // an attributed stale epoch must never widen into retiring healthy replacements.
+    // Fall back to every route-eligible admitted lane only when the timeout has no lane
+    // attribution; an attributed stale epoch must never widen into retiring healthy replacements.
     const targets = attributed.length > 0
       ? attributed
-      : managed.lanes.laneIds().flatMap((laneId) => {
+      : managed.lanes.eligibleLaneIds(routes).flatMap((laneId) => {
           const laneEpoch = managed.lanes.laneEpoch(laneId) ?? managed.session.laneEpoch?.(laneId)
           return laneEpoch === undefined ? [] : [{ laneId, laneEpoch }]
         })
@@ -295,37 +286,35 @@ export class ReceiverReconnectSupervisor implements ContentGenerationProvider {
       const currentEpoch = managed.lanes.laneEpoch(laneId) ?? managed.session.laneEpoch?.(laneId)
       if (currentEpoch === laneEpoch) retirements.push(managed.session.retireLane(laneId, laneEpoch))
     }
-    if (retirements.length === 0) {
-      // Every attributed stalled lane has already detached or been replaced by a newer epoch.
-      return attributed.length > 0
-    }
+    // Every attributed stalled lane has already detached or been replaced by a newer epoch.
+    if (retirements.length === 0) return attributed.length > 0
     this.#traceConnection({ transition: 'retry_requested', failure: error })
     await awaitSettledOrAbort(retirements, signal)
-    signal?.throwIfAborted()
-    this.#throwIfTerminal()
-    if (!this.isCurrent(managed) || managed.retired) {
-      await this.#ready(signal)
-      return true
-    }
-    return managed.lanes.size === 0 ? this.#awaitLaneRecovery(managed, signal) : true
+    if (await this.#recoverRetiredGeneration(managed, routes, signal)) return true
+    return managed.lanes.eligibleSize(routes) === 0 ? this.#awaitLaneRecovery(managed, routes, signal) : true
   }
 
   async #awaitLaneRecovery(
-    managed: ReceiverGeneration,
-    signal: AbortSignal | undefined,
+    managed: ReceiverGeneration, routes: BlockRouteEligibility, signal: AbortSignal | undefined,
   ): Promise<boolean> {
     try {
-      await managed.lanes.waitForContentAdmission(signal)
+      await managed.lanes.waitForContentAdmission(routes, signal)
       return true
     } catch {
-      signal?.throwIfAborted()
-      this.#throwIfTerminal()
-      if (!this.isCurrent(managed) || managed.retired) {
-        await this.#ready(signal)
-        return true
-      }
-      return false
+      return this.#recoverRetiredGeneration(managed, routes, signal)
     }
+  }
+
+  async #recoverRetiredGeneration(
+    managed: ReceiverGeneration, routes: BlockRouteEligibility, signal: AbortSignal | undefined,
+  ): Promise<boolean> {
+    signal?.throwIfAborted()
+    this.#throwIfTerminal()
+    routes.assertActive()
+    if (this.isCurrent(managed) && !managed.retired) return false
+    await this.#ready(signal)
+    routes.assertActive()
+    return true
   }
 
   #handleSystemWake(kind: SystemWakeKind): void {

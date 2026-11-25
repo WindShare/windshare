@@ -68,10 +68,12 @@ class SwitchingGenerationProvider implements ContentGenerationProvider {
 
   async recover(
     generation: ContentGeneration,
+    routes: BlockRouteEligibility,
     _error: unknown,
     signal: AbortSignal | undefined,
   ): Promise<boolean> {
     signal?.throwIfAborted()
+    routes.assertActive()
     if (generation !== this.current) return generation === this.initial
     this.recoveries += 1
     this.current = this.replacement

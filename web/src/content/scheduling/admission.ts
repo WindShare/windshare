@@ -219,7 +219,9 @@ export class ContentAdmissions {
       const bytes = demandBytes(work.demand)
       queuedBytes += bytes; queuedBlocks++
       if (work.capacity?.readiness() === 'consumer') capacityWaitingBytes += bytes
-      else if (this.#lanes().some(work.intent.eligible)) networkWaitingBytes += bytes
+      else if (this.#lanes().some(lane => work.routes.allows(lane.route) && work.intent.eligible(lane))) {
+        networkWaitingBytes += bytes
+      }
     }
     return { queuedBytes, queuedBlocks, networkWaitingBytes, capacityWaitingBytes }
   }

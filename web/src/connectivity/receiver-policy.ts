@@ -100,8 +100,7 @@ export class ConnectivityRouteAuthority implements BlockRouteEligibility {
   }
 
   allows(route: BlockTransportRoute): boolean {
-    return this.#active && (this.#policy === 'auto' ||
-      (this.#policy === 'relay-only' ? route === 'application-relay' : route === 'direct'))
+    return this.#active && policyAllowsRoute(this.#policy, route)
   }
 
   assertActive(): void {
@@ -151,7 +150,7 @@ interface InstalledPeer {
   unsubscribePathRoute?: () => void
 }
 
-/** Browsing keeps relay control-only; explicit content activation admits both routes. */
+/** Browsing keeps relay control-only; explicit content activation admits policy-permitted routes. */
 export class ReceiverConnectivity {
   readonly #optionalPaths = new Map<string, { identity: PeerPathIdentity; activation?: PeerRecoveryActivation }>()
   #throughputTask: Promise<void> | undefined
@@ -594,6 +593,7 @@ export class ReceiverConnectivity {
   }
 
   #admit(laneId: number, laneEpoch: number, route: BlockTransportRoute): boolean {
+    if (!policyAllowsRoute(this.#policy, route)) return false
     const existing = this.#admitted.get(laneId)
     if (existing !== undefined) {
       return existing.laneEpoch === laneEpoch && existing.route === route
@@ -610,6 +610,9 @@ export class ReceiverConnectivity {
   }
 
   #admitRelay(): void {
+    // Keep relay lanes control-only when policy forbids relay content so LaneSet,
+    // path activity, and recovery only observe routes permitted to carry blocks.
+    if (!policyAllowsRoute(this.#policy, 'application-relay')) return
     for (const laneId of this.#relayLaneIds) {
       const laneEpoch = this.#laneEpochs.get(laneId)
       if (laneEpoch !== undefined) this.#admit(laneId, laneEpoch, 'application-relay')
@@ -637,4 +640,8 @@ export class ReceiverConnectivity {
       // The lane is already ineligible; diagnostics cannot re-admit it.
     }
   }
+}
+
+function policyAllowsRoute(policy: ConnectivityPolicy, route: BlockTransportRoute): boolean {
+  return policy === 'auto' || (policy === 'relay-only' ? route === 'application-relay' : route === 'direct')
 }

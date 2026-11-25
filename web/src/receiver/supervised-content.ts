@@ -41,6 +41,7 @@ export interface ContentGenerationProvider {
   ): Promise<{ readonly generation: ContentGeneration; readonly value: T }>
   recover(
     generation: ContentGeneration,
+    routes: BlockRouteEligibility,
     error: unknown,
     signal: AbortSignal | undefined,
   ): Promise<boolean>
@@ -244,6 +245,7 @@ export class SupervisedContent {
     signal: AbortSignal | undefined,
   ): Promise<void> {
     signal?.throwIfAborted()
+    authorization.routes.assertActive()
     if (requiresRevisionLeaseReplacement(error)) {
       if (progress.offset === end) return
       // A repeatedly expired fresh lease without any useful bytes cannot
@@ -257,7 +259,7 @@ export class SupervisedContent {
     if (stalled && progress.stalledOffset === progress.offset && progress.stalledRecoveries >= MAXIMUM_STALLED_RECOVERIES) {
       throw error
     }
-    if (!(await this.#provider.recover(binding.generation, error, signal))) throw error
+    if (!(await this.#provider.recover(binding.generation, authorization.routes, error, signal))) throw error
     if (stalled) {
       progress.stalledRecoveries = progress.stalledOffset === progress.offset ? progress.stalledRecoveries + 1 : 1
       progress.stalledOffset = progress.offset
@@ -362,6 +364,10 @@ class RevisionAuthorization {
       this.release().catch(() => undefined)
     })
     this.#current = { generation, opened }
+  }
+
+  get routes(): BlockRouteEligibility {
+    return this.#routes
   }
 
   requireDescriptor(descriptor: FileRevisionDescriptor): void {

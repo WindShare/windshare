@@ -232,15 +232,15 @@ describe('content path policy authority', () => {
   })
 
   it('keeps initial and additional relays ineligible for p2p-only content', async () => {
-    const { connectivity, lanes, session } = fixture(new PendingOffers(), undefined, { policy: 'p2p-only' })
+    const admitted: ContentLaneAdmissionObservation[] = []
+    const { connectivity, lanes, session } = fixture(new PendingOffers(), lane => admitted.push(lane), { policy: 'p2p-only' })
     const activation = connectivity.begin('download')
     const grant = await session.requestLaneGrant(0)
     await session.adoptGrantedLane(fakePeer(), grant)
     connectivity.addRelayLane(grant.laneId)
-    expect(lanes.laneIds()).toEqual([1, grant.laneId])
-    expect(lanes.eligibleSize(activation.routes)).toBe(0)
-    expect(activation.routes.allows('direct')).toBe(true)
-    expect(activation.routes.allows('turn')).toBe(false)
+    expect([lanes.laneIds(), admitted, lanes.eligibleSize(activation.routes)]).toEqual([[], [], 0])
+    await expect(lanes.requests.run({ kind: 'list_children' }, async ({ laneId }) => laneId)).resolves.toBe(grant.laneId)
+    expect([activation.routes.allows('direct'), activation.routes.allows('turn')]).toEqual([true, false])
     activation.close()
     await connectivity.close()
   })

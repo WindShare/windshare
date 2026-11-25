@@ -18,6 +18,7 @@ import {
   ConnectivityRouteAuthority,
   type ContentLaneAdmissionObservation,
 } from '../../src/connectivity/receiver-policy'
+import { CandidateLimitExceededError } from '../../src/connectivity/errors'
 import type { PeerAttemptTraceEvent } from '../../src/connectivity/diagnostics'
 import {
   BrowserSessionFactory,
@@ -656,13 +657,22 @@ describe('independent receiver relay set', () => {
       descriptor: descriptor(), initial: core(session, initial), sessionFactory: factory,
       policy: 'p2p-only', nativePeerUsable: () => false,
     })
+    const observedPathLanes: number[] = []
+    supervisor.pathActivity.subscribe(snapshot => observedPathLanes.push(snapshot.lanes.length))
     const activation = supervisor.beginConnectivity('download')
     await flushReconciliation()
     expect(supervisor.contentLaneCount(activation.routes)).toBe(0)
+    expect(supervisor.currentGeneration()!.lanes.size).toBe(0)
     session.detach(2)
     await flushReconciliation()
     expect(calls).toBe(2)
     expect(supervisor.contentLaneCount(activation.routes)).toBe(0)
+    expect(supervisor.currentGeneration()!.lanes.size).toBe(0)
+    expect(observedPathLanes).toEqual([0])
+    await expect(supervisor.currentGeneration()!.lanes.requests.run(
+      { kind: 'list_children' },
+      async ({ laneId }) => laneId,
+    )).resolves.toBe(1)
     activation.close()
     await supervisor.close()
   })
@@ -921,7 +931,7 @@ describe('wake detection and stalled-lane recovery loop', () => {
     const stall = new BlockLaneAttemptsError([
       new BlockInactivityTimeoutError('awaiting_first_fragment', 15_000, 0, { lane: { laneId: 1, laneEpoch: 0 } }),
     ])
-    const recovered = await supervisor.recover(stalledGeneration, stall, undefined)
+    const recovered = await supervisor.recover(stalledGeneration, activation.routes, stall, undefined)
     expect(recovered).toBe(true)
     expect(supervisor.generationId).toBe(2)
     expect(factory.connectFreshCalls).toBe(1)
@@ -946,7 +956,7 @@ describe('wake detection and stalled-lane recovery loop', () => {
     const stall = new BlockLaneAttemptsError([
       new BlockInactivityTimeoutError('receiving_fragments', 15_000, 0, { lane: { laneId: 7, laneEpoch: 1 } }),
     ])
-    const recovered = await supervisor.recover(current, stall, undefined)
+    const recovered = await supervisor.recover(current, activation.routes, stall, undefined)
     expect(recovered).toBe(true)
     expect(supervisor.generationId).toBe(1)
     expect(factory.connectFreshCalls).toBe(0)
@@ -978,7 +988,7 @@ describe('wake detection and stalled-lane recovery loop', () => {
     const staleTimeout = new BlockLaneAttemptsError([
       new BlockInactivityTimeoutError('receiving_fragments', 15_000, 0, { lane: { laneId: 7, laneEpoch: 1 } }),
     ])
-    const recovered = await supervisor.recover(current, staleTimeout, undefined)
+    const recovered = await supervisor.recover(current, activation.routes, staleTimeout, undefined)
     expect(recovered).toBe(true)
     expect(supervisor.generationId).toBe(1)
     expect(current.lanes.laneIds()).toEqual([1, 7])
@@ -1006,7 +1016,7 @@ describe('wake detection and stalled-lane recovery loop', () => {
       new BlockInactivityTimeoutError('awaiting_first_fragment', 15_000, 0, { lane: { laneId: 7, laneEpoch: 1 } }),
       new BlockInactivityTimeoutError('receiving_fragments', 15_000, 0, { lane: { laneId: 1, laneEpoch: 0 } }),
     ])
-    const recovered = await supervisor.recover(current, mixed, undefined)
+    const recovered = await supervisor.recover(current, activation.routes, mixed, undefined)
     expect(recovered).toBe(true)
     expect(supervisor.generationId).toBe(1)
     expect(current.lanes.laneIds()).toEqual([7])
@@ -1028,9 +1038,123 @@ describe('wake detection and stalled-lane recovery loop', () => {
     const unattributed = new BlockLaneAttemptsError([
       new BlockInactivityTimeoutError('awaiting_first_fragment', 15_000, 0),
     ])
-    expect(await supervisor.recover(stalledGeneration, unattributed, undefined)).toBe(true)
+    expect(await supervisor.recover(stalledGeneration, activation.routes, unattributed, undefined)).toBe(true)
     expect(supervisor.generationId).toBe(2)
     expect(factory.connectFreshCalls).toBe(1)
+
+    activation.close()
+    await supervisor.close()
+  })
+
+  it('awaits direct-lane replacement on non-timeout churn in p2p-only without admitting relay', async () => {
+    const session = new FakeSession([1])
+    const factory = new FakeSessionFactory()
+    const supervisor = new ReceiverReconnectSupervisor({
+      descriptor: descriptor(),
+      initial: core(session, new TrackedRelay(1)),
+      sessionFactory: factory,
+      policy: 'p2p-only',
+      nativePeerUsable: () => true,
+      offersFactory: () => ({
+        offer: (_route, signal) => new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+        }),
+      }),
+    })
+    const pathSnapshots: number[] = []
+    supervisor.pathActivity.subscribe(snapshot => pathSnapshots.push(snapshot.lanes.length))
+    const activation = supervisor.beginConnectivity('download')
+    const current = supervisor.currentGeneration()!
+    expect(pathSnapshots).toEqual([0])
+    expect(current.lanes.size).toBe(0)
+    expect(current.lanes.eligibleSize(activation.routes)).toBe(0)
+
+    let settled = false
+    const churn = new BlockLaneAttemptsError([new SessionRuntimeError('lane', 'direct lane detached')])
+    const recovery = supervisor.recover(current, activation.routes, churn, undefined).then(result => {
+      settled = true
+      return result
+    })
+    await flushReconciliation()
+    expect(settled).toBe(false)
+
+    current.lanes.add(new ImmediateBlockLane(2), 'direct', 1)
+    await expect(recovery).resolves.toBe(true)
+    expect(supervisor.generationId).toBe(1)
+    expect(session.availableLaneIds()).toEqual([1])
+
+    activation.close()
+    await supervisor.close()
+  })
+
+  it('rejects awaiting p2p-only lane recovery with the route authority error when direct paths fail', async () => {
+    const session = new FakeSession([1])
+    const factory = new FakeSessionFactory()
+    const failOffer = deferred<void>()
+    const supervisor = new ReceiverReconnectSupervisor({
+      descriptor: descriptor(),
+      initial: core(session, new TrackedRelay(1)),
+      sessionFactory: factory,
+      policy: 'p2p-only',
+      nativePeerUsable: () => true,
+      offersFactory: () => ({
+        offer: async () => {
+          await failOffer.promise
+          throw new CandidateLimitExceededError(64)
+        },
+      }),
+    })
+    const activation = supervisor.beginConnectivity('download')
+    const current = supervisor.currentGeneration()!
+    const churn = new BlockLaneAttemptsError([new SessionRuntimeError('lane', 'direct lane detached')])
+    const recovery = supervisor.recover(current, activation.routes, churn, undefined)
+    await flushReconciliation()
+
+    failOffer.resolve()
+    await expect(recovery).rejects.toThrow('No authenticated direct path is available')
+    expect(activation.routes.active).toBe(false)
+
+    activation.close()
+    await supervisor.close()
+  })
+
+  it('keeps the signaling relay lane alive on an unattributed inactivity timeout in p2p-only', async () => {
+    const session = new FakeSession([1])
+    const factory = new FakeSessionFactory()
+    const supervisor = new ReceiverReconnectSupervisor({
+      descriptor: descriptor(),
+      initial: core(session, new TrackedRelay(1)),
+      sessionFactory: factory,
+      policy: 'p2p-only',
+      nativePeerUsable: () => true,
+      offersFactory: () => ({
+        offer: (_route, signal) => new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+        }),
+      }),
+    })
+    const activation = supervisor.beginConnectivity('download')
+    const current = supervisor.currentGeneration()!
+    const directEpoch = session.attach(2)
+    current.lanes.add(new ImmediateBlockLane(2), 'direct', directEpoch)
+
+    let settled = false
+    const unattributed = new BlockLaneAttemptsError([
+      new BlockInactivityTimeoutError('awaiting_first_fragment', 15_000, 0),
+    ])
+    const recovery = supervisor.recover(current, activation.routes, unattributed, undefined).then(result => {
+      settled = true
+      return result
+    })
+    await flushReconciliation()
+    expect(settled).toBe(false)
+    expect(supervisor.generationId).toBe(1)
+    expect(factory.connectFreshCalls).toBe(0)
+    expect(session.availableLaneIds()).toEqual([1])
+    expect(current.lanes.laneIds()).toEqual([])
+
+    current.lanes.add(new ImmediateBlockLane(3), 'direct', 1)
+    await expect(recovery).resolves.toBe(true)
 
     activation.close()
     await supervisor.close()

@@ -282,7 +282,12 @@ export class LaneSet {
 
   eligibleSize(routes: BlockRouteEligibility): number {
     routes.assertActive()
-    return [...this.#lanes.values()].filter((candidate) => routes.allows(candidate.route)).length
+    return this.#availableLanes(routes).length
+  }
+
+  eligibleLaneIds(routes: BlockRouteEligibility): readonly number[] {
+    routes.assertActive()
+    return Object.freeze(this.#availableLanes(routes).map((candidate) => candidate.lane.id))
   }
 
   isBandwidthWaiting(routes: BlockRouteEligibility): boolean {
@@ -315,8 +320,8 @@ export class LaneSet {
     }
   }
 
-  waitForContentAdmission(signal?: AbortSignal): Promise<void> {
-    return this.#waitForContentAvailability(undefined, signal)
+  waitForContentAdmission(routes: BlockRouteEligibility, signal?: AbortSignal): Promise<void> {
+    return this.#waitForContentAvailability(routes, signal)
   }
 
   async fetch(demand: BlockDemand, routes: BlockRouteEligibility, signal: AbortSignal): Promise<BlockRecord> {
