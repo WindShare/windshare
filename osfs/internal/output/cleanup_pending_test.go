@@ -12,6 +12,8 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/windshare/windshare/core/diagnostics"
+	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
@@ -263,5 +265,227 @@ func TestNonEmptyOperationDirWithoutJournalRemainsUnknown(t *testing.T) {
 	if inv.Status() != RecoveryListNeedsAttention || !inv.UnknownEntries() || len(inv.Summaries()) != 0 {
 		t.Fatalf("inventory for non-empty dir missing state.log = (status=%v unknown=%t count=%d), want unknown",
 			inv.Status(), inv.UnknownEntries(), len(inv.Summaries()))
+	}
+}
+
+func TestSettleCreateRecheckLookupLockedTranslatesClaimAndReopenOutcomes(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	sel, intent, _ := createPausedSingleFileOp(t, root, 0xa1)
+	opID := intent.OperationID()
+	opDir := filepath.Join(root, ControlDirName, hex.EncodeToString(opID.Bytes()))
+
+	// Empty the operation directory so claimOpUnderDirLock returns LookupNeedsAttention(AttentionCleanup).
+	entries, err := os.ReadDir(opDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if err := os.RemoveAll(filepath.Join(opDir, entry.Name())); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("empty dir claim translates to AttentionCleanup", func(t *testing.T) {
+		stream, err := diagnostics.NewStream(16, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		auth, err := New(Config{RootPath: root, Diagnostics: stream.Sink()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer auth.Close()
+		if err := auth.BindDestination(ctx); err != nil {
+			t.Fatal(err)
+		}
+		auth.admission = &pendingAdmission{selection: sel}
+		auth.stage = stageLookupHeld
+
+		ctrlDir, err := openChildDir(auth.root, ControlDirName)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ctrlDir.Close()
+
+		claimed, early, err := auth.claimOpUnderDirLock(ctx, ctrlDir, opID, false)
+		if err != nil || claimed.taskLock != nil || early.kind != LookupNeedsAttention || early.attention != AttentionCleanup {
+			t.Fatalf("claimOpUnderDirLock(empty) = (claimed=%+v early=%+v err=%v), want LookupNeedsAttention(%q)",
+				claimed, early, err, AttentionCleanup)
+		}
+
+		settledErr := auth.settleCreateRecheckLookupLocked(early)
+		attn, ok := errors.AsType[*AttentionError](settledErr)
+		if !ok || attn == nil || attn.Reason != AttentionCleanup {
+			t.Fatalf("settleCreateRecheckLookupLocked = %v, want *AttentionError(%q)", settledErr, AttentionCleanup)
+		}
+		if !isAdmissionOutcomeError(settledErr) {
+			t.Fatalf("AttentionError must bypass FailureCreate diagnostic wrapping")
+		}
+		if auth.admission != nil || auth.stage != stageStopped {
+			t.Fatalf("authority state = (admission=%v stage=%v), want (nil, stageStopped)", auth.admission, auth.stage)
+		}
+		assertCreateOperationTraceDecision(t, stream, "needs_attention")
+
+		afterEntries, err := os.ReadDir(opDir)
+		if err != nil || len(afterEntries) != 0 {
+			t.Fatalf("empty op dir was mutated during claim: entries=%v err=%v", afterEntries, err)
+		}
+	})
+
+	cases := []struct {
+		name         string
+		lookup       ActiveLookup
+		wantDecision string
+		checkErr     func(t *testing.T, err error)
+	}{
+		{
+			name:         "needs attention with invalid reason falls back to operation",
+			lookup:       ActiveLookup{kind: LookupNeedsAttention, attention: AttentionNone},
+			wantDecision: "needs_attention",
+			checkErr: func(t *testing.T, err error) {
+				t.Helper()
+				attn, ok := errors.AsType[*AttentionError](err)
+				if !ok || attn == nil || attn.Reason != AttentionOperation {
+					t.Fatalf("err = %v, want *AttentionError(%q)", err, AttentionOperation)
+				}
+			},
+		},
+		{
+			name:         "already running",
+			lookup:       ActiveLookup{kind: LookupAlreadyRunning},
+			wantDecision: "already_running",
+			checkErr: func(t *testing.T, err error) {
+				t.Helper()
+				if !errors.Is(err, ErrAlreadyRunning) {
+					t.Fatalf("err = %v, want ErrAlreadyRunning", err)
+				}
+			},
+		},
+		{
+			name:         "ambiguous",
+			lookup:       ActiveLookup{kind: LookupAmbiguous},
+			wantDecision: "ambiguous",
+			checkErr: func(t *testing.T, err error) {
+				t.Helper()
+				if !errors.Is(err, ErrAmbiguous) {
+					t.Fatalf("err = %v, want ErrAmbiguous", err)
+				}
+			},
+		},
+		{
+			name:   "unexpected lookup kind fails closed",
+			lookup: ActiveLookup{kind: LookupNotFound},
+			checkErr: func(t *testing.T, err error) {
+				t.Helper()
+				if !errors.Is(err, transfer.ErrInvalidOutputBinding) {
+					t.Fatalf("err = %v, want ErrInvalidOutputBinding", err)
+				}
+				if isAdmissionOutcomeError(err) {
+					t.Fatalf("ErrInvalidOutputBinding must not be treated as an admission outcome")
+				}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stream, err := diagnostics.NewStream(16, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			auth, err := New(Config{RootPath: root, Diagnostics: stream.Sink()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			auth.admission = &pendingAdmission{selection: sel}
+			auth.stage = stageLookupHeld
+
+			gotErr := auth.settleCreateRecheckLookupLocked(tc.lookup)
+			tc.checkErr(t, gotErr)
+			if auth.admission != nil || auth.stage != stageStopped {
+				t.Fatalf("authority state = (admission=%v stage=%v), want (nil, stageStopped)", auth.admission, auth.stage)
+			}
+			if tc.wantDecision != "" {
+				assertCreateOperationTraceDecision(t, stream, tc.wantDecision)
+			}
+		})
+	}
+}
+
+func TestCreateOperationRecheckSurfacesAttentionErrorForCleanupPending(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	sel := testSelectionSpec(t, 0xa3)
+
+	stream, err := diagnostics.NewStream(16, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth, err := New(Config{RootPath: root, Diagnostics: stream.Sink()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer auth.Close()
+	if err := auth.BindDestination(ctx); err != nil {
+		t.Fatal(err)
+	}
+	lookup, err := auth.SelectOperation(ctx, sel, receivecontract.AutomaticOperation())
+	if err != nil || lookup.Kind() != LookupCreateReady {
+		t.Fatalf("SelectOperation = (kind=%v err=%v), want LookupCreateReady", lookup.Kind(), err)
+	}
+
+	// Another instance creates a matching operation and leaves it cleanup-pending
+	// before auth enters CreateOperation's automatic uniqueness re-check.
+	_, intent, fileID := createPausedSingleFileOp(t, root, 0xa3)
+	rootDir, _, err := OpenContainer(root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctrlDir, err := openChildDir(rootDir, ControlDirName)
+	if err != nil {
+		_ = rootDir.Close()
+		t.Fatal(err)
+	}
+	markOperationCleanupPending(ctrlDir, hex.EncodeToString(intent.OperationID().Bytes()))
+	if err := errors.Join(ctrlDir.Close(), rootDir.Close()); err != nil {
+		t.Fatal(err)
+	}
+
+	art, err := receivecontract.NewSingleFileDirectoryTree(fileID, "cleanup-recheck.bin", "cleanup-recheck.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, createErr := auth.CreateOperation(ctx, lookup, art)
+	if op != nil {
+		t.Fatalf("CreateOperation unexpectedly returned operation %+v", op)
+	}
+	attn, ok := errors.AsType[*AttentionError](createErr)
+	if !ok || attn == nil || attn.Reason != AttentionCleanup {
+		t.Fatalf("CreateOperation = %v, want *AttentionError(%q)", createErr, AttentionCleanup)
+	}
+	if _, hasDiag := DiagnosticFor(createErr); hasDiag {
+		t.Fatalf("CreateOperation wrapped AttentionError in failure diagnostic: %v", createErr)
+	}
+	assertCreateOperationTraceDecision(t, stream, "needs_attention")
+
+	if _, retryErr := auth.CreateOperation(ctx, lookup, art); !errors.Is(retryErr, transfer.ErrInvalidOutputBinding) {
+		t.Fatalf("retry CreateOperation on stopped authority = %v, want ErrInvalidOutputBinding", retryErr)
+	}
+}
+
+func assertCreateOperationTraceDecision(t *testing.T, stream *diagnostics.Stream, wantDecision string) {
+	t.Helper()
+	for {
+		select {
+		case rec := <-stream.Records():
+			p := rec.Payload()
+			if p.Get("runtime_operation").Text() == "create_operation" &&
+				p.Get("runtime_decision").Text() == wantDecision {
+				return
+			}
+		default:
+			t.Fatalf("missing filesystem_output trace with runtime_operation=create_operation runtime_decision=%s", wantDecision)
+		}
 	}
 }

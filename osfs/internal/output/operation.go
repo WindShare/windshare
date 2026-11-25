@@ -169,32 +169,12 @@ func (a *Authority) recheckAutomaticCreateUnderDirLock(
 			a.stage = stageStopped
 			return claimedTask{}, err
 		}
-		if early.kind == LookupAlreadyRunning {
-			a.admission = nil
-			emitTrace(a.diagnostics, traceEvent{
-				component: "session",
-				operation: "create_operation",
-				decision:  "already_running",
-				bindingID: a.bindingID,
-			})
-			return claimedTask{}, ErrAlreadyRunning
-		}
 		if early.kind != 0 {
-			a.admission = nil
-			a.stage = stageStopped
-			return claimedTask{}, transfer.ErrInvalidOutputBinding
+			return claimedTask{}, a.settleCreateRecheckLookupLocked(early)
 		}
 		return claimed, nil
 	default:
-		a.admission = nil
-		a.stage = stageStopped
-		emitTrace(a.diagnostics, traceEvent{
-			component: "session",
-			operation: "create_operation",
-			decision:  "ambiguous",
-			bindingID: a.bindingID,
-		})
-		return claimedTask{}, ErrAmbiguous
+		return claimedTask{}, a.settleCreateRecheckLookupLocked(ActiveLookup{authority: a, kind: LookupAmbiguous})
 	}
 }
 
@@ -204,13 +184,13 @@ func (a *Authority) finishRecheckedReopenLocked(
 ) (*Operation, error) {
 	selection := a.admission.selection
 	reopened, err := a.reopenClaimedLocked(ctx, selection, claimed, false)
-	a.admission = nil
 	if err != nil {
+		a.admission = nil
 		a.stage = stageStopped
 		return nil, err
 	}
-	switch reopened.kind {
-	case LookupReopened:
+	if reopened.kind == LookupReopened {
+		a.admission = nil
 		emitTrace(a.diagnostics, traceEvent{
 			component:    "session",
 			operation:    "create_operation",
@@ -220,17 +200,47 @@ func (a *Authority) finishRecheckedReopenLocked(
 			intentDigest: reopened.operation.intent.Digest(),
 		})
 		return reopened.operation, nil
+	}
+	return nil, a.settleCreateRecheckLookupLocked(reopened)
+}
+
+// settleCreateRecheckLookupLocked converts a non-reopened ActiveLookup from
+// either phase of CreateOperation's automatic uniqueness re-check into an
+// admission outcome error so dirLock claim and task.lock reopen stay aligned.
+func (a *Authority) settleCreateRecheckLookupLocked(lookup ActiveLookup) error {
+	a.admission = nil
+	a.stage = stageStopped
+	switch lookup.kind {
+	case LookupAlreadyRunning:
+		emitTrace(a.diagnostics, traceEvent{
+			component: "session",
+			operation: "create_operation",
+			decision:  "already_running",
+			bindingID: a.bindingID,
+		})
+		return ErrAlreadyRunning
 	case LookupNeedsAttention:
+		reason := lookup.attention
+		if !reason.Valid() {
+			reason = AttentionOperation
+		}
 		emitTrace(a.diagnostics, traceEvent{
 			component: "session",
 			operation: "create_operation",
 			decision:  "needs_attention",
 			bindingID: a.bindingID,
 		})
-		return nil, &AttentionError{Reason: reopened.attention}
+		return &AttentionError{Reason: reason}
+	case LookupAmbiguous:
+		emitTrace(a.diagnostics, traceEvent{
+			component: "session",
+			operation: "create_operation",
+			decision:  "ambiguous",
+			bindingID: a.bindingID,
+		})
+		return ErrAmbiguous
 	default:
-		a.stage = stageStopped
-		return nil, transfer.ErrInvalidOutputBinding
+		return transfer.ErrInvalidOutputBinding
 	}
 }
 
