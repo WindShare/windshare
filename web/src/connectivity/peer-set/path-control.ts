@@ -56,14 +56,19 @@ export class PeerPathControl {
     this.#demand = undefined
     // Idle content withdraws its hold; revoke permanently retires this identity
     // at the sender and belongs only to the path owner's final close.
-    this.#track(this.#send(PEER_PATH_CONTROL_KIND.demand))
+    this.#track(this.#sendDemand())
   }
 
   async close(): Promise<void> {
     if (!this.#closed) {
       this.#demand?.abort()
       this.#demand = undefined
-      if (this.#sequence !== 0n) this.#track(this.#send(PEER_PATH_CONTROL_KIND.revoke))
+      if (this.#sequence !== 0n) {
+        // Hand final revoke to the session writer without binding #lifetime.signal,
+        // so synchronous teardown neither blocks on a stalled relay nor withdraws
+        // a queued revoke before it seals.
+        void this.#session.sendPeerPathControl(this.#encode(PEER_PATH_CONTROL_KIND.revoke)).catch(() => undefined)
+      }
       this.#closed = true
       this.#unsubscribe()
       this.#lifetime.abort()
@@ -73,7 +78,7 @@ export class PeerPathControl {
 
   async #renew(signal: AbortSignal): Promise<void> {
     while (!signal.aborted && !this.#closed) {
-      await this.#send(PEER_PATH_CONTROL_KIND.demand, signal).catch(() => undefined)
+      await this.#sendDemand(signal).catch(() => undefined)
       if (signal.aborted || this.#closed) return
       await this.#clock.sleep(DEMAND_RENEWAL_MILLISECONDS, signal)
     }
@@ -84,15 +89,22 @@ export class PeerPathControl {
     this.#tasks.add(settled)
   }
 
-  #send(kind: number, signal = this.#lifetime.signal): Promise<void> {
+  #sendDemand(signal = this.#lifetime.signal): Promise<void> {
+    // Demand cancellation withdraws queued updates and releases this owner's
+    // wait so shutdown cannot depend on a stalled relay.
+    return awaitWithAbort(
+      this.#session.sendPeerPathControl(this.#encode(PEER_PATH_CONTROL_KIND.demand), { signal }),
+      signal,
+    )
+  }
+
+  #encode(kind: number): Uint8Array<ArrayBuffer> {
     const revoke = kind === PEER_PATH_CONTROL_KIND.revoke
-    // The session retains its serialized transport write; demand cancellation
-    // releases this owner's wait so shutdown cannot depend on a stalled relay.
-    return awaitWithAbort(this.#session.sendPeerPathControl(encodePeerPathControl({
+    return encodePeerPathControl({
       peerPathId: this.#path, networkGenerationId: this.#network.copyBytes(),
       controlSequence: ++this.#sequence, kind,
       validForMilliseconds: revoke ? 0 : DEMAND_LIFETIME_MILLISECONDS,
-      holdForMilliseconds: this.#demand === undefined ? 0 : ATTEMPT_HOLD_MILLISECONDS,
-    }), { signal }), signal)
+      holdForMilliseconds: revoke || this.#demand === undefined ? 0 : ATTEMPT_HOLD_MILLISECONDS,
+    })
   }
 }

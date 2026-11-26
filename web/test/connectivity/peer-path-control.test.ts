@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { PeerPathControl } from '../../src/connectivity/peer-set/path-control'
 import { PeerNetworkGeneration } from '../../src/connectivity/peer-set/network-generation'
 import { decodePeerPathControl, encodePeerPathControl, PEER_PATH_CONTROL_KIND as KIND } from '../../src/protocol/peer-path-control'
+import type { ProtocolTraceEvent } from '../../src/session/diagnostics'
 import type { ReceiverSessionRuntime } from '../../src/session/runtime'
+import { deferred, openSent, runtimeFixture } from '../session/v2-send-fixture'
 
 describe('authenticated cross-attempt path control', () => {
   it('joins demand renewal when the session writer remains stalled', async () => {
@@ -79,5 +81,74 @@ describe('authenticated cross-attempt path control', () => {
     expect(decodePeerPathControl(sent.at(-1)!)).toMatchObject({ kind: KIND.revoke, validForMilliseconds: 0 })
     expect(sent.map((body) => decodePeerPathControl(body).kind).filter((kind) => kind === KIND.revoke)).toHaveLength(1)
     expect(receive).toBeUndefined()
+  })
+
+  it('delivers queued revoke without blocking close when the session writer is sealing', async () => {
+    const completed: ProtocolTraceEvent[] = []
+    const twoSent = deferred<void>()
+    const { runtime, channel } = runtimeFixture({
+      current: (event) => {
+        if (event.eventName === 'protocol_operation' && event.transition === 'send_completed') {
+          completed.push(event)
+          if (completed.length === 2) twoSent.resolve()
+        }
+      },
+    })
+    channel.unblock()
+    const path = new Uint8Array(16).fill(2)
+    const control = new PeerPathControl(runtime, path, new PeerNetworkGeneration(), {
+      now: () => 0,
+      sleep: async () => { throw new Error('closed control must not schedule renewal') },
+    }, () => undefined)
+    try {
+      control.activate()
+      await control.close()
+      await twoSent.promise
+      const sent = (await openSent(channel)).map(({ message }) => decodePeerPathControl(message.body))
+      expect(sent).toMatchObject([
+        { peerPathId: path, controlSequence: 1n, kind: KIND.demand, holdForMilliseconds: 85_000 },
+        { peerPathId: path, controlSequence: 2n, kind: KIND.revoke, validForMilliseconds: 0, holdForMilliseconds: 0 },
+      ])
+    } finally {
+      await runtime.close()
+    }
+  })
+
+  it('withdraws queued demand on close while retaining queued revoke behind a backpressured writer', async () => {
+    const transitions: string[] = []
+    const twoSent = deferred<void>()
+    let sentCount = 0
+    const { runtime, channel } = runtimeFixture({
+      current: (event) => {
+        if (event.eventName === 'protocol_operation') {
+          transitions.push(event.transition)
+          if (event.transition === 'send_completed' && ++sentCount === 2) twoSent.resolve()
+        }
+      },
+    })
+    const path = new Uint8Array(16).fill(3)
+    const control = new PeerPathControl(runtime, path, new PeerNetworkGeneration(), {
+      now: () => 0,
+      sleep: (_ms, signal) => new Promise<void>((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+      }),
+    }, () => undefined)
+    try {
+      control.activate()
+      await channel.sending.promise
+      control.deactivate()
+      await control.close()
+      expect(transitions).toContain('send_withdrawn')
+      expect(channel.sent).toHaveLength(0)
+      channel.unblock()
+      await twoSent.promise
+      const sent = (await openSent(channel)).map(({ message }) => decodePeerPathControl(message.body))
+      expect(sent).toMatchObject([
+        { peerPathId: path, controlSequence: 1n, kind: KIND.demand, holdForMilliseconds: 85_000 },
+        { peerPathId: path, controlSequence: 3n, kind: KIND.revoke, validForMilliseconds: 0, holdForMilliseconds: 0 },
+      ])
+    } finally {
+      await runtime.close()
+    }
   })
 })
