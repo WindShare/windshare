@@ -40,23 +40,15 @@ func TestTCPListenerUsesPathDemandCapacityAndRetirement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	alias, err := mux.GetConnForEndpoint("first", first)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if conn.LocalAddr().String() != first.String() || alias.LocalAddr().String() != first.String() {
+	if conn.LocalAddr().String() != first.String() {
 		t.Fatal("wrong TCP base")
 	}
 	_ = conn.Close()
-	_ = alias.Close()
 	mux.RemoveConnByUfrag("first")
 	if _, err = mux.GetAllConns("other", false, net.IPv4(127, 0, 0, 2)); err != ErrInvalid {
 		t.Fatal(err)
 	}
 	if _, err = mux.GetConnByUfrag("other", false, net.IPv4(127, 0, 0, 2)); err != ErrInvalid {
-		t.Fatal(err)
-	}
-	if _, err = mux.GetConnForEndpoint("other", netip.MustParseAddrPort("127.0.0.1:1")); err != ErrInvalid {
 		t.Fatal(err)
 	}
 	_, release, err := lease.Claim()

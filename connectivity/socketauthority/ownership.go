@@ -1,9 +1,6 @@
 package socketauthority
 
-import (
-	"sync"
-	"time"
-)
+import "sync"
 
 type iceOwnership uint8
 
@@ -12,8 +9,7 @@ const (
 	iceActive
 )
 
-// unavailableLocked is checked again after every unlocked wait: cancellation
-// does not preserve a lease or network generation's right to start new work.
+// unavailableLocked rejects new work on released, closing, or retired leases.
 func (l *Lease) unavailableLocked() error {
 	if l.released || l.authority.closing != nil || l.entry.closing != nil {
 		return ErrClosed
@@ -42,9 +38,6 @@ func (l *Lease) Claim() (*Mux, func(), error) {
 	}
 	l.entry.owner = iceActive
 	a.mu.Unlock()
-	started := time.Now()
-	l.observe(Event{Kind: SocketHandoffStarted, Result: "pending"})
-	l.observe(Event{Kind: SocketHandoffFinished, Duration: time.Since(started), Result: socketResult(nil)})
 	var once sync.Once
 	return l.entry.mux, func() {
 		once.Do(func() {

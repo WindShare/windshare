@@ -6,7 +6,6 @@ import (
 
 	"github.com/windshare/windshare/connectivity/pionpeer"
 	"github.com/windshare/windshare/connectivity/reachability"
-	"github.com/windshare/windshare/connectivity/socketauthority"
 	"github.com/windshare/windshare/connectivity/throughput"
 	"github.com/windshare/windshare/core/observationstream"
 )
@@ -35,7 +34,6 @@ type Observation struct {
 	Reachability *reachability.Event
 	Lifecycle    *LifecycleFacts
 	Admission    *AdmissionFacts
-	Socket       *socketauthority.Event
 	Parallelism  *ParallelismFacts
 }
 
@@ -110,10 +108,6 @@ func (n *NativePeerConnectivity) observeProvider(subject Subject, event pionpeer
 		event.Pair = &copy
 	}
 	n.producer.TryPublish(Observation{Subject: subject, Provider: &event})
-}
-func (n *NativePeerConnectivity) observeSocket(event socketauthority.Event) {
-	subject := Subject{ProtocolSessionID: event.ProtocolSessionID, PeerPathID: event.PeerPathID, NetworkGenerationID: event.NetworkGenerationID, Side: n.config.Side}
-	n.producer.TryPublish(Observation{Subject: subject, Socket: &event})
 }
 
 func (n *NativePeerConnectivity) observeReachability(event reachability.Event) {

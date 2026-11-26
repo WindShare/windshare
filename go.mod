@@ -22,7 +22,6 @@ require (
 	github.com/pion/stun/v4 v4.0.1
 	github.com/pion/transport/v5 v5.1.4
 	// Native transport and connectivity own Pion; core remains transport-neutral.
-	// The pinned source projection preserves provider capabilities across upgrades.
 	github.com/pion/webrtc/v4 v4.2.26
 	// TerminalCanvas clips only at grapheme boundaries and measures combining,
 	// East Asian wide, and emoji clusters in terminal display cells.

@@ -35,16 +35,6 @@ func (m *TCPMux) GetAllConns(ufrag string, isIPv6 bool, local net.IP) ([]net.Pac
 	}
 	return nil, ErrInvalid
 }
-
-// GetConnForEndpoint prevents a mapped port from borrowing another listener.
-func (m *TCPMux) GetConnForEndpoint(ufrag string, local netip.AddrPort) (net.PacketConn, error) {
-	for _, endpoint := range m.endpoints {
-		if endpoint.address == local {
-			return endpoint.mux.GetConnByUfrag(ufrag, local.Addr().Is6(), net.IP(local.Addr().AsSlice()))
-		}
-	}
-	return nil, ErrInvalid
-}
 func (m *TCPMux) RemoveConnByUfrag(ufrag string) {
 	for _, endpoint := range m.endpoints {
 		endpoint.mux.RemoveConnByUfrag(ufrag)

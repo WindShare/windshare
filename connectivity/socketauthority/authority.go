@@ -42,8 +42,6 @@ type Config struct {
 	TCPCapacity  int
 	ListenPacket ListenPacket
 	ListenTCP    func(network, address string) (net.Listener, error)
-	// Observe must publish promptly; it is never called while holding the authority lock.
-	Observe func(Event)
 }
 
 type pathKey struct {

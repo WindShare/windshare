@@ -19,11 +19,6 @@ func (value Observation) DiagnosticRecord() diag.Record {
 		"attempt_sequence": knownDiagnosticUint(subject.AttemptSequence), "network_generation_id": knownDiagnosticUint(subject.NetworkGenerationID),
 		"ice_profile_id": diag.Text(subject.ICEProfileID)}
 	var at time.Time
-	if socket := value.Socket; socket != nil {
-		fields["kind"], at = diag.Text(string(socket.Kind)), socket.At
-		fields["socket"] = diag.Object(diag.Fields{"local_endpoint": diagnosticEndpoint(socket.Local), "stun_server": diagnosticEndpoint(socket.Server),
-			"duration_ms": diag.Millis(socket.Duration), "result": diag.Text(socket.Result)})
-	}
 	if lifecycle := value.Lifecycle; lifecycle != nil {
 		fields["kind"], at = diag.Text(string(lifecycle.Kind)), lifecycle.At
 		fields["lifecycle"] = diag.Object(diag.Fields{"content_demand": diag.Bool(lifecycle.Content), "direct_demand": diag.Bool(lifecycle.Direct),
