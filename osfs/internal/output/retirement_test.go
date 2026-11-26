@@ -165,8 +165,18 @@ func TestDiscardOperationAndConcurrentReopenNeverCorruptActiveResume(t *testing.
 
 		switch lookup.Kind() {
 		case LookupReopened:
-			if !errors.Is(discardErr, ErrBusy) {
-				t.Fatalf("iter %d: reopened op raced with discard = (%+v, %v), want ErrBusy", i, discardRes, discardErr)
+			// completeReopenedSingleFile retires the operation via FinalizeTree(Success),
+			// so a concurrent DiscardOperation either observes the active task.lock
+			// (ErrBusy) or acquires dirLock after completion already removed opDir
+			// (FailureLookup with fs.ErrNotExist). It must never discard or corrupt it.
+			diag, hasDiag := DiagnosticFor(discardErr)
+			retiredBeforeDiscard := hasDiag && diag.Stage == FailureLookup && errors.Is(discardErr, fs.ErrNotExist)
+			if discardRes.Valid() || FailureForStage(discardErr, FailureClose) != nil ||
+				(!errors.Is(discardErr, ErrBusy) && !retiredBeforeDiscard) {
+				t.Fatalf(
+					"iter %d: reopened op raced with discard = (%+v, %v), want ErrBusy or not-found after retirement",
+					i, discardRes, discardErr,
+				)
 			}
 			if reopenDoneErr != nil {
 				t.Fatalf("iter %d: reopened download failed after concurrent discard: %v", i, reopenDoneErr)

@@ -4,14 +4,24 @@ package output
 
 import (
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 	"unsafe"
 
 	"github.com/windshare/windshare/core/catalog"
 	"golang.org/x/sys/unix"
+)
+
+const (
+	// APFS stores inode timestamps as signed 64-bit nanoseconds since the Unix
+	// epoch, saturating future timespecs above math.MaxInt64 ns to
+	// 2262-04-11T23:47:16.854775807Z rather than returning ERANGE.
+	apfsMaxTimestampSec  = math.MaxInt64 / int64(time.Second)
+	apfsMaxTimestampNsec = math.MaxInt64 % int64(time.Second)
 )
 
 func TestSetModifiedTimePreservesNanosecondsAccessTimeAndHandleIdentity(t *testing.T) {
@@ -143,8 +153,10 @@ func TestSetDirModifiedTimeStaysAnchoredPreservesAccessTimeAndAvoidsUnixNanoWrap
 		t.Fatalf("directory mtime update reached replacement: before=%v after=%v err=%v", replacementBefore.ModTime(), replacementAfter.ModTime(), err)
 	}
 
-	// Year 2300 exceeds time.Time.UnixNano (2262) while fitting ext4 (2446) and
-	// APFS (2554). Ensure 64-bit timespec targets never silently wrap to ~1715.
+	// Year 2300 exceeds time.Time.UnixNano (2262) while fitting ext4 (2446).
+	// APFS saturates timestamps above math.MaxInt64 ns to 2262-04-11T23:47:16.854775807Z
+	// rather than returning ERANGE. In both cases, ensure 64-bit timespec
+	// targets never silently wrap through UnixNano() to a negative ~1715 date.
 	if unsafe.Sizeof(unix.Timespec{}.Sec) < 8 {
 		return
 	}
@@ -162,8 +174,15 @@ func TestSetDirModifiedTimeStaysAnchoredPreservesAccessTimeAndAvoidsUnixNanoWrap
 	if err := unix.Fstat(int(dir.handle.Fd()), &after); err != nil {
 		t.Fatal(err)
 	}
-	if int64(after.Mtim.Sec) != futureSec || int64(after.Mtim.Nsec) != 123_456_789 {
-		t.Fatalf("future directory mtime = %+v, want sec=%d nsec=123456789", after.Mtim, futureSec)
+	exact := int64(after.Mtim.Sec) == futureSec && int64(after.Mtim.Nsec) == 123_456_789
+	apfsClamped := runtime.GOOS == "darwin" &&
+		int64(after.Mtim.Sec) == apfsMaxTimestampSec &&
+		int64(after.Mtim.Nsec) == apfsMaxTimestampNsec
+	if !exact && !apfsClamped {
+		t.Fatalf(
+			"future directory mtime = %+v, want sec=%d nsec=123456789 (or Darwin APFS max sec=%d nsec=%d)",
+			after.Mtim, futureSec, apfsMaxTimestampSec, apfsMaxTimestampNsec,
+		)
 	}
 }
 
