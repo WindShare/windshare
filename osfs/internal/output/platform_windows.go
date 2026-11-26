@@ -24,7 +24,8 @@ import (
 const (
 	windowsExtendedPrefix       = `\\?\`
 	windowsExtendedUNCPrefix    = `\\?\UNC\`
-	windowsShortFinalPathLimit  = 240
+	windowsNTNamespacePrefix    = `\??\`
+	windowsMaxShortDirPath      = 248
 	initialResolvedPathUnits    = 512
 	windowsDirLockPrefix        = `Local\windshare-output-dir-`
 	windowsDirLockPathHashBytes = 16
@@ -105,8 +106,61 @@ func isWindowsContainerLink(path string, info os.FileInfo) (bool, error) {
 	return tag == windows.IO_REPARSE_TAG_SYMLINK || tag == windows.IO_REPARSE_TAG_MOUNT_POINT, nil
 }
 
+func hasWindowsExtendedOrDevicePrefix(path string) bool {
+	if len(path) < 4 {
+		return false
+	}
+	if strings.HasPrefix(path, windowsNTNamespacePrefix) {
+		return true
+	}
+	isSep := func(c byte) bool { return c == '\\' || c == '/' }
+	return isSep(path[0]) && isSep(path[1]) && (path[2] == '?' || path[2] == '.') && isSep(path[3])
+}
+
+// windowsCreateFilePath mirrors Go's os.fixLongPath before raw windows.CreateFile
+// calls so OpenContainer matches os.Lstat and os.MkdirAll on standard Windows
+// (LongPathsEnabled == 0): short paths (< 248 bytes) stay unmodified to preserve
+// native Win32 normalization, while long paths are canonicalized via FullPath
+// before prepending \\?\ or \\?\UNC\.
+func windowsCreateFilePath(path string) (string, error) {
+	if path == "" || hasWindowsExtendedOrDevicePrefix(path) {
+		return path, nil
+	}
+	pathLen := len(path)
+	if !filepath.IsAbs(path) {
+		if wd, err := os.Getwd(); err == nil {
+			pathLen += len(wd) + 1
+		}
+	}
+	if pathLen < windowsMaxShortDirPath {
+		return path, nil
+	}
+	full, err := windows.FullPath(path)
+	if err != nil {
+		return "", err
+	}
+	if hasWindowsExtendedOrDevicePrefix(full) {
+		return full, nil
+	}
+	if rest, ok := strings.CutPrefix(full, `\\`); ok {
+		return windowsExtendedUNCPrefix + rest, nil
+	}
+	if len(full) >= 3 && full[1] == ':' && full[2] == '\\' {
+		return windowsExtendedPrefix + full, nil
+	}
+	return full, nil
+}
+
+func windowsCreateFileUTF16(path string) (*uint16, error) {
+	openPath, err := windowsCreateFilePath(path)
+	if err != nil {
+		return nil, err
+	}
+	return windows.UTF16PtrFromString(openPath)
+}
+
 func windowsReparseTag(path string) (uint32, error) {
-	encoded, err := windows.UTF16PtrFromString(path)
+	encoded, err := windowsCreateFileUTF16(path)
 	if err != nil {
 		return 0, err
 	}
@@ -129,7 +183,7 @@ func windowsReparseTag(path string) (uint32, error) {
 }
 
 func windowsResolvedContainerPath(path string) (string, error) {
-	encoded, err := windows.UTF16PtrFromString(path)
+	encoded, err := windowsCreateFileUTF16(path)
 	if err != nil {
 		return "", err
 	}
@@ -170,21 +224,17 @@ func finalPathByHandle(handle windows.Handle) (string, error) {
 
 func normalizeWindowsFinalPath(path string) string {
 	if rest, ok := strings.CutPrefix(path, windowsExtendedUNCPrefix); ok {
-		stripped := `\\` + rest
-		if len(stripped) < windowsShortFinalPathLimit {
-			return stripped
-		}
-		return path
+		return `\\` + rest
 	}
 	if rest, ok := strings.CutPrefix(path, windowsExtendedPrefix); ok &&
-		len(rest) >= 3 && rest[1] == ':' && rest[2] == '\\' && len(rest) < windowsShortFinalPathLimit {
+		len(rest) >= 3 && rest[1] == ':' && rest[2] == '\\' {
 		return rest
 	}
 	return path
 }
 
 func openDirHandle(path string) (*Dir, error) {
-	encoded, err := windows.UTF16PtrFromString(path)
+	encoded, err := windowsCreateFileUTF16(path)
 	if err != nil {
 		return nil, err
 	}
