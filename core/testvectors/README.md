@@ -1,7 +1,7 @@
 # Cross-runtime contracts
 
 This directory contains interoperability contracts for wire messages, bootstrap
-descriptors, content payloads, capability links, paths, naming and diagnostics.
+descriptors, content payloads, capability links, paths and diagnostics.
 Go generates protocol vectors; TypeScript and Rust consume the relevant cases.
 
 Scheduling and retry policies belong to each receiver. Their regressions live in
@@ -27,10 +27,8 @@ Web consumers run under `make web`; Rust consumers run under `make rust`.
   shared by Go, TypeScript and Rust.
 - `diagnostic-correlation-v1.json`: protocol/session/path/lane identities and their
   canonical diagnostic projections.
-- `name-collision-v1.json`: deterministic suffixes, extension preservation and UTF-8
-  truncation at component limits.
-- Signaling, portable-path and envelope fixtures cover their shared codecs
-  and algorithm boundaries.
+- `turn-control.json`, `path-policy.json` and `envelope-sample.json`: TURN control
+  bodies, Unicode 15 logical path policy and vector envelope conventions.
 
 Byte representations follow each file's established encoding. Integers beyond
 JavaScript's safe range use decimal strings. The envelope `version` describes the

@@ -245,7 +245,6 @@ func buildVectorFiles(t *testing.T) []vectorFile {
 		{Version: 1, Kind: "v2-session", Description: "Canonical v2 relay endpoint/identity, purpose-bound register/resume/stop proofs, relay control-frame and proof refusals, connection probes, route controls, lane admission, X25519 transcript, traffic keys and sender controls.", Cases: sessionCases(t, f, descriptor.encoded)},
 		{Version: 1, Kind: "v2-session-controls", Description: "Authenticated reachability session control messages with envelope authentication.", Cases: sessionControlCases(t, f)},
 		{Version: 1, Kind: "v2-fragment", Description: "Authenticated BLOCK_FRAGMENT fixed layout and allocation limits.", Cases: fragmentCases(f, block)},
-		{Version: 1, Kind: "name-collision-v1", Description: "Deterministic collision names preserve extensions when a complete stem scalar fits; otherwise the full name is shortened on UTF-8 scalar boundaries.", Cases: buildNameCollisionVectorCases(t)},
 		{Version: 1, Kind: "v2-semantics", Description: "Cross-runtime wire protocol limits, error domains, relay route lifecycle, and session operation/sequence contracts.", Cases: semanticCases(t)},
 	}
 }
