@@ -644,4 +644,102 @@ describe('OPFS cross-tab reopen and export authority', () => {
     expect(f.part()).toBeDefined()
     await recovered.close()
   })
+
+  it('honors post-async aborts in reopenOPFSSession before worker open and before persisting downloading', async () => {
+    const f = fixture(zip)
+    const session = await f.open()
+    const file = await session.transferOutput.openFile(fileRequest, new AbortController().signal)
+    await file.writeAt(0n, bytes)
+    await file.commit([byteRange(0n, 4n)])
+    const paused = await session.settle({ ...completion, status: 'paused', pauseReason: 'user' })
+    await session.close()
+
+    const putSpy = vi.spyOn(f.memory, 'putTask')
+    const openNativeSpy = vi.spyOn(f.env, 'openNativeObject')
+
+    // Abort during getFileHandle: must skip native worker creation and IDB putTask, then release the lock.
+    const beforeWorker = new AbortController()
+    const dir = f.directory()
+    const originalGetFileHandle = dir.getFileHandle.bind(dir)
+    vi.spyOn(dir, 'getFileHandle').mockImplementationOnce(async (name, options) => {
+      const handle = await originalGetFileHandle(name, options)
+      beforeWorker.abort()
+      return handle
+    })
+    f.events.length = 0
+    await expect(reopenOPFSSession({ ...f, task: paused, signal: beforeWorker.signal }))
+      .rejects.toMatchObject({ name: 'AbortError' })
+    expect(openNativeSpy).not.toHaveBeenCalled()
+    expect(putSpy).not.toHaveBeenCalled()
+    expect(f.events).toEqual(['lock.release'])
+    expect(await f.store.getTask(taskId)).toEqual(paused)
+
+    // Abort during ProgressiveZipWriter.open: must close the native handle before releasing the lock and skip putTask.
+    const beforePut = new AbortController()
+    const originalListFiles = f.memory.listTaskFiles.bind(f.memory)
+    vi.spyOn(f.memory, 'listTaskFiles').mockImplementationOnce(async id => {
+      const rows = await originalListFiles(id)
+      beforePut.abort()
+      return rows
+    })
+    f.events.length = 0
+    await expect(reopenOPFSSession({ ...f, task: paused, signal: beforePut.signal }))
+      .rejects.toMatchObject({ name: 'AbortError' })
+    expect(openNativeSpy).toHaveBeenCalledTimes(1)
+    expect(putSpy).not.toHaveBeenCalled()
+    expect(f.events).toEqual(['native.close', 'lock.release'])
+    expect(f.part()?.nativeOpen).toBe(false)
+    expect(await f.store.getTask(taskId)).toEqual(paused)
+
+    const reopened = await reopenOPFSSession({ ...f, task: paused })
+    expect(await reopened.transferOutput.checkCompleted!('f', new AbortController().signal)).toEqual({ size: 4n })
+    await reopened.close()
+  })
+
+  it('reloads the locked task and checks post-async aborts in exportPartialOPFSZip without blocking crashed-tab recovery', async () => {
+    const f = fixture(zip)
+    const session = await f.open()
+    const file = await session.transferOutput.openFile(fileRequest, new AbortController().signal)
+    await file.writeAt(0n, bytes)
+    await file.commit([byteRange(0n, 4n)])
+    const paused = await session.settle({ ...completion, status: 'paused', pauseReason: 'user' })
+    await session.close()
+
+    // Abort right after locked getTask: must release lock without reading task files or triggering a download.
+    const abortAfterLoad = new AbortController()
+    const originalGetTask = f.memory.getTask.bind(f.memory)
+    const listSpy = vi.spyOn(f.memory, 'listTaskFiles')
+    vi.spyOn(f.memory, 'getTask').mockImplementationOnce(async id => {
+      const record = await originalGetTask(id)
+      abortAfterLoad.abort()
+      return record
+    })
+    f.events.length = 0
+    await expect(exportPartialOPFSZip(paused, f.store, f.env, f.windowPort, abortAfterLoad.signal))
+      .rejects.toMatchObject({ name: 'AbortError' })
+    expect(listSpy).not.toHaveBeenCalled()
+    expect(f.downloads).toHaveLength(0)
+    expect(f.events).toEqual(['lock.release'])
+
+    // Crashed-tab task still persisted as `downloading` (lock free) remains exportable using the authoritative locked target.
+    const authoritativeTarget = Object.freeze({ ...(paused.target as Extract<typeof paused.target, { kind: 'opfs' }>), fileName: 'renamed.zip' })
+    const crashedDownloading = Object.freeze({
+      ...paused,
+      target: authoritativeTarget,
+      lifecycle: Object.freeze({ kind: 'downloading' as const, taskId: paused.taskId, generation: paused.lifecycle.generation + 1n }),
+    })
+    await f.store.putTask(crashedDownloading)
+    await exportPartialOPFSZip(paused, f.store, f.env, f.windowPort)
+    expect(f.downloads).toHaveLength(1)
+    expect(f.downloads[0]?.fileName).toBe('renamed-partial.zip')
+
+    // Cross-tab deletion before lock acquisition rejects with NotFoundError even if an orphaned .part object remains.
+    f.memory.tasks.delete(taskId)
+    expect(f.part()).toBeDefined()
+    f.events.length = 0
+    await expect(exportPartialOPFSZip(paused, f.store, f.env, f.windowPort))
+      .rejects.toMatchObject({ name: 'NotFoundError', message: 'This download record no longer exists' })
+    expect(f.downloads).toHaveLength(1)
+    expect(f.events).toEqual(['lock.release'])
+  })
 })

@@ -126,14 +126,19 @@ async function openOPFSSession(
     const task = reopened
       ? await loadLockedReopenableTask(ports.store, initialTask.taskId, 'opfs', signal)
       : initialTask
+    signal?.throwIfAborted()
     const target = task.target as OPFSTargetRecord
     directory = await openTasksDirectory(ports.env, true)
+    signal?.throwIfAborted()
     fileHandle = await directory.getFileHandle(target.objectName, { create: true })
+    signal?.throwIfAborted()
     const nativeFactory = ports.env.openNativeObject ?? openNativeObject
     io = new ObjectCheckpointCoordinator({
       io: await nativeFactory(fileHandle), operationId: task.taskId, objectId: target.objectName,
     })
+    signal?.throwIfAborted()
     const zip = target.isZip ? await ProgressiveZipWriter.open(task.taskId, ports.store, io, ports.diagnostics?.trace) : undefined
+    signal?.throwIfAborted()
     const record: ReceiveTaskRecord = Object.freeze({
       ...task,
       lifecycle: transitionReceiveState(task.lifecycle, { kind: 'downloading' }),
@@ -231,12 +236,22 @@ export async function exportPartialOPFSZip(
   }
   const lock = await acquireTaskLock(task.taskId, env.locks)
   try {
+    signal?.throwIfAborted()
+    const current = await store.getTask(task.taskId)
+    signal?.throwIfAborted()
+    if (current === undefined) throw new DOMException('This download record no longer exists', 'NotFoundError')
+    if (current.target.kind !== 'opfs' || !current.target.isZip) {
+      throw new TypeError('Partial ZIP export requires a retained OPFS ZIP task')
+    }
     const dir = await openTasksDirectory(env)
-    const handle = await dir.getFileHandle(task.target.objectName)
+    signal?.throwIfAborted()
+    const handle = await dir.getFileHandle(current.target.objectName)
+    signal?.throwIfAborted()
     const file = await handle.getFile()
-    const files = await store.listTaskFiles(task.taskId)
+    signal?.throwIfAborted()
+    const files = await store.listTaskFiles(current.taskId)
     const blob = await buildPartialZipBlob(file, files, signal === undefined ? undefined : { signal })
-    const partialName = task.target.fileName.replace(/\.zip$/iu, '') + '-partial.zip'
+    const partialName = current.target.fileName.replace(/\.zip$/iu, '') + '-partial.zip'
     signal?.throwIfAborted()
     triggerBrowserDownload(windowPort, blob, partialName, 'application/zip')
     return blob
