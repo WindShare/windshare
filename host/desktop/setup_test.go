@@ -2,6 +2,9 @@ package desktop
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -194,7 +197,81 @@ func TestSetupSnapshotPropagatesRelayRemoved(t *testing.T) {
 	}
 	a.work.Wait()
 	view := a.snapshot().Setup
-	if view.State != "finished" || view.ID != "setup:remove" || !view.RelayRemoved || view.RelaySaved || view.FrontendSaved {
+	if view.State != "finished" || view.ID != "setup:remove" || !view.RelayRemoved || view.RelaySaved || view.FrontendSaved || view.Recovery != "" {
 		t.Fatalf("unexpected setup view: %+v", view)
+	}
+}
+
+func TestSetupRecoveryIsOnlyEmittedOnFailure(t *testing.T) {
+	tests := []struct {
+		name         string
+		input        SetupInput
+		result       SetupResult
+		err          error
+		wantState    string
+		wantRecovery relaysetup.RecoveryAction
+	}{
+		{
+			name:      "preference_finished",
+			input:     SetupInput{ID: "setup:pref-ok", Preference: &relayconfig.PreferenceEdit{Action: "mode", Value: "selected"}},
+			wantState: "finished",
+		},
+		{
+			name:      "frontend_finished",
+			input:     SetupInput{ID: "setup:front-ok", FrontURL: "https://front.example"},
+			result:    SetupResult{FrontendSaved: true},
+			wantState: "finished",
+		},
+		{
+			name:         "preference_failed_without_relay_receipt",
+			input:        SetupInput{ID: "setup:pref-fail", Preference: &relayconfig.PreferenceEdit{Action: "frontend", Value: "https://front.example"}},
+			err:          errors.New("settings unwritable"),
+			wantState:    "failed",
+			wantRecovery: relaysetup.RecoveryRestart,
+		},
+		{
+			name:      "relay_failed_with_receipt_remains_fail_closed",
+			input:     SetupInput{ID: "setup:relay-fail", RelayURL: "https://relay.example", RelayOperation: relaysetup.AddProfile},
+			result:    SetupResult{RelayURL: "https://relay.example"},
+			err:       errors.New("relay failed"),
+			wantState: "failed",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			a, _, _ := fixture(t)
+			var loggedRecovery relaysetup.RecoveryAction
+			var loggedEvent bool
+			a.deps.log = func(event string, fields any) {
+				if event != "host.setup_completed" {
+					return
+				}
+				loggedEvent = true
+				loggedRecovery, _ = fields.(map[string]any)["recovery"].(relaysetup.RecoveryAction)
+			}
+			a.deps.setup = func(context.Context, SetupInput, func(relaysetup.Progress)) (SetupResult, error) {
+				return tc.result, tc.err
+			}
+			reply := a.execute(Request{Command: "configure", Setup: &tc.input})
+			if reply.Error != nil {
+				t.Fatalf("configure rejected: %+v", reply.Error)
+			}
+			a.work.Wait()
+			view := a.snapshot().Setup
+			if view.State != tc.wantState || view.Recovery != tc.wantRecovery {
+				t.Fatalf("setup view = %+v, want state=%q recovery=%q", view, tc.wantState, tc.wantRecovery)
+			}
+			if !loggedEvent || loggedRecovery != tc.wantRecovery {
+				t.Fatalf("host.setup_completed recovery = %q (logged=%v), want %q", loggedRecovery, loggedEvent, tc.wantRecovery)
+			}
+			encoded, err := json.Marshal(view)
+			if err != nil {
+				t.Fatal(err)
+			}
+			hasRecoveryField := strings.Contains(string(encoded), `"recovery"`)
+			if hasRecoveryField != (tc.wantRecovery != "") {
+				t.Fatalf("wire setup JSON = %s, want recovery field=%v", encoded, tc.wantRecovery != "")
+			}
+		})
 	}
 }

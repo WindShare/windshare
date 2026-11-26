@@ -31,6 +31,20 @@ func (a *Application) cancelSetupRequest(id string) error {
 	return nil
 }
 
+type setupCleanup struct {
+	relayURL string
+	pending  bool
+}
+
+func setupCleanupFor(relayURL string, relaySaved bool, recovery relaysetup.RecoveryAction) setupCleanup {
+	// A finished or unacquired enrollment does not belong to this intent. Do not
+	// cancel a different workflow that another process may have started since.
+	pending := !relaySaved && relayURL != "" &&
+		recovery != relaysetup.RecoveryRestart &&
+		recovery != relaysetup.RecoveryBlocked
+	return setupCleanup{relayURL: relayURL, pending: pending}
+}
+
 // The application fences admission synchronously, then joins Run before asking
 // the setup owner to revoke its unfinished enrollment. Committed settings survive.
 func (a *Application) cancelSetupLocked() {
@@ -40,22 +54,17 @@ func (a *Application) cancelSetupLocked() {
 		a.setup.clearApproval()
 		a.interruptSetup()
 	case "failed", "cancel_failed":
-		a.setup.State, a.setup.Error = "cancelling", nil
-		a.work.Go(a.finishSetupCancellation)
+		cleanup := setupCleanupFor(a.setup.RelayURL, a.setup.RelaySaved, a.setup.Recovery)
+		a.setup.State, a.setup.Recovery, a.setup.Error = "cancelling", "", nil
+		a.work.Go(func() { a.finishSetupCancellation(cleanup) })
 	}
 }
 
-func (a *Application) finishSetupCancellation() {
-	a.mu.Lock()
-	address := a.setup.RelayURL
-	noPending := a.setup.RelaySaved || a.setup.Recovery == relaysetup.RecoveryRestart || a.setup.Recovery == relaysetup.RecoveryBlocked
-	a.mu.Unlock()
+func (a *Application) finishSetupCancellation(cleanup setupCleanup) {
 	ctx, cancel := context.WithTimeout(context.Background(), setupCancellationTimeout)
 	var err error
-	// A finished or unacquired enrollment does not belong to this intent. Do not
-	// cancel a different workflow that another process may have started since.
-	if !noPending {
-		err = a.deps.cancelSetup(ctx, address)
+	if cleanup.pending {
+		err = a.deps.cancelSetup(ctx, cleanup.relayURL)
 	}
 	cancel()
 	a.mu.Lock()

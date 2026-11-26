@@ -147,6 +147,18 @@ func (input SetupInput) validate() error {
 	return nil
 }
 
+func setupRecovery(result SetupResult, err error) relaysetup.RecoveryAction {
+	if setupError, ok := errors.AsType[*relaysetup.SetupError](err); ok {
+		return setupError.Recovery.Action
+	}
+	// Only the completed workflow receipt can identify an enrollment to clean up.
+	// An input URL alone does not mean this intent acquired that relay's approval.
+	if result.RelayURL == "" {
+		return relaysetup.RecoveryRestart
+	}
+	return ""
+}
+
 func (a *Application) runSetup(ctx context.Context, input SetupInput) {
 	defer a.work.Done()
 	result, err := a.deps.setup(ctx, input, func(progress relaysetup.Progress) {
@@ -170,30 +182,25 @@ func (a *Application) runSetup(ctx context.Context, input SetupInput) {
 	}
 	a.setup.FrontendSaved, a.setup.RelaySaved, a.setup.RelayRemoved = result.FrontendSaved, result.RelaySaved, result.RelayRemoved
 	a.setup.RelayURL = result.RelayURL
-	// Only the completed workflow receipt can identify an enrollment to clean up.
-	// An input URL alone does not mean this intent acquired that relay's approval.
-	if result.RelayURL == "" {
-		a.setup.Recovery = relaysetup.RecoveryRestart
-	}
-	if setupError, ok := errors.AsType[*relaysetup.SetupError](err); ok {
-		a.setup.Recovery = setupError.Recovery.Action
-	}
 	cancelled := ctx.Err() != nil || a.closing
 	a.interruptSetup()
 	a.interruptSetup = nil
 	a.setup.clearApproval()
 	if cancelled {
-		a.setup.State = "cancelling"
+		cleanup := setupCleanupFor(a.setup.RelayURL, a.setup.RelaySaved, setupRecovery(result, err))
+		a.setup.State, a.setup.Recovery = "cancelling", ""
 		a.snapshotLocked()
 		a.mu.Unlock()
-		a.finishSetupCancellation()
+		a.finishSetupCancellation(cleanup)
 		return
 	}
 	defer a.mu.Unlock()
 	if err != nil {
-		a.setup.State, a.setup.Error = "failed", failure("setup_failed", err)
+		a.setup.State = "failed"
+		a.setup.Recovery = setupRecovery(result, err)
+		a.setup.Error = failure("setup_failed", err)
 	} else {
-		a.setup.State = "finished"
+		a.setup.State, a.setup.Recovery = "finished", ""
 	}
 	a.logSetupResult("host.setup_completed")
 	if err == nil {

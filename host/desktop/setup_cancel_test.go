@@ -63,8 +63,12 @@ func TestShareCancellationJoinsSetupAndRetainsRetryableCleanup(t *testing.T) {
 		view.VerificationURL != "" || view.UserCode != "" || view.ServiceLogin != nil {
 		t.Fatalf("lost cancellation receipt: %+v", view)
 	}
-	if reply := a.execute(Request{Command: "cancel_setup", SetupID: view.ID}); reply.Error != nil {
-		t.Fatal(reply.Error)
+	retryReply := a.execute(Request{Command: "cancel_setup", SetupID: view.ID})
+	if retryReply.Error != nil {
+		t.Fatal(retryReply.Error)
+	}
+	if retryReply.Snapshot.Setup.State != "cancelling" || retryReply.Snapshot.Setup.Recovery != "" {
+		t.Fatalf("cancelling snapshot leaked recovery state: %+v", retryReply.Snapshot.Setup)
 	}
 	a.work.Wait()
 	settled := a.snapshot().Setup
@@ -111,14 +115,18 @@ func TestShutdownWaitsForEnrollmentCancellation(t *testing.T) {
 }
 
 func TestSetupCleanupDoesNotCancelUnacquiredOrCommittedApproval(t *testing.T) {
-	for _, receipt := range []SetupView{
-		{State: "failed", Recovery: relaysetup.RecoveryRestart},
-		{State: "failed", Recovery: relaysetup.RecoveryBlocked},
-		{State: "cancelling", RelaySaved: true},
+	for _, tc := range []struct {
+		name    string
+		receipt SetupView
+	}{
+		{name: "restart", receipt: SetupView{State: "failed", RelayURL: "https://relay.example", Recovery: relaysetup.RecoveryRestart}},
+		{name: "blocked", receipt: SetupView{State: "failed", RelayURL: "https://relay.example", Recovery: relaysetup.RecoveryBlocked}},
+		{name: "relay_saved", receipt: SetupView{State: "cancelling", RelayURL: "https://relay.example", RelaySaved: true}},
+		{name: "empty_relay", receipt: SetupView{State: "cancelling"}},
 	} {
-		t.Run(string(receipt.Recovery), func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			a, _, _ := fixture(t)
-			receipt.RelayURL = "https://relay.example"
+			receipt := tc.receipt
 			receipt.VerificationURL = "https://console.example/approve"
 			receipt.UserCode = "ABCD-EFGH"
 			receipt.ServiceLogin = &relaysetup.ServiceLogin{URL: "https://account.example/device#invite=token", Host: "account.example"}
@@ -127,9 +135,9 @@ func TestSetupCleanupDoesNotCancelUnacquiredOrCommittedApproval(t *testing.T) {
 				t.Error("cleanup attempted to revoke another workflow's approval")
 				return nil
 			}
-			a.finishSetupCancellation()
+			a.finishSetupCancellation(setupCleanupFor(receipt.RelayURL, receipt.RelaySaved, receipt.Recovery))
 			settled := a.snapshot().Setup
-			if settled.State != "cancelled" || settled.VerificationURL != "" || settled.UserCode != "" || settled.ServiceLogin != nil {
+			if settled.State != "cancelled" || settled.Recovery != "" || settled.VerificationURL != "" || settled.UserCode != "" || settled.ServiceLogin != nil {
 				t.Fatalf("finished setup did not settle cleanly: %+v", settled)
 			}
 		})
@@ -269,5 +277,37 @@ func TestConfigureRejectsFinishedRunningShare(t *testing.T) {
 	reply := a.execute(setupRequest())
 	if reply.Error == nil || reply.Error.Message != "creation operation has finished" {
 		t.Fatalf("expected finished operation rejection, got: %+v", reply.Error)
+	}
+}
+
+func TestCancelledSetupWithoutRelayReceiptSkipsCleanupAndOmitsRecovery(t *testing.T) {
+	a, _, _ := fixture(t)
+	entered := make(chan struct{})
+	a.deps.setup = func(ctx context.Context, _ SetupInput, _ func(relaysetup.Progress)) (SetupResult, error) {
+		close(entered)
+		<-ctx.Done()
+		return SetupResult{}, ctx.Err()
+	}
+	a.deps.cancelSetup = func(context.Context, string) error {
+		t.Error("cleanup attempted to cancel without a relay receipt")
+		return nil
+	}
+	request := setupRequest()
+	request.OperationID = ""
+	if reply := a.execute(request); reply.Error != nil {
+		t.Fatal(reply.Error)
+	}
+	<-entered
+	cancelReply := a.execute(Request{Command: "cancel_setup", SetupID: request.Setup.ID})
+	if cancelReply.Error != nil {
+		t.Fatal(cancelReply.Error)
+	}
+	if cancelReply.Snapshot.Setup.State != "cancelling" || cancelReply.Snapshot.Setup.Recovery != "" {
+		t.Fatalf("cancelling snapshot leaked recovery: %+v", cancelReply.Snapshot.Setup)
+	}
+	a.work.Wait()
+	settled := a.snapshot().Setup
+	if settled.State != "cancelled" || settled.Recovery != "" {
+		t.Fatalf("cancelled setup did not settle cleanly: %+v", settled)
 	}
 }
