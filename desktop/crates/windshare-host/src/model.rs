@@ -488,41 +488,31 @@ impl Model {
         self.matches_session(snapshot) && snapshot.revision > self.revision
     }
 
-    pub(crate) fn can_cancel_setup(&self, setup_id: &str) -> bool {
+    pub fn can_cancel_setup(&self, setup_id: &str) -> bool {
+        if setup_id.is_empty() {
+            return false;
+        }
         if matches!(
             &self.setup,
             Setup::Finished { context } | Setup::Cancelled { context } if context.id == setup_id
         ) {
             return false;
         }
-        if matches!(
-            &self.setup_request,
-            crate::SetupRequest::Pending {
-                id,
-                kind: crate::SetupRequestKind::Cancel { .. },
-                ..
-            } if id == setup_id
-        ) {
-            return false;
+        if let crate::SetupRequest::Pending { id, kind, .. } = &self.setup_request {
+            if id != setup_id {
+                return false;
+            }
+            return matches!(kind, crate::SetupRequestKind::Configure);
         }
-        if matches!(
-            &self.setup_request,
-            crate::SetupRequest::Pending {
-                id,
-                kind: crate::SetupRequestKind::Configure,
-                ..
-            } if id == setup_id
-        ) {
-            return true;
-        }
-        matches!(
-            &self.setup,
-            Setup::Running { context, .. }
-                | Setup::Cancelling { context }
-                | Setup::Failed { context, .. }
-                | Setup::CancelFailed { context, .. }
-                if context.id == setup_id
-        )
+        self.setup.unfinished()
+            && !matches!(self.setup, Setup::Cancelling { .. })
+            && self.setup.context().is_some_and(|ctx| ctx.id == setup_id)
+    }
+
+    pub fn can_cancel_current_setup(&self) -> bool {
+        self.setup
+            .context()
+            .is_some_and(|ctx| self.can_cancel_setup(&ctx.id))
     }
 
     pub(crate) fn can_reject(&self, operation_id: &str, error: &Failure) -> bool {
@@ -656,7 +646,7 @@ impl Model {
                     }
                     (Setup::Finished { .. } | Setup::Cancelled { .. }, _)
                     | (
-                        Setup::Failed { .. } | Setup::CancelFailed { .. },
+                        Setup::Running { .. } | Setup::Failed { .. } | Setup::CancelFailed { .. },
                         crate::SetupRequestKind::Configure,
                     )
                     | (

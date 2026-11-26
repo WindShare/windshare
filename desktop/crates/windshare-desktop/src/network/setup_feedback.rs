@@ -37,7 +37,7 @@ pub(super) fn setup_progress_panel<V: 'static>(
     setup: &Setup,
     approve_owner: impl FnOnce(&Context<V>) -> Button,
     approve_device: impl FnOnce(&Context<V>) -> Button,
-    cancel_button: impl FnOnce(Text, bool, &Context<V>) -> Button,
+    cancel_button: impl FnOnce(Text, &Context<V>) -> Button,
     cx: &Context<V>,
 ) -> Div {
     let locale = language(cx);
@@ -98,15 +98,21 @@ pub(super) fn setup_progress_panel<V: 'static>(
     } else {
         Text::CancelSetup
     };
-    panel.child(cancel_button(
-        cancel_label,
-        matches!(setup, Setup::Cancelling { .. }),
-        cx,
-    ))
+    panel.child(cancel_button(cancel_label, cx))
 }
 
 impl Desktop {
-    pub fn setup_cancellation_notice(theme: Theme, error: &str, cx: &Context<Self>) -> Div {
+    fn setup_cancel_disabled(&self, cx: &App) -> bool {
+        match &self.runtime {
+            Runtime::Native(session) => {
+                let store = session.host.read(cx);
+                store.selection_disabled() || !store.model().can_cancel_current_setup()
+            }
+            Runtime::Preview(_) => true,
+        }
+    }
+
+    pub fn setup_cancellation_notice(&self, theme: Theme, error: &str, cx: &Context<Self>) -> Div {
         theme
             .card()
             .p(px(18.))
@@ -123,6 +129,7 @@ impl Desktop {
                 )
                 .icon(Icon::Refresh)
                 .style(ButtonStyle::Secondary)
+                .disabled(self.setup_cancel_disabled(cx))
                 .on_press(cx.listener(|this, (), _, cx| {
                     this.cancel_sharing_setup(cx);
                     cx.notify();
@@ -166,7 +173,8 @@ impl Desktop {
         ))
     }
 
-    pub(super) fn setup_progress(theme: Theme, setup: &Setup, cx: &Context<Self>) -> Div {
+    pub(super) fn setup_progress(&self, theme: Theme, setup: &Setup, cx: &Context<Self>) -> Div {
+        let cancel_disabled = self.setup_cancel_disabled(cx);
         setup_progress_panel(
             theme,
             setup,
@@ -182,11 +190,11 @@ impl Desktop {
                     .style(ButtonStyle::Primary)
                     .on_press(cx.listener(|this, (), _, cx| this.approve_relay(cx)))
             },
-            |label, disabled, cx| {
+            |label, cx| {
                 Button::new("cancel-sharing-setup", language(cx).text(label))
                     .icon(Icon::Close)
                     .style(ButtonStyle::Secondary)
-                    .disabled(disabled)
+                    .disabled(cancel_disabled)
                     .on_press(cx.listener(|this, (), _, cx| {
                         this.cancel_sharing_setup(cx);
                         cx.notify();

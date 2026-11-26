@@ -486,7 +486,7 @@ impl Desktop {
                             .flex_shrink_0()
                             .gap(px(16.))
                             .when_some(self.runtime.setup_cancellation_error(cx), |el, error| {
-                                el.child(Self::setup_cancellation_notice(theme, error, cx))
+                                el.child(self.setup_cancellation_notice(theme, error, cx))
                             })
                             .when_some(self.account_notice(theme, cx), |el, notice| {
                                 el.child(notice)
@@ -547,7 +547,7 @@ impl Desktop {
                             el.child(self.page_heading(theme, compact, cx))
                         })
                         .when_some(self.runtime.setup_cancellation_error(cx), |el, error| {
-                            el.child(Self::setup_cancellation_notice(theme, error, cx))
+                            el.child(self.setup_cancellation_notice(theme, error, cx))
                         })
                         .when_some(self.account_notice(theme, cx), |el, notice| {
                             el.child(notice)

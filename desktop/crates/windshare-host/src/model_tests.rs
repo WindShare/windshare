@@ -612,3 +612,83 @@ fn in_flight_registration_id_tracks_only_pending_register_commands() {
         }
     );
 }
+
+#[test]
+fn can_cancel_setup_enforces_state_and_pending_request_ownership() {
+    let mut model = Model::default();
+    assert!(!model.can_cancel_setup(""));
+    assert!(!model.can_cancel_current_setup());
+
+    // Active Running setup is cancellable both before and after local Pending(Configure) clears.
+    let mut running = snapshot(1, vec![]);
+    running.setup = serde_json::from_value(serde_json::json!({
+        "state": "running",
+        "id": "setup:1",
+        "operation_id": "share:a",
+        "relay_url": "https://relay.example"
+    }))
+    .unwrap();
+    model.setup_request = crate::SetupRequest::Pending {
+        id: "setup:1".into(),
+        operation_id: "share:a".into(),
+        kind: crate::SetupRequestKind::Configure,
+    };
+    assert!(model.can_cancel_setup("setup:1"));
+    model.reconcile(running);
+    assert_eq!(model.setup_request, crate::SetupRequest::Idle);
+    assert!(model.can_cancel_setup("setup:1"));
+    assert!(model.can_cancel_current_setup());
+    assert!(!model.can_cancel_setup("setup:other"));
+
+    // An adopted Cancelling setup (e.g. after reconnect with Idle request) is not re-cancellable.
+    let mut cancelling = snapshot(2, vec![]);
+    cancelling.setup = serde_json::from_value(serde_json::json!({
+        "state": "cancelling",
+        "id": "setup:1",
+        "operation_id": "share:a"
+    }))
+    .unwrap();
+    model.reconcile(cancelling);
+    assert!(!model.can_cancel_setup("setup:1"));
+    assert!(!model.can_cancel_current_setup());
+
+    // Terminal failures (Restart / Blocked) have no pending enrollment to cancel.
+    for (rev, recovery) in [(3, "restart"), (4, "blocked")] {
+        let mut terminal_fail = snapshot(rev, vec![]);
+        terminal_fail.setup = serde_json::from_value(serde_json::json!({
+            "state": "failed",
+            "id": format!("setup:{rev}"),
+            "recovery": recovery,
+            "error": { "code": "setup_failed", "message": "failed" }
+        }))
+        .unwrap();
+        model.reconcile(terminal_fail);
+        assert!(
+            !model.can_cancel_setup(&format!("setup:{rev}")),
+            "{recovery}"
+        );
+        assert!(!model.can_cancel_current_setup(), "{recovery}");
+    }
+
+    // CancelFailed is cancellable when idle, but disabled once a cancel or newer configure is pending.
+    let mut cancel_failed = snapshot(5, vec![]);
+    cancel_failed.setup = serde_json::from_value(serde_json::json!({
+        "state": "cancel_failed",
+        "id": "setup:5",
+        "error": { "code": "setup_cancel_failed", "message": "offline" }
+    }))
+    .unwrap();
+    model.reconcile(cancel_failed);
+    assert!(model.can_cancel_setup("setup:5"));
+    assert!(model.can_cancel_current_setup());
+
+    model.setup_request = crate::SetupRequest::Pending {
+        id: "setup:5".into(),
+        operation_id: String::new(),
+        kind: crate::SetupRequestKind::Cancel {
+            acknowledged: false,
+        },
+    };
+    assert!(!model.can_cancel_setup("setup:5"));
+    assert!(!model.can_cancel_current_setup());
+}

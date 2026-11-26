@@ -81,6 +81,7 @@ impl Render for SetupDialog {
 
 impl SetupDialog {
     fn progress_view(&self, theme: Theme, cx: &Context<Self>) -> Div {
+        let cancel_disabled = self.cancel_disabled(cx);
         setup_progress_panel(
             theme,
             self.setup(cx),
@@ -96,11 +97,11 @@ impl SetupDialog {
                     .style(ButtonStyle::Primary)
                     .on_press(cx.listener(|this, (), _, cx| this.approve_relay(cx)))
             },
-            |label, disabled, cx| {
+            |label, cx| {
                 Button::new("cancel-sharing-setup", language(cx).text(label))
                     .icon(Icon::Close)
                     .style(ButtonStyle::Secondary)
-                    .disabled(disabled)
+                    .disabled(cancel_disabled)
                     .on_press(cx.listener(|this, (), _, cx| this.cancel_setup(cx)))
             },
             cx,

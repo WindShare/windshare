@@ -368,7 +368,11 @@ impl Desktop {
         let Runtime::Native(session) = &self.runtime else {
             return;
         };
-        let Some(setup_id) = session.model(cx).setup.context().map(|ctx| ctx.id.clone()) else {
+        let store = session.host.read(cx);
+        if store.selection_disabled() {
+            return;
+        }
+        let Some(setup_id) = store.model().setup.context().map(|ctx| ctx.id.clone()) else {
             return;
         };
         let host = session.host.clone();

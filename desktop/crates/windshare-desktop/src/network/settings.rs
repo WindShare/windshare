@@ -262,7 +262,7 @@ impl Desktop {
                 .rounded(px(12.))
                 .bg(theme.inset())
                 .gap(px(10.))
-                .child(Self::setup_progress(theme, setup, cx)),
+                .child(self.setup_progress(theme, setup, cx)),
         )
     }
 

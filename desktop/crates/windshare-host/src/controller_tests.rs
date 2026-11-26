@@ -325,3 +325,114 @@ fn cancel_setup_ignores_terminal_and_superseded_setups() {
     );
     assert!(!controller.model().has_unfinished_work());
 }
+
+#[test]
+fn cancel_setup_rejects_superseded_failed_setup_while_retry_is_pending() {
+    let (controller, receiver) = controller();
+    let first = controller.setup_relay(
+        "share:1",
+        RelayOperation::AddProfile,
+        "https://relay.example".into(),
+        String::new(),
+    );
+    let _ = receiver.try_recv().unwrap();
+
+    // First setup fails with Recovery::Continue: still unfinished and cancellable.
+    let failed: Snapshot = serde_json::from_value(serde_json::json!({
+        "session_id": "session",
+        "revision": 1,
+        "shares": [],
+        "setup": {
+            "state": "failed",
+            "id": first,
+            "operation_id": "share:1",
+            "relay_url": "https://relay.example",
+            "relay_operation": "add",
+            "recovery": "continue",
+            "error": { "code": "setup_failed", "message": "temporary network error" }
+        }
+    }))
+    .unwrap();
+    controller
+        .shared
+        .update(|draft| draft.write().reconcile(failed));
+    assert_eq!(controller.model().setup_request, SetupRequest::Idle);
+    assert!(controller.model().can_cancel_setup(&first));
+    assert!(controller.model().can_cancel_current_setup());
+
+    // User retries (`Configure("setup:2")`): before the host replies, cancelling the
+    // superseded `first` setup must be rejected without clobbering `second`.
+    let second = controller.setup_relay(
+        "share:1",
+        RelayOperation::AddProfile,
+        "https://relay.example".into(),
+        String::new(),
+    );
+    assert!(matches!(
+        receiver.try_recv().unwrap(),
+        Command::Configure { setup, .. } if setup.id == second
+    ));
+    assert!(!controller.model().can_cancel_setup(&first));
+    assert!(!controller.model().can_cancel_current_setup());
+    assert!(controller.model().can_cancel_setup(&second));
+    assert!(!controller.cancel_setup(&first));
+    assert!(receiver.try_recv().is_err());
+    assert_eq!(
+        controller.model().setup_request,
+        SetupRequest::Pending {
+            id: second,
+            operation_id: "share:1".into(),
+            kind: SetupRequestKind::Configure,
+        }
+    );
+}
+
+#[test]
+fn running_setup_clears_pending_configure_and_remains_cancellable() {
+    let (controller, receiver) = controller();
+    let active = controller.setup_relay(
+        "share:1",
+        RelayOperation::AddProfile,
+        "https://relay.example".into(),
+        String::new(),
+    );
+    let _ = receiver.try_recv().unwrap();
+
+    // Once the host acknowledges `active` as Running, local Pending(Configure) clears
+    // and the active running setup remains cancellable.
+    let running: Snapshot = serde_json::from_value(serde_json::json!({
+        "session_id": "session",
+        "revision": 1,
+        "shares": [],
+        "setup": {
+            "state": "running",
+            "id": active,
+            "operation_id": "share:1",
+            "relay_url": "https://relay.example",
+            "relay_operation": "add"
+        }
+    }))
+    .unwrap();
+    controller
+        .shared
+        .update(|draft| draft.write().reconcile(running));
+    assert_eq!(controller.model().setup_request, SetupRequest::Idle);
+    assert!(!controller.model().setup_pending());
+    assert!(controller.model().has_unfinished_work());
+    assert_eq!(
+        controller.model().in_flight_setup_id("share:1"),
+        Some(active.as_str())
+    );
+    assert!(controller.model().can_cancel_setup(&active));
+    assert!(controller.model().can_cancel_current_setup());
+
+    // Cancelling the active running setup succeeds and immediately blocks duplicates.
+    assert!(controller.cancel_setup(&active));
+    assert!(matches!(
+        receiver.try_recv().unwrap(),
+        Command::CancelSetup { setup_id } if setup_id == active
+    ));
+    assert!(!controller.model().can_cancel_current_setup());
+    assert!(!controller.cancel_setup(&active));
+    assert!(receiver.try_recv().is_err());
+}

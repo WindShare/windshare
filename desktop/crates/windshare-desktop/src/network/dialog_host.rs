@@ -133,13 +133,11 @@ impl SetupDialog {
         let SetupSource::Native { host, .. } = &self.source else {
             return;
         };
-        let Some(setup_id) = host
-            .read(cx)
-            .model()
-            .setup
-            .context()
-            .map(|ctx| ctx.id.clone())
-        else {
+        let store = host.read(cx);
+        if store.selection_disabled() {
+            return;
+        }
+        let Some(setup_id) = store.model().setup.context().map(|ctx| ctx.id.clone()) else {
             return;
         };
         let host = host.clone();
