@@ -394,8 +394,10 @@ func (a *runner) startReceiverPeer(
 		notifyReceiverPeer(observe, receiverPeerFailed)
 		return nil
 	}
-	attempt, err := starter.Start(ctx, runtime)
+	peerCtx, cancelPeer := standardCancellationContext(ctx)
+	attempt, err := starter.Start(peerCtx, runtime)
 	if err != nil || attempt == nil {
+		cancelPeer()
 		observation.warningCode(receiverPeerSetupFailureCode(receiverPeerSetupStart))
 		notifyReceiverPeer(observe, receiverPeerFailed)
 		return nil
@@ -403,11 +405,46 @@ func (a *runner) startReceiverPeer(
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		defer cancelPeer()
 		a.monitorReceiverPeer(
 			attempt, runtime, runtime.ProtocolSessionID(), observation, observe,
 		)
 	}()
 	return &activeReceiverPeer{attempt: attempt, done: done, localStop: localStop}
+}
+
+// standardCancellationContext forwards parent cancellation without leaking
+// task-internal cancel causes (such as task.ErrCancelled) into connectivity
+// layers whose diagnostic classifier only treats standard context.Canceled as
+// a benign local stop.
+func standardCancellationContext(parent context.Context) (context.Context, func()) {
+	if parent == nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		return ctx, cancel
+	}
+	base := context.WithoutCancel(parent)
+	var ctx context.Context
+	var cancel context.CancelFunc
+	if deadline, ok := parent.Deadline(); ok {
+		ctx, cancel = context.WithDeadline(base, deadline)
+	} else {
+		ctx, cancel = context.WithCancel(base)
+	}
+	if parent.Err() != nil {
+		if ctx.Err() == nil {
+			cancel()
+		}
+		return ctx, cancel
+	}
+	stop := context.AfterFunc(parent, func() {
+		if ctx.Err() == nil {
+			cancel()
+		}
+	})
+	return ctx, func() {
+		stop()
+		cancel()
+	}
 }
 
 func receiverPeerSetupFailureCode(phase receiverPeerSetupPhase) FailureCode {

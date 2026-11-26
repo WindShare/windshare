@@ -216,13 +216,16 @@ func (r *Reader) ReleaseRevision(ctx context.Context, handle transfer.RevisionHa
 		return content.ErrInvalidLease
 	}
 	b.cancel()
-	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
-	defer cancel()
-	if err := b.acquire(cleanup); err != nil {
+	acquireCtx, cancelAcquire := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	defer cancelAcquire()
+	if err := b.acquire(acquireCtx); err != nil {
 		return err
 	}
 	defer b.unlock()
-	return errors.Join(b.cleanupErr, r.release(cleanup, b.lease.LeaseID))
+	// Explicit handle release honors caller cancellation and shorter caller
+	// deadlines so tearing down a canceled job relinquishes local state without
+	// blocking on a remote RPC.
+	return errors.Join(b.cleanupErr, r.releaseCallerScoped(ctx, b.lease.LeaseID))
 }
 
 // A download can replace many leases. Keep the first unconfirmed release for
@@ -246,7 +249,20 @@ func (r *Reader) release(ctx context.Context, id content.LeaseID) error {
 	}
 	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 	defer cancel()
-	err := r.source.ReleaseLease(cleanup, id)
+	return r.releaseWithContext(cleanup, id)
+}
+
+func (r *Reader) releaseCallerScoped(ctx context.Context, id content.LeaseID) error {
+	if id.IsZero() {
+		return nil
+	}
+	cleanup, cancel := context.WithTimeout(ctx, cleanupTimeout)
+	defer cancel()
+	return r.releaseWithContext(cleanup, id)
+}
+
+func (r *Reader) releaseWithContext(ctx context.Context, id content.LeaseID) error {
+	err := r.source.ReleaseLease(ctx, id)
 	if errors.Is(err, content.ErrLeaseExpired) || errors.Is(err, content.ErrInvalidLease) {
 		return nil
 	}

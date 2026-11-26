@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer"
@@ -168,4 +169,55 @@ func TestBrokenSourceRangesCannotInventProgress(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+}
+
+func TestReleaseRevisionHonorsCallerCancellationAndShorterDeadline(t *testing.T) {
+	t.Run("pre-canceled caller skips remote wait after relinquishing local state", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			reader, source, opened := fixture(t)
+			source.releaseCtx = func(ctx context.Context, _ content.LeaseID) error {
+				<-ctx.Done()
+				return ctx.Err()
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+
+			started := time.Now()
+			err := reader.ReleaseRevision(ctx, opened.Handle)
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("release err = %v, want context.Canceled", err)
+			}
+			if elapsed := time.Since(started); elapsed >= time.Second {
+				t.Fatalf("canceled release stalled for %v", elapsed)
+			}
+			if len(source.released) != 1 || source.released[0][0] != 1 {
+				t.Fatalf("local release handoff skipped: %v", source.released)
+			}
+			if err := reader.ReleaseRevision(context.Background(), opened.Handle); !errors.Is(err, content.ErrInvalidLease) {
+				t.Fatalf("handle remained bound after release: %v", err)
+			}
+		})
+	})
+
+	t.Run("shorter caller deadline is not extended to cleanupTimeout", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			reader, source, opened := fixture(t)
+			source.releaseCtx = func(ctx context.Context, _ content.LeaseID) error {
+				<-ctx.Done()
+				return ctx.Err()
+			}
+			const shortBudget = 100 * time.Millisecond
+			ctx, cancel := context.WithTimeout(context.Background(), shortBudget)
+			defer cancel()
+
+			started := time.Now()
+			err := reader.ReleaseRevision(ctx, opened.Handle)
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("release err = %v, want context.DeadlineExceeded", err)
+			}
+			if elapsed := time.Since(started); elapsed >= time.Second {
+				t.Fatalf("release extended short deadline to %v", elapsed)
+			}
+		})
+	})
 }

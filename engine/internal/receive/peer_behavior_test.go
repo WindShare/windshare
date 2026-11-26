@@ -6,10 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/core/session/protocolsession"
-
 	"github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session/protocolsession"
+	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
+	"github.com/windshare/windshare/engine/internal/task"
 )
 
 func TestReceiverPeerDispositionOwnsSessionClosure(t *testing.T) {
@@ -135,4 +136,70 @@ func TestReceiverPeerFactoryFailurePreservesRequiredAdmission(t *testing.T) {
 	if warnings := warningEvents(*events); len(warnings) != 1 || warnings[0].(Warning).Code != FailurePeerConfiguration {
 		t.Fatalf("warnings=%v", warnings)
 	}
+}
+
+type capturingPeerStarter struct {
+	started func(context.Context) (receiverPeerAttempt, error)
+}
+
+func (s capturingPeerStarter) Start(ctx context.Context, _ *receiversession.Runtime) (receiverPeerAttempt, error) {
+	return s.started(ctx)
+}
+
+func TestStartReceiverPeerIsolatesTaskCancelCause(t *testing.T) {
+	t.Run("pre-canceled task cause becomes standard context.Canceled", func(t *testing.T) {
+		observation, _ := newTestObservation(t)
+		parent, cancel := context.WithCancelCause(context.Background())
+		cancel(task.ErrCancelled)
+
+		var observedCtx context.Context
+		attempt := newCLIReceiverPeerAttempt()
+		worker := &runner{receiverPeerFactory: func() (receiverPeerStarter, error) {
+			return capturingPeerStarter{started: func(ctx context.Context) (receiverPeerAttempt, error) {
+				observedCtx = ctx
+				return attempt, nil
+			}}, nil
+		}}
+		peer := worker.startReceiverPeer(parent, nil, observation, nil, &receiverLocalStop{}, receiverPeerPreferred)
+		if peer == nil {
+			t.Fatal("expected active peer")
+		}
+		defer peer.Close()
+
+		if observedCtx == nil || observedCtx.Err() != context.Canceled {
+			t.Fatalf("peer ctx err = %v, want context.Canceled", observedCtx.Err())
+		}
+		if cause := context.Cause(observedCtx); cause != context.Canceled {
+			t.Fatalf("peer ctx cause = %v, want standard context.Canceled (leaked task cause)", cause)
+		}
+	})
+
+	t.Run("mid-run task cancellation forwards standard context.Canceled", func(t *testing.T) {
+		observation, _ := newTestObservation(t)
+		parent, cancel := context.WithCancelCause(context.Background())
+		defer cancel(nil)
+
+		var observedCtx context.Context
+		attempt := newCLIReceiverPeerAttempt()
+		worker := &runner{receiverPeerFactory: func() (receiverPeerStarter, error) {
+			return capturingPeerStarter{started: func(ctx context.Context) (receiverPeerAttempt, error) {
+				observedCtx = ctx
+				return attempt, nil
+			}}, nil
+		}}
+		peer := worker.startReceiverPeer(parent, nil, observation, nil, &receiverLocalStop{}, receiverPeerPreferred)
+		if peer == nil {
+			t.Fatal("expected active peer")
+		}
+		defer peer.Close()
+
+		if observedCtx.Err() != nil {
+			t.Fatalf("live peer ctx already ended: %v", observedCtx.Err())
+		}
+		cancel(task.ErrCancelled)
+		<-observedCtx.Done()
+		if observedCtx.Err() != context.Canceled || context.Cause(observedCtx) != context.Canceled {
+			t.Fatalf("peer ctx err=%v cause=%v, want context.Canceled", observedCtx.Err(), context.Cause(observedCtx))
+		}
+	})
 }

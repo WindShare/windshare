@@ -2,6 +2,7 @@ package transfer
 
 import (
 	"context"
+	"time"
 
 	"github.com/windshare/windshare/core/transfer/fault"
 )
@@ -177,9 +178,12 @@ func (r *jobRun) rejectCommitSettlement(
 }
 
 func (r *jobRun) releaseRevision(ctx context.Context, plan plannedFile, lease RevisionHandle) {
-	settleContext, cancel := r.job.newSettlementContext(ctx)
-	rawReleaseErr := r.job.revisions.ReleaseRevision(settleContext, lease)
-	err := normalizeSourceBoundary(settleContext, rawReleaseErr)
+	releaseContext, cancel := r.job.newRevisionReleaseContext(ctx)
+	rawReleaseErr := r.job.revisions.ReleaseRevision(releaseContext, lease)
+	var err error
+	if rawReleaseErr != nil {
+		err = normalizeSourceBoundary(releaseContext, rawReleaseErr)
+	}
 	cancel()
 	// Remote cleanup cannot retract an accepted output settlement. Its bounded
 	// ownership and diagnostic result remain visible without inventing file failure.
@@ -334,6 +338,34 @@ func (r *jobRun) completeJob(ctx context.Context, outcome DirectTreeOutcome) {
 
 func (j *TransferJob) newSettlementContext(parent context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(parent), j.settlementTimeout)
+}
+
+// Unlike local output settlement (which strips cancellation to protect durable
+// checkpoints), remote lease release must follow caller cancellation so a
+// canceled run relinquishes local ownership without stalling on remote RPCs.
+// Forwarding via a fresh child also keeps sibling BoundaryError cancel causes
+// from being misattributed to revision cleanup diagnostics.
+func (j *TransferJob) newRevisionReleaseContext(parent context.Context) (context.Context, context.CancelFunc) {
+	deadline := time.Now().Add(j.settlementTimeout)
+	if parentDeadline, ok := parent.Deadline(); ok && parentDeadline.Before(deadline) {
+		deadline = parentDeadline
+	}
+	ctx, cancel := context.WithDeadline(context.WithoutCancel(parent), deadline)
+	if parent.Err() != nil {
+		if ctx.Err() == nil {
+			cancel()
+		}
+		return ctx, cancel
+	}
+	stop := context.AfterFunc(parent, func() {
+		if ctx.Err() == nil {
+			cancel()
+		}
+	})
+	return ctx, func() {
+		stop()
+		cancel()
+	}
 }
 
 func lifecyclePolicyFor(err error) lifecyclePolicy {

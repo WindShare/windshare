@@ -20,6 +20,7 @@ type sourceFixture struct {
 	open       func(context.Context, int) (Lease, error)
 	read       func(context.Context, content.LeaseID, content.Range, transfer.RangeSink) error
 	release    func(content.LeaseID) error
+	releaseCtx func(context.Context, content.LeaseID) error
 }
 
 func (s *sourceFixture) OpenLease(ctx context.Context, _ catalog.FileID) (Lease, error) {
@@ -29,8 +30,11 @@ func (s *sourceFixture) OpenLease(ctx context.Context, _ catalog.FileID) (Lease,
 	}
 	return NewLease(identity[content.LeaseID](byte(s.opens)), s.descriptor)
 }
-func (s *sourceFixture) ReleaseLease(_ context.Context, id content.LeaseID) error {
+func (s *sourceFixture) ReleaseLease(ctx context.Context, id content.LeaseID) error {
 	s.released = append(s.released, id)
+	if s.releaseCtx != nil {
+		return s.releaseCtx(ctx, id)
+	}
 	if s.release != nil {
 		return s.release(id)
 	}

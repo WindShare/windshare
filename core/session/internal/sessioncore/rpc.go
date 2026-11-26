@@ -223,6 +223,9 @@ func (client *Requests) BeginCall(
 			call.RecordTraceFailure(session.ErrRuntimeClosed)
 		}
 		client.End(call)
+		if client.runtime.ctx.Err() == nil && isPreAdmissionContextErr(ctx, err) {
+			return ctx.Err()
+		}
 		return protocolsession.MarkNotSent(rpcDeliveryError(client.runtime, errRequestNotDelivered, err))
 	}
 	// Uncertain physical send: the operation remains admitted in operationTable.
@@ -605,6 +608,17 @@ func (client *Requests) enqueueBestEffortCancel(call *Call, message protocolsess
 		}
 		return
 	}
+}
+
+func isPreAdmissionContextErr(ctx context.Context, err error) bool {
+	if ctx == nil {
+		return false
+	}
+	ctxErr := ctx.Err()
+	if ctxErr != context.Canceled && ctxErr != context.DeadlineExceeded {
+		return false
+	}
+	return err == ctxErr || errors.Unwrap(err) == ctxErr //nolint:errorlint // Only an exact pre-admission context leaf (optionally tagged NotSent) aligns with PrepareCall.
 }
 
 func retryableLaneFailure(err error) bool {
