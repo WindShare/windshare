@@ -43,6 +43,7 @@ func TestDescribeFailureCoversDomainCategoriesAndContext(t *testing.T) {
 	sealedCloseNoFault, _ := output.SealFailure(errors.New("close handle failed"), output.FailureDiagnostic{Stage: output.FailureClose})
 	sealedBusyNoFault, _ := output.SealFailure(errors.Join(output.ErrBusy, errors.New("lock held")), output.FailureDiagnostic{Stage: output.FailureOpen})
 	faultDrift, _ := transferfault.NewSource(transferfault.ScopeFileLocal, transferfault.SourceRevisionChanged)
+	faultCatalogStale, _ := transferfault.NewCatalog(transferfault.ScopeDirectoryLocal, transferfault.CatalogDirectoryStale)
 	faultBusy, _ := transferfault.NewOutput(transferfault.ScopeFileLocal, transferfault.OutputFileAlreadyActive)
 	faultCat, _ := transferfault.NewCatalog(transferfault.ScopeDirectoryLocal, transferfault.CatalogUnavailable)
 	faultSess, _ := transferfault.NewSession(transferfault.ScopeSessionTerminal, transferfault.SessionTransport)
@@ -85,6 +86,7 @@ func TestDescribeFailureCoversDomainCategoriesAndContext(t *testing.T) {
 		{"auth pending", &relayset.AuthorizationError{State: relayset.AuthorizationPendingSetup}, FailureRelayUnavailable},
 		{"boundary fault busy", transferfault.Wrap(faultBusy, errors.New("busy")), FailureOutputBusy},
 		{"boundary catalog", transferfault.Wrap(faultCat, errors.New("cat")), FailureCatalogUnavailable},
+		{"boundary catalog stale", transferfault.Wrap(faultCatalogStale, errors.New("stale")), FailureSourceChanged},
 		{"boundary session", transferfault.Wrap(faultSess, errors.New("sess")), FailureSessionFailed},
 		{"boundary ck busy", transferfault.Wrap(faultCkBusy, errors.New("ck")), FailureOutputBusy},
 		{"directory unavailable", &networkdirectory.UnavailableError{}, FailureNetworkUnavailable},

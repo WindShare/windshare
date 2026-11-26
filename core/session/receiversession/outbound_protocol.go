@@ -223,6 +223,13 @@ func catalogDirectoryBoundaryError(cause error) error {
 	return transferfault.Wrap(value, cause)
 }
 
+func catalogStaleBoundaryError(cause error) error {
+	value, _ := transferfault.NewCatalog(
+		transferfault.ScopeDirectoryLocal, transferfault.CatalogDirectoryStale,
+	)
+	return transferfault.Wrap(value, cause)
+}
+
 func sourceBoundaryError(code transferfault.SourceCode, cause error) error {
 	value, _ := transferfault.NewSource(transferfault.ScopeFileLocal, code)
 	return transferfault.Wrap(value, cause)

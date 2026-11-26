@@ -53,7 +53,7 @@ func formatTransferResult(result TransferResult, symbols Symbols) []terminalcanv
 	case ResultPaused:
 		headline = statusLine(symbols.Paused, withDrift("Download paused after "+elapsed, result.SourceDrift), terminalcanvas.StyleWarning)
 	case ResultStopped:
-		headline = statusLine(symbols.Warning, "Download stopped after "+elapsed, terminalcanvas.StyleWarning)
+		headline = statusLine(symbols.Warning, withDrift("Download stopped after "+elapsed, result.SourceDrift), terminalcanvas.StyleWarning)
 	default:
 		headline = statusLine(symbols.Failure, withDrift("Download failed after "+elapsed, result.SourceDrift), terminalcanvas.StyleError)
 	}

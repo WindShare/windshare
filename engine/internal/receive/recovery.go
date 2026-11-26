@@ -27,11 +27,15 @@ const (
 	RecoveryTransferFailure RecoveryReason = iota + 1
 	RecoveryCollision
 	RecoveryOwnershipUnknown
-	RecoveryRevisionChanged
+	// Local checkpoint metadata disagrees with the opened remote revision.
+	RecoveryCheckpointRevisionConflict
 	RecoverySelectionMissing
 	RecoverySourceOmitted
 	RecoveryInvalidRequest
 	RecoveryNeedsInspection
+	// Every remaining unpublished item changed at the source; retrying this link
+	// cannot complete them.
+	RecoverySourceChanged
 )
 
 type ShareStopSource uint8
@@ -69,21 +73,28 @@ const (
 // Retention is independent of the next step: an invalid selection can coexist
 // with completed files and reusable partials that must remain owned and intact.
 type RecoveryOutcome struct {
-	Retention ProgressRetention
-	Reason    RecoveryReason
-	ShareStop ShareStopSource
+	Retention      ProgressRetention
+	Reason         RecoveryReason
+	ShareStop      ShareStopSource
+	HasSourceDrift bool
 }
 
 func (outcome RecoveryOutcome) ShareStopped() bool { return outcome.ShareStop != ShareStopUnconfirmed }
 
+// NeedsNewLink reports when this link cannot finish any remaining unfinished
+// work because either the share ended or only source-changed files remain.
+func (outcome RecoveryOutcome) NeedsNewLink() bool {
+	return outcome.ShareStopped() || outcome.Reason == RecoverySourceChanged
+}
+
 // Retryable describes replaying the same request after any local remediation.
 // Link viability and the primary fault are independent of output ownership.
 func (outcome RecoveryOutcome) Retryable() bool {
-	if outcome.ShareStopped() {
+	if outcome.NeedsNewLink() {
 		return false
 	}
 	switch outcome.Reason {
-	case RecoveryTransferFailure, RecoveryCollision, RecoveryOwnershipUnknown, RecoveryRevisionChanged:
+	case RecoveryTransferFailure, RecoveryCollision, RecoveryOwnershipUnknown, RecoveryCheckpointRevisionConflict:
 		return true
 	default:
 		return false
@@ -144,11 +155,13 @@ func runOperation(ctx context.Context, request Request, deps Dependencies, attem
 		actions := pauseActions(recovery, control != nil)
 		deps.Control.Diagnostics.Emit(diagnostics.New("receive.output_recovery_evaluated", diagnostics.Fields{
 			"operation": diagnostics.Identity(completed.Value.Operation.Bytes()), "attempt": diagnostics.Uint(attemptNumber),
-			"failure_class": diagnostics.Uint(uint64(completed.FailureClass)),
-			"reason":        diagnostics.Uint(uint64(recovery.Reason)),
-			"retention":     diagnostics.Uint(uint64(recovery.Retention)),
-			"share_stop":    diagnostics.Text(recovery.ShareStop.String()),
-			"output_idle":   diagnostics.Bool(control != nil), "retry_allowed": diagnostics.Bool(slices.Contains(actions, RecoveryRetry)),
+			"failure_class":    diagnostics.Uint(uint64(completed.FailureClass)),
+			"reason":           diagnostics.Uint(uint64(recovery.Reason)),
+			"retention":        diagnostics.Uint(uint64(recovery.Retention)),
+			"share_stop":       diagnostics.Text(recovery.ShareStop.String()),
+			"has_source_drift": diagnostics.Bool(recovery.HasSourceDrift),
+			"needs_new_link":   diagnostics.Bool(recovery.NeedsNewLink()),
+			"output_idle":      diagnostics.Bool(control != nil), "retry_allowed": diagnostics.Bool(slices.Contains(actions, RecoveryRetry)),
 		}))
 		if ctx.Err() != nil || request.OnPause == nil || len(actions) == 0 {
 			return
@@ -224,7 +237,7 @@ func pauseActions(recovery RecoveryOutcome, idle bool) []RecoveryAction {
 		return nil
 	case recovery.Retryable():
 		return []RecoveryAction{RecoveryRetry, RecoveryDiscard, RecoveryExit}
-	case recovery.ShareStopped() && recovery.Retention == RetentionCheckpoints:
+	case recovery.NeedsNewLink() && recovery.Retention == RetentionCheckpoints:
 		return []RecoveryAction{RecoveryDiscard, RecoveryExit}
 	default:
 		return nil
@@ -256,10 +269,15 @@ func recoveryReason(class task.FailureClass, failure Failure, result transfer.Jo
 	if code, ok := failure.Fault.SessionCode(); ok && code == transferfault.SessionDependencyContract {
 		return RecoveryNeedsInspection
 	}
+	// Only a change that leaves no other unfinished work exhausts this link;
+	// mixed outcomes stay retryable so retry can still finish unchanged files.
+	if class == task.FailureSourceDrift && result.OnlySourceChangedFiles() {
+		return RecoverySourceChanged
+	}
 	outcomes := result.Progress.FileOutcomes
 	switch {
 	case outcomes.RevisionConflictFiles != 0:
-		return RecoveryRevisionChanged
+		return RecoveryCheckpointRevisionConflict
 	case outcomes.OwnedObjectUnknownFiles != 0 || outcomes.ItemBlockedFiles != 0:
 		return RecoveryOwnershipUnknown
 	case outcomes.CollisionFiles != 0:

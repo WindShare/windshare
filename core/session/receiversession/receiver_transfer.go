@@ -277,12 +277,12 @@ func (dependencies receiverTransferDependencies) classifyCatalog(ctx context.Con
 		var directoryFailure catalogflow.DirectoryFailure
 		switch {
 		case errors.As(cause, &directoryFailure):
+			if directoryFailure.Code == catalogflow.DirectoryCodeStale {
+				return catalogStaleBoundaryError(cause)
+			}
 			return catalogDirectoryBoundaryError(cause)
 		case errors.Is(cause, catalog.ErrDirectoryStale):
-			value, _ := transferfault.NewCatalog(
-				transferfault.ScopeDirectoryLocal, transferfault.CatalogDirectoryStale,
-			)
-			return transferfault.Wrap(value, cause)
+			return catalogStaleBoundaryError(cause)
 		case transferfault.IsSessionTerminal(cause):
 			return sessionTransportBoundaryError(cause)
 		default:

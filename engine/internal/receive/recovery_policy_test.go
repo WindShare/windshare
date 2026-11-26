@@ -244,3 +244,158 @@ func TestNonIdleRetainedOutputRequiresInspectionInsteadOfAdvisingRetry(t *testin
 		t.Fatalf("settlement failure lost from completion error: %v", completed.Err)
 	}
 }
+
+// pureSourceDrift builds a finalized partial job whose only unpublished file
+// changed at the source while every other discovered file was published.
+func pureSourceDrift(t *testing.T) SettlementInput {
+	t.Helper()
+	drift, err := transferfault.NewSource(transferfault.ScopeFileLocal, transferfault.SourceRevisionChanged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return SettlementInput{Result: transfer.JobResult{
+		Outcome: transfer.DirectTreeOutcomePartial, SourceDriftFault: drift,
+		Files: []transfer.FileJobFailure{{Path: "d/b.txt", Stage: transfer.FailureRevisionOpen, Fault: drift}},
+		Progress: transfer.ReceiveProgressSnapshot{
+			Discovery: transfer.DiscoveryComplete, CountersExact: true, DiscoveredFiles: 2, PublishedFiles: 1,
+			FileOutcomes: transfer.FileOutcomeSummary{DownloadedFiles: 1},
+		},
+	}}
+}
+
+func TestSourceDriftOffersDiscardInsteadOfSameLinkRetry(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		action    RecoveryAction
+		retention ProgressRetention
+		discards  int
+	}{
+		{name: "unattended", retention: RetentionCheckpoints},
+		{name: "exit keeps partials", action: RecoveryExit, retention: RetentionCheckpoints},
+		{name: "discard", action: RecoveryDiscard, retention: RetentionDiscarded, discards: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prepared, authority := recoveryTestPreparation(t)
+			attempts, prompts := 0, 0
+			request := Request{Capability: link.Link{Suite: link.SuiteSenderAuthenticated}, Connectivity: ConnectivityRelayOnly}
+			if test.action != 0 {
+				request.OnPause = func(_ context.Context, pause Pause) (RecoveryAction, error) {
+					prompts++
+					if pause.Recovery.Reason != RecoverySourceChanged || !pause.Recovery.NeedsNewLink() ||
+						!pause.Recovery.HasSourceDrift || pause.Allows(RecoveryRetry) ||
+						!pause.Allows(RecoveryDiscard) || !pause.Allows(RecoveryExit) {
+						t.Fatalf("source drift pause = %+v", pause)
+					}
+					return test.action, nil
+				}
+			}
+			completed := runOperation(t.Context(), request, Dependencies{}, func(_ context.Context, _ preparedRequest, _ Dependencies, retained *getOutputPreparation) task.Completion[Result] {
+				attempts++
+				*retained = prepared
+				result, err := Settle(pureSourceDrift(t))
+				if err != nil {
+					t.Fatal(err)
+				}
+				return result
+			})
+			wantPrompts := 0
+			if test.action != 0 {
+				wantPrompts = 1
+			}
+			recovery := completed.Value.Recovery
+			if attempts != 1 || prompts != wantPrompts || authority.discards != test.discards ||
+				completed.FailureClass != task.FailureSourceDrift || recovery.Reason != RecoverySourceChanged ||
+				!recovery.NeedsNewLink() || !recovery.HasSourceDrift ||
+				recovery.Retryable() || recovery.ShareStopped() || recovery.Retention != test.retention {
+				t.Fatalf("recovery=%+v class=%d attempts=%d prompts=%d discards=%d", recovery, completed.FailureClass, attempts, prompts, authority.discards)
+			}
+		})
+	}
+}
+
+func TestSourceDriftKeepsRetryWhileOtherWorkCanFinish(t *testing.T) {
+	session, err := transferfault.NewSession(transferfault.ScopeSessionTerminal, transferfault.SessionTransport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*SettlementInput)
+		reason RecoveryReason
+	}{
+		{"interruption", func(input *SettlementInput) {
+			input.ContextError = context.Canceled
+			input.Result.Outcome = transfer.DirectTreeOutcomePaused
+			input.Result.TerminationCause, input.Result.TerminationInterruption = context.Canceled, transfer.TransferInterruptionCanceled
+			input.Result.Progress.DiscoveredFiles++
+			input.Result.Progress.FileOutcomes.PausedFiles++
+			input.Result.Progress.RestartReusableBytes = 1 << 20
+		}, RecoveryTransferFailure},
+		{"network loss", func(input *SettlementInput) {
+			input.ConnectionError = errors.New("relay connection lost")
+			input.Result.Outcome = transfer.DirectTreeOutcomePaused
+			input.Result.TerminationCause, input.Result.TerminationFault = errors.New("session ended"), session
+			input.Result.Progress.DiscoveredFiles++
+		}, RecoveryTransferFailure},
+		{"collision", func(input *SettlementInput) {
+			input.Result.Progress.DiscoveredFiles++
+			input.Result.Progress.FileOutcomes.CollisionFiles++
+		}, RecoveryCollision},
+		{"checkpoint revision conflict", func(input *SettlementInput) {
+			input.Result.Progress.DiscoveredFiles++
+			input.Result.Progress.FileOutcomes.ItemBlockedFiles++
+			input.Result.Progress.FileOutcomes.RevisionConflictFiles++
+		}, RecoveryCheckpointRevisionConflict},
+		{"unchanged file still unfinished", func(input *SettlementInput) {
+			input.Result.Progress.DiscoveredFiles++
+		}, RecoveryTransferFailure},
+		{"unattributed omitted failure", func(input *SettlementInput) {
+			input.Result.OmittedFileFailures = 1
+		}, RecoveryTransferFailure},
+		{"incomplete discovery", func(input *SettlementInput) {
+			input.Result.Progress.Discovery = transfer.DiscoveryOpen
+		}, RecoveryTransferFailure},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prepared, authority := recoveryTestPreparation(t)
+			attempts, prompts := 0, 0
+			request := Request{Capability: link.Link{Suite: link.SuiteSenderAuthenticated}, Connectivity: ConnectivityRelayOnly, OnPause: func(_ context.Context, pause Pause) (RecoveryAction, error) {
+				prompts++
+				if prompts > 1 {
+					if pause.Recovery.Reason != RecoverySourceChanged || !pause.Recovery.NeedsNewLink() || pause.Allows(RecoveryRetry) {
+						t.Fatalf("pure drift after retry pause = %+v", pause.Recovery)
+					}
+					return RecoveryExit, nil
+				}
+				if pause.Recovery.Reason != test.reason || pause.Recovery.NeedsNewLink() ||
+					!pause.Recovery.HasSourceDrift || !pause.Allows(RecoveryRetry) || !pause.Allows(RecoveryDiscard) {
+					t.Fatalf("mixed drift pause = %+v", pause.Recovery)
+				}
+				return RecoveryRetry, nil
+			}}
+			completed := runOperation(t.Context(), request, Dependencies{}, func(_ context.Context, _ preparedRequest, _ Dependencies, retained *getOutputPreparation) task.Completion[Result] {
+				attempts++
+				if attempts > 1 {
+					result, err := Settle(pureSourceDrift(t))
+					if err != nil {
+						t.Fatal(err)
+					}
+					return result
+				}
+				*retained = prepared
+				input := pureSourceDrift(t)
+				test.mutate(&input)
+				result, err := Settle(input)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return result
+			})
+			recovery := completed.Value.Recovery
+			if attempts != 2 || prompts != 2 || authority.discards != 0 || completed.FailureClass != task.FailureSourceDrift ||
+				recovery.Reason != RecoverySourceChanged || !recovery.NeedsNewLink() || !recovery.HasSourceDrift || recovery.Retryable() {
+				t.Fatalf("recovery=%+v attempts=%d prompts=%d discards=%d", recovery, attempts, prompts, authority.discards)
+			}
+		})
+	}
+}

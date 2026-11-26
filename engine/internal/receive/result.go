@@ -175,7 +175,11 @@ func Settle(input SettlementInput) (task.Completion[Result], error) {
 				result.Outcome = task.OutcomeFailed
 			}
 		}
-		result.Value.Recovery = RecoveryOutcome{Reason: recoveryReason(class, failure, r, input.CleanupError), ShareStop: stop}
+		result.Value.Recovery = RecoveryOutcome{
+			Reason:         recoveryReason(class, failure, r, input.CleanupError),
+			ShareStop:      stop,
+			HasSourceDrift: r.SourceDriftFault.Valid(),
+		}
 		result.Err = errors.Join(failure, input.diagnosticCauses())
 	}
 	return result, nil

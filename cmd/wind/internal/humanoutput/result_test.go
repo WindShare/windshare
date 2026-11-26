@@ -70,6 +70,31 @@ func TestTransferResultVocabularyAndOutcomeAuthority(t *testing.T) {
 			}
 		})
 	}
+
+	for _, test := range []struct {
+		name      string
+		drift     bool
+		wantDrift bool
+	}{
+		{"stopped", false, false},
+		{"stopped drift", true, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var text strings.Builder
+			for _, line := range formatTransferResult(TransferResult{
+				Status: ResultStopped, SourceDrift: test.drift, Elapsed: time.Second, Destination: "out",
+				Files: transfer.FileOutcomeSummary{PausedFiles: 1}, CountersExact: true,
+			}, SelectSymbols(false)) {
+				text.WriteString(lineText(line))
+				text.WriteByte('\n')
+			}
+			output := text.String()
+			if !strings.Contains(output, "Download stopped") || !strings.Contains(output, "1 unfinished") ||
+				strings.Contains(output, "because the source changed") != test.wantDrift {
+				t.Fatalf("stopped output = %q, wantDrift=%t", output, test.wantDrift)
+			}
+		})
+	}
 }
 
 func TestShareResultNeverInfersTrafficTotals(t *testing.T) {

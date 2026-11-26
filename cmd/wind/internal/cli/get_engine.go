@@ -95,13 +95,13 @@ func buildTransferResult(
 	case engine.OutcomePaused:
 		status = humanoutput.ResultPaused
 	}
-	if input.Outcome != engine.OutcomeSuccess && input.Value.Recovery.ShareStopped() {
+	if input.Outcome != engine.OutcomeSuccess && input.Value.Recovery.NeedsNewLink() {
 		status = humanoutput.ResultStopped
 	}
 	r := input.Value.Transfer
 	res := humanoutput.TransferResult{
 		Status:               status,
-		SourceDrift:          input.FailureClass == engine.FailureSourceDrift,
+		SourceDrift:          input.Value.Recovery.HasSourceDrift || input.FailureClass == engine.FailureSourceDrift,
 		Elapsed:              input.Value.Elapsed,
 		Destination:          input.Value.Destination,
 		DestinationAdjusted:  input.Value.DestinationAdjusted,
@@ -145,11 +145,14 @@ func (a *App) reportReceiveRecovery(result engine.ReceiveResult, selection recei
 	recovery := result.Recovery
 	switch recovery.Retention {
 	case engine.ReceiveRetentionCheckpoints:
-		if !recovery.ShareStopped() {
+		if !recovery.NeedsNewLink() {
 			a.writeCompleteLine("Saved partials: %d bytes. Previously delivered: %d files (%d bytes).", result.Transfer.Progress.RestartReusableBytes, result.Transfer.Progress.FileOutcomes.PreviouslyPublishedFiles, result.Transfer.Progress.PreviouslyPublishedBytes)
 		}
 	case engine.ReceiveRetentionDiscarded:
 		a.writeCompleteLine("Unfinished owned output was discarded; completed files were kept.")
+		if recovery.Reason == engine.ReceiveRecoverySourceChanged {
+			a.writeCompleteLine(changedSourceGuidance)
+		}
 		return
 	}
 	if recovery.ShareStopped() {
@@ -164,7 +167,13 @@ func (a *App) reportReceiveRecovery(result engine.ReceiveResult, selection recei
 		a.writeCompleteLine("Correct the request before starting another download.")
 	case engine.ReceiveRecoveryNeedsInspection:
 		a.writeCompleteLine("Inspect the reported failure before retrying.")
+	case engine.ReceiveRecoverySourceChanged:
+		a.writeCompleteLine(changedSourceGuidance)
+		a.reportRetainedOperationCleanup(result)
 	default:
+		if recovery.HasSourceDrift {
+			a.writeCompleteLine(partialSourceChangeNote)
+		}
 		if recovery.Retention == engine.ReceiveRetentionCheckpoints && recovery.Retryable() {
 			a.writeCompleteLine("Retry with wind resume retry -o <original-directory> --operation %x and the same link and selection.", result.Operation.Bytes())
 		}
@@ -176,6 +185,17 @@ func (a *App) reportStoppedReceiveRecovery(result engine.ReceiveResult) {
 		a.writeCompleteLine("The share has stopped. Inspect the reported failure before removing saved progress.")
 		return
 	}
+	a.reportRetainedOperationCleanup(result)
+}
+
+const (
+	changedSourceLabel      = "changed at the source"
+	changedSourceStopped    = "The changed items cannot be finished from this link."
+	changedSourceGuidance   = changedSourceStopped + " Ask the sender to share again and download the new link."
+	partialSourceChangeNote = "Items " + changedSourceLabel + " need a new link from the sender."
+)
+
+func (a *App) reportRetainedOperationCleanup(result engine.ReceiveResult) {
 	if result.Recovery.Retention != engine.ReceiveRetentionCheckpoints || result.Operation.IsZero() {
 		return
 	}
@@ -392,15 +412,21 @@ func (a *App) promptReceiveRecovery(ctx context.Context, reader *bufio.Reader, p
 		reason = "a destination collision; move the conflicting entry before retrying"
 	case engine.ReceiveRecoveryOwnershipUnknown:
 		reason = "blocked output ownership; unknown objects will remain untouched"
-	case engine.ReceiveRecoveryRevisionChanged:
-		reason = "a changed source revision; prior verified progress remains isolated"
+	case engine.ReceiveRecoveryCheckpointRevisionConflict:
+		reason = "a checkpoint revision conflict; prior verified progress remains isolated"
 	}
-	if pause.Recovery.ShareStopped() {
+	switch {
+	case pause.Recovery.ShareStopped():
 		a.writeCompleteLine("Download stopped. The share has ended. Discard unfinished output or keep it for manual cleanup.")
-	} else {
+	case pause.Recovery.Reason == engine.ReceiveRecoverySourceChanged:
+		a.writeCompleteLine("Download stopped. %s Discard unfinished output or keep it for manual cleanup.", changedSourceStopped)
+	default:
 		a.writeCompleteLine("Download paused: %s. Saved partials: %d bytes. Previously delivered: %d files (%d bytes).", reason, pause.Transfer.Progress.RestartReusableBytes, pause.Transfer.Progress.FileOutcomes.PreviouslyPublishedFiles, pause.Transfer.Progress.PreviouslyPublishedBytes)
 	}
 	a.reportBlockedReceiveItems(pause.Transfer)
+	if pause.Allows(engine.ReceiveRecoveryRetry) && pause.Recovery.HasSourceDrift {
+		a.writeCompleteLine("%s Retry can finish the rest.", partialSourceChangeNote)
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return engine.ReceiveRecoveryExit, err
@@ -425,8 +451,11 @@ func (a *App) promptReceiveRecovery(ctx context.Context, reader *bufio.Reader, p
 func (a *App) reportBlockedReceiveItems(result transfer.JobResult) {
 	for _, item := range result.Files {
 		reason := "transfer or output failure"
-		if item.Settlement.Kind() == transfer.FileCollision {
+		switch {
+		case item.Settlement.Kind() == transfer.FileCollision:
 			reason = "destination collision"
+		case item.Fault.SourceChanged():
+			reason = changedSourceLabel
 		}
 		if _, blocked, ok := item.Settlement.ItemBlock(); ok {
 			switch blocked {
@@ -439,7 +468,11 @@ func (a *App) reportBlockedReceiveItems(result transfer.JobResult) {
 		a.writeCompleteLine("  %q: %s", item.Path, reason)
 	}
 	for _, item := range result.Directories {
-		a.writeCompleteLine("  %q: directory unavailable", item.Path)
+		reason := "directory unavailable"
+		if item.Fault.SourceChanged() {
+			reason = changedSourceLabel
+		}
+		a.writeCompleteLine("  %q: %s", item.Path, reason)
 	}
 	if omitted := result.OmittedFileFailures + result.OmittedDirectoryFailures; omitted != 0 {
 		a.writeCompleteLine("  %d additional affected items omitted; inspect the recovery inventory.", omitted)

@@ -241,3 +241,32 @@ func faultPermutations(values []fault.Fault) [][]fault.Fault {
 	}
 	return result
 }
+
+func TestSourceChangedClassifiesOnlySourceDriftFaults(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		value fault.Fault
+		want  bool
+	}{
+		{mustSource(t, fault.ScopeFileLocal, fault.SourceRevisionChanged), true},
+		{mustSource(t, fault.ScopeFileLocal, fault.SourceRevisionInvalidated), true},
+		{mustCatalog(t, fault.ScopeDirectoryLocal, fault.CatalogDirectoryStale), true},
+		{mustSource(t, fault.ScopeFileLocal, fault.SourceUnavailable), false},
+		{mustSource(t, fault.ScopeFileLocal, fault.SourcePermanent), false},
+		{mustCatalog(t, fault.ScopeDirectoryLocal, fault.CatalogUnavailable), false},
+		{mustSession(t, fault.ScopeSessionTerminal, fault.SessionTransport), false},
+		{mustOutput(t, fault.ScopeFileLocal, fault.OutputStateIO), false},
+		{mustCheckpoint(t, fault.ScopeOutputPause, fault.CheckpointStateIO), false},
+		{fault.Fault{}, false},
+	} {
+		if got := test.value.SourceChanged(); got != test.want {
+			t.Fatalf("%v.SourceChanged() = %t, want %t", test.value, got, test.want)
+		}
+	}
+}
+
+func mustSession(t *testing.T, scope fault.Scope, code fault.SessionCode) fault.Fault {
+	t.Helper()
+	value, err := fault.NewSession(scope, code)
+	return mustFault(t, value, err)
+}

@@ -402,23 +402,15 @@ func FailureFromFault(fault transferfault.Fault) (Failure, bool) {
 	if !fault.Valid() {
 		return Failure{}, false
 	}
+	if fault.SourceChanged() {
+		return Failure{Code: FailureSourceChanged, Fault: fault}, true
+	}
 	var code FailureCode
 	switch fault.Domain() {
 	case transferfault.DomainSource:
-		sc, _ := fault.SourceCode()
-		switch sc {
-		case transferfault.SourceRevisionChanged, transferfault.SourceRevisionInvalidated:
-			code = FailureSourceChanged
-		default:
-			code = FailureSourceUnavailable
-		}
+		code = FailureSourceUnavailable
 	case transferfault.DomainCatalog:
-		cc, _ := fault.CatalogCode()
-		if cc == transferfault.CatalogDirectoryStale {
-			code = FailureSourceChanged
-		} else {
-			code = FailureCatalogUnavailable
-		}
+		code = FailureCatalogUnavailable
 	case transferfault.DomainSession:
 		code = FailureSessionFailed
 	case transferfault.DomainOutput:

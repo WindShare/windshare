@@ -15,24 +15,25 @@ type ReceiveRecoveryOutcome = receive.RecoveryOutcome
 type ReceiveProgressRetention = receive.ProgressRetention
 
 const (
-	ReceiveRecoveryExit             = receive.RecoveryExit
-	ReceiveRecoveryRetry            = receive.RecoveryRetry
-	ReceiveRecoveryDiscard          = receive.RecoveryDiscard
-	ReceiveRecoveryTransferFailure  = receive.RecoveryTransferFailure
-	ReceiveRecoveryCollision        = receive.RecoveryCollision
-	ReceiveRecoveryOwnershipUnknown = receive.RecoveryOwnershipUnknown
-	ReceiveRecoveryRevisionChanged  = receive.RecoveryRevisionChanged
-	ReceiveRecoverySelectionMissing = receive.RecoverySelectionMissing
-	ReceiveRecoverySourceOmitted    = receive.RecoverySourceOmitted
-	ReceiveRecoveryInvalidRequest   = receive.RecoveryInvalidRequest
-	ReceiveRecoveryNeedsInspection  = receive.RecoveryNeedsInspection
-	ReceiveShareStopUnconfirmed     = receive.ShareStopUnconfirmed
-	ReceiveShareStopSender          = receive.ShareStopSender
-	ReceiveShareStopRelays          = receive.ShareStopRelays
-	ReceiveShareStopRecorded        = receive.ShareStopRecorded
-	ReceiveRetentionNone            = receive.RetentionNone
-	ReceiveRetentionCheckpoints     = receive.RetentionCheckpoints
-	ReceiveRetentionDiscarded       = receive.RetentionDiscarded
+	ReceiveRecoveryExit                       = receive.RecoveryExit
+	ReceiveRecoveryRetry                      = receive.RecoveryRetry
+	ReceiveRecoveryDiscard                    = receive.RecoveryDiscard
+	ReceiveRecoveryTransferFailure            = receive.RecoveryTransferFailure
+	ReceiveRecoveryCollision                  = receive.RecoveryCollision
+	ReceiveRecoveryOwnershipUnknown           = receive.RecoveryOwnershipUnknown
+	ReceiveRecoveryCheckpointRevisionConflict = receive.RecoveryCheckpointRevisionConflict
+	ReceiveRecoverySelectionMissing           = receive.RecoverySelectionMissing
+	ReceiveRecoverySourceOmitted              = receive.RecoverySourceOmitted
+	ReceiveRecoveryInvalidRequest             = receive.RecoveryInvalidRequest
+	ReceiveRecoveryNeedsInspection            = receive.RecoveryNeedsInspection
+	ReceiveRecoverySourceChanged              = receive.RecoverySourceChanged
+	ReceiveShareStopUnconfirmed               = receive.ShareStopUnconfirmed
+	ReceiveShareStopSender                    = receive.ShareStopSender
+	ReceiveShareStopRelays                    = receive.ShareStopRelays
+	ReceiveShareStopRecorded                  = receive.ShareStopRecorded
+	ReceiveRetentionNone                      = receive.RetentionNone
+	ReceiveRetentionCheckpoints               = receive.RetentionCheckpoints
+	ReceiveRetentionDiscarded                 = receive.RetentionDiscarded
 )
 
 type ReceiveRequest = receive.Request

@@ -255,6 +255,33 @@ func (r *jobRun) selectionFullyPublished() bool {
 		progress.PublishedFiles == progress.FileOutcomes.PublishedFiles()
 }
 
+// OnlySourceChangedFiles proves that discovery completed with exact accounting,
+// the tree finalized as partial without directory/selection/settlement errors,
+// and every unpublished discovered file failed solely because its source changed.
+func (r JobResult) OnlySourceChangedFiles() bool {
+	p := r.Progress
+	f := p.FileOutcomes
+	if r.Outcome != DirectTreeOutcomePartial || !r.SourceDriftFault.Valid() ||
+		r.SelectionResolutionFailure != nil ||
+		r.TerminationCause != nil || r.TerminationFault.Valid() || r.TerminationInterruption != 0 ||
+		r.SettlementFailure != nil || r.SettlementFault.Valid() || r.SettlementInterruption != 0 ||
+		p.Discovery != DiscoveryComplete || !p.CountersExact ||
+		len(r.Directories) != 0 || r.OmittedDirectoryFailures != 0 || r.OmittedFileFailures != 0 ||
+		len(r.Files) == 0 || f.CollisionFiles != 0 || f.ItemBlockedFiles != 0 {
+		return false
+	}
+	if p.PublishedFiles != f.PublishedFiles() || p.PublishedFiles > p.DiscoveredFiles ||
+		p.DiscoveredFiles-p.PublishedFiles != uint64(len(r.Files)) {
+		return false
+	}
+	for _, file := range r.Files {
+		if !file.Fault.SourceChanged() || file.SettlementFailure != nil || file.SettlementFault.Valid() {
+			return false
+		}
+	}
+	return true
+}
+
 func (r *jobRun) settleJob(ctx context.Context, outcome DirectTreeOutcome) DirectTreeOutcome {
 	failed := r.terminationCause != nil || r.settlementFailure != nil
 	if !r.admitted {
@@ -430,12 +457,7 @@ func (policy lifecyclePolicy) sourceFileLocal() bool {
 }
 
 func (policy lifecyclePolicy) sourceDrift() bool {
-	if policy.value.Domain() == fault.DomainCatalog {
-		code, ok := policy.value.CatalogCode()
-		return ok && code == fault.CatalogDirectoryStale
-	}
-	code, ok := policy.value.SourceCode()
-	return ok && (code == fault.SourceRevisionChanged || code == fault.SourceRevisionInvalidated)
+	return policy.value.SourceChanged()
 }
 
 func (policy lifecyclePolicy) invalidatedRevision() bool {

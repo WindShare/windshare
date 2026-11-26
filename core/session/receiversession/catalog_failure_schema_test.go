@@ -324,3 +324,98 @@ func TestCatalogShareCapacityExhaustionMapsToNonRetryableBudgetOperationError(t 
 		}
 	})
 }
+
+func TestStaleDirectoryFailureClassifiesAsCatalogDirectoryStale(t *testing.T) {
+	fixture := newVerticalFixture(t)
+	process, err := catalog.NewBudgetAccount("stale-process", catalog.DefaultProcessBudgetLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	shareBudget, err := catalog.NewBudgetAccount("stale-share", catalog.DefaultShareBudgetLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := catalog.NewCatalogStore(catalog.StoreConfig{
+		ShareInstance:  fixture.share,
+		ProcessBudget:  process,
+		ShareBudget:    shareBudget,
+		FailureEncoder: catalogflow.CatalogFailureEncoder{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	startup, err := catalog.NewBudgetAccount("stale-startup", catalog.DefaultSessionBudgetLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, _ := catalog.NewSourceReference([]byte("dir"))
+	identity, _ := catalog.NewSourceIdentity([]byte("id"))
+	selectedDir, err := catalog.NewDirectoryNodeRecord(
+		fixture.directoryID, fixture.syntheticRoot, "vanished", ref, identity, catalog.ModifiedTime{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootCommit, err := catalog.NewSyntheticRootCommit(catalog.SyntheticRootCommitSpec{
+		ShareInstance: fixture.share,
+		SyntheticRoot: fixture.syntheticRoot,
+		Generation:    id16[catalog.DirectoryGeneration](213),
+		SelectedRoots: []catalog.NodeRecord{selectedDir},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CommitSyntheticRoot(context.Background(), rootCommit, startup); err != nil {
+		t.Fatal(err)
+	}
+
+	session, err := catalog.NewBudgetAccount("stale-session", catalog.DefaultSessionBudgetLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := catalogflow.NewCatalogStoreSource(catalogflow.CatalogStoreSourceConfig{
+		ShareInstance: fixture.share,
+		Store:         store,
+		SessionBudget: session,
+		Scanner: catalog.DirectoryScannerFunc(func(context.Context, catalog.ScanRequest) (catalog.ScanResult, error) {
+			return catalog.ScanResult{}, catalog.ErrDirectoryStale
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := catalogflow.NewAddressedSenderService(fixture.share, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	senderFactory := newLocalFailureSenderFactory(
+		t, fixture,
+		sendersession.CatalogFactoryFunc(func() (*catalogflow.AddressedSenderService, error) {
+			return service, nil
+		}),
+		nil,
+	)
+	sender, receiver := connectVerticalPair(t, senderFactory, fixture.receiverFactory)
+	defer sender.Close()
+	defer receiver.Close()
+
+	deps, err := receiver.TransferDependencies()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cursor, err := deps.OpenDirectoryPagesLive(context.Background(), fixture.directoryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cursor.Close()
+	_, _, err = cursor.Next(context.Background())
+	value, normalized := boundaryFaultForTest(err)
+	expected, _ := transferfault.NewCatalog(
+		transferfault.ScopeDirectoryLocal, transferfault.CatalogDirectoryStale,
+	)
+	if !normalized || value != expected {
+		t.Fatalf("stale directory fault = (%v, %t) err=%v, want %v", value, normalized, err, expected)
+	}
+}
