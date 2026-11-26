@@ -108,6 +108,7 @@ export class ConnectivityRouteAuthority implements BlockRouteEligibility {
   }
 
   subscribe(listener: () => void): () => void {
+    if (!this.#active) return () => undefined
     this.#listeners.add(listener)
     return () => this.#listeners.delete(listener)
   }

@@ -223,7 +223,7 @@ export class ReceiverReconnectSupervisor implements ContentGenerationProvider {
   beginConnectivity(intent: ContentIntent): ConnectivityActivation {
     this.#throwIfTerminal()
     const activation = this.connectivity.begin(intent)
-    if (intent === 'download') {
+    if (intent === 'download' && activation.routes.active) {
       const metrics = new DownloadMetrics(crypto.randomUUID(), this.#directUsable, () => this.#clock.now())
       this.#downloads.set(activation.routes, metrics)
       const unsubscribe = activation.routes.subscribe(() => {

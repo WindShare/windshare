@@ -564,6 +564,81 @@ describe('v2 supervised connectivity activation ownership', () => {
     await supervised.close()
     expect(third.closeCalls).toBe(1)
   })
+
+  it('prunes synchronously and asynchronously closed activations before rebinding', async () => {
+    const supervised = new SupervisedConnectivity('p2p-only')
+    const first = new FakeConnectivity()
+    const second = new FakeConnectivity()
+    const third = new FakeConnectivity()
+    const syncCloseFirst = {
+      begins: first.begins,
+      get closeCalls() { return first.closeCalls },
+      begin(intent: ContentIntent, options: { readonly routeAuthority?: ConnectivityRouteAuthority } = {}) {
+        const delegate = first.begin(intent, options)
+        if (first.begins.length === 1) options.routeAuthority?.close(new Error('no direct path'))
+        return delegate
+      },
+      close: () => first.close(),
+    }
+    supervised.bind(syncCloseFirst as unknown as ReceiverConnectivity)
+
+    const syncClosed = supervised.begin('download')
+    expect(syncClosed.routes.active).toBe(false)
+    expect(first.begins[0]?.delegateCloses).toBe(1)
+
+    const asyncClosed = supervised.begin('preview')
+    const live = supervised.begin('download')
+    expect(first.begins).toHaveLength(3)
+
+    // Simulate ReceiverConnectivity.#peerUnavailable() closing shared routes before caller cleanup.
+    first.begins[1]?.routeAuthority?.close(new Error('wave exhausted'))
+    expect(asyncClosed.routes.active).toBe(false)
+    expect(first.begins[1]?.delegateCloses).toBe(1)
+
+    const syncCloseSecond = {
+      begins: second.begins,
+      get closeCalls() { return second.closeCalls },
+      begin(intent: ContentIntent, options: { readonly routeAuthority?: ConnectivityRouteAuthority } = {}) {
+        options.routeAuthority?.assertActive()
+        const delegate = second.begin(intent, options)
+        options.routeAuthority?.close(new Error('second gen unavailable'))
+        return delegate
+      },
+      close: () => second.close(),
+    }
+    supervised.bind(syncCloseSecond as unknown as ReceiverConnectivity)
+    expect(first.closeCalls).toBe(1)
+    expect(second.begins).toHaveLength(1)
+    expect(second.begins[0]?.routeAuthority).toBe(live.routes)
+    expect(live.routes.active).toBe(false)
+    expect(second.begins[0]?.delegateCloses).toBe(1)
+
+    supervised.bind(third as unknown as ReceiverConnectivity)
+    expect(second.closeCalls).toBe(1)
+    expect(third.begins).toHaveLength(0)
+
+    syncClosed.close()
+    asyncClosed.close()
+    live.close()
+    await supervised.close()
+    expect(third.closeCalls).toBe(1)
+  })
+
+  it('closes the previous generation connectivity in finally if rebinding throws', async () => {
+    const supervised = new SupervisedConnectivity()
+    const first = new FakeConnectivity()
+    supervised.bind(first as unknown as ReceiverConnectivity)
+    const activation = supervised.begin('download')
+    const failing = {
+      begin: () => { throw new Error('replacement closed') },
+      close: async () => undefined,
+    }
+
+    expect(() => supervised.bind(failing as unknown as ReceiverConnectivity)).toThrow('replacement closed')
+    expect(first.closeCalls).toBe(1)
+    activation.close()
+    await supervised.close()
+  })
 })
 
 describe('v2 supervised stalled-recovery bounds', () => {

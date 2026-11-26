@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { CandidateLimitExceededError } from '../../src/connectivity/errors'
+import type { ReceiverConnectionSnapshot } from '../../src/receiver/connection-state'
 import { systemReconnectClock } from '../../src/receiver/recovery-clock'
 import { ReceiverReconnectSupervisor } from '../../src/receiver/supervisor'
 import type { ProtocolTraceEvent } from '../../src/session/diagnostics'
-import { core, descriptor, FakeSession, FakeSessionFactory, TrackedRelay } from './v2-supervisor-fixture'
+import { core, deferred, descriptor, FakeSession, FakeSessionFactory, TrackedRelay } from './v2-supervisor-fixture'
 
 afterEach(() => vi.useRealTimers())
 
@@ -121,5 +123,95 @@ describe('automatic generation recovery pacing', () => {
       }))
     } finally { await supervisor.close() }
     expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
+describe('p2p-only generation replacement with closed activations', () => {
+  it('replaces generation without wedging when p2p-only closes routes synchronously and avoids metrics leak', async () => {
+    const initial = new FakeSession([1])
+    const replacement = new FakeSession([2])
+    const factory = new FakeSessionFactory()
+    factory.connectFreshImpl = async () => core(replacement, new TrackedRelay(2))
+    const supervisor = new ReceiverReconnectSupervisor({
+      descriptor: descriptor(),
+      initial: core(initial, new TrackedRelay(1)),
+      sessionFactory: factory,
+      policy: 'p2p-only',
+      nativePeerUsable: () => false,
+    })
+    const states: ReceiverConnectionSnapshot[] = []
+    const installed: number[] = []
+    supervisor.connection.subscribe(snapshot => states.push(snapshot))
+    supervisor.subscribeProtocolGeneration(observation => installed.push(observation.generationId))
+
+    const activation = supervisor.beginConnectivity('download')
+    try {
+      expect(activation.routes.active).toBe(false)
+      expect(supervisor.downloadMetrics(activation.routes)).toBeUndefined()
+
+      // Keep the already-closed activation unclosed across reconnect (matching the
+      // async session teardown window before connectivity.close() runs).
+      const recovered = supervisor.waitForGenerationAfter(1)
+      initial.detach(1)
+      await recovered
+
+      expect(supervisor.generationId).toBe(2)
+      expect(installed).toEqual([2])
+      expect(states.at(-1)).toEqual({ kind: 'connected' })
+      await expect(supervisor.execute(undefined, async generation => generation.id))
+        .resolves.toMatchObject({ value: 2 })
+    } finally {
+      activation.close()
+      await supervisor.close()
+    }
+  })
+
+  it('replaces generation cleanly after async p2p-only direct failure before caller closes activation', async () => {
+    const initial = new FakeSession([1])
+    const replacement = new FakeSession([2])
+    const factory = new FakeSessionFactory()
+    factory.connectFreshImpl = async () => core(replacement, new TrackedRelay(2))
+    const failOffer = deferred<void>()
+    const supervisor = new ReceiverReconnectSupervisor({
+      descriptor: descriptor(),
+      initial: core(initial, new TrackedRelay(1)),
+      sessionFactory: factory,
+      policy: 'p2p-only',
+      nativePeerUsable: () => true,
+      offersFactory: () => ({
+        offer: async () => {
+          await failOffer.promise
+          throw new CandidateLimitExceededError(64)
+        },
+      }),
+    })
+    const states: ReceiverConnectionSnapshot[] = []
+    const installed: number[] = []
+    supervisor.connection.subscribe(snapshot => states.push(snapshot))
+    supervisor.subscribeProtocolGeneration(observation => installed.push(observation.generationId))
+
+    const activation = supervisor.beginConnectivity('download')
+    try {
+      expect(activation.routes.active).toBe(true)
+      expect(supervisor.downloadMetrics(activation.routes)).toBeDefined()
+
+      failOffer.resolve()
+      for (let turn = 0; turn < 16 && activation.routes.active; turn += 1) await Promise.resolve()
+      expect(activation.routes.active).toBe(false)
+      expect(supervisor.downloadMetrics(activation.routes)).toBeUndefined()
+
+      const recovered = supervisor.waitForGenerationAfter(1)
+      initial.detach(1)
+      await recovered
+
+      expect(supervisor.generationId).toBe(2)
+      expect(installed).toEqual([2])
+      expect(states.at(-1)).toEqual({ kind: 'connected' })
+      await expect(supervisor.execute(undefined, async generation => generation.id))
+        .resolves.toMatchObject({ value: 2 })
+    } finally {
+      activation.close()
+      await supervisor.close()
+    }
   })
 })
