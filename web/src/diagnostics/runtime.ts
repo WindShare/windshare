@@ -23,7 +23,7 @@ const FAILURE_FORMAT_OPTIONS = Object.freeze({
 const TEXT_ENCODER = new TextEncoder()
 
 export type TraceCaptureState = 'idle' | 'recording' | 'sealed'
-export type TraceSealReason = 'manual_disable' | 'expired'
+export type TraceSealReason = 'manual_disable' | 'expired' | 'disposed'
 
 export type TraceActivationSnapshot =
   | Readonly<{ kind: 'off' }>
@@ -132,20 +132,30 @@ interface StoredFailure {
   readonly line: string
 }
 
-interface ActiveTrace {
+interface ActiveExpiry {
+  readonly expiresAtMilliseconds: number
+  task: DiagnosticsScheduledTask | undefined
+}
+
+interface CaptureBase {
   readonly generation: number
   readonly startedAtMs: number
   readonly ring: DiagnosticRingBuffer<string>
-  readonly observer: TraceObserver<TraceEntry>
-  state: 'recording' | 'sealed'
-  sealReason?: TraceSealReason
   nextSequence: number
 }
 
-interface ActiveExpiry {
-  readonly expiresAtMilliseconds: number
-  task?: DiagnosticsScheduledTask
+interface RecordingCapture extends CaptureBase {
+  readonly state: 'recording'
+  readonly observer: TraceObserver<TraceEntry>
+  readonly expiry: ActiveExpiry
 }
+
+interface SealedCapture extends CaptureBase {
+  readonly state: 'sealed'
+  readonly sealReason: TraceSealReason
+}
+
+type ActiveCapture = RecordingCapture | SealedCapture
 
 /**
  * In-memory page-local diagnostics with two tiers:
@@ -172,8 +182,8 @@ export class DiagnosticsRuntime {
   readonly #listeners = new Set<() => void>()
   #failureSequence = 0
   #captureGeneration = 0
-  #active: ActiveTrace | undefined
-  #expiry: ActiveExpiry | undefined
+  #active: ActiveCapture | undefined
+  #disposed = false
   #snapshot: DiagnosticsSnapshot
 
   constructor(options: DiagnosticsRuntimeOptions = {}) {
@@ -203,6 +213,7 @@ export class DiagnosticsRuntime {
   }
 
   subscribe = (listener: () => void): (() => void) => {
+    if (this.#disposed) return () => undefined
     this.#listeners.add(listener)
     return () => { this.#listeners.delete(listener) }
   }
@@ -210,16 +221,18 @@ export class DiagnosticsRuntime {
   getSnapshot = (): DiagnosticsSnapshot => this.#snapshot
 
   refresh(): void {
+    if (this.#disposed) return
     this.#publishSnapshot()
   }
 
   activation(): TraceActivationSnapshot {
-    return this.#expiry === undefined
-      ? Object.freeze({ kind: 'off' })
-      : Object.freeze({ kind: 'active', expiresAtMilliseconds: this.#expiry.expiresAtMilliseconds })
+    return this.#active?.state === 'recording'
+      ? Object.freeze({ kind: 'active', expiresAtMilliseconds: this.#active.expiry.expiresAtMilliseconds })
+      : Object.freeze({ kind: 'off' })
   }
 
   enable(): DiagnosticsStatus {
+    if (this.#disposed) return this.status()
     const now = this.#safeNow()
     const expiresAt = Math.min(Number.MAX_SAFE_INTEGER, now + this.#traceExpiryMs)
     this.#startCapture(now, expiresAt)
@@ -234,24 +247,25 @@ export class DiagnosticsRuntime {
   }
 
   enableFromLink(): void {
+    if (this.#disposed) return
     // Repeated link intake must not discard evidence or extend an existing deadline.
     if (this.activation().kind === 'off') this.enable()
   }
 
   disable(): DiagnosticsStatus {
-    this.#cancelExpiry()
+    if (this.#disposed) return this.status()
+    if (this.#active?.state === 'recording') {
+      this.#sealRecording(this.#active, 'manual_disable')
+    }
     try { this.#activationStore?.clear() } catch {
       // Revocation of in-memory recording is independent of browser storage.
-    }
-    if (this.#active?.state === 'recording') {
-      this.#active.state = 'sealed'
-      this.#active.sealReason = 'manual_disable'
     }
     this.#publishSnapshot()
     return this.status()
   }
 
   clear(): void {
+    if (this.#disposed) return
     this.#failures.clear()
     if (this.#active !== undefined) {
       if (this.#active.state === 'recording') this.#active.ring.clear()
@@ -265,6 +279,7 @@ export class DiagnosticsRuntime {
   }
 
   recordFailure(input: DiagnosticFailureInput): DiagnosticFailureRecord | undefined {
+    if (this.#disposed) return undefined
     try {
       const now = this.#safeNow()
       const record: DiagnosticFailureRecord = Object.freeze({
@@ -304,10 +319,10 @@ export class DiagnosticsRuntime {
       state: active?.state ?? 'idle',
       enabled: recording,
       capture_generation: String(this.#captureGeneration),
-      ...(recording && this.#expiry !== undefined
-        ? { expires_at: new Date(this.#expiry.expiresAtMilliseconds).toISOString() }
+      ...(active?.state === 'recording'
+        ? { expires_at: new Date(active.expiry.expiresAtMilliseconds).toISOString() }
         : {}),
-      ...(active?.sealReason === undefined ? {} : { seal_reason: active.sealReason }),
+      ...(active?.state === 'sealed' ? { seal_reason: active.sealReason } : {}),
       failure_count: String(this.#failures.size),
       retained_event_count: String(active?.ring.size ?? 0),
       retained_event_bytes: String(active?.ring.bytes ?? 0),
@@ -341,49 +356,52 @@ export class DiagnosticsRuntime {
   }
 
   dispose(): void {
-    this.#cancelExpiry()
+    if (this.#disposed) return
+    this.#disposed = true
     this.#listeners.clear()
+    if (this.#active?.state === 'recording') {
+      // Teardown stops in-memory capture without clearing sessionStorage so reload preserves the deadline.
+      this.#sealRecording(this.#active, 'disposed')
+    }
+    this.#snapshot = this.#buildSnapshot()
   }
 
   #startCapture(now: number, expiresAt: number): void {
-    this.#cancelExpiry()
     if (this.#active?.state === 'recording') {
-      this.#active.state = 'sealed'
-      this.#active.sealReason = 'manual_disable'
+      this.#sealRecording(this.#active, 'manual_disable')
     }
     this.#captureGeneration += 1
-    const ring = new DiagnosticRingBuffer<string>(this.#traceCapacity)
-    const active: ActiveTrace = {
+    const expiry: ActiveExpiry = { expiresAtMilliseconds: expiresAt, task: undefined }
+    const capture: RecordingCapture = {
       generation: this.#captureGeneration,
       startedAtMs: now,
-      ring,
-      state: 'recording',
+      ring: new DiagnosticRingBuffer<string>(this.#traceCapacity),
       nextSequence: 0,
-      observer: entry => this.#recordTrace(active, entry),
+      state: 'recording',
+      expiry,
+      observer: entry => this.#recordTrace(capture, entry),
     }
-    this.#active = active
-    const expiry: ActiveExpiry = { expiresAtMilliseconds: expiresAt }
-    this.#expiry = expiry
+    this.#active = capture
     try {
-      expiry.task = this.#scheduler.schedule(Math.max(0, expiresAt - now), () => this.#expire(expiry, active))
+      const task = this.#scheduler.schedule(Math.max(0, expiresAt - now), () => this.#expire(capture))
+      if (this.#active === capture) expiry.task = task
+      else cancelTask(task)
     } catch {
-      this.#cancelExpiry()
-      active.state = 'sealed'
-      active.sealReason = 'expired'
+      if (this.#active === capture) this.#sealRecording(capture, 'expired')
     }
   }
 
-  #recordTrace(active: ActiveTrace, entry: TraceEntry): void {
-    if (active.state !== 'recording') return
+  #recordTrace(capture: RecordingCapture, entry: TraceEntry): void {
+    if (this.#active !== capture) return
     try {
       const hadEvidence = this.#snapshot.hasEvidence
       const now = this.#safeNow()
       const line = encodeJsonLine({
         line_type: 'trace_event',
         record: {
-          sequence: String(++active.nextSequence),
+          sequence: String(++capture.nextSequence),
           time: this.#safeTime(),
-          elapsed_ms: String(Math.max(0, now - active.startedAtMs)),
+          elapsed_ms: String(Math.max(0, now - capture.startedAtMs)),
           event: entry.event,
           runtime_run_id: this.runtimeRunId,
           ...(entry.correlation === undefined ? {} : { correlation: entry.correlation }),
@@ -391,7 +409,7 @@ export class DiagnosticsRuntime {
         },
       })
       if (line === undefined) return
-      if (active.ring.push(line.text, line.bytes) && !hadEvidence) {
+      if (capture.ring.push(line.text, line.bytes) && !hadEvidence) {
         // Notify React only when evidence transitions from empty to non-empty, not per hot-path event.
         this.#publishSnapshot()
       }
@@ -400,19 +418,15 @@ export class DiagnosticsRuntime {
     }
   }
 
-  #expire(expiry: ActiveExpiry, active: ActiveTrace): void {
-    if (this.#expiry !== expiry) return
-    this.#cancelExpiry()
+  #expire(capture: RecordingCapture): void {
+    if (this.#active !== capture) return
+    this.#sealRecording(capture, 'expired')
     try {
-      if (this.#activationStore?.readExpiry() === expiry.expiresAtMilliseconds) {
+      if (this.#activationStore?.readExpiry() === capture.expiry.expiresAtMilliseconds) {
         this.#activationStore.clear()
       }
     } catch {
       // Storage cleanup is best-effort.
-    }
-    if (active.state === 'recording') {
-      active.state = 'sealed'
-      active.sealReason = 'expired'
     }
     this.#publishSnapshot()
   }
@@ -433,10 +447,18 @@ export class DiagnosticsRuntime {
     }
   }
 
-  #cancelExpiry(): void {
-    const current = this.#expiry
-    this.#expiry = undefined
-    try { current?.task?.cancel() } catch { /* Ignore timer cancellation errors. */ }
+  #sealRecording(capture: RecordingCapture, reason: TraceSealReason): void {
+    const task = capture.expiry.task
+    capture.expiry.task = undefined
+    this.#active = {
+      generation: capture.generation,
+      startedAtMs: capture.startedAtMs,
+      ring: capture.ring,
+      nextSequence: capture.nextSequence,
+      state: 'sealed',
+      sealReason: reason,
+    }
+    cancelTask(task)
   }
 
   #buildSnapshot(): DiagnosticsSnapshot {
@@ -471,6 +493,10 @@ export class DiagnosticsRuntime {
 
 export function createDiagnosticsRuntime(options?: DiagnosticsRuntimeOptions): DiagnosticsRuntime {
   return new DiagnosticsRuntime(options)
+}
+
+function cancelTask(task: DiagnosticsScheduledTask | undefined): void {
+  try { task?.cancel() } catch { /* Ignore timer cancellation errors. */ }
 }
 
 function encodeJsonLine(value: unknown): Readonly<{ text: string; bytes: number }> | undefined {

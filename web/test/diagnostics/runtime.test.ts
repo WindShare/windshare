@@ -161,6 +161,97 @@ describe('DiagnosticsRuntime', () => {
     runtime.dispose()
   })
 
+  it('seals active capture as a terminal state on dispose while preserving sessionStorage activation', () => {
+    const clock = createFakeClock()
+    const scheduler = createFakeScheduler()
+    const storageMap = new Map<string, string>()
+    const activationStore = createBrowserTraceActivationStore(
+      () => ({
+        getItem: key => storageMap.get(key) ?? null,
+        setItem: (key, value) => { storageMap.set(key, value) },
+        removeItem: key => { storageMap.delete(key) },
+      }),
+      'https://windshare.top/share-dispose',
+    )
+    const runtime = createDiagnosticsRuntime({
+      build: { version: '1.0.0', mode: 'test' },
+      clock,
+      scheduler,
+      activationStore,
+      traceExpiryMs: 60_000,
+    })
+
+    const notifications = vi.fn()
+    runtime.subscribe(notifications)
+    const enabled = runtime.enable()
+    const observer = runtime.trace.current
+    expect(observer).toBeDefined()
+    observer?.({ event: 'join_transition', payload: { transition: 'started' } })
+    notifications.mockClear()
+
+    runtime.dispose()
+    runtime.dispose()
+
+    expect(notifications).not.toHaveBeenCalled()
+    expect(scheduler.tasks).toHaveLength(1)
+    expect(scheduler.tasks[0]?.cancelled).toBe(true)
+    expect(storageMap.size).toBe(1)
+
+    const expectedStatus = {
+      state: 'sealed',
+      enabled: false,
+      capture_generation: '1',
+      seal_reason: 'disposed',
+      failure_count: '0',
+      retained_event_count: '1',
+    }
+    expect(runtime.status()).toMatchObject(expectedStatus)
+    expect(runtime.status()).not.toHaveProperty('expires_at')
+    expect(runtime.activation()).toEqual({ kind: 'off' })
+    expect(runtime.getSnapshot().status).toEqual(runtime.status())
+    expect(runtime.getSnapshot().activation).toEqual({ kind: 'off' })
+    expect(runtime.getSnapshot().hasEvidence).toBe(true)
+    expect(runtime.trace.current).toBeUndefined()
+
+    // Cached observers, late scheduler callbacks, and post-dispose mutations must not revive state or touch storage.
+    observer?.({ event: 'join_transition', payload: { transition: 'late' } })
+    scheduler.tasks[0]?.callback()
+    const lateListener = vi.fn()
+    runtime.subscribe(lateListener)
+    expect(runtime.enable()).toMatchObject(expectedStatus)
+    runtime.enableFromLink()
+    expect(runtime.disable()).toMatchObject(expectedStatus)
+    runtime.clear()
+    runtime.refresh()
+    expect(runtime.recordFailure({ stage: 'join', error: new Error('late') })).toBeUndefined()
+
+    expect(scheduler.tasks).toHaveLength(1)
+    expect(lateListener).not.toHaveBeenCalled()
+    expect(storageMap.size).toBe(1)
+    expect(runtime.status()).toMatchObject(expectedStatus)
+    expect(runtime.export()).toContain('"seal_reason":"disposed"')
+    expect(runtime.export()).not.toContain('"transition":"late"')
+
+    // Reloading into a fresh runtime still restores the unexpired activation deadline.
+    clock.advance(10_000)
+    const reloaded = createDiagnosticsRuntime({
+      build: { version: '1.0.0', mode: 'test' },
+      clock,
+      scheduler,
+      activationStore,
+      traceExpiryMs: 60_000,
+    })
+    expect(reloaded.status()).toMatchObject({ state: 'recording', enabled: true, expires_at: enabled.expires_at })
+    reloaded.dispose()
+
+    // Disposing an already manually sealed runtime preserves its original seal reason.
+    const manual = createDiagnosticsRuntime({ build: { version: '1.0.0', mode: 'test' }, clock, scheduler })
+    manual.enable()
+    manual.disable()
+    manual.dispose()
+    expect(manual.status()).toMatchObject({ state: 'sealed', enabled: false, seal_reason: 'manual_disable' })
+  })
+
   it('installs frozen window.windshareDiagnostics and supports delivery actions', async () => {
     const runtime = createDiagnosticsRuntime({ build: { version: '1.0.0', mode: 'test' } })
     const host: Record<string, unknown> = {}
