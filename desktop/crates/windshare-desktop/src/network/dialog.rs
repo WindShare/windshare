@@ -1,8 +1,8 @@
 use super::{
     SetupPage,
     dialog_host::{
-        OtherRunningSetup, ShareDisplay, operation_display, other_running_for_model,
-        setup_shows_progress,
+        OtherRunningSetup, ShareDisplay, operation_display, operation_finished,
+        other_running_for_model, setup_shows_progress,
     },
 };
 use crate::{
@@ -189,8 +189,20 @@ impl SetupDialog {
         }
     }
 
+    pub(super) fn share_finished(&self, cx: &App) -> bool {
+        match &self.source {
+            SetupSource::Native { host, operation_id } => {
+                operation_finished(host.read(cx).model(), operation_id)
+            }
+            SetupSource::Preview { .. } => false,
+        }
+    }
+
     pub(super) fn busy(&self, cx: &App) -> bool {
-        self.pending(cx) || self.selection_disabled(cx) || self.setup(cx).unfinished()
+        self.pending(cx)
+            || self.selection_disabled(cx)
+            || self.setup(cx).unfinished()
+            || self.share_finished(cx)
     }
 
     pub(super) fn waits_official(&self, cx: &App) -> bool {

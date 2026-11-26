@@ -30,7 +30,7 @@ impl Render for SetupDialog {
                 cx,
             );
         }
-        let locked = self.pending(cx) || self.selection_disabled(cx);
+        let locked = self.pending(cx) || self.selection_disabled(cx) || self.share_finished(cx);
         let busy = self.busy(cx);
         let switch_share = match self.target {
             SharingSetupTarget::SwitchRelay(id) => Some(id),

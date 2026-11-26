@@ -1,11 +1,15 @@
 use super::{
-    NetworkSettingsState, dialog_host::other_running_for_model, relay_removed_toast,
-    settings_visible_setup,
+    NetworkSettingsState,
+    dialog_host::{
+        DialogCloseAction, dialog_close_action, operation_finished, other_running_for_model,
+    },
+    relay_removed_toast, settings_visible_setup,
 };
-use crate::localization::Text;
+use crate::{localization::Text, model::SharingSetupTarget};
 use windshare_host::{
-    Failure, Model, RelayOperation, SavedRelay, Setup, SetupContext, SetupRecovery, SetupRequest,
-    SetupRequestKind,
+    BlockingReason, Completion, CreationBlock, Failure, Model, Operation, OperationState, Outcome,
+    RecoveryAction, RelayOperation, SavedRelay, Setup, SetupContext, SetupRecovery, SetupRequest,
+    SetupRequestKind, Share, ShareAuthorization, ShareState, StopReason,
 };
 
 fn global_context(id: &str) -> SetupContext {
@@ -294,4 +298,208 @@ fn blocked_share_dialog_does_not_adopt_another_shares_running_setup() {
 
     assert!(other_running_for_model(&model, "").is_none());
     assert_eq!(model.in_flight_setup_id(""), Some("setup:7"));
+}
+
+fn operation_with_state(id: &str, state: ShareState) -> Operation {
+    Operation {
+        id: id.into(),
+        paths: Vec::new(),
+        state: OperationState::Accepted(Box::new(Share {
+            operation_id: id.into(),
+            created_at_ms: 0,
+            selection: None,
+            omissions: None,
+            state,
+        })),
+    }
+}
+
+fn blocked_state() -> ShareState {
+    ShareState::AwaitingConfiguration {
+        blocking: CreationBlock {
+            reason: BlockingReason::ConfigurationRequired,
+            recovery: RecoveryAction::Configure,
+            retry_at_ms: None,
+        },
+        error: None,
+    }
+}
+
+fn finished_state(outcome: Outcome) -> ShareState {
+    ShareState::Finished {
+        result: Completion {
+            outcome,
+            stop_reason: if outcome == Outcome::Cancelled {
+                StopReason::Cancelled
+            } else {
+                StopReason::None
+            },
+            error: String::new(),
+            cleanup_error: String::new(),
+        },
+        error: None,
+        authorization: None,
+    }
+}
+
+#[test]
+fn operation_finished_distinguishes_active_and_terminal_operations() {
+    let model = Model {
+        operations: vec![
+            Operation {
+                id: "op:submitting".into(),
+                paths: Vec::new(),
+                state: OperationState::Submitting,
+            },
+            Operation {
+                id: "op:rejected".into(),
+                paths: Vec::new(),
+                state: OperationState::Rejected(failure("bad selection")),
+            },
+            operation_with_state("op:blocked", blocked_state()),
+            operation_with_state("op:finished", finished_state(Outcome::Cancelled)),
+        ],
+        ..Model::default()
+    };
+
+    assert!(!operation_finished(&model, ""));
+    assert!(!operation_finished(&model, "op:missing"));
+    assert!(!operation_finished(&model, "op:submitting"));
+    assert!(!operation_finished(&model, "op:blocked"));
+    assert!(operation_finished(&model, "op:rejected"));
+    assert!(operation_finished(&model, "op:finished"));
+}
+
+#[test]
+fn share_scoped_dialog_stays_open_on_setup_cancel_and_closes_when_share_finishes() {
+    let blocked = Model {
+        operations: vec![operation_with_state("op:1", blocked_state())],
+        ..Model::default()
+    };
+    let mut cancelled_ctx = global_context("setup:1");
+    cancelled_ctx.operation_id = "op:1".into();
+    let setup_cancelled_share_blocked = Model {
+        operations: vec![operation_with_state("op:1", blocked_state())],
+        setup: Setup::Cancelled {
+            context: cancelled_ctx,
+        },
+        ..Model::default()
+    };
+    assert_eq!(
+        dialog_close_action(
+            SharingSetupTarget::RecoverShare(1),
+            &blocked,
+            &setup_cancelled_share_blocked,
+            "op:1",
+            false,
+        ),
+        DialogCloseAction::StayOpen
+    );
+
+    let preparing = Model {
+        operations: vec![operation_with_state(
+            "op:1",
+            ShareState::Preparing {
+                task_id: "task:1".into(),
+                error: None,
+            },
+        )],
+        ..Model::default()
+    };
+    assert_eq!(
+        dialog_close_action(
+            SharingSetupTarget::RecoverShare(1),
+            &blocked,
+            &preparing,
+            "op:1",
+            true,
+        ),
+        DialogCloseAction::CompleteWithToast
+    );
+
+    let share_cancelled = Model {
+        operations: vec![operation_with_state(
+            "op:1",
+            finished_state(Outcome::Cancelled),
+        )],
+        ..Model::default()
+    };
+    assert_eq!(
+        dialog_close_action(
+            SharingSetupTarget::RecoverShare(1),
+            &blocked,
+            &share_cancelled,
+            "op:1",
+            false,
+        ),
+        DialogCloseAction::CloseWithoutToast
+    );
+    assert_eq!(
+        dialog_close_action(
+            SharingSetupTarget::SwitchRelay(1),
+            &blocked,
+            &share_cancelled,
+            "op:1",
+            false,
+        ),
+        DialogCloseAction::CloseWithoutToast
+    );
+
+    // Even if an authorization setup finishes in the same snapshot as a terminal share
+    // failure, closing without a green setup toast exposes the share failure cleanly.
+    let awaiting_auth = Model {
+        operations: vec![operation_with_state(
+            "op:1",
+            ShareState::AwaitingAuthorization {
+                authorization: ShareAuthorization::SelfHosted {
+                    relay_url: "https://relay.example".into(),
+                },
+            },
+        )],
+        ..Model::default()
+    };
+    let mut auth_ctx = global_context("setup:2");
+    auth_ctx.operation_id = "op:1".into();
+    auth_ctx.relay_operation = Some(RelayOperation::AuthorizeDevice);
+    auth_ctx.relay_saved = true;
+    let auth_done_share_failed = Model {
+        operations: vec![operation_with_state(
+            "op:1",
+            finished_state(Outcome::Failed),
+        )],
+        setup: Setup::Finished { context: auth_ctx },
+        ..Model::default()
+    };
+    assert_eq!(
+        dialog_close_action(
+            SharingSetupTarget::RecoverShare(1),
+            &awaiting_auth,
+            &auth_done_share_failed,
+            "op:1",
+            true,
+        ),
+        DialogCloseAction::CloseWithoutToast
+    );
+
+    // Global Defaults target closes on setup finish and ignores share state.
+    assert_eq!(
+        dialog_close_action(
+            SharingSetupTarget::Defaults,
+            &blocked,
+            &share_cancelled,
+            "",
+            false,
+        ),
+        DialogCloseAction::StayOpen
+    );
+    assert_eq!(
+        dialog_close_action(
+            SharingSetupTarget::Defaults,
+            &blocked,
+            &share_cancelled,
+            "",
+            true,
+        ),
+        DialogCloseAction::CompleteWithToast
+    );
 }

@@ -32,6 +32,7 @@ impl SetupDialog {
         if !self.is_preview()
             && (self.selection_disabled(cx)
                 || self.pending(cx)
+                || self.share_finished(cx)
                 || !self.setup(cx).can_configure(self.operation_id()))
         {
             return;
@@ -83,7 +84,11 @@ impl SetupDialog {
             cx.emit(SetupDialogEvent::PreviewPreference(edit));
             return;
         }
-        if self.pending(cx) || self.setup(cx).unfinished() || self.selection_disabled(cx) {
+        if self.pending(cx)
+            || self.setup(cx).unfinished()
+            || self.selection_disabled(cx)
+            || self.share_finished(cx)
+        {
             return;
         }
         let SetupSource::Native { host, operation_id } = &self.source else {
@@ -99,6 +104,9 @@ impl SetupDialog {
     }
 
     pub(super) fn switch_share_relay(&self, relay_url: &str, cx: &mut Context<Self>) {
+        if self.share_finished(cx) {
+            return;
+        }
         if let SetupSource::Native { host, operation_id } = &self.source
             && !operation_id.is_empty()
             && host
@@ -111,6 +119,9 @@ impl SetupDialog {
     }
 
     pub(super) fn use_saved_settings(&self, cx: &App) {
+        if self.share_finished(cx) {
+            return;
+        }
         if let SetupSource::Native { host, operation_id } = &self.source
             && !operation_id.is_empty()
         {
@@ -239,30 +250,22 @@ impl SetupDialog {
         let previous_page = self.page;
         let previous_form_visible = form_visible_for(&previous_model, &op_id);
         let finished = self.settle_in_flight(&model, cx);
-        let should_close = match self.target {
-            SharingSetupTarget::Defaults => finished,
-            SharingSetupTarget::RecoverShare(_) | SharingSetupTarget::SwitchRelay(_) => {
-                let prev = host_share_state(&previous_model, &op_id);
-                let next = host_share_state(&model, &op_id);
-                let auth_completed = matches!(self.target, SharingSetupTarget::RecoverShare(_))
-                    && matches!(prev, Some(HostShareState::AwaitingAuthorization { .. }))
-                    && finished
-                    && matches!(
-                        &model.setup,
-                        Setup::Finished { context }
-                            if context.operation_id == op_id
-                                && context.relay_operation == Some(RelayOperation::AuthorizeDevice)
-                                && context.relay_saved
-                    );
-                let share_unblocked = prev.is_some_and(|s| !host_share_running(s))
-                    && next.is_some_and(host_share_running);
-                auth_completed || share_unblocked
+        match dialog_close_action(self.target, &previous_model, &model, &op_id, finished) {
+            DialogCloseAction::CompleteWithToast => {
+                let toast = self.feedback.take().and_then(Result::ok);
+                cx.emit(SetupDialogEvent::Completed(toast));
+                return;
             }
-        };
-        if should_close {
-            let toast = self.feedback.take().and_then(Result::ok);
-            cx.emit(SetupDialogEvent::Completed(toast));
-            return;
+            DialogCloseAction::CloseWithoutToast => {
+                tracing::info!(
+                    event = "desktop.setup_dialog_closed_for_finished_share",
+                    session = std::process::id(),
+                    operation_id = %op_id,
+                );
+                cx.emit(SetupDialogEvent::Close);
+                return;
+            }
+            DialogCloseAction::StayOpen => {}
         }
         if self.page != previous_page {
             cx.emit(SetupDialogEvent::PageChanged);
@@ -296,6 +299,70 @@ impl SetupDialog {
                 false
             }
             None => false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DialogCloseAction {
+    StayOpen,
+    CompleteWithToast,
+    CloseWithoutToast,
+}
+
+pub(super) fn operation_finished(model: &Model, operation_id: &str) -> bool {
+    !operation_id.is_empty()
+        && model
+            .operations
+            .iter()
+            .find(|op| op.id == operation_id)
+            .is_some_and(|op| match &op.state {
+                OperationState::Submitting => false,
+                OperationState::Rejected(_) => true,
+                OperationState::Accepted(share) => share.is_finished(),
+            })
+}
+
+pub(super) fn dialog_close_action(
+    target: SharingSetupTarget,
+    previous: &Model,
+    current: &Model,
+    operation_id: &str,
+    setup_finished: bool,
+) -> DialogCloseAction {
+    match target {
+        SharingSetupTarget::Defaults => {
+            if setup_finished {
+                DialogCloseAction::CompleteWithToast
+            } else {
+                DialogCloseAction::StayOpen
+            }
+        }
+        SharingSetupTarget::RecoverShare(_) | SharingSetupTarget::SwitchRelay(_) => {
+            if operation_finished(current, operation_id) {
+                // A share-scoped modal cannot configure a terminal operation; close
+                // without a setup toast so the underlying share outcome is visible.
+                return DialogCloseAction::CloseWithoutToast;
+            }
+            let prev = host_share_state(previous, operation_id);
+            let next = host_share_state(current, operation_id);
+            let auth_completed = matches!(target, SharingSetupTarget::RecoverShare(_))
+                && matches!(prev, Some(HostShareState::AwaitingAuthorization { .. }))
+                && setup_finished
+                && matches!(
+                    &current.setup,
+                    Setup::Finished { context }
+                        if context.operation_id == operation_id
+                            && context.relay_operation == Some(RelayOperation::AuthorizeDevice)
+                            && context.relay_saved
+                );
+            let share_unblocked = prev.is_some_and(|s| !host_share_running(s))
+                && next.is_some_and(host_share_running);
+            if auth_completed || share_unblocked {
+                DialogCloseAction::CompleteWithToast
+            } else {
+                DialogCloseAction::StayOpen
+            }
         }
     }
 }

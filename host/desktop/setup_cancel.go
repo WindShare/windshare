@@ -20,14 +20,13 @@ func (a *Application) cancelSetupRequest(id string) error {
 		}
 		return errors.New("relay setup not found")
 	}
-	// A terminal setup has already settled and may have resumed its share;
-	// treat late cancellations as idempotent instead of cancelling the share.
+	// A terminal setup has already settled; treat late cancellations as idempotent.
 	if a.setup.State == "finished" || a.setup.State == "cancelled" {
 		return nil
 	}
-	if a.setup.OperationID != "" {
-		return a.cancel(a.setup.OperationID)
-	}
+	// Cancelling relay setup aborts only the setup workflow so a blocked share
+	// keeps its selection and can retry with another relay or preference.
+	// Cancelling the share itself cascades to setup via Application.cancel.
 	a.cancelSetupLocked()
 	return nil
 }

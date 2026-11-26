@@ -178,3 +178,80 @@ func TestLateSetupCancellationDoesNotCancelResumedShare(t *testing.T) {
 		t.Fatalf("late cancel_setup cancelled resumed share: setup=%+v share=%+v", after.Setup, after.Shares[0])
 	}
 }
+
+func TestShareScopedSetupCancellationPreservesBlockedShareForRetry(t *testing.T) {
+	a, _, starts := fixture(t)
+	var saved atomic.Bool
+	start := a.deps.start
+	a.deps.start = func(ctx context.Context, request engine.ShareRequest) (shareTask, error) {
+		if !saved.Load() {
+			return nil, engine.ErrNetworkUnavailable
+		}
+		return start(ctx, request)
+	}
+	entered := make(chan struct{})
+	var cleanedUp atomic.Int32
+	a.deps.setup = func(ctx context.Context, input SetupInput, _ func(relaysetup.Progress)) (SetupResult, error) {
+		if input.ID == "setup:1" {
+			close(entered)
+			<-ctx.Done()
+			return SetupResult{RelayURL: input.RelayURL}, ctx.Err()
+		}
+		saved.Store(true)
+		return SetupResult{RelayURL: input.RelayURL, RelaySaved: true}, nil
+	}
+	a.deps.cancelSetup = func(_ context.Context, address string) error {
+		if address != setupRequest().Setup.RelayURL {
+			t.Errorf("unexpected cleanup address: %q", address)
+		}
+		cleanedUp.Add(1)
+		return nil
+	}
+
+	a.execute(createRequest())
+	awaitShare(t, a, "operation", func(s Share) bool { return s.State == AwaitingNetwork })
+	first := setupRequest()
+	if reply := a.execute(first); reply.Error != nil {
+		t.Fatal(reply.Error)
+	}
+	<-entered
+
+	if reply := a.execute(Request{Command: "cancel_setup", SetupID: first.Setup.ID}); reply.Error != nil {
+		t.Fatalf("cancel_setup failed: %+v", reply.Error)
+	}
+	a.work.Wait()
+
+	afterCancel := a.snapshot()
+	if afterCancel.Setup.State != "cancelled" || cleanedUp.Load() != 1 || starts.Load() != 0 {
+		t.Fatalf("setup cancellation did not settle cleanly: setup=%+v cleanedUp=%d starts=%d", afterCancel.Setup, cleanedUp.Load(), starts.Load())
+	}
+	if afterCancel.Shares[0].State != AwaitingNetwork {
+		t.Fatalf("cancel_setup terminated blocked share: share=%+v", afterCancel.Shares[0])
+	}
+
+	retry := setupRequest()
+	retry.Setup.ID = "setup:2"
+	retry.Setup.RelayURL = "https://replacement.example"
+	if reply := a.execute(retry); reply.Error != nil {
+		t.Fatalf("retry configure after setup cancellation rejected: %+v", reply.Error)
+	}
+	admitted(t, a)
+	a.work.Wait()
+	if a.snapshot().Setup.State != "finished" || starts.Load() != 1 {
+		t.Fatalf("retry configure did not resume preserved share: setup=%+v starts=%d", a.snapshot().Setup, starts.Load())
+	}
+}
+
+func TestConfigureRejectsFinishedRunningShare(t *testing.T) {
+	a, task, _ := fixture(t)
+	a.execute(createRequest())
+	admitted(t, a)
+	task.StopShare()
+	task.finish()
+	awaitShare(t, a, "operation", func(s Share) bool { return s.State == Finished })
+
+	reply := a.execute(setupRequest())
+	if reply.Error == nil || reply.Error.Message != "creation operation has finished" {
+		t.Fatalf("expected finished operation rejection, got: %+v", reply.Error)
+	}
+}

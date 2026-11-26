@@ -102,7 +102,7 @@ func (a *Application) configure(request Request) error {
 		if !ok {
 			return errors.New("creation operation not found")
 		}
-		if _, ended := op.phase.(terminal); ended {
+		if a.reconcileAndProjectLocked(op).State == Finished {
 			return errors.New("creation operation has finished")
 		}
 	}
