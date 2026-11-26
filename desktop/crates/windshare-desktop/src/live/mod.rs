@@ -7,7 +7,7 @@ mod quit;
 mod selection;
 mod session;
 
-pub use host_store::{HostStore, host_share_running, host_share_state};
+pub use host_store::{HostChange, HostStore, host_share_running, host_share_state};
 pub use projection::byte_size;
 pub use session::{PREVIEW_DEFAULT_FRONTEND, Runtime};
 

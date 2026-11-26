@@ -4,12 +4,11 @@ use super::{
     setup_finished_feedback,
 };
 use crate::{
-    live::{HostStore, host_share_running, host_share_state},
+    live::{HostChange, host_share_running, host_share_state},
     localization::Text,
     model::SharingSetupTarget,
 };
-use gpui::{App, Context, Entity, Window};
-use std::sync::Arc;
+use gpui::{App, Context, Window};
 use windshare_host::{
     Model, Operation, OperationState, PreferenceEdit, RelayOperation, SelectedRoot, Setup,
     SetupSettlement, ShareState as HostShareState,
@@ -227,13 +226,14 @@ impl SetupDialog {
         .detach();
     }
 
-    pub(super) fn on_host_updated(&mut self, host: &Entity<HostStore>, cx: &mut Context<Self>) {
-        let (previous_model, model) = {
-            let store = host.read(cx);
-            (
-                Arc::clone(store.previous_model()),
-                Arc::clone(store.model()),
-            )
+    pub(super) fn on_host_updated(&mut self, change: &HostChange, cx: &mut Context<Self>) {
+        let HostChange::ModelChanged {
+            previous: previous_model,
+            current: model,
+        } = change
+        else {
+            cx.notify();
+            return;
         };
         if let Some(url) = &self.expanded_relay
             && !model
@@ -246,9 +246,9 @@ impl SetupDialog {
         }
         let op_id = self.operation_id().to_owned();
         let previous_page = self.page;
-        let previous_form_visible = form_visible_for(&previous_model, &op_id);
-        let finished = self.settle_in_flight(&model, cx);
-        match dialog_close_action(self.target, &previous_model, &model, &op_id, finished) {
+        let previous_form_visible = form_visible_for(previous_model, &op_id);
+        let finished = self.settle_in_flight(model, cx);
+        match dialog_close_action(self.target, previous_model, model, &op_id, finished) {
             DialogCloseAction::CompleteWithToast => {
                 let toast = self.feedback.take().and_then(Result::ok);
                 cx.emit(SetupDialogEvent::Completed(toast));
@@ -267,7 +267,7 @@ impl SetupDialog {
         }
         if self.page != previous_page {
             cx.emit(SetupDialogEvent::PageChanged);
-        } else if form_visible_for(&model, &op_id) != previous_form_visible {
+        } else if form_visible_for(model, &op_id) != previous_form_visible {
             cx.emit(SetupDialogEvent::FocusChanged);
         }
         cx.notify();

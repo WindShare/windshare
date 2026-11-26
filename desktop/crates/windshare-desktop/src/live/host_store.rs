@@ -1,18 +1,57 @@
-use gpui::{Context, Window};
+use gpui::{Context, Entity, Subscription, Window};
 use std::sync::Arc;
 use windshare_host::{Connection, Controller, Model, ShareState as HostShareState};
+
+#[cfg(test)]
+#[path = "host_store_tests.rs"]
+mod tests;
+
+/// Change delivered to a single `HostStore` subscriber.
+///
+/// Each observer tracks its own cursor against `HostStore::model()`, so
+/// non-model notifications (such as `set_exiting`) emit `StateChanged` rather
+/// than replaying a prior `(previous, current)` model edge or leaking transitions
+/// that occurred before a dialog subscribed.
+pub enum HostChange {
+    ModelChanged {
+        previous: Arc<Model>,
+        current: Arc<Model>,
+    },
+    StateChanged,
+}
+
+struct ModelCursor {
+    last: Arc<Model>,
+}
+
+impl ModelCursor {
+    fn new(initial: &Arc<Model>) -> Self {
+        Self {
+            last: Arc::clone(initial),
+        }
+    }
+
+    fn observe(&mut self, current: &Arc<Model>) -> HostChange {
+        if Arc::ptr_eq(&self.last, current) {
+            return HostChange::StateChanged;
+        }
+        let previous = std::mem::replace(&mut self.last, Arc::clone(current));
+        HostChange::ModelChanged {
+            previous,
+            current: Arc::clone(current),
+        }
+    }
+}
 
 pub struct HostStore {
     controller: Controller,
     model: Arc<Model>,
-    previous_model: Arc<Model>,
     exiting: bool,
 }
 
 impl HostStore {
     pub fn new(controller: Controller, window: &Window, cx: &Context<Self>) -> Self {
         let model = controller.model();
-        let previous_model = Arc::clone(&model);
         let observer = controller.clone();
         // Controller::changed() uses a single-consumer MPMC channel; keep exactly
         // one task consuming it and fan out updates to views through GPUI observe.
@@ -28,9 +67,35 @@ impl HostStore {
         Self {
             controller,
             model,
-            previous_model,
             exiting: false,
         }
+    }
+
+    /// Observes host notifications with per-subscriber model edge tracking.
+    pub fn observe<T: 'static>(
+        host: &Entity<Self>,
+        cx: &mut Context<T>,
+        mut on_change: impl FnMut(&mut T, &HostChange, &mut Context<T>) + 'static,
+    ) -> Subscription {
+        let mut cursor = ModelCursor::new(host.read(cx).model());
+        cx.observe(host, move |this, host, cx| {
+            let change = cursor.observe(host.read(cx).model());
+            on_change(this, &change, cx);
+        })
+    }
+
+    /// Observes host notifications within `window` with per-subscriber model edge tracking.
+    pub fn observe_in<T: 'static>(
+        host: &Entity<Self>,
+        window: &mut Window,
+        cx: &mut Context<T>,
+        mut on_change: impl FnMut(&mut T, &HostChange, &mut Window, &mut Context<T>) + 'static,
+    ) -> Subscription {
+        let mut cursor = ModelCursor::new(host.read(cx).model());
+        cx.observe_in(host, window, move |this, host, window, cx| {
+            let change = cursor.observe(host.read(cx).model());
+            on_change(this, &change, window, cx);
+        })
     }
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
@@ -38,16 +103,12 @@ impl HostStore {
         if Arc::ptr_eq(&next, &self.model) {
             return;
         }
-        self.previous_model = std::mem::replace(&mut self.model, next);
+        self.model = next;
         cx.notify();
     }
 
     pub const fn model(&self) -> &Arc<Model> {
         &self.model
-    }
-
-    pub const fn previous_model(&self) -> &Arc<Model> {
-        &self.previous_model
     }
 
     pub const fn controller(&self) -> &Controller {

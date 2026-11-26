@@ -1,4 +1,4 @@
-use super::host_store::{HostStore, host_share_state};
+use super::host_store::{HostChange, HostStore, host_share_state};
 use crate::{
     desktop::Desktop,
     flow_state::ShareRun,
@@ -221,26 +221,27 @@ impl Desktop {
             let _ = weak.update(cx, |this, cx| this.request_quit(window, cx));
             false
         });
-        cx.observe_in(host, window, |this, host, window, cx| {
-            this.on_host_changed(&host, window, cx);
+        HostStore::observe_in(host, window, cx, |this, change, window, cx| {
+            this.on_host_changed(change, window, cx);
         })
     }
 
     fn on_host_changed(
         &mut self,
-        host: &Entity<HostStore>,
+        change: &HostChange,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (previous_model, model) = {
-            let store = host.read(cx);
-            (
-                Arc::clone(store.previous_model()),
-                Arc::clone(store.model()),
-            )
+        let HostChange::ModelChanged {
+            previous: previous_model,
+            current: model,
+        } = change
+        else {
+            cx.notify();
+            return;
         };
         if let Runtime::Native(session) = &mut self.runtime {
-            session.retry_wakeup = Self::schedule_retry_wakeups(&model, cx);
+            session.retry_wakeup = Self::schedule_retry_wakeups(model, cx);
         }
         if let windshare_host::Setup::Running {
             verification_url,
@@ -256,11 +257,11 @@ impl Desktop {
             cx.open_url(verification_url);
         }
         self.network_ui.prune_expanded(&model.preferences);
-        self.project_native_shares(&model);
-        if let Some(toast) = crate::network::relay_removed_toast(&previous_model, &model) {
+        self.project_native_shares(model);
+        if let Some(toast) = crate::network::relay_removed_toast(previous_model, model) {
             self.notify(toast, cx);
         }
-        if self.should_close_unblocked_account_overlay(&previous_model, &model, cx) {
+        if self.should_close_unblocked_account_overlay(previous_model, model, cx) {
             self.close_overlay(window, cx);
         }
         cx.notify();

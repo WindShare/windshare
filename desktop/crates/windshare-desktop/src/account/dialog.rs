@@ -3,14 +3,14 @@ use super::{
 };
 use crate::{
     flow_state::COPY_FEEDBACK_MS,
-    live::HostStore,
+    live::{HostChange, HostStore},
     localization::{LanguageSettings, Text, language},
 };
 use gpui::{
     App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable,
     Subscription, Window,
 };
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 use windshare_host::{AccountCommand, AccountRequest, AccountState, AccountView};
 use windshare_ui::{Input, InputEvent};
 
@@ -96,8 +96,8 @@ impl AccountDialog {
         }
         let in_flight_id = match &source {
             AccountSource::Native(host) => {
-                subscriptions.push(cx.observe(host, |this, host, cx| {
-                    this.on_host_updated(&host, cx);
+                subscriptions.push(HostStore::observe(host, cx, |this, change, cx| {
+                    this.on_host_updated(change, cx);
                 }));
                 match &host.read(cx).model().account_request {
                     AccountRequest::Pending { id, action }
@@ -479,13 +479,14 @@ impl AccountDialog {
         cx.notify();
     }
 
-    fn on_host_updated(&mut self, host: &Entity<HostStore>, cx: &mut Context<Self>) {
-        let (previous_model, model) = {
-            let store = host.read(cx);
-            (
-                Arc::clone(store.previous_model()),
-                Arc::clone(store.model()),
-            )
+    fn on_host_updated(&mut self, change: &HostChange, cx: &mut Context<Self>) {
+        let HostChange::ModelChanged {
+            previous: previous_model,
+            current: model,
+        } = change
+        else {
+            cx.notify();
+            return;
         };
         let Some(view) = model.account.as_ref() else {
             return;
@@ -520,7 +521,7 @@ impl AccountDialog {
             }
         }
         if let Some(event) =
-            self.host_update_event(previous_page, &previous_model, view, completed_toast)
+            self.host_update_event(previous_page, previous_model, view, completed_toast)
         {
             cx.emit(event);
         }

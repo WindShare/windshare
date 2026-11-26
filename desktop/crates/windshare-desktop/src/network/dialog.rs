@@ -93,8 +93,8 @@ impl SetupDialog {
         }
         let in_flight_id = match &source {
             SetupSource::Native { host, operation_id } => {
-                subscriptions.push(cx.observe(host, |this, host, cx| {
-                    this.on_host_updated(&host, cx);
+                subscriptions.push(HostStore::observe(host, cx, |this, change, cx| {
+                    this.on_host_updated(change, cx);
                 }));
                 host.read(cx)
                     .model()
