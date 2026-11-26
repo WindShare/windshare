@@ -1,6 +1,8 @@
 import { expect, it } from 'vitest'
+import type { TURNTraceStage } from '../../src/connectivity/diagnostics'
 import { TURNPaths } from '../../src/connectivity/turn-paths'
 import { decodeTURNDemand, encodeTURNGrants, type TURNDemand, type TURNStatus } from '../../src/protocol/turn-control'
+import type { ProtocolTraceEvent } from '../../src/session/diagnostics'
 import { EnvelopeSealer } from '../../src/session/envelope'
 import { createPeerAttemptIdentity } from '../../src/session/identities'
 import { encodeBody, encodeMessage, MESSAGE_KIND } from '../../src/session/message'
@@ -91,8 +93,25 @@ it('discards prior grants when a reply observer ends the activation', async () =
   }
 })
 
+async function flushMicrotasks(turns = 6): Promise<void> {
+  for (let i = 0; i < turns; i += 1) await Promise.resolve()
+}
+
 function queuedFixture(start?: ConstructorParameters<typeof TURNPaths>[0]['start']) {
-  const { runtime, channel, events } = runtimeFixture()
+  const events: ProtocolTraceEvent[] = []
+  const traces: Array<{ stage: TURNTraceStage; status?: string; mode?: string; serviceId?: string }> = []
+  const waiters: Array<{ predicate: () => boolean; resolve: () => void }> = []
+  const notify = () => {
+    for (let i = waiters.length - 1; i >= 0; i -= 1) {
+      if (waiters[i]!.predicate()) waiters.splice(i, 1)[0]!.resolve()
+    }
+  }
+  const { runtime, channel } = runtimeFixture({
+    current: (event) => {
+      events.push(event)
+      notify()
+    },
+  })
   let now = 0
   const manager = new TURNPaths({
     session: runtime,
@@ -106,12 +125,20 @@ function queuedFixture(start?: ConstructorParameters<typeof TURNPaths>[0]['start
       cancel: () => {},
     })),
     release: async () => {},
+    trace: (stage, detail) => {
+      traces.push({ stage, ...detail })
+      notify()
+    },
   })
   return {
-    runtime, channel, events, manager,
+    runtime, channel, events, traces, manager,
     step: (time: number, usefulBytes = 0) => {
       now = time
       manager.step({ ...demand, usefulBytes })
+    },
+    waitUntil: (predicate: () => boolean): Promise<void> => {
+      if (predicate()) return Promise.resolve()
+      return new Promise<void>(resolve => { waiters.push({ predicate, resolve }) })
     },
     sentTURNDemands: async () => (await openSent(channel))
       .filter(entry => entry.message.kind === MESSAGE_KIND.turnControl)
@@ -131,8 +158,7 @@ it('withdraws timed-out queued TURN requests from the real session writer withou
     f.step(4000, 8 * MiB)
     f.step(6000, 12 * MiB)
     f.step(8000, 16 * MiB)
-    await Promise.resolve()
-    await Promise.resolve()
+    await flushMicrotasks()
 
     f.step(9999, 20 * MiB)
     f.step(10_000, 20 * MiB)
@@ -201,15 +227,23 @@ it('withdraws other queued TURN requests when an authenticated reply marks TURN 
       })
       f.channel.receive(await server.seal(encodeMessage(MESSAGE_KIND.turnControl, undefined, grants).plaintext))
     }
+    const turnEvents = (transition: string) => f.events.filter(event =>
+      event.eventName === 'protocol_operation' && event.requestKind === 'turn_control' && event.transition === transition,
+    )
 
+    // WebCrypto sealing/opening resolves asynchronously on worker threads, so wait for
+    // observed send completion and authenticated grant receipt instead of timer ticks.
     f.channel.unblock()
     f.step(0)
+    await f.waitUntil(() => turnEvents('send_completed').length === 1)
     await deliver(1n, 'ok', ['a', 'b'])
-    await new Promise<void>(resolve => setTimeout(resolve, 0))
+    await f.waitUntil(() => f.traces.some(trace => trace.stage === 'turn_grants_received' && trace.status === 'ok'))
+    await flushMicrotasks()
 
     f.step(2000)
+    await f.waitUntil(() => turnEvents('send_completed').length === 2)
     second.resolve({ type: 'lifecycle-cancelled', owner: 'last-activation' })
-    await new Promise<void>(resolve => setTimeout(resolve, 0))
+    await flushMicrotasks()
 
     f.channel.block()
     const blocker = f.runtime.beginOperation(MESSAGE_KIND.listChildren, encodeBody([]))
@@ -217,7 +251,7 @@ it('withdraws other queued TURN requests when an authenticated reply marks TURN 
 
     f.step(4000)
     await deliver(2n, 'unconfigured')
-    await new Promise<void>(resolve => setTimeout(resolve, 0))
+    await f.waitUntil(() => f.traces.some(trace => trace.stage === 'turn_grants_received' && trace.status === 'unconfigured'))
 
     const followUp = f.runtime.beginOperation(MESSAGE_KIND.listChildren, encodeBody([]))
     f.channel.unblock()
@@ -228,8 +262,7 @@ it('withdraws other queued TURN requests when an authenticated reply marks TURN 
       { requestId: 2n, mode: 'all', serviceIds: ['a'] },
     ])
     expect(f.channel.state).toBe('open')
-    expect(f.events.some(event => event.eventName === 'protocol_operation' &&
-      event.requestKind === 'turn_control' && event.transition === 'send_withdrawn')).toBe(true)
+    expect(turnEvents('send_withdrawn')).toHaveLength(2)
   } finally {
     await f.manager.reset()
     await f.runtime.close()
