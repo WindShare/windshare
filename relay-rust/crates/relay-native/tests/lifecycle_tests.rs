@@ -7,7 +7,10 @@ use windshare_relay_core::lifecycle::Record;
 use windshare_relay_native::{ConnectionLimits, Endpoint, OriginPolicy, Server, SourcePolicy};
 
 fn root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+    // Prefer Cargo's runtime CARGO_MANIFEST_DIR so cached test binaries reused
+    // across worktrees locate the active repository root.
+    std::env::var_os("CARGO_MANIFEST_DIR")
+        .map_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")), PathBuf::from)
         .join("../../..")
         .canonicalize()
         .unwrap()

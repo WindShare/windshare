@@ -3,8 +3,10 @@ use std::{env, fs, path::PathBuf};
 fn main() {
     // Include removed aliases as well as the release head. The publisher verifies
     // each signature before treating these bytes as permanent bindings.
-    let directory =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../deploy/network/history");
+    // Read CARGO_MANIFEST_DIR at runtime so a build script binary reused across
+    // worktrees reads the active checkout.
+    let directory = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("manifest directory"))
+        .join("../../../deploy/network/history");
     println!("cargo:rerun-if-changed={}", directory.display());
     let mut paths: Vec<_> = fs::read_dir(directory)
         .expect("directory release history")

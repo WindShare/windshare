@@ -267,7 +267,10 @@ fn default_provenance_rejects_system_temp_and_accepts_project_directories() {
 
     // Verify a real project file outside the 6 Windows Known Folders is accepted
     // (skip only if the workspace itself was placed under an ephemeral directory).
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    // Prefer Cargo's runtime CARGO_MANIFEST_DIR so a cached test binary reused
+    // across worktrees stays valid after the compiling worktree is removed.
+    let manifest_dir = std::env::var_os("CARGO_MANIFEST_DIR")
+        .map_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")), PathBuf::from);
     let manifest = manifest_dir.join("Cargo.toml");
     let canonical_manifest = std::fs::canonicalize(&manifest).unwrap();
     if provenance.ephemeral_kind(&canonical_manifest).is_none() {

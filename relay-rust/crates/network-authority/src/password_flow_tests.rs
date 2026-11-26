@@ -89,8 +89,7 @@ fn pepper_ring_validates_format_supports_rotation_and_redacts_secrets() {
 
 #[test]
 fn shared_password_verifier_vectors_parse_and_verify_with_domain_separation() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../testdata/network/password-verifiers.json");
+    let path = manifest_dir().join("../../../testdata/network/password-verifiers.json");
     let fixture_json: serde_json::Value =
         serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
     let vectors = fixture_json["vectors"].as_array().unwrap();

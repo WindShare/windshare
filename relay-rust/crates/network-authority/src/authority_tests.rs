@@ -28,13 +28,20 @@ use crate::{
 use anyhow::Result;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use ed25519_dalek::SigningKey;
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, path::PathBuf};
 use windshare_relay_access::{
     entitlement::{DAY_SECONDS, ENTITLEMENT_LIFETIME},
     ticket::Ticket,
     trust::{self, Generation, TrustStore},
     usage::{Batch, Load, RESPONSE_DOMAIN, Reply, ReportResult, USAGE_DOMAIN, UsageRecord},
 };
+
+fn manifest_dir() -> PathBuf {
+    // Prefer Cargo's runtime CARGO_MANIFEST_DIR so cached test binaries reused
+    // across worktrees resolve fixtures in the active checkout.
+    std::env::var_os("CARGO_MANIFEST_DIR")
+        .map_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")), PathBuf::from)
+}
 
 #[derive(Clone, Default)]
 struct Memory {

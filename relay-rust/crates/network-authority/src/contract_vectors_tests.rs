@@ -51,8 +51,7 @@ fn account_contract_vectors_match_go_and_browser() {
         "node_key":URL_SAFE_NO_PAD.encode(node.verifying_key().to_bytes()),
         "descriptor":{"version":2,"descriptor":URL_SAFE_NO_PAD.encode(&descriptor),"signature":URL_SAFE_NO_PAD.encode(&signed[descriptor.len()..])}
     })).unwrap();
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../testdata/network/authority.json");
+    let path = manifest_dir().join("../../../testdata/network/authority.json");
     if std::env::var("UPDATE_AUTHORITY_VECTORS").as_deref() == Ok("1") {
         std::fs::write(&path, &data).unwrap();
     }
