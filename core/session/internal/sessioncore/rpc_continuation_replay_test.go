@@ -290,7 +290,9 @@ func TestRPCContinuationQueuedCancelPreservesNotSentAndSingleChildLeaf(t *testin
 			t.Fatal(err)
 		}
 		parkDone := make(chan error, 1)
-		go func() { parkDone <- fixture.rpc.BeginCall(context.Background(), &fixture.runtime.initial, parkCall, parkMsg) }()
+		go func() {
+			parkDone <- fixture.rpc.BeginCall(context.Background(), &fixture.runtime.initial, parkCall, parkMsg)
+		}()
 		<-sendStarted
 
 		ctx, cancel := context.WithCancel(context.Background())

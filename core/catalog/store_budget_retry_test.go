@@ -393,12 +393,19 @@ func TestListChildrenContendedOversizedDirectoryRetriesAtMostOnce(t *testing.T) 
 
 	smallEntered := make(chan struct{})
 	releaseSmall := make(chan struct{})
+	var smallEnteredOnce sync.Once
 	var hugeScans atomic.Int32
 	scanner := DirectoryScannerFunc(func(ctx context.Context, request ScanRequest) (ScanResult, error) {
 		dirID, _ := request.Directory.DirectoryID()
 		if dirID == smallDir {
-			close(smallEntered)
-			<-releaseSmall
+			// Guard channel closure because a peer waking before the failing pass
+			// releases its transient budget may legitimately re-enter on exclusive retry.
+			smallEnteredOnce.Do(func() { close(smallEntered) })
+			select {
+			case <-releaseSmall:
+			case <-ctx.Done():
+				return ScanResult{}, ctx.Err()
+			}
 			return ScanResult{}, request.Children.Add(ctx, scannedFile(t, 90, "tiny", 1))
 		}
 		if hugeScans.Add(1) == 1 {
@@ -713,12 +720,17 @@ func TestListChildrenContendedShareOverflowBecomesPermanentAfterExclusiveRetry(t
 
 	smallEntered := make(chan struct{})
 	releaseSmall := make(chan struct{})
+	var smallEnteredOnce sync.Once
 	var hugeScans atomic.Int32
 	scanner := DirectoryScannerFunc(func(ctx context.Context, request ScanRequest) (ScanResult, error) {
 		dirID, _ := request.Directory.DirectoryID()
 		if dirID == smallDir {
-			close(smallEntered)
-			<-releaseSmall
+			smallEnteredOnce.Do(func() { close(smallEntered) })
+			select {
+			case <-releaseSmall:
+			case <-ctx.Done():
+				return ScanResult{}, ctx.Err()
+			}
 			return ScanResult{}, request.Children.Add(ctx, scannedFile(t, 210, "tiny", 1))
 		}
 		if dirID == laterSmallDir {
@@ -996,12 +1008,17 @@ func TestListChildrenContendedShareScanWorkResolvesOrBecomesPermanentAfterExclus
 
 		smallEntered := make(chan struct{})
 		releaseSmall := make(chan struct{})
+		var smallEnteredOnce sync.Once
 		var wideScans atomic.Int32
 		scanner := DirectoryScannerFunc(func(ctx context.Context, request ScanRequest) (ScanResult, error) {
 			dirID, _ := request.Directory.DirectoryID()
 			if dirID == smallDir {
-				close(smallEntered)
-				<-releaseSmall
+				smallEnteredOnce.Do(func() { close(smallEntered) })
+				select {
+				case <-releaseSmall:
+				case <-ctx.Done():
+					return ScanResult{}, ctx.Err()
+				}
 				return ScanResult{}, request.Children.Add(ctx, scannedFile(t, 50, "tiny", 1))
 			}
 			if wideScans.Add(1) == 1 {
