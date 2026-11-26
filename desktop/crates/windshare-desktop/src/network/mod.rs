@@ -70,6 +70,26 @@ fn settings_visible_setup(setup: &Setup) -> Option<&SetupContext> {
     })
 }
 
+/// Banner presentation for `Settings -> Relays & network` while the host's
+/// single global setup workflow is unfinished. Share-scoped setups that do not
+/// require cancellation still lock all network controls, so settings surfaces a
+/// return path instead of adopting their completion/error ownership.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SettingsSetupBanner<'a> {
+    InlineProgress,
+    ReturnToShare(&'a SetupContext),
+}
+
+fn settings_setup_banner(setup: &Setup) -> Option<SettingsSetupBanner<'_>> {
+    if !setup.unfinished() {
+        return None;
+    }
+    if settings_visible_setup(setup).is_some() {
+        return Some(SettingsSetupBanner::InlineProgress);
+    }
+    setup.context().map(SettingsSetupBanner::ReturnToShare)
+}
+
 pub fn relay_removed_toast(previous: &Model, current: &Model) -> Option<Text> {
     let Setup::Finished { context } = &current.setup else {
         return None;

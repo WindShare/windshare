@@ -71,6 +71,9 @@ impl Desktop {
         let busy = self.network_settings_busy(cx);
         column()
             .gap(px(SECTION_GAP))
+            .when_some(self.share_setup_return_card(theme, cx), |col, banner| {
+                col.child(banner)
+            })
             .child(Self::relay_mode_card(theme, prefs, compact, busy, cx))
             .child(self.custom_relays_card(theme, prefs, busy, cx))
             .child(Self::receiver_site_card(theme, prefs, busy, cx))
@@ -244,16 +247,49 @@ impl Desktop {
         card
     }
 
+    fn setup_modal_open(&self) -> bool {
+        self.overlays
+            .iter()
+            .any(|frame| matches!(frame.content, Overlay::SharingSetup(..)))
+    }
+
+    fn share_setup_return_card(&self, theme: Theme, cx: &Context<Self>) -> Option<Div> {
+        let Runtime::Native(session) = &self.runtime else {
+            return None;
+        };
+        if self.setup_modal_open() {
+            return None;
+        }
+        let setup = &session.model(cx).setup;
+        let super::SettingsSetupBanner::ReturnToShare(context) =
+            super::settings_setup_banner(setup)?
+        else {
+            return None;
+        };
+        // A share-scoped setup locks all three cards on this page; anchor the
+        // return path at the top so the disabled controls are explained upfront.
+        Some(
+            theme
+                .card()
+                .px(px(CARD_PADDING_X))
+                .py(px(CARD_PADDING_Y))
+                .border_color(Tone::Peach.accent(theme))
+                .child(self.setup_return_for_context(theme, setup, context, cx)),
+        )
+    }
+
     fn inline_setup_banner(&self, theme: Theme, cx: &Context<Self>) -> Option<Div> {
         let Runtime::Native(session) = &self.runtime else {
             return None;
         };
+        if self.setup_modal_open() {
+            return None;
+        }
         let setup = &session.model(cx).setup;
-        let setup_modal_open = self
-            .overlays
-            .last()
-            .is_some_and(|frame| matches!(frame.content, Overlay::SharingSetup(..)));
-        if setup_modal_open || super::settings_visible_setup(setup).is_none() {
+        if !matches!(
+            super::settings_setup_banner(setup),
+            Some(super::SettingsSetupBanner::InlineProgress)
+        ) {
             return None;
         }
         Some(
@@ -267,11 +303,7 @@ impl Desktop {
     }
 
     fn network_inline_feedback(&self, theme: Theme, cx: &Context<Self>) -> Option<Div> {
-        let setup_modal_open = self
-            .overlays
-            .last()
-            .is_some_and(|frame| matches!(frame.content, Overlay::SharingSetup(..)));
-        if setup_modal_open {
+        if self.setup_modal_open() {
             return None;
         }
         let Runtime::Native(session) = &self.runtime else {

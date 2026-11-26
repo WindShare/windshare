@@ -151,6 +151,16 @@ impl Desktop {
         if !setup.unfinished() || operation.is_empty() || context.operation_id == operation {
             return None;
         }
+        Some(self.setup_return_for_context(theme, setup, context, cx))
+    }
+
+    pub(super) fn setup_return_for_context(
+        &self,
+        theme: Theme,
+        setup: &Setup,
+        context: &windshare_host::SetupContext,
+        cx: &Context<Self>,
+    ) -> Div {
         let original = self.shares.iter().find(|share| {
             matches!(&share.source, crate::model::ShareSource::Native { operation_id } if operation_id == &context.operation_id)
         });
@@ -164,13 +174,13 @@ impl Desktop {
             this.return_to_sharing_setup(window, cx);
             cx.notify();
         }));
-        Some(setup_return_panel(
+        setup_return_panel(
             theme,
             setup,
             original.map(|share| share.name.as_str()),
             button,
             cx,
-        ))
+        )
     }
 
     pub(super) fn setup_progress(&self, theme: Theme, setup: &Setup, cx: &Context<Self>) -> Div {

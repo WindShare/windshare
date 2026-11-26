@@ -1,9 +1,9 @@
 use super::{
-    NetworkSettingsState,
+    NetworkSettingsState, SettingsSetupBanner,
     dialog_host::{
         DialogCloseAction, dialog_close_action, operation_finished, other_running_for_model,
     },
-    relay_removed_toast, settings_visible_setup,
+    relay_removed_toast, settings_setup_banner, settings_visible_setup,
 };
 use crate::{localization::Text, model::SharingSetupTarget};
 use windshare_host::{
@@ -502,4 +502,102 @@ fn share_scoped_dialog_stays_open_on_setup_cancel_and_closes_when_share_finishes
         ),
         DialogCloseAction::CompleteWithToast
     );
+}
+
+#[test]
+fn settings_setup_banner_routes_share_scoped_unfinished_setups_to_return_card() {
+    let mut share_ctx = global_context("setup:20");
+    share_ctx.operation_id = "share:1".into();
+
+    // Settled or idle states render no banner.
+    assert_eq!(settings_setup_banner(&Setup::Idle), None);
+    assert_eq!(
+        settings_setup_banner(&Setup::Finished {
+            context: share_ctx.clone(),
+        }),
+        None
+    );
+    assert_eq!(
+        settings_setup_banner(&Setup::Cancelled {
+            context: share_ctx.clone(),
+        }),
+        None
+    );
+    for settled in [SetupRecovery::Restart, SetupRecovery::Blocked] {
+        let failed = Setup::Failed {
+            context: share_ctx.clone(),
+            recovery: Some(settled),
+            error: failure("settled"),
+        };
+        assert_eq!(settings_setup_banner(&failed), None);
+    }
+
+    // Global setups and cancellation-blocking share setups stay inline.
+    let global_running = Setup::Running {
+        context: global_context("setup:21"),
+        stage: "discover".into(),
+        verification_url: String::new(),
+        user_code: String::new(),
+        service_login: None,
+    };
+    assert_eq!(
+        settings_setup_banner(&global_running),
+        Some(SettingsSetupBanner::InlineProgress)
+    );
+    for inline_share in [
+        Setup::Cancelling {
+            context: share_ctx.clone(),
+        },
+        Setup::CancelFailed {
+            context: share_ctx.clone(),
+            error: failure("cancel failed"),
+        },
+        Setup::Failed {
+            context: share_ctx.clone(),
+            recovery: Some(SetupRecovery::Cancel),
+            error: failure("settings changed"),
+        },
+        Setup::Failed {
+            context: share_ctx.clone(),
+            recovery: Some(SetupRecovery::RetryCancel),
+            error: failure("retry cancel"),
+        },
+    ] {
+        assert_eq!(
+            settings_setup_banner(&inline_share),
+            Some(SettingsSetupBanner::InlineProgress)
+        );
+    }
+
+    // Share-scoped unfinished setups that do not require cancellation surface a
+    // return card without adopting the setup into Settings' inline feedback.
+    let share_running = Setup::Running {
+        context: share_ctx.clone(),
+        stage: "approval".into(),
+        verification_url: "https://relay.example/approve".into(),
+        user_code: "ABCD-1234".into(),
+        service_login: None,
+    };
+    assert!(settings_visible_setup(&share_running).is_none());
+    assert_eq!(
+        settings_setup_banner(&share_running),
+        Some(SettingsSetupBanner::ReturnToShare(&share_ctx))
+    );
+
+    for recovery in [
+        Some(SetupRecovery::Continue),
+        Some(SetupRecovery::Unknown),
+        None,
+    ] {
+        let share_failed = Setup::Failed {
+            context: share_ctx.clone(),
+            recovery,
+            error: failure("interrupted"),
+        };
+        assert!(settings_visible_setup(&share_failed).is_none());
+        assert_eq!(
+            settings_setup_banner(&share_failed),
+            Some(SettingsSetupBanner::ReturnToShare(&share_ctx))
+        );
+    }
 }
