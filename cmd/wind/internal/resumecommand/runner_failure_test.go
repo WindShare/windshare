@@ -8,6 +8,7 @@ import (
 
 	"github.com/windshare/windshare/adapters/filesystem"
 	"github.com/windshare/windshare/cmd/wind/internal/command"
+	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/output"
 )
 
@@ -150,6 +151,96 @@ func TestResumeListFailureStageMatrixIsClosedAndPathFree(t *testing.T) {
 				strings.Contains(rendered, "path") ||
 				strings.Contains(rendered, "capability") {
 				t.Fatalf("provider canary escaped: %q", rendered)
+			}
+		})
+	}
+}
+
+func TestResumeFailureDetailRejectsOrphanNativeClassAndGatesStage(t *testing.T) {
+	orphan := resumeFailureDetail{NativeClass: filesystem.NativeErrorNotFound}
+	if orphan.Valid() {
+		t.Fatalf("orphan native class accepted as valid: %+v", orphan)
+	}
+	renderer := textRenderer{}
+	if _, err := renderer.ListControlStatus(resumeListStatusNeedsAttention, resumeDestinationUnknownReason, orphan); !errors.Is(err, errResumeStateContract) {
+		t.Fatalf("ListControlStatus(orphan) err = %v, want %v", err, errResumeStateContract)
+	}
+	if _, err := renderer.DiscardControlStatus(resumeDiscardStatusChanged, 1, resumeOperationChangedReason, orphan); !errors.Is(err, errResumeStateContract) {
+		t.Fatalf("DiscardControlStatus(orphan) err = %v, want %v", err, errResumeStateContract)
+	}
+	var rendered strings.Builder
+	renderResumeFailureDetail(&rendered, orphan)
+	if strings.Contains(rendered.String(), "stage=") {
+		t.Fatalf("renderResumeFailureDetail emitted empty stage: %q", rendered.String())
+	}
+
+	notFoundCause, ok := filesystem.SealOutputFailure(filesystem.OutputFailureDiagnostic{
+		Stage:            output.FailureLookup,
+		NativeErrorClass: filesystem.NativeErrorNotFound,
+	})
+	if !ok {
+		t.Fatal("failed to seal not_found diagnostic")
+	}
+	accessDeniedCause, ok := filesystem.SealOutputFailure(filesystem.OutputFailureDiagnostic{
+		Stage:            output.FailureDurability,
+		NativeErrorClass: filesystem.NativeErrorAccessDenied,
+	})
+	if !ok {
+		t.Fatal("failed to seal access_denied diagnostic")
+	}
+	if detail := presentFailureDetail(nil); detail != (resumeFailureDetail{}) {
+		t.Fatalf("presentFailureDetail(nil) = %+v, want zero", detail)
+	}
+	for _, tc := range []struct {
+		name    string
+		failure *engine.RecoveryFailure
+		want    resumeFailureDetail
+	}{
+		{
+			name: "changed race suppresses native class without stage",
+			failure: &engine.RecoveryFailure{
+				Kind:   engine.RecoveryFailureChanged,
+				Reason: resumeOperationChangedReason,
+				Cause:  notFoundCause,
+			},
+			want: resumeFailureDetail{},
+		},
+		{
+			name: "cancelled failure suppresses joined native class without stage",
+			failure: &engine.RecoveryFailure{
+				Kind:   engine.RecoveryFailureCancelled,
+				Reason: resumeCommandCancelledReason,
+				Cause:  errors.Join(context.Canceled, accessDeniedCause),
+			},
+			want: resumeFailureDetail{},
+		},
+		{
+			name: "mismatched native stage is not attached to surfaced stage",
+			failure: &engine.RecoveryFailure{
+				Kind:   engine.RecoveryFailureNeedsAttention,
+				Reason: resumeAuthorityCloseReason,
+				Detail: engine.RecoveryFailureDetail{Stage: output.FailureClose},
+				Cause:  accessDeniedCause,
+			},
+			want: resumeFailureDetail{Stage: output.FailureClose},
+		},
+		{
+			name: "matching surfaced stage preserves native class",
+			failure: &engine.RecoveryFailure{
+				Kind:   engine.RecoveryFailureNeedsAttention,
+				Reason: resumeNativeDurabilityReason,
+				Detail: engine.RecoveryFailureDetail{Stage: output.FailureDurability},
+				Cause:  accessDeniedCause,
+			},
+			want: resumeFailureDetail{
+				Stage:       output.FailureDurability,
+				NativeClass: filesystem.NativeErrorAccessDenied,
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := presentFailureDetail(tc.failure); got != tc.want {
+				t.Fatalf("presentFailureDetail() = %+v, want %+v", got, tc.want)
 			}
 		})
 	}

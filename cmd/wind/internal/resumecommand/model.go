@@ -75,12 +75,21 @@ type resumeFailureDetail struct {
 }
 
 func (detail resumeFailureDetail) Valid() bool {
-	return (detail.Stage == 0 || detail.Stage.Valid()) &&
+	if detail.Stage == 0 {
+		return detail.NativeClass == 0
+	}
+	return detail.Stage.Valid() &&
 		(detail.NativeClass == 0 || detail.NativeClass.Valid())
 }
+
+// Native OS error classes only refine a stage surfaced by engine/recovery;
+// control and race outcomes (changed/busy/cancelled) keep Detail empty.
 func presentFailureDetail(failure *engine.RecoveryFailure) resumeFailureDetail {
+	if failure == nil || failure.Detail.Stage == 0 {
+		return resumeFailureDetail{}
+	}
 	detail := resumeFailureDetail{Stage: failure.Detail.Stage}
-	if native, ok := filesystem.FailureDetailFor(failure.Cause); ok {
+	if native, ok := filesystem.FailureDetailFor(failure.Cause); ok && native.Stage == detail.Stage {
 		detail.NativeClass = native.NativeErrorClass
 	}
 	return detail

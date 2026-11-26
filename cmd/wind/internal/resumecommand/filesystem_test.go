@@ -3,6 +3,7 @@ package resumecommand
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -10,8 +11,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/windshare/windshare/adapters/filesystem"
 	"github.com/windshare/windshare/cmd/wind/internal/command"
+	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/engine"
+	"github.com/windshare/windshare/engine/output"
 )
 
 func TestFilesystemRunnerHelpUsesOnlyRootOwnedOperationInventory(t *testing.T) {
@@ -87,4 +93,124 @@ func TestResumeDiscardProjectsEngineRefusalAfterConfirmation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFilesystemResumeDiscardRaceOmitsMalformedStageAndNativeClass(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name      string
+		removeDir func(root, opDir string) string
+	}{
+		{
+			name:      "operation directory disappears during confirmation",
+			removeDir: func(_, opDir string) string { return opDir },
+		},
+		{
+			name:      "control directory disappears during confirmation",
+			removeDir: func(root, _ string) string { return filepath.Join(root, ".windshare-tmp") },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			opID := createRetainedFilesystemOp(t, ctx, root, 0x21)
+			opDir := filepath.Join(root, ".windshare-tmp", hex.EncodeToString(opID.Bytes()))
+
+			application, err := engine.New(engine.Config{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if closeErr := application.Close(context.Background()); closeErr != nil {
+					t.Error(closeErr)
+				}
+			})
+
+			stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+			logger := logFunc(func(format string, values ...any) {
+				_, _ = fmt.Fprintf(stderr, format+"\n", values...)
+			})
+			runner := newRunner(resumeDependencies{
+				inventories: filesystemResumeStateInventoryOpener{recovery: application},
+				confirmation: callbackConfirmationTerminal{
+					onReadLine: func() (string, error) {
+						if err := os.RemoveAll(tc.removeDir(root, opDir)); err != nil {
+							return "", err
+						}
+						return "discard 1", nil
+					},
+				},
+				parser:   flagRequestParser{logger: logger},
+				renderer: textRenderer{},
+				output:   streamResumeOutput{result: stdout, usage: testDiagnosticOutput{writer: stderr}},
+				logger:   logger,
+			})
+
+			result := runner.Run(ctx, []string{"discard", "-o", root, "--item", "1"})
+			rendered := stdout.String()
+			if result != command.ExitFailure ||
+				!strings.Contains(rendered, `resume_discard_status="operation-changed"`) ||
+				!strings.Contains(rendered, `reason="operation-no-longer-matches"`) {
+				t.Fatalf("result=%d stdout=%q stderr=%q", result, rendered, stderr.String())
+			}
+			if strings.Contains(rendered, "stage=") || strings.Contains(rendered, "native_error_class=") {
+				t.Fatalf("operation-changed leaked diagnostic detail: stdout=%q", rendered)
+			}
+		})
+	}
+}
+
+type callbackConfirmationTerminal struct {
+	onReadLine func() (string, error)
+}
+
+func (callbackConfirmationTerminal) Interactive() bool { return true }
+
+func (terminal callbackConfirmationTerminal) ReadLine(context.Context, string) (string, error) {
+	return terminal.onReadLine()
+}
+
+func createRetainedFilesystemOp(
+	t *testing.T,
+	ctx context.Context,
+	root string,
+	seed byte,
+) receivecontract.OperationID {
+	t.Helper()
+	authority, err := filesystem.FilesystemOutput{RootPath: root, CreateRoot: true}.NewOutputAuthority(output.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if closeErr := authority.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+	}()
+	if err := authority.BindDestination(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var share catalog.ShareInstance
+	share[0] = seed
+	var syntheticRoot catalog.DirectoryID
+	syntheticRoot[0] = seed + 1
+	rules, err := transfer.NewSelectionRules(true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection, err := transfer.NewSelectionSpec(share, syntheticRoot, rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lookup, err := authority.SelectOperation(ctx, selection, receivecontract.AutomaticOperation())
+	if err != nil || lookup.Kind != output.OutputLookupCreateReady || lookup.Reservation == nil {
+		t.Fatalf("SelectOperation = (%+v, %v)", lookup, err)
+	}
+	artifact, err := receivecontract.NewResultRootDirectoryTree(receivecontract.NewSyntheticSelectionResultRoot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation, err := lookup.Reservation.Create(ctx, artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return operation.Intent.OperationID()
 }

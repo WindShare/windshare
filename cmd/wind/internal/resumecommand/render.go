@@ -79,10 +79,12 @@ func (textRenderer) ListControlStatus(
 }
 
 func renderResumeFailureDetail(output *strings.Builder, detail resumeFailureDetail) {
-	if output == nil || detail == (resumeFailureDetail{}) {
+	if output == nil {
 		return
 	}
-	fmt.Fprintf(output, " stage=%q", detail.Stage.String())
+	if detail.Stage != 0 {
+		fmt.Fprintf(output, " stage=%q", detail.Stage.String())
+	}
 	if detail.NativeClass != 0 {
 		fmt.Fprintf(output, " native_error_class=%q", detail.NativeClass.String())
 	}
