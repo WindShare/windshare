@@ -329,6 +329,15 @@ func wrapFileFault(ctx context.Context, code transferfault.OutputCode, op string
 	if ctx != nil && ctx.Err() != nil {
 		return ctx.Err()
 	}
+	return wrapFileFaultError(code, op, cause)
+}
+
+// wrapFileFaultError wraps a file-local I/O error without letting caller
+// cancellation obscure durability or cleanup failures during transaction settlement.
+func wrapFileFaultError(code transferfault.OutputCode, op string, cause error) error {
+	if cause == nil {
+		return nil
+	}
 	if errors.Is(cause, context.Canceled) || errors.Is(cause, context.DeadlineExceeded) {
 		return cause
 	}

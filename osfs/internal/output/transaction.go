@@ -609,7 +609,7 @@ func (tx *fileTransaction) Pause(ctx context.Context) (transfer.FileSettlement, 
 		// Detach the closed transaction so a subsequent PauseTree does not
 		// re-enter Pause and turn a durability error into an invalid-binding fault.
 		tx.session.releaseActiveFile(tx.canonicalPath, tx)
-		return transfer.FileSettlement{}, DiagnoseFailure(FailureDurability, wrapFileFault(ctx, transferfault.OutputStateIO, "pause staged file", persistErr))
+		return transfer.FileSettlement{}, DiagnoseFailure(FailureDurability, wrapFileFaultError(transferfault.OutputStateIO, "pause staged file", persistErr))
 	}
 	verified, err := transfer.VerifyRestartRanges(tx.binding, transfer.CheckpointGeneration(tx.persistedGen), tx.persisted)
 	if err != nil {
@@ -662,7 +662,7 @@ func (tx *fileTransaction) Retire(ctx context.Context) (transfer.FileSettlement,
 	err = errors.Join(err, removeChild(tx.session.op.opDir, tx.partName, false))
 	err = errors.Join(err, tx.session.op.journal.recordRetired(tx.binding.FileID(), tx.canonicalPath))
 	if err != nil {
-		return transfer.FileSettlement{}, wrapFileFault(ctx, transferfault.OutputStateIO, "retire staged file", err)
+		return transfer.FileSettlement{}, wrapFileFaultError(transferfault.OutputStateIO, "retire staged file", err)
 	}
 	settlement, err := transfer.NewFailedFileSettlement(tx.binding)
 	if err != nil {

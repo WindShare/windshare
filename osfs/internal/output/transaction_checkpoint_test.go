@@ -5,11 +5,13 @@ package output
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"testing"
 	"time"
 
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer"
+	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
@@ -396,4 +398,138 @@ func TestLargeFileIntervalCheckpointTriggersPassivelyOnAccept(t *testing.T) {
 	if rangeTotalBytes(reopened) != 3*sliceSize {
 		t.Fatalf("reopened reusable ranges = %v (%d bytes), want %d bytes", reopened, rangeTotalBytes(reopened), 3*sliceSize)
 	}
+}
+
+func assertFileLocalOutputStateIOFault(t *testing.T, err error, wantCause error) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("expected non-nil file settlement error")
+	}
+	if !errors.Is(err, wantCause) {
+		t.Fatalf("error %v does not wrap %v", err, wantCause)
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error %v unexpectedly carries caller cancellation sentinel", err)
+	}
+	normalized := transferfault.Normalize(context.Background(), err, nil)
+	code, isOutput := normalized.Fault().OutputCode()
+	if !isOutput || code != transferfault.OutputStateIO || normalized.Fault().Scope() != transferfault.ScopeFileLocal {
+		t.Fatalf("normalized fault = %v, want ScopeFileLocal/OutputStateIO", normalized.Fault())
+	}
+}
+
+func TestFileTransactionSettlementPreservesIOFaultUnderCanceledContext(t *testing.T) {
+	ctx := context.Background()
+	ioErr := &fs.PathError{Op: "write", Path: "state.log", Err: fs.ErrPermission}
+
+	pauseCases := []struct {
+		name      string
+		seed      byte
+		cancelCtx func() (context.Context, context.CancelFunc)
+	}{
+		{
+			name: "Pause preserves FailureDurability under canceled context",
+			seed: 0xd1,
+			cancelCtx: func() (context.Context, context.CancelFunc) {
+				canceled, cancel := context.WithCancel(ctx)
+				cancel()
+				return canceled, cancel
+			},
+		},
+		{
+			name: "Pause preserves FailureDurability under deadline-exceeded context",
+			seed: 0xd5,
+			cancelCtx: func() (context.Context, context.CancelFunc) {
+				return context.WithDeadline(ctx, time.Now().Add(-time.Second))
+			},
+		},
+	}
+
+	for _, tc := range pauseCases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			auth, op, session, _, tx := openLargeFileTransactionForTest(t, root, tc.seed, "dirty.bin", 64)
+			defer auth.Close()
+
+			if err := tx.WriteRange(ctx, 0, []byte("unpersisted-bytes")); err != nil {
+				t.Fatal(err)
+			}
+			op.journal.appendHook = func(kind string) error {
+				if kind == "partial" {
+					return ioErr
+				}
+				return nil
+			}
+
+			settledCtx, cancel := tc.cancelCtx()
+			defer cancel()
+
+			settlement, err := tx.Pause(settledCtx)
+			if settlement.Kind() != 0 {
+				t.Fatalf("failed Pause returned non-zero settlement: %+v", settlement)
+			}
+			assertFileLocalOutputStateIOFault(t, err, ioErr)
+			diag, ok := DiagnosticFor(err)
+			if !ok || diag.Stage != FailureDurability || diag.NativeErrorClass != NativeErrorAccessDenied {
+				t.Fatalf("DiagnosticFor = (%+v, %t), want stage=FailureDurability native=access_denied", diag, ok)
+			}
+			code, isOutput := diag.Fault.OutputCode()
+			if !isOutput || code != transferfault.OutputStateIO || diag.Fault.Scope() != transferfault.ScopeFileLocal {
+				t.Fatalf("diagnostic fault = %v, want ScopeFileLocal/OutputStateIO", diag.Fault)
+			}
+
+			op.journal.appendHook = nil
+			if _, err := session.PauseTree(ctx); err != nil {
+				t.Fatalf("PauseTree after failed Pause = %v, want nil", err)
+			}
+			if _, repeatErr := tx.Pause(ctx); !errors.Is(repeatErr, transfer.ErrInvalidOutputBinding) {
+				t.Fatalf("repeat tx.Pause = %v, want ErrInvalidOutputBinding", repeatErr)
+			}
+		})
+	}
+
+	t.Run("Retire preserves ScopeFileLocal OutputStateIO under canceled context", func(t *testing.T) {
+		root := t.TempDir()
+		auth, op, session, _, tx := openLargeFileTransactionForTest(t, root, 0xd9, "retire.bin", 64)
+		defer auth.Close()
+
+		if err := tx.WriteRange(ctx, 0, []byte("staged-bytes")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Checkpoint(ctx); err != nil {
+			t.Fatal(err)
+		}
+		op.journal.appendHook = func(kind string) error {
+			if kind == "retired" {
+				return ioErr
+			}
+			return nil
+		}
+
+		canceledCtx, cancel := context.WithCancel(ctx)
+		cancel()
+
+		settlement, err := tx.Retire(canceledCtx)
+		if settlement.Kind() != 0 {
+			t.Fatalf("failed Retire returned non-zero settlement: %+v", settlement)
+		}
+		assertFileLocalOutputStateIOFault(t, err, ioErr)
+
+		op.journal.appendHook = nil
+		if _, err := session.PauseTree(ctx); err != nil {
+			t.Fatalf("PauseTree after failed Retire = %v, want nil", err)
+		}
+	})
+
+	t.Run("wrapFileFault keeps caller cancellation priority for active operations", func(t *testing.T) {
+		canceledCtx, cancel := context.WithCancel(ctx)
+		cancel()
+
+		if err := wrapFileFault(canceledCtx, transferfault.OutputStateIO, "write staged file range", ioErr); !errors.Is(err, context.Canceled) {
+			t.Fatalf("wrapFileFault under canceled ctx = %v, want context.Canceled", err)
+		}
+		if err := wrapFileFaultError(transferfault.OutputStateIO, "pause staged file", context.Canceled); !errors.Is(err, context.Canceled) {
+			t.Fatalf("wrapFileFaultError with cancellation cause = %v, want context.Canceled", err)
+		}
+	})
 }
