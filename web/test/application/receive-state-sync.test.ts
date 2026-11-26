@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { BrowseDirectory, BrowserReceiverGateway, JoinedBrowserShare } from '../../src/application/browser-share/gateway'
 import type { ReceiverTraceEvent } from '../../src/application/receive/contracts'
 import { ReceiveCoordinator, type ReceiveWindowPort } from '../../src/application/receive/coordinator'
+import * as sessionOpener from '../../src/application/receive/session-opener'
 import { ReceiveBlockedError } from '../../src/application/receive/single-file'
 import type { CatalogEntry } from '../../src/catalog/records'
 import { SelectionPolicy } from '../../src/catalog/selection'
@@ -389,5 +390,149 @@ describe('receive state sync invariants', () => {
 
     unsubscribe()
     await controller.dispose()
+  })
+
+  it('clears a discarded workspace task and publishes pending release during waiting-picker while gating pre-activation release/retain/continue', async () => {
+    const file = makeFileEntry(8, 'report.bin', 16n)
+    const store = new FSAMemoryReceiveStore()
+    const parent = new FakeDirectoryHandle('Downloads', store.events)
+    const { locks } = makeTrackingLocks()
+    vi.spyOn(ReceiveStore, 'open').mockResolvedValue(
+      Object.assign(store, { close: vi.fn() }) as unknown as ReceiveStore,
+    )
+    vi.spyOn(outputContract, 'probeBrowserOutputCapabilities').mockResolvedValue(Object.freeze({
+      indexedDb: true, fsa: true, opfs: false, portable: false, availableStorageBytes: null,
+    }))
+
+    const pickers = [deferred<FileSystemDirectoryHandle>(), deferred<FileSystemDirectoryHandle>()]
+    let pickerIndex = 0
+    const { windowPort: baseWin } = createMockDownloadWindow()
+    const windowPort: ReceiveWindowPort = {
+      ...baseWin,
+      indexedDB: { open: vi.fn() } as unknown as IDBFactory,
+      navigator: { locks },
+      showDirectoryPicker: vi.fn(() => pickers[pickerIndex++]!.promise),
+    }
+
+    const jobGate = deferred<ReturnType<typeof makeJobResult>>()
+    const joined = makeSingleFileShare('share-1', file, {
+      createTransferJob: () => ({
+        pause: vi.fn(),
+        stop: vi.fn(),
+        detach: vi.fn(),
+        run: () => jobGate.promise,
+      }) as unknown as ReturnType<JoinedBrowserShare['createTransferJob']>,
+    })
+
+    const onActionError = vi.fn()
+    const coordinator = new ReceiveCoordinator({
+      windowPort,
+      currentJoinedShare: () => joined,
+      onActionError,
+    })
+    coordinator.refreshOffers(joined)
+    await coordinator.loadRetained()
+    await waitForSnapshot(coordinator, s => s.offers?.kind === 'ready')
+
+    // Complete an initial download into a paused workspace task.
+    expect(coordinator.startDownload('fsa:file')).toBe(true)
+    pickers[0]!.resolve(parent as unknown as FileSystemDirectoryHandle)
+    await waitForSnapshot(coordinator, s => s.lifecycle?.kind === 'downloading')
+    jobGate.resolve(makeJobResult('paused', 0n))
+    await waitForSnapshot(coordinator, s => s.lifecycle?.kind === 'paused' && s.retained.tasks.length === 1)
+
+    const pausedTaskId = coordinator.activeTaskId!
+    expect(coordinator.canReleaseCurrent).toBe(true)
+    expect(coordinator.canRetainCurrent).toBe(true)
+    expect(coordinator.activeActionAdmission('continue')).toEqual({ allowed: true, reason: null })
+
+    // While resuming awaits folder permission, workspace release/retain must remain blocked.
+    const promptStarted = deferred<void>()
+    const promptGate = deferred<PermissionState>()
+    const querySpy = vi.spyOn(parent, 'queryPermission').mockResolvedValueOnce('prompt')
+    const requestSpy = vi.spyOn(parent, 'requestPermission').mockImplementationOnce(() => {
+      promptStarted.resolve()
+      return promptGate.promise
+    })
+    coordinator.performActiveAction('continue')
+    await promptStarted.promise
+    expect(coordinator.canReleaseCurrent).toBe(false)
+    expect(coordinator.canRetainCurrent).toBe(false)
+    expect(coordinator.activeActionAdmission('continue')).toEqual({ allowed: false, reason: 'busy' })
+
+    promptGate.resolve('denied')
+    await waitForSnapshot(coordinator, s => s.retained.pending === null)
+    expect(querySpy).toHaveBeenCalledOnce()
+    expect(requestSpy).toHaveBeenCalledOnce()
+    expect(coordinator.canReleaseCurrent).toBe(true)
+    expect(coordinator.canRetainCurrent).toBe(true)
+
+    // Launch a new download into waiting-picker: prior paused task stays in workspace, but release/retain/continue are blocked.
+    expect(coordinator.startDownload('fsa:file')).toBe(true)
+    expect(coordinator.getSnapshot().activation?.kind).toBe('waiting-picker')
+    expect(coordinator.activeTaskId).toBe(pausedTaskId)
+    expect(coordinator.canReleaseCurrent).toBe(false)
+    expect(coordinator.canRetainCurrent).toBe(false)
+    expect(coordinator.activeActionAdmission('continue')).toEqual({ allowed: false, reason: 'downloading' })
+    expect(coordinator.activeActionAdmission('discard')).toEqual({ allowed: true, reason: null })
+
+    // Discarding the pinned paused task during waiting-picker clears workspace and publishes pending=null without disturbing activation.
+    coordinator.performActiveAction('discard')
+    await waitForSnapshot(coordinator, s => s.retained.pending === null && s.lifecycle === null)
+    expect(coordinator.activeTaskId).toBeNull()
+    expect(coordinator.getSnapshot().retained.tasks).toEqual([])
+    expect(coordinator.getSnapshot().activation?.kind).toBe('waiting-picker')
+    expect(store.tasks.has(pausedTaskId)).toBe(false)
+
+    // Cancelling the picker leaves the workspace cleanly empty rather than pinning the deleted task.
+    coordinator.cancelActivation()
+    expect(coordinator.getSnapshot().activation).toBeNull()
+    expect(coordinator.getSnapshot().lifecycle).toBeNull()
+    pickers[1]!.reject(new DOMException('Cancelled', 'AbortError'))
+    await coordinator.dispose()
+  })
+
+  it('clears a forgotten ephemeral portable workspace task and publishes pending release while another download is opening', async () => {
+    const file = makeFileEntry(9, 'photo.png', 4n)
+    vi.spyOn(outputContract, 'probeBrowserOutputCapabilities').mockResolvedValue(Object.freeze({
+      indexedDb: false, fsa: false, opfs: false, portable: true, availableStorageBytes: null,
+    }))
+    const openStarted = deferred<void>()
+    const openGate = deferred<never>()
+    vi.spyOn(sessionOpener, 'openNewOutputSession').mockImplementation(() => {
+      openStarted.resolve()
+      return openGate.promise
+    })
+
+    const { windowPort } = createMockDownloadWindow()
+    const onActionError = vi.fn()
+    const joined = makeSingleFileShare('share-1', file)
+    const coordinator = new ReceiveCoordinator({
+      windowPort,
+      currentJoinedShare: () => joined,
+      onActionError,
+    })
+    coordinator.refreshOffers(joined)
+    await waitForSnapshot(coordinator, s => s.offers?.kind === 'ready')
+
+    const blob = new Blob([Uint8Array.of(137, 80, 78, 71)], { type: 'image/png' })
+    expect(coordinator.completeLocalBlobDownload('portable:file', blob)).toBe(true)
+    expect(coordinator.getSnapshot().lifecycle?.kind).toBe('download-started')
+
+    // Start a new download held in the pre-activation 'opening' state.
+    expect(coordinator.startDownload('portable:file')).toBe(true)
+    await openStarted.promise
+    expect(coordinator.getSnapshot().activation?.kind).toBe('committing')
+
+    // Forgetting the ephemeral portable workspace task during 'opening' clears workspace and releases pending.
+    coordinator.performActiveAction('forget')
+    await waitForSnapshot(coordinator, s => s.retained.pending === null && s.lifecycle === null)
+    expect(coordinator.activeTaskId).toBeNull()
+    expect(coordinator.getSnapshot().activation?.kind).toBe('committing')
+
+    openGate.reject(new DOMException('Cancelled', 'AbortError'))
+    await waitForSnapshot(coordinator, s => s.activation === null)
+    expect(coordinator.getSnapshot().lifecycle).toBeNull()
+    await coordinator.dispose()
   })
 })

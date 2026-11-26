@@ -168,7 +168,6 @@ export class ReceiveCoordinator {
       connectionBlock: () => this.#connectionBlock,
       isDisposed: () => this.#disposed,
       publish: () => this.#publish(),
-      clearActiveTask: () => this.startNewDownload(),
       closeUnactivated: session => this.#sessions.closeUnactivated(session),
       runSession: input => this.#sessions.run(input),
       refreshStorageEstimate: () => { void this.#capabilities.refreshStorageEstimate() },
@@ -194,11 +193,11 @@ export class ReceiveCoordinator {
   }
 
   get canReleaseCurrent(): boolean {
-    return !this.#execution.isRunning && this.#workspace.canRelease
+    return !this.#execution.isTransferActive && this.#workspace.canRelease
   }
 
   get canRetainCurrent(): boolean {
-    return !this.#execution.isRunning && this.#workspace.canRetain
+    return !this.#execution.isTransferActive && this.#workspace.canRetain
   }
 
   observeConnection(block: TerminalConnectionBlock | null): void {
@@ -252,6 +251,7 @@ export class ReceiveCoordinator {
     if (action === 'continue') {
       const terminal = this.#connectionBlock
       if (terminal !== null) return blockedAdmission(terminal)
+      if (this.#execution.isTransferActive) return blockedAdmission('downloading')
     }
     return ALLOWED_ADMISSION
   }

@@ -39,7 +39,6 @@ export interface RetainedTaskActionsOptions {
   readonly connectionBlock: () => TerminalConnectionBlock | null
   readonly isDisposed: () => boolean
   readonly publish: () => void
-  readonly clearActiveTask: () => void
   readonly closeUnactivated: (session: OutputSessionHandle) => Promise<void>
   readonly runSession: (input: SessionRunInput) => Promise<void>
   readonly refreshStorageEstimate: () => void
@@ -231,16 +230,12 @@ export class RetainedTaskActions {
     this.#options.execution.releaseLocalIfOwned(token)
     if (this.#options.workspace.taskId === taskId) {
       if (removing) {
-        this.#options.clearActiveTask()
+        this.#clearRemovedWorkspaceTask(taskId)
       } else if (updated !== undefined) {
         this.#options.workspace.applyUpdatedLifecycle(updated.lifecycle)
-        this.#options.publish()
-      } else {
-        this.#options.publish()
       }
-    } else {
-      this.#options.publish()
     }
+    this.#options.publish()
 
     if (action === 'save') {
       try { callbacks?.onCompleted?.() } catch { /* Callback failure cannot break retained refresh. */ }
@@ -298,10 +293,19 @@ export class RetainedTaskActions {
   #clearEphemeralPortableTask(token: symbol, taskId: string): void {
     this.#options.inventory.removeTask(taskId)
     this.#options.execution.releaseLocalIfOwned(token)
-    if (this.#options.workspace.taskId === taskId) {
-      this.#options.clearActiveTask()
-    } else {
-      this.#options.publish()
+    this.#clearRemovedWorkspaceTask(taskId)
+    this.#options.publish()
+  }
+
+  #clearRemovedWorkspaceTask(taskId: string): void {
+    // Removing a persisted/ephemeral record must drop its workspace projection even when another
+    // download is in pre-activation (`waiting-picker` / `opening`), without touching an active
+    // transfer on the same task id or the unrelated transfer slot itself.
+    if (
+      this.#options.workspace.taskId === taskId &&
+      this.#options.execution.activeTransferTaskId !== taskId
+    ) {
+      this.#options.workspace.clear()
     }
   }
 
