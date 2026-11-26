@@ -48,11 +48,14 @@ func TestTwoSidedAllocatedUDPPortsCarryPayloadAcrossReplacement(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if !parsed.NetworkType().IsUDP() {
+				return false
+			}
 			endpoint := netip.AddrPortFrom(netip.MustParseAddr(parsed.Address()), uint16(parsed.Port()))
 			return endpoint == leftExternal || endpoint == rightExternal
 		})
 		pair, ok := left.SelectedPair()
-		if !ok || pair.RemotePort != rightExternal.Port() {
+		if !ok || pair.Protocol != "udp" || pair.RemotePort != rightExternal.Port() {
 			t.Fatalf("two-sided pair=%+v", pair)
 		}
 		_ = left.Close()

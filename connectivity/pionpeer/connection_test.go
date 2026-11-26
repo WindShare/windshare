@@ -150,6 +150,17 @@ func withoutCandidates(sdp string) string {
 	return strings.Join(lines, "\r\n")
 }
 
+func udpCandidateOnly(t *testing.T) func(pion.ICECandidateInit) bool {
+	t.Helper()
+	return func(candidate pion.ICECandidateInit) bool {
+		parsed, err := ice.UnmarshalCandidate(candidate.Candidate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return parsed.NetworkType().IsUDP()
+	}
+}
+
 func TestSocketCarriesSTUNGatherChecksPayloadAndFreshReplacement(t *testing.T) {
 	for _, address := range []string{"127.0.0.1", "::1"} {
 		t.Run(address, func(t *testing.T) {
@@ -173,7 +184,7 @@ func TestSocketCarriesSTUNGatherChecksPayloadAndFreshReplacement(t *testing.T) {
 			for range 2 {
 				left := testConnection(t, leftLease, []string{url}, nil)
 				right := testConnection(t, rightLease, []string{url}, nil)
-				connectPayload(t, left, right, nil)
+				connectPayload(t, left, right, udpCandidateOnly(t))
 				if got := leftLease.Endpoints()[0]; got != stableLeft {
 					t.Fatal("left endpoint changed")
 				}
@@ -246,12 +257,15 @@ func TestExternalPortCandidateCarriesPayload(t *testing.T) {
 	go forwardUDP(forwarder, internal, remote, &forwarded)
 	left := testConnection(t, leftLease, nil, []MappedEndpoint{{Local: internal, External: external}})
 	right := testConnection(t, rightLease, nil, nil)
+	// NewPeerConnection also advertises passive ICE-TCP listeners on loopback.
+	// This fixture simulates UDP NAT translation only, so exclude TCP candidates
+	// and the untranslated internal UDP port to keep ICE on the mapped UDP path.
 	connectPayload(t, left, right, func(candidate pion.ICECandidateInit) bool {
 		parsed, err := ice.UnmarshalCandidate(candidate.Candidate)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if parsed.Port() == int(internal.Port()) {
+		if !parsed.NetworkType().IsUDP() || parsed.Port() == int(internal.Port()) {
 			return false
 		}
 		return true
@@ -260,7 +274,7 @@ func TestExternalPortCandidateCarriesPayload(t *testing.T) {
 		t.Fatal("distinct external port was not traversed")
 	}
 	pair, ok := right.SelectedPair()
-	if !ok || pair.RemotePort != external.Port() {
+	if !ok || pair.Protocol != "udp" || pair.RemotePort != external.Port() {
 		t.Fatalf("external pair not selected: %+v", pair)
 	}
 }

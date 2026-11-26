@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	"github.com/windshare/windshare/core/networkendpoint"
+	"github.com/windshare/windshare/core/session"
 )
 
 func mergeEndpoints(known, additional []string) ([]string, error) {
@@ -70,12 +71,15 @@ func (receiver *Receiver) expandCandidates() {
 // queue pressure or path loss wakes fallback; idle browsing makes no retry traffic.
 func (receiver *Receiver) waitForDemand(ctx context.Context) error {
 	for {
-		runtime := receiver.current()
-		if runtime == nil || runtime.AttachedLanes() == 0 || runtime.LaneSet().SchedulingDemand().NetworkWaitingBytes > 0 {
-			return nil
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		if runtime.Stopping() {
-			return errors.New("receiver session stopped")
+		runtime := receiver.current()
+		if runtimeEnding(runtime) {
+			return session.ErrRuntimeClosed
+		}
+		if runtime.AttachedLanes() == 0 || runtime.LaneSet().SchedulingDemand().NetworkWaitingBytes > 0 {
+			return nil
 		}
 		if err := receiver.config.Clock.Wait(ctx, receiverRetryDelay); err != nil {
 			return err

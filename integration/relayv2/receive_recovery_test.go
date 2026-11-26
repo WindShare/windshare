@@ -139,6 +139,30 @@ func TestGetReplacesLostSessionAndKeepsOneJobAndOutputReservation(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Ready publishes as soon as the first relay registers. Wait until every
+	// configured relay has confirmed registration so the stopped relay cannot
+	// satisfy Ready ahead of the primary relay and trigger a spurious join retry.
+	pendingRelays := make(map[engine.RelayOrigin]bool, len(relayURLs))
+	for _, address := range relayURLs {
+		origin, err := engine.NormalizeRelayOrigin(address)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pendingRelays[origin] = true
+	}
+	for len(pendingRelays) > 0 {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("sender did not register all relays before receive: pending=%v err=%v", pendingRelays, ctx.Err())
+		case value, ok := <-sender.Observations():
+			if !ok {
+				t.Fatalf("sender observations closed before all relays registered: pending=%v", pendingRelays)
+			}
+			if recovery, ok := value.Event.(engine.RelayRecovery); ok && recovery.State == engine.RelayRecoverySucceeded {
+				delete(pendingRelays, recovery.Origin)
+			}
+		}
+	}
 	trace.RequireCleanup(t, "sender share", func(cleanup context.Context) error {
 		sender.StopShare()
 		result, err := sender.Wait(cleanup)

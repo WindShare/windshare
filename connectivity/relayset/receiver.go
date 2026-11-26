@@ -229,10 +229,15 @@ func (receiver *Receiver) Close() {
 	})
 }
 
+type admittedLane struct {
+	identity session.LaneIdentity
+	done     <-chan struct{}
+}
+
 func (receiver *Receiver) run(url string) {
 	defer receiver.workers.Done()
 	initial := true
-	var lane session.LaneIdentity
+	var lane admittedLane
 	recovery := receiver.config.recovery
 	started := receiver.config.Clock.Now()
 	for failures := uint32(0); receiver.attemptError(receiver.ctx) == nil; failures++ {
@@ -253,7 +258,7 @@ func (receiver *Receiver) run(url string) {
 		}
 		if err == nil {
 			recovery.observe(url, attempt, ReceiverRecoveryConnected, 0, receiver.current(), nil)
-			receiver.waitLane(connection, lane)
+			receiver.waitLane(lane)
 			err = retiredLaneError(connection)
 			recovery.recordFailure(url, err)
 			if !receiverEndpointRetryable(err) {
@@ -279,10 +284,7 @@ func (receiver *Receiver) run(url string) {
 		if !receiverEndpointRetryable(err) {
 			return
 		}
-		if runtime == nil {
-			return
-		}
-		if runtime.Stopping() {
+		if runtimeEnding(runtime) {
 			return
 		}
 		delay, phase := recovery.localRetryDelay(started, failures, err)
@@ -293,7 +295,10 @@ func (receiver *Receiver) run(url string) {
 	}
 }
 
-func (receiver *Receiver) tryEndpoint(url string, lane *session.LaneIdentity) (uint32, ReceiverConnection, error) {
+func (receiver *Receiver) tryEndpoint(url string, lane *admittedLane) (uint32, ReceiverConnection, error) {
+	if err := receiver.attemptError(receiver.ctx); err != nil {
+		return 0, nil, err
+	}
 	recovery := receiver.config.recovery
 	attempt, err := recovery.begin(url)
 	if err != nil {
@@ -326,7 +331,7 @@ func (receiver *Receiver) current() *receiversession.Runtime {
 
 var closedReceiverLane = func() <-chan struct{} { done := make(chan struct{}); close(done); return done }()
 
-func (receiver *Receiver) admit(ctx context.Context, connection ReceiverConnection, lane *session.LaneIdentity) error {
+func (receiver *Receiver) admit(ctx context.Context, connection ReceiverConnection, lane *admittedLane) error {
 	config := receiver.config.Receiver
 	config.DescriptorObject = connection.Descriptor()
 	prepared, err := liveshare.PrepareReceiver(config)
@@ -360,8 +365,12 @@ func (receiver *Receiver) admit(ctx context.Context, connection ReceiverConnecti
 	_, err = runtime.AttachLane(ctx, grant, channel, transferlanes.RouteRelay)
 	err = framechannel.ClassifyDeadline(channel, err)
 	if err == nil {
-		lane.ID = grant.LaneID
-		lane.Epoch = grant.LaneEpoch
+		lane.identity = session.LaneIdentity{ID: grant.LaneID, Epoch: grant.LaneEpoch}
+		if done, live := runtime.LaneDone(lane.identity); live {
+			lane.done = done
+		} else {
+			lane.done = closedReceiverLane
+		}
 	}
 	if err == nil && receiver.config.Connected != nil {
 		receiver.config.Connected(connection)
@@ -369,17 +378,24 @@ func (receiver *Receiver) admit(ctx context.Context, connection ReceiverConnecti
 	return err
 }
 
+// runtimeEnding closes the publication window between removing the last lane
+// (which claims TerminationPathsExhausted under lanes.mu) and canceling
+// runtime.Lifetime after the detach hook completes.
+func runtimeEnding(runtime *receiversession.Runtime) bool {
+	return runtime == nil || runtime.Stopping() || runtime.PathsExhausted()
+}
+
 func (receiver *Receiver) attemptError(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if runtime := receiver.current(); runtime != nil && runtime.Stopping() {
+	if runtime := receiver.current(); runtime != nil && runtimeEnding(runtime) {
 		return session.ErrRuntimeClosed
 	}
 	return nil
 }
 
-func (receiver *Receiver) connectAttempt(ctx context.Context, url string, lane *session.LaneIdentity) (ReceiverConnection, error) {
+func (receiver *Receiver) connectAttempt(ctx context.Context, url string, lane *admittedLane) (ReceiverConnection, error) {
 	if err := receiver.attemptError(ctx); err != nil {
 		return nil, err
 	}
@@ -402,7 +418,7 @@ func (receiver *Receiver) dial(ctx context.Context, url string) (ReceiverConnect
 	return receiver.config.Dial(ctx, relayv2.ReceiverConfig{RelayBaseURL: url, ShareID: receiver.shareID, Dial: receiver.config.DialOptions})
 }
 
-func (receiver *Receiver) connectInitial(ctx context.Context, prepared *liveshare.PreparedReceiver, connection ReceiverConnection, lane *session.LaneIdentity) error {
+func (receiver *Receiver) connectInitial(ctx context.Context, prepared *liveshare.PreparedReceiver, connection ReceiverConnection, lane *admittedLane) error {
 	channel := connection.Channel()
 	candidate, connectErr := prepared.Connect(ctx, channel, transferlanes.RouteRelay)
 	if connectErr != nil {
@@ -420,7 +436,7 @@ func (receiver *Receiver) connectInitial(ctx context.Context, prepared *liveshar
 	return nil
 }
 
-func (receiver *Receiver) publishInitial(ctx context.Context, candidate *receiversession.Runtime, prepared *liveshare.PreparedReceiver, connection ReceiverConnection, lane *session.LaneIdentity) error {
+func (receiver *Receiver) publishInitial(ctx context.Context, candidate *receiversession.Runtime, prepared *liveshare.PreparedReceiver, connection ReceiverConnection, lane *admittedLane) error {
 	// An authenticated contradiction can race a still-running handshake. Hold
 	// identity authority through publication so rejection either prevents this
 	// generation or observes and terminates the published runtime.
@@ -443,7 +459,7 @@ func (receiver *Receiver) publishInitial(ctx context.Context, candidate *receive
 		// reassigned to the winner, so the endpoint redials before attachment.
 		return errors.New("initial relay handshake superseded")
 	}
-	if candidate.Stopping() {
+	if runtimeEnding(candidate) {
 		return errors.Join(session.ErrRuntimeClosed, candidate.Err())
 	}
 	// Relay waits and dials belong to this session's live authority. Done is a
@@ -452,7 +468,12 @@ func (receiver *Receiver) publishInitial(ctx context.Context, candidate *receive
 	receiver.runtime = candidate
 	receiver.prepared = prepared
 	receiver.first = connection
-	lane.ID, lane.Epoch = candidate.LaneIdentity()
+	lane.identity.ID, lane.identity.Epoch = candidate.LaneIdentity()
+	if done, live := candidate.LaneDone(lane.identity); live {
+		lane.done = done
+	} else {
+		lane.done = closedReceiverLane
+	}
 	receiver.failure = nil
 	close(receiver.ready)
 	return nil
@@ -479,18 +500,26 @@ func (receiver *Receiver) finishInitial(url string, err error) {
 		close(receiver.ready)
 	}
 }
-func (receiver *Receiver) waitLane(connection ReceiverConnection, lane session.LaneIdentity) {
-	receiver.mu.Lock()
-	runtime := receiver.runtime
-	receiver.mu.Unlock()
-	done, live := runtime.LaneDone(lane)
-	if !live {
+
+// Wait for sessioncore to retire this lane rather than racing connection.Done.
+// Transport shutdown always closes the lane channel, and retiring the last lane
+// cancels runtime.Lifetime before closing lane.done; waking earlier on
+// connection.Done can discard buffered terminal frames or schedule an
+// in-session retry against a dying generation.
+func (receiver *Receiver) waitLane(lane admittedLane) {
+	runtime := receiver.current()
+	done := lane.done
+	if done == nil {
 		done = closedReceiverLane
+	}
+	var lifetimeDone <-chan struct{}
+	if lifetime := runtime.Lifetime(); lifetime != nil {
+		lifetimeDone = lifetime.Done()
 	}
 	select {
 	case <-receiver.ctx.Done():
+	case <-lifetimeDone:
 	case <-runtime.Done():
-	case <-connection.Done():
 	case <-done:
 	}
 }

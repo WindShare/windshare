@@ -51,13 +51,13 @@ func TestIndependentPathsRetainPayloadAndRejectOldAttemptChecks(t *testing.T) {
 	// independent lifetime as different paths within one session.
 	c, d := testSessionLease(t, authority, [16]byte{2}, 1, "127.0.0.1"), testSessionLease(t, authority, [16]byte{2}, 2, "127.0.0.1")
 	firstLeft, firstRight := testConnection(t, a, nil, nil), testConnection(t, b, nil, nil)
-	connectPayload(t, firstLeft, firstRight, nil)
+	connectPayload(t, firstLeft, firstRight, udpCandidateOnly(t))
 	otherLeft, otherRight := testConnection(t, c, nil, nil), testConnection(t, d, nil, nil)
-	otherChannel, otherReceived := connectPayload(t, otherLeft, otherRight, nil)
+	otherChannel, otherReceived := connectPayload(t, otherLeft, otherRight, udpCandidateOnly(t))
 	_ = firstLeft.Close()
 	_ = firstRight.Close()
 	nextLeft, nextRight := testConnection(t, a, nil, nil), testConnection(t, b, nil, nil)
-	nextChannel, nextReceived := connectPayload(t, nextLeft, nextRight, nil)
+	nextChannel, nextReceived := connectPayload(t, nextLeft, nextRight, udpCandidateOnly(t))
 	if err := captured[0].replay(); err != nil {
 		t.Fatal(err)
 	}
