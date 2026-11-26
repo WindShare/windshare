@@ -151,25 +151,17 @@ upgrades (`pnpm --dir web run test:browser:interop --project chrome --headed` se
 
 ## Browser folder saving
 
-Folder claims use bounded inspection workers that refill as files become ready. Independent claims
-can reach durable registration without waiting for a slower sibling; database transactions still batch
-ready work. Browser namespace operations serialize briefly per parent, while writer ownership and
-file removal conflict only for the same verified file. Recursive cleanup requires terminal authority.
-`lineage_claims` measures successful unique claims (duplicate requests coalesce); its phase totals
-include overlapping waits on shared transactions. The inspector also includes failed attempts.
-`inspect_entry` and `create_file` separate namespace inspection from creation. IndexedDB stage events
-identify the actual batched transactions.
-
-Compare runs from output-authority acquisition through confirmed publication. A ZIP handed to the
-browser has a different completion boundary from a folder confirmed saved. Summed queue wait times
-overlap across files and must not be subtracted from elapsed download time.
+Direct folder saving writes up to four files concurrently into the chosen folder under per-task
+Web Locks and IndexedDB checkpoints. Compare runs across the same completion boundary: handing a
+ZIP or browser-workspace file to the browser download manager is not equivalent to a folder
+confirmed saved on disk.
 
 ## Windows native output
 
-Opening an output root checks live volume capabilities and restart identity evidence independently. Subsequent object checks read
-current handle identity (volume GUID, serial, and File ID), attributes, and directory case sensitivity;
-they do not repeat path-based volume resolution. Ancestry guards still verify each opened directory
-against the retained volume. Reopening a root repeats these checks; there is no process-wide path cache.
+Opening an output root verifies the destination handle once and probes atomic no-replace rename
+through a temporary directory. Subsequent child operations use handle-relative `NtCreateFile` calls
+against open directory handles rather than repeating full-path resolution. Reopening a root repeats
+container verification and probing; there is no process-wide path cache.
 
 ## Output
 

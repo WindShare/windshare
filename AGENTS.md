@@ -94,6 +94,7 @@ The root `go.mod` owns WindShare's production Go packages; the pinned Pion SCTP 
 ├── web/                          React/TypeScript landing portal and browser receiver
 │   ├── src/                      Protocol/crypto, session/connectivity, transfer/output, network/document, preview, and UI
 │   └── scripts/, test/, e2e/     Boundary/evidence scripts, unit/contract tests, and Playwright scenarios
+├── services/donations/           Cloudflare Worker/DO donation wall service and admin console
 ├── internal/                     Connection liveness, platform setup, process ownership, performance evidence, test support
 ├── integration/                  Native relayv2 and v2peer integration scenarios
 ├── e2e/                          Process-level Go end-to-end tests
