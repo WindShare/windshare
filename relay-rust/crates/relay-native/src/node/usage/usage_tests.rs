@@ -523,6 +523,7 @@ fn authority_validation_accepts_origin_spellings_and_rejects_non_origin_urls() {
         "https://API.example:443/",
         "http://localhost",
         "http://127.0.0.1:8787/",
+        "http://[::1]:8787/",
     ] {
         let authority = Authority {
             url: valid.into(),
@@ -536,6 +537,8 @@ fn authority_validation_accepts_origin_spellings_and_rejects_non_origin_urls() {
 
     for invalid in [
         "http://api.example",
+        "http://[2001:db8::1]:8787",
+        "http://[::ffff:127.0.0.1]:8787",
         "https:api.example",
         "https://foo.workers.dev",
         "https://api.example/v1",

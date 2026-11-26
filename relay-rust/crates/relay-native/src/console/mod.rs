@@ -81,14 +81,13 @@ impl Console {
         authority: Option<crate::node::usage::Authority>,
     ) -> Result<Option<Self>> {
         let url = url::Url::parse(endpoint.relay_url())?;
-        if url.scheme() != "https"
-            && !matches!(url.host(), Some(url::Host::Domain("localhost")))
-            && !url.host_str().is_some_and(|s| {
-                s.trim_matches(['[', ']'])
-                    .parse::<std::net::IpAddr>()
-                    .is_ok_and(|a| a.is_loopback())
-            })
-        {
+        let loopback = match url.host() {
+            Some(url::Host::Domain("localhost")) => true,
+            Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+            Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+            _ => false,
+        };
+        if url.scheme() != "https" && !loopback {
             return Ok(None);
         }
         let origin = url.origin().ascii_serialization();
