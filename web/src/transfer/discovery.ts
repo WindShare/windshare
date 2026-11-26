@@ -44,10 +44,16 @@ export type SelectionShape =
       complete: boolean
     }>
 
+export interface MissingSelectionTarget {
+  readonly kind: 'directory' | 'file'
+  readonly idText: string
+}
+
 export interface DiscoveryCallbacks {
   readonly onDirectoryFailed?: (directoryId: string, error: unknown) => void
   readonly onOmittedEntries?: (count: bigint) => void
   readonly onFileDiscovered?: (file: DiscoveredFile) => void
+  readonly onUnmatchedTargets?: (targets: readonly MissingSelectionTarget[]) => void
 }
 
 const DEFAULT_ARCHIVE_NAME = 'windshare-download'
@@ -127,6 +133,14 @@ class SelectionDiscoveryTracker {
 
   get hasRemainingTargets(): boolean {
     return this.#remaining.size > 0
+  }
+
+  remainingTargets(): readonly MissingSelectionTarget[] {
+    return Object.freeze(
+      [...this.#remaining.entries()]
+        .map(([idText, target]): MissingSelectionTarget => Object.freeze({ kind: target.kind, idText }))
+        .sort((left, right) => left.kind.localeCompare(right.kind) || left.idText.localeCompare(right.idText)),
+    )
   }
 
   observe(entry: CatalogEntry): void {
@@ -565,6 +579,7 @@ export async function* discoverSelection(
   queues.enqueue(rootFrame, tracker.isHintedDirectory(rootFrame.ancestry))
 
   let consecutiveCapacityFailures = 0
+  let traversalComplete = true
   while (true) {
     signal.throwIfAborted()
     const next = queues.next(tracker)
@@ -577,8 +592,12 @@ export async function* discoverSelection(
       callbacks,
       consecutiveCapacityFailures,
     )
-    if (outcome.kind === 'stop') break
+    if (outcome.kind === 'stop') {
+      traversalComplete = false
+      break
+    }
     if (outcome.kind === 'skip') {
+      traversalComplete = false
       consecutiveCapacityFailures = outcome.consecutiveCapacityFailures
       continue
     }
@@ -599,6 +618,11 @@ export async function* discoverSelection(
       signal,
       callbacks,
     )
+  }
+  // Only report unmatched explicit targets once the entire reachable catalog
+  // traversed cleanly; a skipped or stopped directory may still contain them.
+  if (traversalComplete && !signal.aborted && tracker.hasRemainingTargets) {
+    callbacks.onUnmatchedTargets?.(tracker.remainingTargets())
   }
 }
 

@@ -19,6 +19,7 @@ import {
   type BrowserDownloadWindow,
 } from './browser-handoff'
 import {
+  MISSING_COMMITTED_FILE_MESSAGE,
   PORTABLE_MAX_BYTES,
   mergeSourceOmittedEntries,
   resolveZipEntryPath,
@@ -140,6 +141,7 @@ class PortableSessionHandle implements OutputSessionHandle {
   readonly #zip: StreamingZipWriter | undefined
   #singleFileBuffer: Uint8Array<ArrayBuffer> | undefined
   #singleFileSize = 0n
+  #singleFileCommitted = false
   #settled = false
 
   constructor(
@@ -185,42 +187,24 @@ class PortableSessionHandle implements OutputSessionHandle {
       result.discoveryComplete,
     )
     if (result.status !== 'completed') {
-      this.#zip?.abort()
-      this.#singleFileBuffer = undefined
-      const reason = failedReasonFor(result)
-      const isStopped = result.status === 'stopped' || (result.status === 'partial' && result.partialReason === 'stopped')
-      const warning = isStopped ? null : (result.contentWarning ?? null)
-      const failed = transitionReceiveState(this.#baseRecord.lifecycle, {
-        kind: 'failed',
-        reason,
-        ...(reason === 'error' && result.error instanceof Error ? { detail: result.error.message } : {}),
-        contentWarning: warning,
-      })
-      emitOutputTrace(this.#diagnostics?.trace, 'settlement', {
-        backend: 'portable',
-        task_id: this.taskId,
-        transition: 'failed',
-        reason,
-      })
-      const record: ReceiveTaskRecord = Object.freeze({
-        ...this.#baseRecord,
-        lifecycle: failed,
-        ...(sourceOmittedEntries === undefined ? {} : { sourceOmittedEntries }),
-        ...(result.sourceRevisionFailures === undefined
-          ? {}
-          : { sourceRevisionFailures: result.sourceRevisionFailures }),
-        updatedAt: Date.now(),
-      })
-      await this.#persistHistory(record)
-      return record
+      return this.#settleFailed(result, sourceOmittedEntries, false)
+    }
+    if (!this.#isZip && (!this.#singleFileCommitted || this.#singleFileBuffer === undefined)) {
+      // Never synthesize a 0-byte browser download when a single-file task settled
+      // without committing its sole file (e.g. empty root on default-selected share).
+      return this.#settleFailed(
+        { ...result, status: 'failed', error: result.error ?? new Error(MISSING_COMMITTED_FILE_MESSAGE) },
+        sourceOmittedEntries,
+        true,
+      )
     }
 
     const mediaType = artifactDownloadMediaType(this.#baseRecord.artifact.kind)
-    const parts = this.#singleFileBuffer === undefined ? [] : [this.#singleFileBuffer]
     const blob = this.#zip !== undefined
       ? this.#zip.finalize()
-      : new Blob(parts, { type: mediaType })
+      : new Blob([this.#singleFileBuffer!], { type: mediaType })
     this.#singleFileBuffer = undefined
+    this.#singleFileCommitted = false
 
     triggerBrowserDownload(this.#windowPort, blob, this.#baseRecord.artifact.name, mediaType)
     emitOutputTrace(this.#diagnostics?.trace, 'publication', {
@@ -245,6 +229,43 @@ class PortableSessionHandle implements OutputSessionHandle {
     return record
   }
 
+  async #settleFailed(
+    result: SettledTransferJobResult,
+    sourceOmittedEntries: bigint | undefined,
+    missingCommittedFile: boolean,
+  ): Promise<ReceiveTaskRecord> {
+    this.#zip?.abort()
+    this.#singleFileBuffer = undefined
+    this.#singleFileCommitted = false
+    const reason = failedReasonFor(result)
+    const isStopped = result.status === 'stopped' || (result.status === 'partial' && result.partialReason === 'stopped')
+    const warning = isStopped ? null : (result.contentWarning ?? null)
+    const failed = transitionReceiveState(this.#baseRecord.lifecycle, {
+      kind: 'failed',
+      reason,
+      ...(reason === 'error' && result.error instanceof Error ? { detail: result.error.message } : {}),
+      contentWarning: warning,
+    })
+    emitOutputTrace(this.#diagnostics?.trace, 'settlement', {
+      backend: 'portable',
+      task_id: this.taskId,
+      transition: 'failed',
+      reason,
+      ...(missingCommittedFile ? { missing_committed_file: true } : {}),
+    })
+    const record: ReceiveTaskRecord = Object.freeze({
+      ...this.#baseRecord,
+      lifecycle: failed,
+      ...(sourceOmittedEntries === undefined ? {} : { sourceOmittedEntries }),
+      ...(result.sourceRevisionFailures === undefined
+        ? {}
+        : { sourceRevisionFailures: result.sourceRevisionFailures }),
+      updatedAt: Date.now(),
+    })
+    await this.#persistHistory(record)
+    return record
+  }
+
   async rollbackUnactivated(): Promise<void> {
     // Portable sessions defer persistence until settlement, so nothing was written on open.
   }
@@ -253,6 +274,7 @@ class PortableSessionHandle implements OutputSessionHandle {
     if (!this.#settled) {
       this.#zip?.abort()
       this.#singleFileBuffer = undefined
+      this.#singleFileCommitted = false
     }
   }
 
@@ -310,6 +332,7 @@ class PortableSessionHandle implements OutputSessionHandle {
     const buffer = new Uint8Array(sizeNumber)
     this.#singleFileBuffer = buffer
     this.#singleFileSize = request.exactSize
+    this.#singleFileCommitted = false
     return Object.freeze({
       completedRanges: Object.freeze([]),
       writeAt: async (offset: bigint, data: Uint8Array) => {
@@ -320,9 +343,12 @@ class PortableSessionHandle implements OutputSessionHandle {
         buffer.set(data, start)
       },
       checkpoint: () => Promise.resolve('skipped' as const),
-      commit: () => Promise.resolve(),
+      commit: async () => { this.#singleFileCommitted = true },
       pause: () => Promise.resolve(),
-      abort: async () => { this.#singleFileBuffer = undefined },
+      abort: async () => {
+        this.#singleFileBuffer = undefined
+        this.#singleFileCommitted = false
+      },
     })
   }
 

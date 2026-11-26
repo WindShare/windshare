@@ -13,9 +13,11 @@ import { openNewOPFSSession, type OPFSEnvironment } from '../../src/output/backe
 import type { OutputTraceEvent } from '../../src/output/diagnostics'
 import { ReceiveStore } from '../../src/output/store/database'
 import type { SettledTransferJobResult } from '../../src/transfer/job'
+import type { TransferOutputSession } from '../../src/transfer/output-port'
 import { initialReceiveState } from '../../src/transfer/state'
 import { FakeDirectoryHandle, FakeFileHandle, MemoryReceiveStore } from '../output/fsa-fixture'
 import { createMemoryOPFSEnv, createMockDownloadWindow } from '../output/opfs-fixture'
+import { commitMockOutputFile } from './receive-coordinator-fixture'
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void
@@ -165,11 +167,14 @@ describe('pre-activation output session rollback', () => {
         if (failConnectivity) throw startupError
         return { routes: [], close: vi.fn() }
       },
-      createTransferJob: () => ({
+      createTransferJob: (output: TransferOutputSession) => ({
         pause: vi.fn(),
         stop: vi.fn(),
         detach: vi.fn(),
-        run: async () => makeCompletedResult(file.expectedSize),
+        run: async () => {
+          await commitMockOutputFile(output, file)
+          return makeCompletedResult(file.expectedSize)
+        },
       }),
     } as unknown as JoinedBrowserShare
 

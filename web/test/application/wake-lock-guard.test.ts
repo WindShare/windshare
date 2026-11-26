@@ -9,6 +9,8 @@ import {
 import { SelectionPolicy } from '../../src/catalog/selection'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import type { TransferJobResult } from '../../src/transfer/job'
+import type { TransferOutputSession } from '../../src/transfer/output-port'
+import { commitMockOutputFile } from './receive-coordinator-fixture'
 
 interface FakeSentinel extends ScreenWakeLockSentinelLike {
   released: boolean
@@ -213,13 +215,19 @@ describe('ScreenWakeLockGuard', () => {
         exactBytes: 32n,
       }),
       beginDownloadConnectivity: () => ({ routes: [], close: vi.fn() }),
-      createTransferJob: () => {
+      createTransferJob: (output: TransferOutputSession) => {
         jobCalls += 1
         return {
           pause: vi.fn(),
           stop: vi.fn(),
           detach: vi.fn(),
-          run: () => new Promise(resolve => { resolveJob = resolve }),
+          run: async () => {
+            const result = await new Promise<TransferJobResult>(resolve => { resolveJob = resolve })
+            if (result.status === 'completed') {
+              await commitMockOutputFile(output, { idText: fileIdText, name: 'clip.mp4' })
+            }
+            return result
+          },
         }
       },
     } as unknown as JoinedBrowserShare

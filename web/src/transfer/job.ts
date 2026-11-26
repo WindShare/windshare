@@ -3,7 +3,12 @@ import type { ShareDescriptor } from '../catalog/records'
 import type { FrozenSelectionPolicy } from '../catalog/selection'
 import type { BlockRangeReader, ContentLaneStatus } from '../content/broker'
 import type { RevisionReader } from '../content/session-services'
-import { discoverSelection, type DiscoveredDirectory, type DiscoveredFile } from './discovery'
+import {
+  discoverSelection,
+  type DiscoveredDirectory,
+  type DiscoveredFile,
+  type MissingSelectionTarget,
+} from './discovery'
 import type { ActiveFileWrite } from './active-file-write'
 import { FaultScope, FileDestinationConflictError, TransferFaultError, catalogCapacityReason, isRecoverableTransferInterruption, storagePauseReason, transferFailureReason } from './fault'
 import { transferSingleFile, type FileTransferContext, type SingleFileTransferOutcome, type TransferExit, type TransferPause } from './file-transfer'
@@ -105,6 +110,8 @@ export class TransferJob {
   #discoveredBytes = 0n
   #failedFiles = 0n
   #failedDirectories = 0n
+  #missingSelectionTargets = 0n
+  #unmatchedTargets: readonly MissingSelectionTarget[] = []
   #sourceOmittedEntries = 0n
   // Shared per-job callback identities let LaneSet ref-count remaining work once
   // across concurrent files and let BlockBroker deduplicate shared receipt callbacks.
@@ -232,6 +239,9 @@ export class TransferJob {
     try {
       await this.#runDiscoveryLoop(active, maxWorkers)
       this.#finalizeDiscovery()
+      if (this.#discoveryComplete && this.#unmatchedTargets.length > 0) {
+        await this.#verifyUnmatchedTargets(this.#unmatchedTargets)
+      }
     } catch (error) {
       this.#handleDiscoveryError(error)
     } finally {
@@ -271,6 +281,9 @@ export class TransferJob {
           this.#discoveredFiles += 1n
           this.#discoveredBytes += file.entry.expectedSize
           this.#tracker.observeFileDiscovered(file.entry.expectedSize)
+        },
+        onUnmatchedTargets: targets => {
+          this.#unmatchedTargets = targets
         },
       },
     )
@@ -335,6 +348,56 @@ export class TransferJob {
     this.#discoveryFailed = true
     this.#recordFailure(error)
     this.#tracker.observeDiscoverySettled('failed')
+    this.#abortAllOrNothing()
+  }
+
+  async #verifyUnmatchedTargets(targets: readonly MissingSelectionTarget[]): Promise<void> {
+    const checkCompleted = this.#options.output.checkCompleted
+    for (const target of targets) {
+      if (this.#abort.signal.aborted) return
+      if (target.kind === 'file' && checkCompleted !== undefined) {
+        const resolved = await this.#verifyUnmatchedCompletedFile(target.idText, checkCompleted)
+        if (resolved || this.#abort.signal.aborted) continue
+      }
+      this.#recordMissingSelectionTarget(target)
+    }
+  }
+
+  async #verifyUnmatchedCompletedFile(
+    fileId: string,
+    checkCompleted: NonNullable<TransferOutputSession['checkCompleted']>,
+  ): Promise<boolean> {
+    try {
+      const completed = await checkCompleted(fileId, this.#abort.signal)
+      if (completed === undefined) return false
+      // A resumed file already verified complete locally satisfies its selection rule
+      // even if a subsequent catalog snapshot no longer lists it.
+      this.#discoveredFiles += 1n
+      this.#discoveredBytes += completed.size
+      this.#completedFiles += 1n
+      this.#completedBytes += completed.size
+      this.#tracker.observeFileDiscovered(completed.size)
+      this.#tracker.observeInitialCoverage(completed.size)
+      this.#tracker.observeFileCompleted(completed.size)
+      return true
+    } catch (error) {
+      if (this.#discoveryInterrupted(error)) return true
+      this.#failedFiles += 1n
+      this.#recordFailure(error)
+      this.#tracker.observeFileFailed()
+      this.#abortAllOrNothing()
+      return true
+    }
+  }
+
+  #recordMissingSelectionTarget(target: MissingSelectionTarget): void {
+    // Absence proven by a complete catalog is a closed selection mismatch rather
+    // than a successful empty transfer. Keep it separate from `#sourceChangedCount`
+    // because undiscovered targets lack a sourcePath for replacement lookup.
+    if (target.kind === 'file') this.#failedFiles += 1n
+    else this.#failedDirectories += 1n
+    this.#missingSelectionTargets += 1n
+    this.#tracker.observeSelectionError()
     this.#abortAllOrNothing()
   }
 
@@ -499,11 +562,16 @@ export class TransferJob {
     if (this.#exit?.kind === 'failed' || this.#exit?.kind === 'stopped') {
       return this.#canProducePartial() ? 'partial' : this.#exit.kind
     }
-    if (this.#failedFiles === 0n && this.#failedDirectories === 0n && !this.#discoveryFailed) {
+    if (
+      this.#failedFiles === 0n &&
+      this.#failedDirectories === 0n &&
+      this.#missingSelectionTargets === 0n &&
+      !this.#discoveryFailed
+    ) {
       return 'completed'
     }
     if (this.#canProducePartial()) return 'partial'
-    if (this.#sourceChangedCount > 0n) return 'source-changed'
+    if (this.#sourceChangedCount > 0n || this.#missingSelectionTargets > 0n) return 'source-changed'
     return this.#allFailuresSourceBusy() ? 'source-busy' : 'failed'
   }
 

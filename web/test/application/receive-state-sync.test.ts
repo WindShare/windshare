@@ -16,6 +16,7 @@ import { TaskComposer } from '../../src/ui/experience/task-composition'
 import { FakeDirectoryHandle, MemoryReceiveStore as FSAMemoryReceiveStore } from '../output/fsa-fixture'
 import { createMemoryOPFSEnv, createMockDownloadWindow, MemoryReceiveStore } from '../output/opfs-fixture'
 import {
+  commitMockOutputFile,
   deferred,
   makeFileEntry,
   makeJobResult,
@@ -334,11 +335,15 @@ describe('receive state sync invariants', () => {
     const events: ReceiverTraceEvent[] = []
     const jobGate = deferred<ReturnType<typeof makeJobResult>>()
     const joined = makeSingleFileShare('share-1', fileA, {
-      createTransferJob: () => ({
+      createTransferJob: output => ({
         pause: vi.fn(),
         stop: vi.fn(),
         detach: vi.fn(),
-        run: () => jobGate.promise,
+        run: async () => {
+          const result = await jobGate.promise
+          if (result.status === 'completed') await commitMockOutputFile(output, fileA)
+          return result
+        },
       }) as unknown as ReturnType<JoinedBrowserShare['createTransferJob']>,
     })
 

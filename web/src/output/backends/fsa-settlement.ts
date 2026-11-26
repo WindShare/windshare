@@ -2,6 +2,7 @@ import { catalogCapacityReason, transferFailureReason } from '../../transfer/fau
 import type { SettledTransferJobResult } from '../../transfer/job'
 import { transitionReceiveState, type ReceiveContentWarning, type ReceivePartialReason } from '../../transfer/state'
 import type { ReceiveTaskRecord, StoredTaskFileSummary } from '../store/types'
+import { MISSING_COMMITTED_FILE_MESSAGE } from './contract'
 
 export interface FSALifecycleSettlementInput {
   readonly singleFile: boolean
@@ -30,6 +31,16 @@ export function nextFSALifecycle(
   }
 
   if (result.status === 'completed') {
+    if (singleFile) {
+      // A single-file FSA task with zero committed rows never published its target;
+      // fail with cleanupPending so terminal cleanup removes the placeholder or partial file.
+      return failedFSALifecycle(
+        current,
+        { ...result, status: 'failed', error: result.error ?? new Error(MISSING_COMMITTED_FILE_MESSAGE) },
+        stored,
+        warning,
+      )
+    }
     return transitionReceiveState(current, {
       kind: 'saved',
       savedFiles: stored.completedFiles,

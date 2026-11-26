@@ -5,12 +5,14 @@ import type { CatalogEntry } from '../../src/catalog/records'
 import { SelectionPolicy } from '../../src/catalog/selection'
 import * as outputContract from '../../src/output/backends/contract'
 import type { ReceiverConnectionSnapshot } from '../../src/receiver/connection-state'
+import type { TransferOutputSession } from '../../src/transfer/output-port'
 import { ReceiverController } from '../../src/ui/controller'
 import { presentSavingActions } from '../../src/ui/saving'
 import {
   singleFileDownloadState,
   type SingleFileDownloadReadiness,
 } from '../../src/ui/share-content/single-file-admission'
+import { commitMockOutputFile } from '../application/receive-coordinator-fixture'
 import { createMockDownloadWindow } from '../output/opfs-fixture'
 import { entry, identity, identityText, rootDirectory, waitForController } from './v2-preview-fixture'
 
@@ -56,16 +58,20 @@ function makeBrowseShare(
     beginPreviewConnectivity: () => ({ routes: [], close: vi.fn() }),
     beginDownloadConnectivity: () => ({ routes: [], close: vi.fn() }),
     ...(options.automaticPhotoPreview === undefined ? {} : { automaticPhotoPreview: options.automaticPhotoPreview }),
-    createTransferJob: () => ({
+    createTransferJob: (output: TransferOutputSession) => ({
       pause: vi.fn(),
       stop: vi.fn(),
       detach: vi.fn(),
-      run: async () => ({
-        status: 'completed' as const,
-        completedFiles: 1n, completedBytes: 16n,
-        discoveredFiles: 1n, discoveredBytes: 16n, discoveryComplete: true,
-        failedFiles: 0n, failedDirectories: 0n,
-      }),
+      run: async () => {
+        const target = entries.find(item => item.kind === 'file') ?? entry
+        await commitMockOutputFile(output, target)
+        return {
+          status: 'completed' as const,
+          completedFiles: 1n, completedBytes: 16n,
+          discoveredFiles: 1n, discoveredBytes: 16n, discoveryComplete: true,
+          failedFiles: 0n, failedDirectories: 0n,
+        }
+      },
     }),
     close: async () => undefined,
   } as unknown as JoinedBrowserShare

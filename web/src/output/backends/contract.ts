@@ -17,6 +17,8 @@ const MEBIBYTE = 1024n * 1024n
 export const SMALL_FILE_PORTABLE_THRESHOLD_BYTES = 16n * MEBIBYTE
 /** Portable in-memory Blob assembly is capped to protect browser tab memory. */
 export const PORTABLE_MAX_BYTES = 64n * MEBIBYTE
+/** Shared diagnostic detail when single-file settlement sees `completed` without any committed file. */
+export const MISSING_COMMITTED_FILE_MESSAGE = 'Missing committed browser file'
 
 export interface BrowserOutputWindow extends BrowserDownloadWindow, NativeSupportRuntime {
   readonly indexedDB?: IDBFactory

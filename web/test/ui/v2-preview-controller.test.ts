@@ -9,6 +9,8 @@ import { PreviewController } from '../../src/ui/preview-controller'
 import { dismissedTaskKey, resolveWorkspaceTaskLayout } from '../../src/ui/experience/retained-match'
 import { EMPTY_PREVIEW, type ReceiverFailure } from '../../src/ui/model'
 import type { BrowseDirectory, BrowserReceiverGateway, JoinedBrowserShare } from '../../src/application/browser-share/gateway'
+import type { TransferOutputSession } from '../../src/transfer/output-port'
+import { commitMockOutputFile } from '../application/receive-coordinator-fixture'
 import { createMemoryOPFSEnv, createMockDownloadWindow, MemoryReceiveStore } from '../output/opfs-fixture'
 import {
   deferred,
@@ -361,7 +363,7 @@ describe('preview target download, single-photo blob reuse, and workspace task d
       subscribeProtocolGeneration: () => () => undefined,
       beginPreviewConnectivity: () => ({ routes: [], close: vi.fn() }),
       beginDownloadConnectivity: () => ({ routes: [], close: vi.fn() }),
-      createTransferJob: () => {
+      createTransferJob: (output: TransferOutputSession) => {
         jobCalls += 1
         const callIndex = jobCalls
         return {
@@ -371,6 +373,7 @@ describe('preview target download, single-photo blob reuse, and workspace task d
           run: async () => {
             if (callIndex === 1) await jobRunning
             if (callIndex === 3) await job3Gate.promise
+            await commitMockOutputFile(output, videoEntry)
             return {
               status: 'completed' as const,
               completedFiles: 1n, completedBytes: 100n,

@@ -32,6 +32,7 @@ import {
   type BrowserDownloadWindow,
 } from './browser-handoff'
 import {
+  MISSING_COMMITTED_FILE_MESSAGE,
   loadLockedReopenableTask,
   mergeSourceOmittedEntries,
   resolveZipEntryPath,
@@ -367,7 +368,7 @@ class OPFSSessionHandle implements OutputSessionHandle {
       if (committed !== undefined) return this.#publishCompleted(committed.size, result)
     }
     if (result.status === 'completed') {
-      return this.#settleIncomplete('failed', { ...result, error: new Error('Missing committed browser file') }, files)
+      return this.#settleIncomplete('failed', { ...result, error: new Error(MISSING_COMMITTED_FILE_MESSAGE) }, files)
     }
     return this.#settleIncomplete(result.status, result, files, truncatedLength)
   }

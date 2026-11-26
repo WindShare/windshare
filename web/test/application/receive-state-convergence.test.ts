@@ -12,10 +12,12 @@ import { ReceiveStore } from '../../src/output/store/database'
 import type { OutputTraceEvent } from '../../src/output/diagnostics'
 import { taskLockName } from '../../src/output/store/tab-lock'
 import type { ReceiveTaskRecord } from '../../src/output/store/types'
+import type { TransferOutputSession } from '../../src/transfer/output-port'
 import { initialReceiveState, transitionReceiveState } from '../../src/transfer/state'
 import { FakeDirectoryHandle } from '../output/fsa-fixture'
 import { createMemoryOPFSEnv, createMockDownloadWindow, MemoryReceiveStore } from '../output/opfs-fixture'
 import {
+  commitMockOutputFile,
   deferred,
   makeFileEntry,
   makeJobResult,
@@ -119,20 +121,23 @@ function makeJoinedShare(
     }),
     beginDownloadConnectivity: () => ({ routes: [], close: vi.fn() }),
     subscribeConnection: () => () => undefined,
-    createTransferJob: () => ({
+    createTransferJob: (output: TransferOutputSession) => ({
       pause: vi.fn(),
       stop: vi.fn(),
       detach: vi.fn(),
-      run: async () => ({
-        status: 'completed' as const,
-        completedFiles: 1n,
-        completedBytes: entry.expectedSize,
-        discoveredFiles: 1n,
-        discoveredBytes: entry.expectedSize,
-        discoveryComplete: true,
-        failedFiles: 0n,
-        failedDirectories: 0n,
-      }),
+      run: async () => {
+        await commitMockOutputFile(output, entry)
+        return {
+          status: 'completed' as const,
+          completedFiles: 1n,
+          completedBytes: entry.expectedSize,
+          discoveredFiles: 1n,
+          discoveredBytes: entry.expectedSize,
+          discoveryComplete: true,
+          failedFiles: 0n,
+          failedDirectories: 0n,
+        }
+      },
     }),
     ...overrides,
   } as unknown as JoinedBrowserShare

@@ -4,6 +4,7 @@ import type { ReceiveCoordinator } from '../../src/application/receive/coordinat
 import type { CatalogEntry } from '../../src/catalog/records'
 import { SelectionPolicy } from '../../src/catalog/selection'
 import { encodeBase64Url } from '../../src/crypto/bytes'
+import type { TransferOutputSession } from '../../src/transfer/output-port'
 import { selectionKey, selectionSpecFromPolicy } from '../../src/transfer/selection'
 
 const SNAPSHOT_WAIT_TIMEOUT_MS = 2_000
@@ -73,6 +74,20 @@ export function singleFileSelectionKey(
   policy.set(entry, directory.ancestry, true)
   const spec = selectionSpecFromPolicy(shareInstance, syntheticRoot, policy.snapshot())
   return { spec, key: selectionKey(spec) }
+}
+
+export async function commitMockOutputFile(
+  output: TransferOutputSession,
+  file: Readonly<{ readonly idText: string; readonly name: string }>,
+): Promise<void> {
+  const writer = await output.openFile({
+    fileId: file.idText,
+    path: [file.name],
+    sourcePath: [file.name],
+    revision: 'mock-rev',
+    exactSize: 0n,
+  }, new AbortController().signal)
+  await writer.commit([])
 }
 
 export function makeJobResult(status: 'completed' | 'paused' = 'completed', size = 16n) {
