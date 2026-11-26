@@ -17,8 +17,13 @@ func TestShareCancellationJoinsSetupAndRetainsRetryableCleanup(t *testing.T) {
 	}
 	entered, joined := make(chan struct{}), make(chan struct{})
 	a.deps.setup = func(ctx context.Context, input SetupInput, progress func(relaysetup.Progress)) (SetupResult, error) {
+		progress(relaysetup.Progress{
+			Stage:           "approval_required",
+			VerificationURL: "https://console.example/approve",
+			UserCode:        "ABCD-EFGH",
+			ServiceLogin:    &relaysetup.ServiceLogin{URL: "https://account.example/device#invite=token", Host: "account.example"},
+		})
 		close(entered)
-		progress(relaysetup.Progress{Stage: "approval_required", VerificationURL: "https://console.example/approve"})
 		<-ctx.Done()
 		close(joined)
 		return SetupResult{FrontendSaved: true, RelayURL: input.RelayURL}, ctx.Err()
@@ -44,21 +49,28 @@ func TestShareCancellationJoinsSetupAndRetainsRetryableCleanup(t *testing.T) {
 		t.Fatal(reply.Error)
 	}
 	<-entered
+	if running := a.snapshot().Setup; running.ServiceLogin == nil || running.VerificationURL == "" || running.UserCode == "" {
+		t.Fatalf("approval state was not populated before cancellation: %+v", running)
+	}
 	reply := a.execute(Request{Command: "cancel", OperationID: "operation"})
-	if reply.Snapshot.Shares[0].State != Finished || reply.Snapshot.Setup.VerificationURL != "" {
-		t.Fatal("cancellation did not fence admission and approval")
+	if reply.Snapshot.Shares[0].State != Finished || reply.Snapshot.Setup.VerificationURL != "" ||
+		reply.Snapshot.Setup.UserCode != "" || reply.Snapshot.Setup.ServiceLogin != nil {
+		t.Fatalf("cancellation did not fence admission and approval: %+v", reply.Snapshot.Setup)
 	}
 	a.work.Wait()
 	view := a.snapshot().Setup
-	if view.State != "cancel_failed" || !view.FrontendSaved || view.Error == nil || view.Recovery != relaysetup.RecoveryRetryCancel {
+	if view.State != "cancel_failed" || !view.FrontendSaved || view.Error == nil || view.Recovery != relaysetup.RecoveryRetryCancel ||
+		view.VerificationURL != "" || view.UserCode != "" || view.ServiceLogin != nil {
 		t.Fatalf("lost cancellation receipt: %+v", view)
 	}
 	if reply := a.execute(Request{Command: "cancel_setup", SetupID: view.ID}); reply.Error != nil {
 		t.Fatal(reply.Error)
 	}
 	a.work.Wait()
-	if a.snapshot().Setup.State != "cancelled" || cancellations.Load() != 2 || starts.Load() != 0 {
-		t.Fatal("retry did not clean up the original setup without admitting a share")
+	settled := a.snapshot().Setup
+	if settled.State != "cancelled" || settled.VerificationURL != "" || settled.UserCode != "" || settled.ServiceLogin != nil ||
+		cancellations.Load() != 2 || starts.Load() != 0 {
+		t.Fatalf("retry did not clean up the original setup without admitting a share: %+v", settled)
 	}
 	a.execute(Request{Command: "cancel_setup", SetupID: view.ID})
 	a.work.Wait()
@@ -107,14 +119,18 @@ func TestSetupCleanupDoesNotCancelUnacquiredOrCommittedApproval(t *testing.T) {
 		t.Run(string(receipt.Recovery), func(t *testing.T) {
 			a, _, _ := fixture(t)
 			receipt.RelayURL = "https://relay.example"
+			receipt.VerificationURL = "https://console.example/approve"
+			receipt.UserCode = "ABCD-EFGH"
+			receipt.ServiceLogin = &relaysetup.ServiceLogin{URL: "https://account.example/device#invite=token", Host: "account.example"}
 			a.setup = receipt
 			a.deps.cancelSetup = func(context.Context, string) error {
 				t.Error("cleanup attempted to revoke another workflow's approval")
 				return nil
 			}
 			a.finishSetupCancellation()
-			if a.snapshot().Setup.State != "cancelled" {
-				t.Fatal("finished setup did not settle")
+			settled := a.snapshot().Setup
+			if settled.State != "cancelled" || settled.VerificationURL != "" || settled.UserCode != "" || settled.ServiceLogin != nil {
+				t.Fatalf("finished setup did not settle cleanly: %+v", settled)
 			}
 		})
 	}

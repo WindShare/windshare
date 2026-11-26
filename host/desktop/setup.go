@@ -66,6 +66,12 @@ type SetupView struct {
 
 func (view SetupView) busy() bool { return view.State == "running" || view.State == "cancelling" }
 
+func (view *SetupView) clearApproval() {
+	view.VerificationURL = ""
+	view.UserCode = ""
+	view.ServiceLogin = nil
+}
+
 type setupCommand struct {
 	input       SetupInput
 	operationID string
@@ -175,6 +181,7 @@ func (a *Application) runSetup(ctx context.Context, input SetupInput) {
 	cancelled := ctx.Err() != nil || a.closing
 	a.interruptSetup()
 	a.interruptSetup = nil
+	a.setup.clearApproval()
 	if cancelled {
 		a.setup.State = "cancelling"
 		a.snapshotLocked()
@@ -183,7 +190,6 @@ func (a *Application) runSetup(ctx context.Context, input SetupInput) {
 		return
 	}
 	defer a.mu.Unlock()
-	a.setup.VerificationURL, a.setup.UserCode, a.setup.ServiceLogin = "", "", nil
 	if err != nil {
 		a.setup.State, a.setup.Error = "failed", failure("setup_failed", err)
 	} else {

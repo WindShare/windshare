@@ -37,7 +37,7 @@ func (a *Application) cancelSetupLocked() {
 	switch a.setup.State {
 	case "running":
 		a.setup.State = "cancelling"
-		a.setup.VerificationURL, a.setup.UserCode = "", ""
+		a.setup.clearApproval()
 		a.interruptSetup()
 	case "failed", "cancel_failed":
 		a.setup.State, a.setup.Error = "cancelling", nil
@@ -60,7 +60,7 @@ func (a *Application) finishSetupCancellation() {
 	cancel()
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.setup.VerificationURL, a.setup.UserCode = "", ""
+	a.setup.clearApproval()
 	a.setup.Recovery, a.setup.Error = "", nil
 	if err == nil {
 		a.setup.State = "cancelled"
