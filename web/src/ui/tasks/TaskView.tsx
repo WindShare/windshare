@@ -1,7 +1,7 @@
 import { receiverCopy } from '../locales/receiver'
 import { useCopy, usePreferences } from '../preferences/use-preferences'
 import { useEffect, useRef, useState, type ReactNode, type Ref } from 'react'
-import type { TaskActionCallbacks } from '../controller/failures'
+import type { AsyncActionCallbacks } from '../controller/failures'
 import type { ReceiverFailure } from '../model'
 import type {
   TaskAction,
@@ -30,7 +30,7 @@ const SELF_EXPLANATORY_ACTIONS = new Set(['pause', 'continue'])
 const DETAILS_ONLY_CONSEQUENCE_ACTIONS = new Set(['save'])
 
 export interface TaskViewActions {
-  readonly perform: (action: TaskAction, callbacks?: TaskActionCallbacks) => void
+  readonly perform: (action: TaskAction, callbacks?: AsyncActionCallbacks) => void
 }
 
 export function TaskActionButton({ action, perform, primary = false, busy = false, detailed = false }: {

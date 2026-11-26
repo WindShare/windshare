@@ -1,4 +1,4 @@
-import type { ReceiverController, TaskActionCallbacks } from '../controller'
+import type { AsyncActionCallbacks, ReceiverController } from '../controller'
 import type { SafeNameRestoreActions, TaskViewActions } from '../tasks/TaskView'
 
 // Reuse one frozen adapter per controller so high-frequency progress re-renders keep
@@ -7,7 +7,7 @@ const restoreActionsByController = new WeakMap<ReceiverController, SafeNameResto
 
 export function taskActions(
   controller: ReceiverController,
-  callbacks?: TaskActionCallbacks,
+  callbacks?: AsyncActionCallbacks,
 ): TaskViewActions {
   return {
     perform: (action, overrideCallbacks) => {

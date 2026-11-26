@@ -38,6 +38,12 @@ function PreviewModal({
 }) {
   const [startedFeedback, setStartedFeedback] = useState<Readonly<{ fileId: string; nonce: number }> | null>(null)
   const [modalError, setModalError] = useState<PreviewModalError | null>(null)
+  const mountedRef = useRef(true)
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
 
   useEffect(() => {
     if (startedFeedback === null) return
@@ -92,7 +98,11 @@ function PreviewModal({
     onDownload: () => {
       setModalError(null)
       const result = controller.downloadPreviewedFile({
-        onAsyncFailure: failure => setModalError({ kind: 'file', fileId, failure }),
+        onAsyncFailure: failure => {
+          if (!mountedRef.current) return false
+          setModalError({ kind: 'file', fileId, failure })
+          return true
+        },
       })
       if (result.kind === 'saved-image') {
         showStartedFeedback(fileId)

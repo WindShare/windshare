@@ -12,17 +12,14 @@ export type PreviewDownloadResult =
   | Readonly<{ kind: 'saved-image' | 'started' | 'waiting-picker' | 'probing' }>
   | Readonly<{ kind: 'failed'; failure: ReceiverFailure }>
 
-export interface PreviewDownloadCallbacks {
-  readonly onAsyncFailure?: (failure: ReceiverFailure) => void
-}
-
-export interface TaskActionCallbacks {
+export interface AsyncActionCallbacks {
   /**
-   * Handles an asynchronous task action failure locally.
-   * Return `false` if the local surface is no longer visible so the controller
-   * can fall back to the share-level error banner.
+   * Handles an asynchronous action failure locally.
+   * Return `true` when the local surface displayed the failure, or `false`
+   * when the surface is no longer visible so the controller falls back to
+   * the share-level error banner.
    */
-  readonly onAsyncFailure?: (failure: ReceiverFailure) => boolean | void
+  readonly onAsyncFailure?: (failure: ReceiverFailure) => boolean
 }
 
 export function previewDownloadResultFromOutcome(

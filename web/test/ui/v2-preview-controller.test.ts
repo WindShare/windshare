@@ -716,7 +716,9 @@ describe('single-photo blob reuse, preview picker isolation, and workspace task 
     controller.previewFile(fsaEntry.idText)
     await waitFor(() => controller.getSnapshot().preview.state === 'error')
     const localFailures: ReceiverFailure[] = []
-    expect(controller.downloadPreviewedFile({ onAsyncFailure: f => localFailures.push(f) })).toEqual({ kind: 'waiting-picker' })
+    expect(controller.downloadPreviewedFile({
+      onAsyncFailure: f => { localFailures.push(f); return true },
+    })).toEqual({ kind: 'waiting-picker' })
     rejectPicker(new DOMException('User cancelled', 'AbortError'))
     await turn()
     expect(controller.getSnapshot().preview.state).toBe('error')
@@ -724,20 +726,42 @@ describe('single-photo blob reuse, preview picker isolation, and workspace task 
     expect(controller.getSnapshot().error).toBeNull()
 
     // Non-abort async startup failure while on the same preview goes ONLY to local onAsyncFailure.
-    expect(controller.downloadPreviewedFile({ onAsyncFailure: f => localFailures.push(f) })).toEqual({ kind: 'waiting-picker' })
+    expect(controller.downloadPreviewedFile({
+      onAsyncFailure: f => { localFailures.push(f); return true },
+    })).toEqual({ kind: 'waiting-picker' })
     rejectPicker(new Error('picker denied'))
     await waitFor(() => localFailures.length === 1)
     expect(controller.getSnapshot().error).toBeNull()
     expect(controller.getSnapshot().preview.state).toBe('error')
 
     // Async startup failure after switching away falls back to global snapshot.error.
-    expect(controller.downloadPreviewedFile({ onAsyncFailure: f => localFailures.push(f) })).toEqual({ kind: 'waiting-picker' })
+    expect(controller.downloadPreviewedFile({
+      onAsyncFailure: f => { localFailures.push(f); return true },
+    })).toEqual({ kind: 'waiting-picker' })
     controller.previewFile(otherEntry.idText)
     await waitFor(() => controller.getSnapshot().preview.state === 'image')
     rejectPicker(new Error('late picker failure'))
     await waitFor(() => controller.getSnapshot().error !== null)
     expect(localFailures).toHaveLength(1)
-    expect(pickerCall).toBe(3)
+
+    // Closing and reopening the same file leaves preview.fileId matching, so an unmounted
+    // PreviewModal callback returning false must fall back to global snapshot.error.
+    controller.previewFile(fsaEntry.idText)
+    await waitFor(() => controller.getSnapshot().preview.state === 'error')
+    let staleCallbacks = 0
+    expect(controller.downloadPreviewedFile({
+      onAsyncFailure: () => {
+        staleCallbacks += 1
+        return false
+      },
+    })).toEqual({ kind: 'waiting-picker' })
+    controller.cancelPreview()
+    controller.previewFile(fsaEntry.idText)
+    await waitFor(() => controller.getSnapshot().preview.state === 'error')
+    rejectPicker(new Error('reopened same-file picker failure'))
+    await waitFor(() => controller.getSnapshot().error === 'reopened same-file picker failure')
+    expect(staleCallbacks).toBe(1)
+    expect(pickerCall).toBe(4)
 
     // Verify ready-to-save is NOT dismissible while a matched OPFS handed-to-browser retained card IS dismissible.
     const baseTaskSnap = controller.presentation.task.getSnapshot()
@@ -945,7 +969,7 @@ describe('preview fresh download, modal task failure routing, and shareScope vis
     await waitFor(() => downloads.length === 2 && controller.getSnapshot().retained.pending === null)
     expect(transferCalls).toBe(1)
 
-    // Retained action failure routes locally when onAsyncFailure handles it (returns true/void),
+    // Retained action failure routes locally when onAsyncFailure handles it (returns true),
     // and falls back to global snapshot.error when onAsyncFailure returns false (unmounted modal).
     const missingTask = {
       ...controller.getSnapshot().retained.tasks[0]!,

@@ -21,10 +21,9 @@ import {
   mapReceiverFailure,
   outcomeFailure,
   previewDownloadResultFromOutcome,
+  type AsyncActionCallbacks,
   type ChooseArtifactIntent,
-  type PreviewDownloadCallbacks,
   type PreviewDownloadResult,
-  type TaskActionCallbacks,
 } from './controller/failures'
 import { ShareJoinCoordinator } from './controller/join-coordinator'
 import { BrowserNavigationCoordinator } from './controller/navigation'
@@ -49,7 +48,7 @@ export type { DiagnosticFormatter, SecurityMilestone } from '../application/brow
 export { captureLocation } from './capability/location'
 export type { CapturedLocation, LocationCaptureOptions } from './capability/location'
 export type { ReceiverControllerOptions } from './controller/contracts'
-export type { ChooseArtifactIntent, PreviewDownloadCallbacks, PreviewDownloadResult, TaskActionCallbacks } from './controller/failures'
+export type { AsyncActionCallbacks, ChooseArtifactIntent, PreviewDownloadResult } from './controller/failures'
 export type { ReceiverTraceEvent } from '../application/receive/contracts'
 
 export class ReceiverController {
@@ -348,7 +347,7 @@ export class ReceiverController {
     return outcome
   }
 
-  downloadPreviewedFile(callbacks?: PreviewDownloadCallbacks): PreviewDownloadResult {
+  downloadPreviewedFile(callbacks?: AsyncActionCallbacks): PreviewDownloadResult {
     const target = this.#previews.activeTarget()
     const previewState = this.#snapshot.preview.state
     if (this.#disposed || target === undefined || previewState === 'idle') {
@@ -379,9 +378,12 @@ export class ReceiverController {
       onAsyncError: error => {
         if (this.#disposed) return
         const current = this.#snapshot.preview
-        if (current.state !== 'idle' && current.fileId === fileId && callbacks?.onAsyncFailure !== undefined) {
+        const handled =
+          current.state !== 'idle' &&
+          current.fileId === fileId &&
+          callbacks?.onAsyncFailure !== undefined &&
           callbacks.onAsyncFailure(mapReceiverFailure(error, err => this.#publicError(err)))
-        } else {
+        if (!handled) {
           this.#publishActionError(error)
         }
       },
@@ -401,7 +403,7 @@ export class ReceiverController {
     return this.#receive.activeActionAdmission(action)
   }
 
-  performLifecycleAction(action: ReceiveAction, callbacks?: TaskActionCallbacks): void {
+  performLifecycleAction(action: ReceiveAction, callbacks?: AsyncActionCallbacks): void {
     this.#operationTransitions.performLifecycleAction(action, callbacks)
   }
 
@@ -413,7 +415,7 @@ export class ReceiverController {
     return this.#receive.retainedActionAdmission(task, action)
   }
 
-  performRetainedAction(task: RetainedTaskSnapshot, action: ReceiveAction, callbacks?: TaskActionCallbacks): void {
+  performRetainedAction(task: RetainedTaskSnapshot, action: ReceiveAction, callbacks?: AsyncActionCallbacks): void {
     this.#operationTransitions.performRetainedAction(task, action, callbacks)
   }
 

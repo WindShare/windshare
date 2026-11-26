@@ -2,7 +2,7 @@ import type { ReceiverFailure, ReceiverSnapshot } from '../model'
 import type { JoinedBrowserShare } from '../../application/browser-share/gateway'
 import type { ReceiveAction, RetainedTaskSnapshot } from '../../application/receive/contracts'
 import type { ReceiveCoordinator, RetainedActionCallbacks } from '../../application/receive/coordinator'
-import type { TaskActionCallbacks } from '../controller/failures'
+import type { AsyncActionCallbacks } from '../controller/failures'
 import type { BrowserNavigationCoordinator } from '../controller/navigation'
 import type { PreviewController } from '../preview-controller'
 import type { ReceiverExperienceObservability } from '../experience/observability'
@@ -33,7 +33,7 @@ export class ReceiveOperationTransitions {
 
   constructor(options: OperationTransitionOptions) { this.#options = options }
 
-  performLifecycleAction(action: ReceiveAction, callbacks?: TaskActionCallbacks): void {
+  performLifecycleAction(action: ReceiveAction, callbacks?: AsyncActionCallbacks): void {
     this.#options.recordIntent('task-' + action)
     if (action === 'continue' && this.#options.coordinator.activeActionAdmission(action).allowed) {
       this.#options.previews.yieldToReceiving()
@@ -51,7 +51,7 @@ export class ReceiveOperationTransitions {
   performRetainedAction(
     task: RetainedTaskSnapshot,
     action: ReceiveAction,
-    callbacks?: TaskActionCallbacks,
+    callbacks?: AsyncActionCallbacks,
   ): void {
     this.#options.experienceTrace.intent('retained-' + action, this.#options.snapshot(), {
       operationId: task.taskId,
@@ -61,14 +61,14 @@ export class ReceiveOperationTransitions {
     this.#options.coordinator.performRetainedAction(task, action, this.#actionCallbacks(callbacks))
   }
 
-  #actionCallbacks(callbacks?: TaskActionCallbacks): RetainedActionCallbacks | undefined {
+  #actionCallbacks(callbacks?: AsyncActionCallbacks): RetainedActionCallbacks | undefined {
     const onAsyncFailure = callbacks?.onAsyncFailure
     if (onAsyncFailure === undefined) return undefined
     return {
       onError: error => {
         if (this.#options.isDisposed()) return
         // Fall back to the global share banner when a modal closed before the error arrived.
-        if (onAsyncFailure(this.#options.mapFailure(error)) === false) {
+        if (!onAsyncFailure(this.#options.mapFailure(error))) {
           this.#options.onActionError(error)
         }
       },
