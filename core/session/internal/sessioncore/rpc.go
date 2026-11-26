@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"sync"
 	"time"
 
@@ -65,7 +64,7 @@ type operationResponse struct {
 	lane    session.LaneIdentity
 }
 
-func NewRequests(runtime *Runtime, _ io.Reader) *Requests {
+func NewRequests(runtime *Runtime) *Requests {
 	return &Requests{
 		runtime: runtime,
 		calls:   make(map[protocolsession.OperationID]*Call),

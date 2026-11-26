@@ -23,7 +23,7 @@ func TestRPCClientBoundsLifecycleAndCancellation(t *testing.T) {
 	receiver := struct {
 		*Runtime
 		rpc *Requests
-	}{runtime, NewRequests(runtime, nil)}
+	}{runtime, NewRequests(runtime)}
 	if err := receiver.rpc.Register(); err != nil {
 		t.Fatal(err)
 	}
@@ -64,16 +64,16 @@ func TestRPCClientBoundsLifecycleAndCancellation(t *testing.T) {
 	if _, err := receiver.rpc.Begin(cancelled, protocolsession.MessageListChildren, body); !errors.Is(err, context.Canceled) {
 		t.Fatalf("begin cancelled error = %v", err)
 	}
-	exhaustedIDs := NewRequests(runtime, nil)
+	exhaustedIDs := NewRequests(runtime)
 	exhaustedIDs.ids.counter = ^uint64(0)
 	if _, err := exhaustedIDs.Begin(context.Background(), protocolsession.MessageListChildren, body); !errors.Is(err, ErrOperationIDExhausted) {
 		t.Fatalf("exhausted operation IDs error = %v", err)
 	}
-	invalidMessage := NewRequests(runtime, nil)
+	invalidMessage := NewRequests(runtime)
 	if _, err := invalidMessage.Begin(context.Background(), protocolsession.MessageKind(255), body); err == nil {
 		t.Fatal("invalid operation kind was accepted")
 	}
-	duplicate := NewRequests(runtime, nil)
+	duplicate := NewRequests(runtime)
 	duplicateID := protocolsession.OperationID(1)
 	duplicate.calls[duplicateID] = &Call{id: duplicateID}
 	if _, err := duplicate.Begin(context.Background(), protocolsession.MessageListChildren, body); !errors.Is(err, session.ErrOperationMissing) {

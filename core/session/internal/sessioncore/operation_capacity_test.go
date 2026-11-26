@@ -21,7 +21,7 @@ func TestRPCWaitsForActiveCapacityAndProceedsWithoutTombstoneBlocking(t *testing
 		writerDone := make(chan error, 1)
 		go func() { writerDone <- physical.writer.Run(writerContext) }()
 		defer func() { stopWriter(); <-writerDone }()
-		client := NewRequests(runtime, nil)
+		client := NewRequests(runtime)
 		body := []byte{0xa1, 0x00, 0x01}
 		first, err := client.Begin(context.Background(), protocolsession.MessageListChildren, body)
 		if err != nil {

@@ -3,7 +3,6 @@ package receiversession
 import (
 	"context"
 	"errors"
-	"io"
 	"sync"
 	"testing"
 
@@ -27,12 +26,12 @@ type trackedRequestClient struct {
 	cancelErr  error
 }
 
-func newTestRequests(runtime *sessioncore.Runtime, random io.Reader) *trackedRequestClient {
-	return &trackedRequestClient{Requests: sessioncore.NewRequests(runtime, random), calls: make(map[protocolsession.OperationID]*sessioncore.Call)}
+func newTestRequests(runtime *sessioncore.Runtime) *trackedRequestClient {
+	return &trackedRequestClient{Requests: sessioncore.NewRequests(runtime), calls: make(map[protocolsession.OperationID]*sessioncore.Call)}
 }
 func trackReceiverFactory(factory *Factory) {
-	factory.requests = func(runtime *sessioncore.Runtime, random io.Reader) requestClient {
-		return newTestRequests(runtime, random)
+	factory.requests = func(runtime *sessioncore.Runtime) requestClient {
+		return newTestRequests(runtime)
 	}
 }
 func trackedRequests(client requestClient) *trackedRequestClient {

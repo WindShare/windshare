@@ -14,7 +14,7 @@ func TestReceiverPeerOperationReportsGenerationContinuationBudget(t *testing.T) 
 	}
 
 	t.Run("local terminal retains admitted budget", func(t *testing.T) {
-		fixture := newReceiverPeerTerminalFixture(t, 140)
+		fixture := newReceiverPeerTerminalFixture(t)
 		assertReceiverPeerContinuationBudget(t, fixture.operation, 4)
 		termination := fixture.operation.Terminate(context.Background())
 		assertReceiverPeerTermination(
@@ -31,7 +31,7 @@ func TestReceiverPeerOperationReportsGenerationContinuationBudget(t *testing.T) 
 	})
 
 	t.Run("runtime shutdown retains admitted budget", func(t *testing.T) {
-		fixture := newReceiverPeerTerminalFixture(t, 141)
+		fixture := newReceiverPeerTerminalFixture(t)
 		if err := fixture.runtime.AddFinalizer(fixture.operation.rpc.Close); err != nil {
 			t.Fatal(err)
 		}
@@ -43,7 +43,7 @@ func TestReceiverPeerOperationReportsGenerationContinuationBudget(t *testing.T) 
 	})
 
 	t.Run("call close retains admission snapshot", func(t *testing.T) {
-		fixture := newReceiverPeerTerminalFixture(t, 142)
+		fixture := newReceiverPeerTerminalFixture(t)
 		if maximum, ok := fixture.call.ContinuationLimit(); !ok || maximum != 4 {
 			t.Fatalf("live call continuation snapshot=%d,%t", maximum, ok)
 		}

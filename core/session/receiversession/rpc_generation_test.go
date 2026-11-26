@@ -21,7 +21,7 @@ func testReceiverPeerOperationLateTerminateCannotAffectSubsequentOperation(t *te
 	var physicalSends atomic.Int32
 	channel.onSend = func(framechannel.Frame) { physicalSends.Add(1) }
 	startReceiverPeerWriter(t, runtime)
-	rpc := newTestRequests(runtime, nil)
+	rpc := newTestRequests(runtime)
 	t.Cleanup(rpc.Close)
 	receiver := &Runtime{core: runtime, lifecycle: runtime, rpc: rpc}
 	open := func() (*PeerOperation, *sessioncore.Call, protocolsession.Operation) {

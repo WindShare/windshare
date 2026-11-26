@@ -14,7 +14,7 @@ import (
 func TestRequestTrackingReleasesRejectedPreparedCall(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
 	startReceiverPeerWriter(t, runtime)
-	rpc := newTestRequests(runtime, &deterministicReader{next: 41})
+	rpc := newTestRequests(runtime)
 	t.Cleanup(rpc.Close)
 	body, err := protocolsession.EncodeBody(map[uint64]any{0: uint64(1)})
 	if err != nil {

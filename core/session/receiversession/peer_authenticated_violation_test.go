@@ -8,7 +8,7 @@ import (
 )
 
 func TestAuthenticatedMalformedPeerFailurePublishesUnsafeExactOperationBeforeShutdown(t *testing.T) {
-	fixture := newReceiverPeerTerminalFixture(t, 0xd4)
+	fixture := newReceiverPeerTerminalFixture(t)
 	received := make(chan PeerReceiveResult, 1)
 	go func() { received <- fixture.operation.Receive(context.Background()) }()
 	waitReceiverPeerState(t, fixture.operation, "receive admitted before malformed failure", func(
@@ -52,14 +52,13 @@ func TestAuthenticatedMalformedPeerControlTerminatesOnlyExactOperation(t *testin
 	testCases := []struct {
 		name string
 		kind protocolsession.MessageKind
-		seed byte
 	}{
-		{name: "answer", kind: protocolsession.MessagePeerAnswer, seed: 0xd7},
-		{name: "candidate", kind: protocolsession.MessagePeerCandidate, seed: 0xda},
+		{name: "answer", kind: protocolsession.MessagePeerAnswer},
+		{name: "candidate", kind: protocolsession.MessagePeerCandidate},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			fixture := newReceiverPeerTerminalFixture(t, testCase.seed)
+			fixture := newReceiverPeerTerminalFixture(t)
 			received := make(chan PeerReceiveResult, 1)
 			go func() { received <- fixture.operation.Receive(context.Background()) }()
 			waitReceiverPeerState(t, fixture.operation, "receive admitted before malformed peer control", func(

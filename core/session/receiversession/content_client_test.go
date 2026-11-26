@@ -71,7 +71,7 @@ func TestReceiverBlockLaneRetiresAnInactiveOperationBeforeReassignment(t *testin
 	}
 	const testInactivityTimeout = 20 * time.Millisecond
 	lane := &receiverBlockLane{
-		identity: runtimeIdentity(runtime), rpc: newTestRequests(runtime, &deterministicReader{next: 64}),
+		identity: runtimeIdentity(runtime), rpc: newTestRequests(runtime),
 		assembler: assembler, revisions: revisions, fragmentInactivityTimeout: testInactivityTimeout,
 	}
 
@@ -203,7 +203,7 @@ func testReceiverBlockLaneUnknownSendDoesNotRetryAfterCallerDeadline(t *testing.
 		t.Fatal(err)
 	}
 	blockLane := &receiverBlockLane{
-		identity: identity, rpc: newTestRequests(runtime, &deterministicReader{next: 76}),
+		identity: identity, rpc: newTestRequests(runtime),
 		assembler: assembler, revisions: revisions,
 	}
 	signalingLane := &signalingReceiverBlockLane{inner: blockLane, done: make(chan struct{})}
@@ -294,7 +294,7 @@ func TestReceiverBlockLaneProvenDropReassignsDemand(t *testing.T) {
 	}}
 	blockLane := &receiverBlockLane{
 		identity: session.LaneIdentity{ID: runtimeIdentity(runtime).ID + 1, Epoch: 1},
-		rpc:      newTestRequests(runtime, &deterministicReader{next: 78}), revisions: revisions,
+		rpc:      newTestRequests(runtime), revisions: revisions,
 		assembler: newBlockProtocolFixture(t, false).lane.assembler,
 	}
 	contentLanes, err := transferlanes.New(transferlanes.Config{ProtocolSessionID: runtime.ProtocolSessionID()})

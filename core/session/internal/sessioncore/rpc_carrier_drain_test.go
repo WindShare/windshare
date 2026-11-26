@@ -30,7 +30,7 @@ func TestRPCPendingControlRecoversBeforeRetiredCarrierDrain(t *testing.T) {
 				close(retired)
 			}
 		})
-		rpc := NewRequests(runtime, &deterministicReader{next: 17})
+		rpc := NewRequests(runtime)
 		if err := rpc.Register(); err != nil {
 			t.Fatal(err)
 		}

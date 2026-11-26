@@ -1,7 +1,6 @@
 package sessioncore
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"github.com/windshare/windshare/core/observationstream"
@@ -55,7 +54,7 @@ func TestProtocolOperationTraceExplainsDeliveredReleaseLeaseDeadline(t *testing.
 func testProtocolOperationTraceExplainsDeliveredReleaseLeaseDeadline(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
 	recorder := newProtocolTraceRecorder(runtime)
-	rpc := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{0x63}, protocolsession.IdentityBytes)))
+	rpc := NewRequests(runtime)
 	lane, err := runtime.lanes.selectLane(&runtime.initial)
 	if err != nil {
 		t.Fatal(err)
@@ -270,7 +269,7 @@ func TestProtocolOperationTraceCapturesAuthenticatedReceivedFailureAtSource(t *t
 	recorder := newProtocolTraceRecorder(runtime)
 	receivedAt := time.Unix(1234, 0)
 	runtime.now = func() time.Time { return receivedAt }
-	rpc := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{0x7d}, protocolsession.IdentityBytes)))
+	rpc := NewRequests(runtime)
 	if err := rpc.Register(); err != nil {
 		t.Fatal(err)
 	}

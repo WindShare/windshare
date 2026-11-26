@@ -1,7 +1,6 @@
 package receiversession
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"github.com/windshare/windshare/core/session"
@@ -20,10 +19,7 @@ func TestReceiverPeerOpenNormalizesNilContextAndRequiresContinuationContract(t *
 			continuationReplayClassifier{},
 		)
 		startReceiverPeerWriter(t, runtime)
-		rpc := newTestRequests(
-			runtime,
-			bytes.NewReader(bytes.Repeat([]byte{0xc1}, protocolsession.IdentityBytes)),
-		)
+		rpc := newTestRequests(runtime)
 		receiver := &Runtime{core: runtime, lifecycle: runtime, rpc: rpc}
 		operation, err := receiver.OpenPeerOperation(receiverPeerMissingContext(), []byte{0xf6})
 		if err != nil || operation == nil || operation.OperationID().IsZero() {
@@ -39,10 +35,7 @@ func TestReceiverPeerOpenNormalizesNilContextAndRequiresContinuationContract(t *
 	t.Run("missing continuation classifier", func(t *testing.T) {
 		runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
 		startReceiverPeerWriter(t, runtime)
-		rpc := newTestRequests(
-			runtime,
-			bytes.NewReader(bytes.Repeat([]byte{0xc2}, protocolsession.IdentityBytes)),
-		)
+		rpc := newTestRequests(runtime)
 		receiver := &Runtime{core: runtime, lifecycle: runtime, rpc: rpc}
 		operation, err := receiver.OpenPeerOperation(context.Background(), []byte{0xf6})
 		if operation != nil || err == nil || len(rpc.calls) != 0 {
@@ -53,7 +46,7 @@ func TestReceiverPeerOpenNormalizesNilContextAndRequiresContinuationContract(t *
 
 func TestReceiverPeerCandidateAndReceiveStateTransitionsFailClosed(t *testing.T) {
 	t.Run("nil candidate context", func(t *testing.T) {
-		fixture := newReceiverPeerTerminalFixture(t, 0xc3)
+		fixture := newReceiverPeerTerminalFixture(t)
 		disposition, err := fixture.operation.SendCandidate(receiverPeerMissingContext(), []byte{0xf6})
 		if err != nil || disposition != protocolsession.OperationDeliver {
 			t.Fatalf("nil-context candidate disposition=%d error=%v", disposition, err)
@@ -61,7 +54,7 @@ func TestReceiverPeerCandidateAndReceiveStateTransitionsFailClosed(t *testing.T)
 	})
 
 	t.Run("stale generation candidate is dropped", func(t *testing.T) {
-		fixture := newReceiverPeerTerminalFixture(t, 0xc4)
+		fixture := newReceiverPeerTerminalFixture(t)
 		if fixture.call.Operation().IsZero() {
 			t.Fatal("peer call retained no operation handle")
 		}
@@ -76,14 +69,14 @@ func TestReceiverPeerCandidateAndReceiveStateTransitionsFailClosed(t *testing.T)
 	})
 
 	t.Run("published terminal is returned to later receive", func(t *testing.T) {
-		fixture := newReceiverPeerTerminalFixture(t, 0xc5)
+		fixture := newReceiverPeerTerminalFixture(t)
 		want := fixture.operation.Terminate(context.Background())
 		got := requireReceiverPeerTermination(t, fixture.operation.Receive(context.Background()))
 		assertReceiverPeerTerminationsEqual(t, want, got)
 	})
 
 	t.Run("second concurrent receive is rejected", func(t *testing.T) {
-		fixture := newReceiverPeerTerminalFixture(t, 0xc6)
+		fixture := newReceiverPeerTerminalFixture(t)
 		fixture.operation.mu.Lock()
 		fixture.operation.receiving = true
 		fixture.operation.mu.Unlock()
@@ -102,7 +95,7 @@ func TestReceiverPeerCandidateAndReceiveStateTransitionsFailClosed(t *testing.T)
 func receiverPeerMissingContext() context.Context { return nil }
 
 func TestReceiverPeerEvidenceClassificationPreservesOwnershipScope(t *testing.T) {
-	fixture := newReceiverPeerTerminalFixture(t, 0xc7)
+	fixture := newReceiverPeerTerminalFixture(t)
 	if evidence, ok := receiverPeerAuthenticatedViolationEvidence(
 		protocolsession.AuthenticatedOperationViolation{},
 	); ok || evidence.transition.authority != receiverPeerTerminalAuthorityInvalid {
@@ -134,7 +127,7 @@ func TestReceiverPeerEvidenceClassificationPreservesOwnershipScope(t *testing.T)
 	stopped, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
 	stopTestCore(stopped)
 	finishedRuntime := &PeerOperation{
-		rpc: newTestRequests(stopped, &deterministicReader{next: 27}),
+		rpc: newTestRequests(stopped),
 	}
 	if evidence, stopping := finishedRuntime.runtimeTerminalEvidence(nil); !stopping ||
 		evidence.transition.authority != PeerTerminalAuthorityRuntime {

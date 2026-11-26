@@ -1,7 +1,6 @@
 package sessioncore
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"github.com/windshare/windshare/core/session"
@@ -15,7 +14,7 @@ import (
 func TestPeerContinuationMigratesOnlyAfterOriginalLaneLoss(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
 	t.Cleanup(runtime.AbortBeforeStart)
-	rpc := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{3}, protocolsession.IdentityBytes)))
+	rpc := NewRequests(runtime)
 	call := &Call{
 		id: protocolsession.OperationID(80), messages: make(chan operationResponse, 1),
 		lane: runtime.initial,
@@ -58,7 +57,7 @@ func TestPeerContinuationMigratesOnlyAfterOriginalLaneLoss(t *testing.T) {
 func TestPeerContinuationFailsWhenEveryAuthenticatedLaneIsGone(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
 	t.Cleanup(runtime.AbortBeforeStart)
-	rpc := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{4}, protocolsession.IdentityBytes)))
+	rpc := NewRequests(runtime)
 	call := &Call{
 		id: protocolsession.OperationID(82), messages: make(chan operationResponse, 1),
 		lane: runtime.initial,
@@ -89,7 +88,7 @@ func TestRPCBeginRollsBackEveryPreDeliveryFailure(t *testing.T) {
 	t.Run("identity source", func(t *testing.T) {
 		runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
 		t.Cleanup(runtime.AbortBeforeStart)
-		rpc := NewRequests(runtime, nil)
+		rpc := NewRequests(runtime)
 		rpc.ids.counter = ^uint64(0)
 		if _, err := rpc.Begin(context.Background(), protocolsession.MessagePeerOffer, canonicalBody); err == nil {
 			t.Fatal("peer operation accepted an exhausted identity source")
@@ -98,7 +97,7 @@ func TestRPCBeginRollsBackEveryPreDeliveryFailure(t *testing.T) {
 	t.Run("message schema", func(t *testing.T) {
 		runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
 		t.Cleanup(runtime.AbortBeforeStart)
-		rpc := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{5}, protocolsession.IdentityBytes)))
+		rpc := NewRequests(runtime)
 		if _, err := rpc.Begin(context.Background(), protocolsession.MessageKind(0), canonicalBody); err == nil {
 			t.Fatal("RPC admitted an unknown request kind")
 		}
@@ -109,7 +108,7 @@ func TestRPCBeginRollsBackEveryPreDeliveryFailure(t *testing.T) {
 		runtime.lanes.mu.Lock()
 		runtime.lanes.active[runtime.initial.ID].closing = true
 		runtime.lanes.mu.Unlock()
-		rpc := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{6}, protocolsession.IdentityBytes)))
+		rpc := NewRequests(runtime)
 		if _, err := rpc.Begin(context.Background(), protocolsession.MessagePeerOffer, canonicalBody); !errors.Is(err, ErrLaneUnavailable) {
 			t.Fatalf("no-lane RPC error = %v", err)
 		}
@@ -127,7 +126,7 @@ func TestRPCBeginRollsBackEveryPreDeliveryFailure(t *testing.T) {
 		stopped, stop := context.WithCancel(context.Background())
 		stop()
 		_ = lane.writer.Run(stopped)
-		rpc := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{7}, protocolsession.IdentityBytes)))
+		rpc := NewRequests(runtime)
 		if _, err := rpc.Begin(context.Background(), protocolsession.MessagePeerOffer, canonicalBody); err == nil {
 			t.Fatal("RPC admitted work after its physical writer stopped")
 		}
@@ -138,7 +137,7 @@ func TestRPCBeginRollsBackEveryPreDeliveryFailure(t *testing.T) {
 	t.Run("pre-transport timeout", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			runtime, channel := newUnstartedRuntime(t, protocolsession.RoleReceiver)
-			rpc := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{8}, protocolsession.IdentityBytes)))
+			rpc := NewRequests(runtime)
 			const deadline = 20 * time.Millisecond
 			ctx, cancel := context.WithTimeout(t.Context(), deadline)
 			defer cancel()
@@ -180,7 +179,7 @@ func TestRPCContinuationRejectsStoppedPhysicalWriter(t *testing.T) {
 	stopped, stop := context.WithCancel(context.Background())
 	stop()
 	_ = lane.writer.Run(stopped)
-	rpc := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{9}, protocolsession.IdentityBytes)))
+	rpc := NewRequests(runtime)
 	call := &Call{
 		id: protocolsession.OperationID(83), messages: make(chan operationResponse, 1),
 		lane: runtime.initial,
@@ -207,7 +206,7 @@ func TestRPCContinuationRetractsPendingPreTransportTimeout(t *testing.T) {
 func testRPCContinuationRetractsPendingPreTransportTimeout(t *testing.T) {
 	runtime, channel := newUnstartedRuntime(t, protocolsession.RoleReceiver)
 	t.Cleanup(runtime.AbortBeforeStart)
-	rpc := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{10}, protocolsession.IdentityBytes)))
+	rpc := NewRequests(runtime)
 	call := &Call{
 		id: protocolsession.OperationID(84), messages: make(chan operationResponse, 1),
 		lane: runtime.initial,
@@ -248,7 +247,7 @@ func testRPCContinuationRetractsPendingPreTransportTimeout(t *testing.T) {
 func TestRPCAdmitCancellationRejectsInvalidAuthority(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
 	t.Cleanup(runtime.AbortBeforeStart)
-	rpc := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{11}, protocolsession.IdentityBytes)))
+	rpc := NewRequests(runtime)
 	for _, call := range []*Call{nil, {}, {id: protocolsession.OperationID(85)}} {
 		if err := rpc.admitCancellation(call, contentflow.CancelReasonTimeout); !errors.Is(err, session.ErrOperationMissing) {
 			t.Fatalf("invalid cancellation authority error = %v", err)

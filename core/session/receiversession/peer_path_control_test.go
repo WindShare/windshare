@@ -8,7 +8,7 @@ import (
 
 func TestKnownPeerSessionFailureSealsUnsafeAuthority(t *testing.T) {
 	for _, code := range []uint16{protocolsession.PeerOperationCodeAuthentication, protocolsession.PeerOperationCodeSessionInvariant, 0x5fff} {
-		fixture := newReceiverPeerTerminalFixture(t, byte(code))
+		fixture := newReceiverPeerTerminalFixture(t)
 		semantic, err := protocolsession.EncodeOperationFailure(protocolsession.OperationFailure{Scope: protocolsession.OperationScopePeer, PeerAttempt: &protocolsession.PeerAttemptBinding{PeerPathID: [16]byte{1}, AttemptID: [16]byte{2}, AttemptSequence: 1}, Code: code, Message: "remote peer failure"})
 		if err != nil {
 			t.Fatal(err)

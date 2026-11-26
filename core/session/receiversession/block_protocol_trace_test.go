@@ -55,7 +55,7 @@ func newBlockProtocolFixture(t *testing.T, runWriter bool) blockProtocolFixture 
 		t.Fatal(err)
 	}
 	lane := &receiverBlockLane{
-		identity: runtimeIdentity(runtime), rpc: newTestRequests(runtime, &deterministicReader{next: 64}),
+		identity: runtimeIdentity(runtime), rpc: newTestRequests(runtime),
 		assembler: assembler, revisions: &receiverRevisionClient{
 			leases: map[content.LeaseID]*remoteLeaseState{lease: {id: lease}},
 		},

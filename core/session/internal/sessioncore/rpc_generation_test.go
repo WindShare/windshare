@@ -17,7 +17,7 @@ import (
 
 func TestRPCBeginPublishesAuthorityAfterFastResponseWasAlreadyDispatched(t *testing.T) {
 	runtime, channel := newUnstartedRuntime(t, protocolsession.RoleReceiver)
-	rpc := NewRequests(runtime, nil)
+	rpc := NewRequests(runtime)
 	if err := rpc.Register(); err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestRPCBeginCancellationAfterAdmissionQueuesOneExactCancel(t *testing.T) {
 		stopWriter()
 		<-writerDone
 	}()
-	rpc := NewRequests(runtime, nil)
+	rpc := NewRequests(runtime)
 	requestContext, cancelRequest := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {
@@ -156,7 +156,7 @@ func testRPCFinalWinsCleanupPreservesFingerprintAndRejectsStaleReuse(t *testing.
 		<-writerDone
 	}()
 
-	rpc := NewRequests(runtime, nil)
+	rpc := NewRequests(runtime)
 	firstID := protocolsession.OperationID(1)
 	request, _ := protocolsession.NewMessage(protocolsession.MessageListChildren, &firstID, []byte{0xa0})
 	firstOp, maxCont, hasLimit, releaseFirst, err := runtime.operations.AdmitOutboundRequest(request, nil)
@@ -245,7 +245,7 @@ func testRPCQueuedStaleResponseCannotAffectSubsequentOperation(t *testing.T) {
 		stopWriter()
 		<-writerDone
 	})
-	rpc := NewRequests(runtime, nil)
+	rpc := NewRequests(runtime)
 	if err := rpc.Register(); err != nil {
 		t.Fatal(err)
 	}

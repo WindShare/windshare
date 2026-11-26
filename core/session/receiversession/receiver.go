@@ -85,7 +85,7 @@ type FactoryConfig struct {
 }
 
 type Factory struct {
-	requests                          func(*sessioncore.Runtime, io.Reader) requestClient
+	requests                          func(*sessioncore.Runtime) requestClient
 	contentRoutePolicy                transferlanes.ContentRoutePolicy
 	descriptor                        catalog.ShareDescriptor
 	authKey                           []byte
@@ -146,8 +146,8 @@ func NewFactory(config FactoryConfig) (*Factory, error) {
 		return nil, errors.Join(session.ErrRuntimeConfig, err)
 	}
 	return &Factory{
-		requests: func(runtime *sessioncore.Runtime, random io.Reader) requestClient {
-			return sessioncore.NewRequests(runtime, random)
+		requests: func(runtime *sessioncore.Runtime) requestClient {
+			return sessioncore.NewRequests(runtime)
 		},
 		descriptor: config.Descriptor, authKey: append([]byte(nil), config.SessionAuthKey...),
 		sender:   config.Sender,
@@ -211,7 +211,7 @@ func (factory *Factory) Connect(ctx context.Context, channel protocolsession.Fra
 			wire.AbortBeforeStart()
 		}
 	}()
-	rpc := factory.requests(wire, factory.random)
+	rpc := factory.requests(wire)
 	if err := wire.AddFinalizer(rpc.Close); err != nil {
 		return nil, err
 	}

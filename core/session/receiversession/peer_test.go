@@ -1,7 +1,6 @@
 package receiversession
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"github.com/windshare/windshare/core/session"
@@ -14,7 +13,7 @@ import (
 func TestReceiverPeerOperationClosedStateIsInert(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
 	t.Cleanup(func() { stopTestCore(runtime) })
-	rpc := newTestRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{1}, protocolsession.IdentityBytes)))
+	rpc := newTestRequests(runtime)
 	receiver := &Runtime{core: runtime, lifecycle: runtime, rpc: rpc}
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -52,7 +51,7 @@ func TestReceiverPeerOperationClosedStateIsInert(t *testing.T) {
 }
 
 func TestReceiverPeerCancelReconcilesTombstonedWireSuppressionLocally(t *testing.T) {
-	fixture := newReceiverPeerTerminalFixture(t, 86)
+	fixture := newReceiverPeerTerminalFixture(t)
 	op := fixture.call.Operation()
 	cancelPendingCall(t, fixture.operation.rpc, fixture.call)
 	assertReceiverPeerTermination(t, fixture.operation, fixture.operation.Terminate(context.Background()),

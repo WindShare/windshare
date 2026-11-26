@@ -345,9 +345,7 @@ func newContinuationReplayFixtureWithOptions(
 	}
 	t.Cleanup(replacementEnvelope.Destroy)
 
-	rpc := NewRequests(
-		runtime, bytes.NewReader(bytes.Repeat([]byte{operationByte}, protocolsession.IdentityBytes)),
-	)
+	rpc := NewRequests(runtime)
 	operationID := protocolsession.OperationID(operationByte)
 	offer, err := protocolsession.NewMessage(protocolsession.MessagePeerOffer, &operationID, []byte{0xf6})
 	if err != nil {

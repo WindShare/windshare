@@ -17,7 +17,7 @@ func newReceiverPeerProtocolTraceFixture(t *testing.T) (receiverPeerTerminalFixt
 	runtime, _ := newUnstartedRuntimeWithContinuations(t, protocolsession.RoleReceiver,
 		protocolsession.OperationLimits{}, nil, continuationReplayClassifier{})
 	recorder := newProtocolTraceRecorder(runtime)
-	return openReceiverPeerTerminalFixture(t, runtime, 0xc8), recorder
+	return openReceiverPeerTerminalFixture(t, runtime), recorder
 }
 
 func assertReceiverPeerProtocolTrace(t *testing.T, fixture receiverPeerTerminalFixture, recorder *protocolTraceRecorder, stage sessionobs.ProtocolOperationStage, cause sessionobs.ProtocolOperationCause) {

@@ -58,7 +58,7 @@ func TestReceiverSemanticRegistryRejectsEveryAuthenticatedMalformedSenderControl
 func TestMalformedAuthenticatedFinalTerminatesBeforeOperationTransition(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
 	startReceiverPeerWriter(t, runtime)
-	rpc := newTestRequests(runtime, &deterministicReader{next: 71})
+	rpc := newTestRequests(runtime)
 	if err := rpc.Register(); err != nil {
 		t.Fatal(err)
 	}

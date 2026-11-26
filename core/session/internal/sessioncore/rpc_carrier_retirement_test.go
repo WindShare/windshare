@@ -26,7 +26,7 @@ func TestRPCPendingControlWakesWhenRequestCarrierRetires(t *testing.T) {
 				if _, err := runtime.lanes.add(session.LaneIdentity{ID: 2, Epoch: 1}, replacement, permissiveInboundAuthenticator(), false); err != nil {
 					t.Fatal(err)
 				}
-				rpc := NewRequests(runtime, &deterministicReader{next: 17})
+				rpc := NewRequests(runtime)
 				if err := rpc.Register(); err != nil {
 					t.Fatal(err)
 				}
@@ -66,7 +66,7 @@ func TestRPCUsesResponseAuthenticatedBeforeCarrierRetirement(t *testing.T) {
 		if _, err := runtime.lanes.add(session.LaneIdentity{ID: 2, Epoch: 1}, replacement, permissiveInboundAuthenticator(), false); err != nil {
 			t.Fatal(err)
 		}
-		rpc := NewRequests(runtime, &deterministicReader{next: 17})
+		rpc := NewRequests(runtime)
 		if err := rpc.Register(); err != nil {
 			t.Fatal(err)
 		}

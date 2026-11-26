@@ -1,7 +1,6 @@
 package receiversession
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"github.com/windshare/windshare/core/session"
@@ -75,7 +74,7 @@ func TestReceiverPeerTerminalConsequenceDominanceIsIndependentOfTransitionOrder(
 
 func TestReceiverPeerTerminalRaceRetainsAuthenticatedProtocolDiagnostic(t *testing.T) {
 	t.Run("local transition owns before remote failure", func(t *testing.T) {
-		fixture := newReceiverPeerTerminalFixture(t, 0xb1)
+		fixture := newReceiverPeerTerminalFixture(t)
 		operationID := fixture.operation.OperationID()
 		received := make(chan PeerReceiveResult, 1)
 		go func() { received <- fixture.operation.Receive(context.Background()) }()
@@ -141,7 +140,7 @@ func TestReceiverPeerTerminalRaceRetainsAuthenticatedProtocolDiagnostic(t *testi
 	})
 
 	t.Run("remote failure owns before local join", func(t *testing.T) {
-		fixture := newReceiverPeerTerminalFixture(t, 0xb2)
+		fixture := newReceiverPeerTerminalFixture(t)
 		operationID := fixture.operation.OperationID()
 		received := make(chan PeerReceiveResult, 1)
 		go func() { received <- fixture.operation.Receive(context.Background()) }()
@@ -203,7 +202,7 @@ func TestReceiverPeerTerminalRaceRetainsAuthenticatedProtocolDiagnostic(t *testi
 }
 
 func TestReceiverPeerPublishedTerminalOutcomeIsImmutable(t *testing.T) {
-	fixture := newReceiverPeerTerminalFixture(t, 0xba)
+	fixture := newReceiverPeerTerminalFixture(t)
 	fixture.operation.mu.Lock()
 	fixture.operation.receiving = true
 	fixture.operation.mu.Unlock()
@@ -251,7 +250,7 @@ func TestReceiverPeerPublishedTerminalOutcomeIsImmutable(t *testing.T) {
 }
 
 func TestReceiverPeerReceiveRetainsCancellationDiagnostics(t *testing.T) {
-	fixture := newReceiverPeerTerminalFixture(t, 0xb3)
+	fixture := newReceiverPeerTerminalFixture(t)
 	operationID := fixture.operation.OperationID()
 	op := fixture.call.Operation()
 	trackedRequests(fixture.operation.rpc).cancelErr = sessioncore.ErrLaneUnavailable
@@ -281,7 +280,7 @@ func TestReceiverPeerReceiveRetainsCancellationDiagnostics(t *testing.T) {
 }
 
 func TestReceiverPeerRuntimeShutdownOwnsTerminalOutcome(t *testing.T) {
-	fixture := newReceiverPeerTerminalFixture(t, 0xb4)
+	fixture := newReceiverPeerTerminalFixture(t)
 	operationID := fixture.operation.OperationID()
 	received := make(chan PeerReceiveResult, 1)
 	go func() { received <- fixture.operation.Receive(context.Background()) }()
@@ -305,7 +304,7 @@ func TestReceiverPeerRuntimeShutdownOwnsTerminalOutcome(t *testing.T) {
 
 func TestReceiverPeerRuntimeLifecycleOwnsBeforeDonePublication(t *testing.T) {
 	t.Run("receive observes call close inside finalization", func(t *testing.T) {
-		fixture := newReceiverPeerTerminalFixture(t, 0xb7)
+		fixture := newReceiverPeerTerminalFixture(t)
 		finalizerEntered := make(chan struct{})
 		releaseFinalizer := make(chan struct{})
 		released := false
@@ -360,7 +359,7 @@ func TestReceiverPeerRuntimeLifecycleOwnsBeforeDonePublication(t *testing.T) {
 	})
 
 	t.Run("receive retains simultaneous caller cancellation diagnostic", func(t *testing.T) {
-		fixture := newReceiverPeerTerminalFixture(t, 0xb9)
+		fixture := newReceiverPeerTerminalFixture(t)
 		finalizerEntered := make(chan struct{})
 		releaseFinalizer := make(chan struct{})
 		released := false
@@ -414,7 +413,7 @@ func TestReceiverPeerRuntimeLifecycleOwnsBeforeDonePublication(t *testing.T) {
 	})
 
 	t.Run("terminate observes lifecycle before finalizers close call", func(t *testing.T) {
-		fixture := newReceiverPeerTerminalFixture(t, 0xb8)
+		fixture := newReceiverPeerTerminalFixture(t)
 		finalizerEntered := make(chan struct{})
 		releaseFinalizer := make(chan struct{})
 		released := false
@@ -497,7 +496,7 @@ type receiverPeerTerminalFixture struct {
 	call      *sessioncore.Call
 }
 
-func newReceiverPeerTerminalFixture(t *testing.T, seed byte) receiverPeerTerminalFixture {
+func newReceiverPeerTerminalFixture(t *testing.T) receiverPeerTerminalFixture {
 	t.Helper()
 	runtime, _ := newUnstartedRuntimeWithContinuations(
 		t,
@@ -506,14 +505,14 @@ func newReceiverPeerTerminalFixture(t *testing.T, seed byte) receiverPeerTermina
 		nil,
 		continuationReplayClassifier{},
 	)
-	return openReceiverPeerTerminalFixture(t, runtime, seed)
+	return openReceiverPeerTerminalFixture(t, runtime)
 }
 
-func openReceiverPeerTerminalFixture(t *testing.T, runtime *sessioncore.Runtime, seed byte) receiverPeerTerminalFixture {
+func openReceiverPeerTerminalFixture(t *testing.T, runtime *sessioncore.Runtime) receiverPeerTerminalFixture {
 	t.Helper()
 	startReceiverPeerWriter(t, runtime)
 
-	rpc := newTestRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{seed}, protocolsession.IdentityBytes)))
+	rpc := newTestRequests(runtime)
 	if err := rpc.Register(); err != nil {
 		t.Fatal(err)
 	}
