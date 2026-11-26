@@ -2,6 +2,7 @@ package engine
 
 import (
 	"errors"
+	"net"
 	"net/url"
 	"strconv"
 	"time"
@@ -36,7 +37,7 @@ func (o RelayOrigin) Valid() bool {
 }
 
 func (o RelayOrigin) HostPort() string {
-	return o.Host + ":" + strconv.FormatUint(uint64(o.Port), 10)
+	return net.JoinHostPort(o.Host, strconv.FormatUint(uint64(o.Port), 10))
 }
 
 func (o RelayOrigin) diagnosticValue() diagnostics.Value {

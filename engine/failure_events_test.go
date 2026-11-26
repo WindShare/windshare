@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"net"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -295,6 +296,40 @@ func TestCloudPlaceholderFailurePreservesPathAndOmissionRecordRedactsNames(t *te
 	for _, want := range []string{`"cloud_placeholder"`, `"name_collision"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("diagnostic record missing reason %s: %s", want, body)
+		}
+	}
+}
+
+func TestRelayOriginHostPortFormatsIPv6WithBrackets(t *testing.T) {
+	cases := []struct {
+		raw          string
+		wantScheme   string
+		wantHost     string
+		wantPort     uint16
+		wantHostPort string
+	}{
+		{"https://relay.example:8443/path?secret=1", "wss", "relay.example", 8443, "relay.example:8443"},
+		{"http://127.0.0.1:8080/ws", "ws", "127.0.0.1", 8080, "127.0.0.1:8080"},
+		{"https://[::1]:8443/path?secret=1", "wss", "::1", 8443, "[::1]:8443"},
+		{"ws://[2001:db8::1]", "ws", "2001:db8::1", 80, "[2001:db8::1]:80"},
+	}
+	for _, tc := range cases {
+		origin, err := NormalizeRelayOrigin(tc.raw)
+		if err != nil {
+			t.Fatalf("NormalizeRelayOrigin(%q) error = %v", tc.raw, err)
+		}
+		if origin.Scheme != tc.wantScheme || origin.Host != tc.wantHost || origin.Port != tc.wantPort {
+			t.Fatalf("NormalizeRelayOrigin(%q) = %+v, want scheme=%q host=%q port=%d", tc.raw, origin, tc.wantScheme, tc.wantHost, tc.wantPort)
+		}
+		if got := origin.HostPort(); got != tc.wantHostPort {
+			t.Fatalf("NormalizeRelayOrigin(%q).HostPort() = %q, want %q", tc.raw, got, tc.wantHostPort)
+		}
+		host, port, err := net.SplitHostPort(origin.HostPort())
+		if err != nil || host != tc.wantHost || port != strconv.FormatUint(uint64(tc.wantPort), 10) {
+			t.Fatalf("SplitHostPort(%q) = (%q, %q, %v), want (%q, %d, nil)", origin.HostPort(), host, port, err, tc.wantHost, tc.wantPort)
+		}
+		if gotHost := origin.diagnosticValue().Get("host").Text(); gotHost != tc.wantHost {
+			t.Fatalf("diagnosticValue().host = %q, want %q", gotHost, tc.wantHost)
 		}
 	}
 }
