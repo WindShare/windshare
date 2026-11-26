@@ -375,7 +375,8 @@ Implementation status (2026-11-21): implemented and archived in
 
 Adding a server takes one command and one approval.
 
-See [P3 implementation plan](p3-console-onboarding-fleet-automation.md).
+Implementation status (2026-11-26): implemented and archived in
+[P3 implementation plan](../../.archive/2026.11.26/p3-console-onboarding-fleet-automation.md).
 
 ### P4 — Community nodes
 

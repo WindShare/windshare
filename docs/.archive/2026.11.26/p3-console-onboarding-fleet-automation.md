@@ -1,6 +1,6 @@
 # P3 — Console onboarding and fleet operations
 
-Part of the [Global Network Plan](global-network.md#6-phases).
+Part of the [Global Network Plan](../../plans/global-service/global-network.md#6-phases).
 
 ## Enroll and publish
 
