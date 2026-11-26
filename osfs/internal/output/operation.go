@@ -471,7 +471,25 @@ func (op *Operation) RecordShareStopped(ctx context.Context) error {
 	if op.journal.meta().Lifecycle == journalLifecycleStopped {
 		return nil
 	}
-	return op.journal.recordLifecycle(journalLifecycleStopped, AttentionNone)
+	if err := op.journal.recordLifecycle(journalLifecycleStopped, AttentionNone); err != nil {
+		nativeClass, _ := ClassifyNativeError(err)
+		emitTrace(op.authority.diagnostics, traceEvent{
+			component:    "session",
+			operation:    "record_share_stopped",
+			decision:     "failed",
+			failed:       true,
+			failureStage: FailureDurability,
+			nativeClass:  nativeClass,
+			bindingID:    op.authority.bindingID,
+			operationID:  op.intent.OperationID(),
+			intentDigest: op.intent.Digest(),
+		})
+		return DiagnoseFailure(
+			FailureDurability,
+			wrapOutputFaultError(transferfault.OutputStateIO, "record share stopped", err),
+		)
+	}
+	return nil
 }
 
 func (op *Operation) Discard(ctx context.Context) error {

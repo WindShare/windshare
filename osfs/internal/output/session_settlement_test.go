@@ -5,7 +5,10 @@ package output
 import (
 	"context"
 	"errors"
+	"io"
 	"io/fs"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/windshare/windshare/core/diagnostics"
@@ -16,11 +19,15 @@ import (
 
 type settlementFaultJournalFile struct {
 	base      journalFile
+	writeHook func(base journalFile, b []byte, off int64) (int, error)
 	syncHook  func(base journalFile) error
 	closeHook func(base journalFile) error
 }
 
 func (f *settlementFaultJournalFile) WriteAt(b []byte, off int64) (int, error) {
+	if f.writeHook != nil {
+		return f.writeHook(f.base, b, off)
+	}
 	return f.base.WriteAt(b, off)
 }
 
@@ -365,4 +372,143 @@ func TestFreezeFailurePreservesNestedCloseCausesAndPrimaryStage(t *testing.T) {
 	if !errors.Is(chainedStage, leaseCloseCause) || !errors.Is(chainedStage, rootCloseCause) {
 		t.Fatalf("chained close stage = %v, want both close causes", chainedStage)
 	}
+}
+
+func TestRecordShareStoppedFailureWrapsOutputStateIOHidesHostPathAndEmitsTrace(t *testing.T) {
+	t.Run("sync path error is diagnosed without leaking host path", func(t *testing.T) {
+		ctx := context.Background()
+		root := t.TempDir()
+		stream, err := diagnostics.NewStream(32, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		auth, op, session, intent, _ := openSettlementTestSession(t, root, 0x81, stream.Sink())
+		if _, err := session.PauseTree(ctx); err != nil {
+			_ = auth.Close()
+			t.Fatal(err)
+		}
+
+		secretPath := filepath.Join(root, "secret-host-dir", journalFileName)
+		syncErr := &fs.PathError{Op: "sync", Path: secretPath, Err: fs.ErrPermission}
+		wrapper := &settlementFaultJournalFile{
+			base:     op.journal.file,
+			syncHook: func(journalFile) error { return syncErr },
+		}
+		op.journal.mu.Lock()
+		op.journal.file = wrapper
+		op.journal.mu.Unlock()
+		t.Cleanup(func() {
+			wrapper.syncHook = nil
+			_ = auth.Close()
+		})
+
+		stopErr := op.RecordShareStopped(ctx)
+		assertOutputStateIODiagnostic(t, stopErr, FailureDurability, syncErr)
+		diag, _ := DiagnosticFor(stopErr)
+		if diag.NativeErrorClass != NativeErrorAccessDenied {
+			t.Fatalf("NativeErrorClass = %v, want %v", diag.NativeErrorClass, NativeErrorAccessDenied)
+		}
+		for _, leaked := range []string{root, "secret-host-dir", journalFileName} {
+			if strings.Contains(stopErr.Error(), leaked) {
+				t.Fatalf("RecordShareStopped().Error() leaked %q: %q", leaked, stopErr.Error())
+			}
+		}
+
+		stream.Close()
+		wantOpID := diagnostics.Identity(intent.OperationID().Bytes()).Text()
+		wantIntent := diagnostics.Identity(intent.Digest().Bytes()).Text()
+		traces := 0
+		for rec := range stream.Records() {
+			if rec.Name() != "filesystem_output" || rec.Payload().Get("runtime_operation").Text() != "record_share_stopped" {
+				continue
+			}
+			traces++
+			p := rec.Payload()
+			if p.Get("runtime_decision").Text() != "failed" || !p.Get("failed").Bool() {
+				t.Fatalf("record_share_stopped trace = %v, want failed decision", p)
+			}
+			if p.Get("failure_stage").Text() != FailureDurability.String() {
+				t.Fatalf("failure_stage = %q, want %q", p.Get("failure_stage").Text(), FailureDurability.String())
+			}
+			if p.Get("native_error_class").Text() != NativeErrorAccessDenied.String() {
+				t.Fatalf("native_error_class = %q, want %q", p.Get("native_error_class").Text(), NativeErrorAccessDenied.String())
+			}
+			corr := rec.Correlation()
+			if corr.Get("destination_binding_id").Text() == "" ||
+				corr.Get("receive_operation_id").Text() != wantOpID ||
+				corr.Get("receive_intent_digest").Text() != wantIntent {
+				t.Fatalf("record_share_stopped correlation = %v, want bindingID + op=%q + intent=%q", corr, wantOpID, wantIntent)
+			}
+		}
+		if traces != 1 {
+			t.Fatalf("record_share_stopped trace count = %d, want 1", traces)
+		}
+	})
+
+	t.Run("non-path write error is diagnosed and remains retryable after rollback", func(t *testing.T) {
+		ctx := context.Background()
+		root := t.TempDir()
+		auth, op, session, _, _ := openSettlementTestSession(t, root, 0x85, diagnostics.Sink{})
+		if _, err := session.PauseTree(ctx); err != nil {
+			_ = auth.Close()
+			t.Fatal(err)
+		}
+
+		wrapper := &settlementFaultJournalFile{
+			base: op.journal.file,
+			writeHook: func(journalFile, []byte, int64) (int, error) {
+				return 0, io.ErrShortWrite
+			},
+		}
+		op.journal.mu.Lock()
+		op.journal.file = wrapper
+		op.journal.mu.Unlock()
+		t.Cleanup(func() {
+			wrapper.writeHook = nil
+			_ = auth.Close()
+		})
+
+		stopErr := op.RecordShareStopped(ctx)
+		assertOutputStateIODiagnostic(t, stopErr, FailureDurability, io.ErrShortWrite)
+		if diag, _ := DiagnosticFor(stopErr); diag.NativeErrorClass != 0 {
+			t.Fatalf("NativeErrorClass for io.ErrShortWrite = %v, want 0", diag.NativeErrorClass)
+		}
+		if strings.Contains(stopErr.Error(), root) {
+			t.Fatalf("RecordShareStopped().Error() leaked root %q: %q", root, stopErr.Error())
+		}
+
+		wrapper.writeHook = nil
+		if err := op.RecordShareStopped(ctx); err != nil {
+			t.Fatalf("retry RecordShareStopped() after transient write failure = %v, want nil", err)
+		}
+		if err := op.RecordShareStopped(ctx); err != nil {
+			t.Fatalf("idempotent RecordShareStopped() = %v, want nil", err)
+		}
+	})
+
+	t.Run("canceled context and invalid binding stay unwrapped", func(t *testing.T) {
+		ctx := context.Background()
+		root := t.TempDir()
+		auth, op, session, _, _ := openSettlementTestSession(t, root, 0x89, diagnostics.Sink{})
+		t.Cleanup(func() { _ = auth.Close() })
+
+		// While a session is open, RecordShareStopped must reject the binding
+		// without fabricating a durability diagnostic.
+		if err := op.RecordShareStopped(ctx); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
+			t.Fatalf("RecordShareStopped on open session = %v, want ErrInvalidOutputBinding", err)
+		} else if _, ok := DiagnosticFor(err); ok {
+			t.Fatalf("binding guard unexpectedly wrapped with DiagnosticFor: %v", err)
+		}
+
+		if _, err := session.PauseTree(ctx); err != nil {
+			t.Fatal(err)
+		}
+		canceled, cancel := context.WithCancel(ctx)
+		cancel()
+		if err := op.RecordShareStopped(canceled); !errors.Is(err, context.Canceled) {
+			t.Fatalf("RecordShareStopped(canceled) = %v, want context.Canceled", err)
+		} else if _, ok := DiagnosticFor(err); ok {
+			t.Fatalf("canceled RecordShareStopped unexpectedly wrapped with DiagnosticFor: %v", err)
+		}
+	})
 }

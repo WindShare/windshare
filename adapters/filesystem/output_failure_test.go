@@ -1,8 +1,11 @@
 package filesystem
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/windshare/windshare/engine/output"
@@ -76,5 +79,30 @@ func TestSealedFailurePreservesAdapterDetailWithoutLeakingForgedWrappers(t *test
 	}
 	if _, ok := SealOutputFailure(OutputFailureDiagnostic{}); ok {
 		t.Fatal("zero diagnostic was sealed")
+	}
+}
+
+func TestSealOutputErrorSealsNativeDiagnosticWithoutLeakingHostPath(t *testing.T) {
+	missingRoot := filepath.Join(t.TempDir(), "secret-host-dir", "missing")
+	authority, err := FilesystemOutput{RootPath: missingRoot, CreateRoot: false}.NewOutputAuthority(output.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = authority.Close() })
+
+	bindErr := authority.BindDestination(context.Background())
+	if bindErr == nil {
+		t.Fatal("expected BindDestination on missing root to fail")
+	}
+	if strings.Contains(bindErr.Error(), "secret-host-dir") || strings.Contains(bindErr.Error(), missingRoot) {
+		t.Fatalf("sealed error text leaked host path: %q", bindErr.Error())
+	}
+	diag, ok := output.DiagnosticFor(bindErr)
+	if !ok || diag.Stage != output.FailureDestinationBinding || !diag.Fault.Valid() {
+		t.Fatalf("output.DiagnosticFor = (%+v, %t), want destination_binding with valid fault", diag, ok)
+	}
+	detail, ok := FailureDetailFor(bindErr)
+	if !ok || detail.Stage != output.FailureDestinationBinding || detail.NativeErrorClass != NativeErrorNotFound {
+		t.Fatalf("FailureDetailFor = (%+v, %t), want destination_binding/not_found", detail, ok)
 	}
 }
