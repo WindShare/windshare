@@ -234,6 +234,39 @@ func (table *operationTable) retirePeerAttemptLocked(record *operationRecord) {
 	}
 }
 
+// retirePreemptedPeerAttemptLocked records a PeerOffer that arrived only after
+// its operation was already preemptively cancelled. Unlike active admission, a
+// delayed offer from a failed lane may arrive after a successor AttemptSequence
+// has already advanced issuedThrough on the same PeerSlot; only reuse of an
+// active or current high-water sequence violates slot monotonicity.
+func (table *operationTable) retirePreemptedPeerAttemptLocked(record *operationRecord) error {
+	binding, ok := operationPeerAttempt(record)
+	if !ok {
+		return nil
+	}
+	if !binding.Valid() {
+		return protocolsession.ErrContinuationContract
+	}
+	slot := table.peerSlots[binding.PeerSlot]
+	if slot == nil {
+		slot = &retiredPeerSlot{active: make(map[uint64]struct{})}
+		table.peerSlots[binding.PeerSlot] = slot
+	}
+	if _, active := slot.active[binding.AttemptSequence]; active {
+		return protocolsession.ErrOperationIDReused
+	}
+	if binding.AttemptSequence == slot.issuedThrough {
+		return protocolsession.ErrOperationIDReused
+	}
+	if binding.AttemptSequence > slot.issuedThrough {
+		slot.issuedThrough = binding.AttemptSequence
+	}
+	if binding.AttemptSequence > slot.retiredThrough {
+		slot.retiredThrough = binding.AttemptSequence
+	}
+	return nil
+}
+
 func (table *operationTable) rollbackPeerAttemptLocked(record *operationRecord) {
 	binding, ok := operationPeerAttempt(record)
 	if !ok {

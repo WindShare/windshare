@@ -74,6 +74,15 @@ func (call *Call) ContinuationLimit() (int, bool) {
 	return call.maximumContinuations, call.hasContinuationLimit
 }
 
+func (call *Call) currentLane() session.LaneIdentity {
+	if call == nil {
+		return session.LaneIdentity{}
+	}
+	call.laneMu.Lock()
+	defer call.laneMu.Unlock()
+	return call.lane
+}
+
 func (call *Call) LastResponseLane() session.LaneIdentity {
 	call.stateMu.Lock()
 	defer call.stateMu.Unlock()

@@ -579,6 +579,91 @@ func TestRetiredPeerContinuationSurvivesOperationGC(t *testing.T) {
 	}
 }
 
+func TestPreemptivelyCancelledSupersededPeerOfferDropsWithoutSessionFailure(t *testing.T) {
+	table, err := newOperationTable(
+		protocolsession.OperationLimits{MaxActive: 4, MaxRecentTombstones: 8},
+		peerSlotTestClassifier{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lane := session.LaneIdentity{ID: 1, Epoch: 0}
+	offer := func(id protocolsession.OperationID, slot uint8, seq uint64) protocolsession.Message {
+		return operationMessageForTest(t, protocolsession.MessagePeerOffer, id, encodeTestPeerBindingBody(t, protocolsession.PeerAttemptBinding{
+			PeerSlot: slot, PeerPathID: [16]byte{slot}, AttemptID: [16]byte{byte(seq)}, AttemptSequence: seq,
+		}))
+	}
+	cand := func(id protocolsession.OperationID, slot uint8, seq uint64) protocolsession.Message {
+		return operationMessageForTest(t, protocolsession.MessagePeerCandidate, id, encodeTestPeerBindingBody(t, protocolsession.PeerAttemptBinding{
+			PeerSlot: slot, PeerPathID: [16]byte{slot}, AttemptID: [16]byte{byte(seq)}, AttemptSequence: seq,
+		}))
+	}
+	cancel := func(id protocolsession.OperationID) protocolsession.Message {
+		return operationMessageForTest(t, protocolsession.MessageCancel, id, []byte{0xa0})
+	}
+
+	// Preemptive cancel for op 10 (slot 1, seq 1) arrives before op 10's delayed offer;
+	// successor op 11 (slot 1, seq 2) advances issuedThrough on slot 1 first.
+	if adm, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, cancel(10)); err != nil || adm.disposition != protocolsession.OperationDeliver {
+		t.Fatalf("preemptive cancel op 10 = (%+v, %v)", adm, err)
+	}
+	if adm, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, offer(11, 1, 2)); err != nil || adm.disposition != protocolsession.OperationDeliver {
+		t.Fatalf("successor offer op 11 = (%+v, %v)", adm, err)
+	}
+
+	// Delayed offer for preemptively cancelled op 10 must bind and drop cleanly without
+	// terminating the session or unprotecting active op 11.
+	if adm, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, offer(10, 1, 1)); err != nil || adm.disposition != protocolsession.OperationDrop {
+		t.Fatalf("delayed preempted offer op 10 = (%+v, %v), want (OperationDrop, nil)", adm, err)
+	}
+	if adm, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, offer(10, 1, 1)); err != nil || adm.disposition != protocolsession.OperationDrop {
+		t.Fatalf("duplicate delayed preempted offer op 10 = (%+v, %v)", adm, err)
+	}
+	if adm, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, cand(10, 1, 1)); err != nil || adm.disposition != protocolsession.OperationDrop {
+		t.Fatalf("late candidate for bound preempted op 10 = (%+v, %v)", adm, err)
+	}
+	if adm, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, cand(11, 1, 2)); err != nil || adm.disposition != protocolsession.OperationDeliver {
+		t.Fatalf("active successor candidate op 11 = (%+v, %v)", adm, err)
+	}
+	if _, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, cand(99, 1, 2)); !errors.Is(err, protocolsession.ErrUnknownOperation) {
+		t.Fatalf("wrong-ID candidate for active seq 2 err = %v, want ErrUnknownOperation", err)
+	}
+
+	// Reusing an active AttemptSequence on a distinct preemptively cancelled op must still fail.
+	if adm, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, cancel(20)); err != nil || adm.disposition != protocolsession.OperationDeliver {
+		t.Fatalf("preemptive cancel op 20 = (%+v, %v)", adm, err)
+	}
+	if _, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, offer(20, 1, 2)); !errors.Is(err, protocolsession.ErrOperationIDReused) {
+		t.Fatalf("preempted offer reusing active seq 2 err = %v, want ErrOperationIDReused", err)
+	}
+
+	// Reusing the current high-water AttemptSequence even after retirement must still fail.
+	if _, err := table.CancelOperation(11); err != nil {
+		t.Fatal(err)
+	}
+	if adm, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, cancel(21)); err != nil || adm.disposition != protocolsession.OperationDeliver {
+		t.Fatalf("preemptive cancel op 21 = (%+v, %v)", adm, err)
+	}
+	if _, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, offer(21, 1, 2)); !errors.Is(err, protocolsession.ErrOperationIDReused) {
+		t.Fatalf("preempted offer reusing high-water seq 2 err = %v, want ErrOperationIDReused", err)
+	}
+
+	// A preempted offer arriving before any successor still retires its sequence so a
+	// later offer reusing seq 1 is suppressed rather than admitted, while seq 2 succeeds.
+	if adm, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, cancel(30)); err != nil || adm.disposition != protocolsession.OperationDeliver {
+		t.Fatalf("preemptive cancel op 30 = (%+v, %v)", adm, err)
+	}
+	if adm, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, offer(30, 2, 1)); err != nil || adm.disposition != protocolsession.OperationDrop {
+		t.Fatalf("preempted first offer op 30 = (%+v, %v)", adm, err)
+	}
+	if adm, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, offer(31, 2, 1)); err != nil || adm.disposition != protocolsession.OperationDrop || table.ActiveCount() != 0 {
+		t.Fatalf("reused seq 1 after preempted op 30 = (%+v, %v, active=%d), want (OperationDrop, nil, 0)", adm, err, table.ActiveCount())
+	}
+	if adm, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, offer(32, 2, 2)); err != nil || adm.disposition != protocolsession.OperationDeliver || table.ActiveCount() != 1 {
+		t.Fatalf("fresh seq 2 after preempted op 30 = (%+v, %v, active=%d), want (OperationDeliver, nil, 1)", adm, err, table.ActiveCount())
+	}
+}
+
 func TestBelowReplayWindowPeerCandidateDropsValidAndPreservesContracts(t *testing.T) {
 	table, err := newOperationTable(
 		protocolsession.OperationLimits{MaxActive: 4, MaxRecentTombstones: 4},

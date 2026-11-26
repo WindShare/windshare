@@ -100,10 +100,9 @@ func (table *operationTable) bindPreemptivelyCancelledRequestLocked(
 		tombstone.record.recordSenderViolationLocked(direction, protocolsession.AuthenticatedOperationViolationContinuationContract)
 		return protocolsession.OperationDrop, protocolsession.ErrConflictingContinuation
 	}
-	if err := table.admitPeerAttemptLocked(candidate); err != nil {
+	if err := table.retirePreemptedPeerAttemptLocked(candidate); err != nil {
 		return protocolsession.OperationDrop, err
 	}
-	table.retirePeerAttemptLocked(candidate)
 	tombstone.record.requestKind = candidate.requestKind
 	tombstone.record.requestFingerprint = candidate.requestFingerprint
 	tombstone.record.continuations = candidate.continuations

@@ -205,6 +205,87 @@ func TestAmbiguousPeerOfferReplaySurvivesRepeatedLaneFailure(t *testing.T) {
 	assertSiblingSessionHealthy(t, fixture, handlers)
 }
 
+func TestAmbiguousPeerOfferCancelOnReplacementLaneDoesNotReplayOffer(t *testing.T) {
+	fixture := newVerticalFixture(t)
+	handlers := make(chan *peerReplayHandler, 4)
+	fixture.senderConfig.Peers = peerReplayHandlerFactory(handlers, nil)
+	fixture.rebuildSender(t)
+
+	initialSender, initialReceiverBase := newObservedChannelPair()
+	initialReceiver := &ambiguousObservedChannel{observedMemoryChannel: initialReceiverBase}
+	sender, receiver := connectPeerReplayPair(
+		t, fixture.senderFactory, fixture.receiverFactory, initialSender, initialReceiver,
+	)
+	defer sender.Close()
+	defer receiver.Close()
+	handler := <-handlers
+
+	secondary, _, secondaryReceiver, _ := attachObservedLane(
+		t, fixture.senderFactory, receiver, 0,
+	)
+	initialDone, ok := receiver.core.LaneDone(runtimeIdentity(receiver))
+	if !ok {
+		t.Fatal("initial receiver lane missing")
+	}
+	secondarySendsBefore := secondaryReceiver.sends.Load()
+	initialReceiver.failNextSend(
+		false, errors.New("peer offer transport acceptance is ambiguous"),
+	)
+
+	offer := peerReplayBody(t, "offer-cancelled-before-migration")
+	call, err := trackedRequests(receiver.rpc).BeginOn(
+		context.Background(), new(runtimeIdentity(receiver)), protocolsession.MessagePeerOffer, offer,
+	)
+	if err != nil {
+		t.Fatalf("ambiguous peer offer was rejected locally: %v", err)
+	}
+	operation := &PeerOperation{
+		rpc: receiver.rpc, call: call, token: new(receiverPeerOperationToken),
+	}
+	select {
+	case <-initialDone:
+	case <-time.After(time.Second):
+		t.Fatal("ambiguous initial lane did not drain")
+	}
+
+	assertReceiverPeerTermination(
+		t,
+		operation,
+		operation.Terminate(context.Background()),
+		PeerTerminalAuthorityLocal,
+		PeerProvenanceLocalExplicitStop,
+		PeerTerminalOperationOnly,
+		PeerProvenanceLocalExplicitStop,
+	)
+	waitSessionCondition(t, "replacement lane transmitted cancel frame", func() bool {
+		return secondaryReceiver.sends.Load() > secondarySendsBefore
+	})
+	// Round-trip a fresh control operation on the same replacement lane so any
+	// mistakenly replayed PeerOffer queued ahead of CANCEL would already have
+	// been dispatched to handler.events before this returns.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err := receiver.RequestLane(ctx, 0); err != nil {
+		t.Fatalf("follow-up lane request after preemptive cancel: %v", err)
+	}
+	// Expect exactly 2 frames on the replacement lane: 1 CANCEL + 1 RequestLane.
+	if got := secondaryReceiver.sends.Load() - secondarySendsBefore; got != 2 {
+		t.Fatalf("replacement lane sent %d frames; want only CANCEL and follow-up RequestLane (no replayed offer)", got)
+	}
+	select {
+	case event := <-handler.events:
+		t.Fatalf("cancelled offer was replayed and dispatched to sender handler: kind=%d op=%x", event.kind, event.operationID)
+	default:
+	}
+	if _, ok := receiver.core.LaneDone(secondary); !ok {
+		t.Fatal("replacement receiver lane missing")
+	}
+	if receiver.Err() != nil || sender.Err() != nil {
+		t.Fatalf("preemptive cancel terminated healthy session receiver=%v sender=%v", receiver.Err(), sender.Err())
+	}
+	assertRequestsRetired(t, receiver.rpc)
+}
+
 func TestAmbiguousPeerAnswerExactReplaySurvivesLaneMigration(t *testing.T) {
 	synctest.Test(t, testAmbiguousPeerAnswerExactReplaySurvivesLaneMigration)
 }

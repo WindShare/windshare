@@ -12,6 +12,7 @@ import (
 
 	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -730,6 +731,111 @@ func TestRPCContinuationCancelInFlightPreAcceptanceFailureReleasesPin(t *testing
 			}
 		})
 	}
+}
+
+func TestRPCCancelOnReplacementLaneDoesNotReplayCancelledRequest(t *testing.T) {
+	cancelBody, err := contentflow.EncodeCancelReason(contentflow.CancelReasonOutputAbort)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertSingleCancelOnly := func(t *testing.T, fixture *continuationReplayFixture) {
+		t.Helper()
+		select {
+		case frame := <-fixture.replacementPeer.Recv():
+			opened, openErr := fixture.replacementEnvelope.Open(frame)
+			if openErr != nil {
+				t.Fatalf("open replacement cancel frame: %v", openErr)
+			}
+			msg, decErr := protocolsession.DecodeMessage(opened.Plaintext)
+			if decErr != nil {
+				t.Fatalf("decode replacement cancel frame: %v", decErr)
+			}
+			opID, ok := msg.OperationID()
+			if !ok || opID != fixture.call.id || msg.Kind() != protocolsession.MessageCancel {
+				t.Fatalf("replacement frame = (kind=%d, op=%d), want (MessageCancel, %d)", msg.Kind(), opID, fixture.call.id)
+			}
+		case <-time.After(continuationReplayTestTimeout):
+			t.Fatal("replacement lane did not transmit MessageCancel")
+		}
+		if got := fixture.replacementChannel.sends.Load(); got != 1 {
+			t.Fatalf("replacement lane sent %d frames; want only MessageCancel without request replay", got)
+		}
+		if lane := fixture.call.currentLane(); lane != fixture.runtime.initial {
+			t.Fatalf("best-effort cancel overwrote call.lane = %+v, want %+v", lane, fixture.runtime.initial)
+		}
+	}
+
+	t.Run("CancelAndEnd after preferred lane stopped", func(t *testing.T) {
+		fixture := newContinuationReplayFixture(t, 111)
+		stopWriterBeforeAdmission(t, fixture.preferred.writer)
+		startContinuationReplayWriter(t, fixture.replacement.writer)
+
+		if cancelErr := fixture.rpc.CancelAndEnd(fixture.call, contentflow.CancelReasonOutputAbort); cancelErr != nil {
+			t.Fatalf("CancelAndEnd: %v", cancelErr)
+		}
+		assertSingleCancelOnly(t, fixture)
+	})
+
+	t.Run("SendContinuation MessageCancel after preferred lane closing", func(t *testing.T) {
+		fixture := newContinuationReplayFixture(t, 112)
+		fixture.runtime.lanes.markSelectedClosing(fixture.preferred)
+		startContinuationReplayWriter(t, fixture.replacement.writer)
+
+		disposition, sendErr := fixture.rpc.SendContinuation(
+			context.Background(), fixture.call, protocolsession.MessageCancel, cancelBody,
+		)
+		if sendErr != nil || disposition != protocolsession.OperationDeliver {
+			t.Fatalf("SendContinuation(MessageCancel) = (%d, %v), want (OperationDeliver, nil)", disposition, sendErr)
+		}
+		assertSingleCancelOnly(t, fixture)
+	})
+
+	t.Run("replacement lane with single control queue slot left", func(t *testing.T) {
+		fixture := newContinuationReplayFixture(t, 113)
+		fixture.runtime.lanes.markSelectedClosing(fixture.preferred)
+
+		fillID := protocolsession.OperationID(900)
+		filler, fillErr := protocolsession.NewMessage(protocolsession.MessageListChildren, &fillID, []byte{0xa0})
+		if fillErr != nil {
+			t.Fatal(fillErr)
+		}
+		for i := range protocolsession.ControlQueueFrameLimit - 1 {
+			if eqErr := fixture.replacement.writer.EnqueueControl(filler, nil); eqErr != nil {
+				t.Fatalf("fill control queue slot %d: %v", i, eqErr)
+			}
+		}
+
+		if cancelErr := fixture.rpc.CancelAndEnd(fixture.call, contentflow.CancelReasonOutputAbort); cancelErr != nil {
+			t.Fatalf("CancelAndEnd with 1 queue slot left: %v", cancelErr)
+		}
+		startContinuationReplayWriter(t, fixture.replacement.writer)
+
+		var lastMsg protocolsession.Message
+		for i := range protocolsession.ControlQueueFrameLimit {
+			select {
+			case frame := <-fixture.replacementPeer.Recv():
+				opened, openErr := fixture.replacementEnvelope.Open(frame)
+				if openErr != nil {
+					t.Fatalf("open frame %d: %v", i, openErr)
+				}
+				msg, decErr := protocolsession.DecodeMessage(opened.Plaintext)
+				if decErr != nil {
+					t.Fatalf("decode frame %d: %v", i, decErr)
+				}
+				if opID, ok := msg.OperationID(); ok && opID == fixture.call.id && msg.Kind() != protocolsession.MessageCancel {
+					t.Fatalf("cancelled request was replayed at frame %d: kind=%d", i, msg.Kind())
+				}
+				lastMsg = msg
+			case <-time.After(continuationReplayTestTimeout):
+				t.Fatalf("timed out draining frame %d", i)
+			}
+		}
+		opID, ok := lastMsg.OperationID()
+		if !ok || opID != fixture.call.id || lastMsg.Kind() != protocolsession.MessageCancel {
+			t.Fatalf("final queued slot = (kind=%d, op=%d), want (MessageCancel, %d)", lastMsg.Kind(), opID, fixture.call.id)
+		}
+	})
 }
 
 func startContinuationReplayWriter(t *testing.T, writer *laneWriter) {

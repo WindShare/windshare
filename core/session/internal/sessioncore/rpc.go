@@ -578,9 +578,21 @@ func (client *Requests) admitCancellation(
 	return reconcileErr
 }
 
+func (client *Requests) cancelLane(call *Call) (selectedLane, error) {
+	preferred := call.currentLane()
+	selected, err := client.runtime.lanes.selectLane(&preferred)
+	if err == nil || errors.Is(err, session.ErrRuntimeClosed) {
+		return selected, err
+	}
+	return client.runtime.lanes.selectLane(nil)
+}
+
 func (client *Requests) enqueueBestEffortCancel(call *Call, message protocolsession.Message) {
+	// CANCEL is a preemptive termination signal; never route it through
+	// continuationLane, which would replay an already-cancelled original request
+	// onto a replacement lane and overwrite call.lane for post-mortem tracing.
 	for attempt := range 2 {
-		selected, laneErr := client.continuationLane(call)
+		selected, laneErr := client.cancelLane(call)
 		if laneErr != nil {
 			return
 		}
