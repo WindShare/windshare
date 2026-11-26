@@ -53,6 +53,13 @@ func (lanes *runtimeLanes) retireIfCovered(identity session.LaneIdentity, succes
 		lanes.mu.Unlock()
 		return true
 	}
+	// Terminal fanout owns the remaining lifetime of active lanes; replacement
+	// handoff must never detach a lane actively delivering or awaiting SessionTerminal.
+	if (lane.writer != nil && lane.writer.DeliveringTerminal()) ||
+		(lanes.terminalFanout && lane.activeLocked()) {
+		lanes.mu.Unlock()
+		return false
+	}
 	if lane.usableLocked() && !oldClosed && !covered {
 		lanes.mu.Unlock()
 		return false

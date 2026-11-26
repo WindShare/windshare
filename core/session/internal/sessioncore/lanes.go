@@ -118,6 +118,7 @@ type runtimeLanes struct {
 	logicalOrder    []uint32
 	nextSlot        uint64
 	started         bool
+	terminalFanout  bool
 	stopping        bool
 	wait            sync.WaitGroup
 	onDetach        func(session.LaneIdentity)
@@ -163,6 +164,8 @@ func (lanes *runtimeLanes) addWithAdmission(
 	var rejection error
 	switch {
 	case lanes.stopping:
+		rejection = session.ErrRuntimeClosed
+	case !initial && lanes.terminalFanout:
 		rejection = session.ErrRuntimeClosed
 	case !initial && !lanes.hasUsableLocked():
 		rejection = session.ErrRuntimeClosed
@@ -684,6 +687,23 @@ func (lanes *runtimeLanes) acceptTerminal() error {
 func (lanes *runtimeLanes) snapshot() []selectedLane {
 	lanes.mu.Lock()
 	defer lanes.mu.Unlock()
+	return lanes.snapshotLocked()
+}
+
+// beginTerminalFanout atomically snapshots every usable lane and seals
+// non-initial lane admission so a concurrent replacement cannot attach without
+// receiving SessionTerminal or serve as an uncovered successor.
+func (lanes *runtimeLanes) beginTerminalFanout() []selectedLane {
+	lanes.mu.Lock()
+	defer lanes.mu.Unlock()
+	result := lanes.snapshotLocked()
+	if len(result) > 0 && lanes.runtime != nil && lanes.runtime.role == protocolsession.RoleSender {
+		lanes.terminalFanout = true
+	}
+	return result
+}
+
+func (lanes *runtimeLanes) snapshotLocked() []selectedLane {
 	result := make([]selectedLane, 0, len(lanes.active))
 	for _, id := range lanes.logicalOrder {
 		lane := lanes.active[id]

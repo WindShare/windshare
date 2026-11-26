@@ -541,3 +541,223 @@ func TestTerminalFanoutQueuedResponsePreservesLifetimeAcrossSiblingRetirement(t 
 		})
 	})
 }
+
+func TestTerminalFanoutProtectsDeliveringLaneFromReplacementRetirement(t *testing.T) {
+	body, err := protocolsession.EncodeSessionTerminal(protocolsession.SessionTerminal{
+		Code: session.SessionStoppedCode, Message: "stop",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminalMsg, err := protocolsession.NewMessage(protocolsession.MessageSessionTerminal, nil, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("retire without successor preserves sole terminal-delivering lane", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
+			outbound := NewResponses(runtime, ResponseConfig{})
+			soleChannel := &contextTerminalChannel{
+				memoryChannel:   newMemoryChannel(t),
+				terminalEntered: make(chan struct{}),
+				terminalRelease: make(chan struct{}),
+			}
+			soleLane, err := runtime.lanes.add(
+				session.LaneIdentity{ID: 2, Epoch: 1}, soleChannel, permissiveInboundAuthenticator(), false,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !runtime.DetachLane(runtime.initial) {
+				t.Fatal("initial lane did not detach")
+			}
+			runtime.Start()
+			defer runtime.Close()
+
+			terminalDone := make(chan error, 1)
+			go func() {
+				terminalDone <- outbound.SendTerminalAll(context.Background(), body)
+			}()
+			<-soleChannel.terminalEntered
+			synctest.Wait()
+
+			if runtime.RetireLaneIfCovered(soleLane.identity, nil) {
+				t.Fatal("RetireLaneIfCovered detached sole lane actively delivering SessionTerminal")
+			}
+			if err := runtime.Lifetime().Err(); err != nil {
+				t.Fatalf("lifetime canceled while sole lane delivered terminal: %v", err)
+			}
+			if err := runtime.InstallLane(
+				session.LaneIdentity{ID: 3, Epoch: 1}, newMemoryChannel(t),
+				permissiveInboundAuthenticator(), nil, nil,
+			); !errors.Is(err, session.ErrRuntimeClosed) {
+				t.Fatalf("InstallLane during terminal fanout err = %v, want ErrRuntimeClosed", err)
+			}
+
+			close(soleChannel.terminalRelease)
+			if err := <-terminalDone; err != nil {
+				t.Fatalf("terminal fanout failed: %v", err)
+			}
+			if soleChannel.delivered.Load() != 1 {
+				t.Fatalf("sole terminal deliveries = %d, want 1", soleChannel.delivered.Load())
+			}
+			<-soleLane.done
+			if runtime.Lifetime().Err() == nil {
+				t.Fatal("final terminal lane retirement did not cancel lifetime")
+			}
+		})
+	})
+
+	t.Run("retire with usable named successor preserves terminal-delivering lane", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
+			deliveringChannel := &contextTerminalChannel{
+				memoryChannel:   newMemoryChannel(t),
+				terminalEntered: make(chan struct{}),
+				terminalRelease: make(chan struct{}),
+			}
+			successorChannel := newMemoryChannel(t)
+			deliveringLane, err := runtime.lanes.add(
+				session.LaneIdentity{ID: 2, Epoch: 1}, deliveringChannel, permissiveInboundAuthenticator(), false,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			successorLane, err := runtime.lanes.add(
+				session.LaneIdentity{ID: 3, Epoch: 1}, successorChannel, permissiveInboundAuthenticator(), false,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !runtime.DetachLane(runtime.initial) {
+				t.Fatal("initial lane did not detach")
+			}
+			runtime.Start()
+			defer runtime.Close()
+
+			// Enqueue terminal on deliveringLane while successorLane remains usable,
+			// matching the mid-loop window during terminal fanout.
+			terminalSend, err := deliveringLane.writer.EnqueueTerminal(terminalMsg, runtime.lanes.acceptTerminal)
+			if err != nil {
+				t.Fatalf("enqueue terminal: %v", err)
+			}
+			<-deliveringChannel.terminalEntered
+			synctest.Wait()
+
+			if runtime.RetireLaneIfCovered(deliveringLane.identity, &successorLane.identity) {
+				t.Fatal("RetireLaneIfCovered detached terminal-delivering lane using a usable successor")
+			}
+			if err := runtime.Lifetime().Err(); err != nil {
+				t.Fatalf("lifetime canceled while delivering lane sent terminal: %v", err)
+			}
+
+			close(deliveringChannel.terminalRelease)
+			if res := terminalSend.Await(context.Background()); res.err != nil {
+				t.Fatalf("delivering lane terminal send failed: %v", res.err)
+			}
+			if deliveringChannel.delivered.Load() != 1 {
+				t.Fatalf("delivering terminal count = %d, want 1", deliveringChannel.delivered.Load())
+			}
+			<-deliveringLane.done
+		})
+	})
+
+	t.Run("terminal fanout seals late lane admission and blocks pre-enqueue replacement", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
+			outbound := NewResponses(runtime, ResponseConfig{})
+			laneAChannel := &contextTerminalChannel{
+				memoryChannel:   newMemoryChannel(t),
+				terminalEntered: make(chan struct{}),
+				terminalRelease: make(chan struct{}),
+			}
+			laneBChannel := &contextTerminalChannel{
+				memoryChannel: newMemoryChannel(t),
+			}
+			laneA, err := runtime.lanes.add(
+				session.LaneIdentity{ID: 2, Epoch: 1}, laneAChannel, permissiveInboundAuthenticator(), false,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			laneB, err := runtime.lanes.add(
+				session.LaneIdentity{ID: 3, Epoch: 1}, laneBChannel, permissiveInboundAuthenticator(), false,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !runtime.DetachLane(runtime.initial) {
+				t.Fatal("initial lane did not detach")
+			}
+			runtime.Start()
+			defer runtime.Close()
+
+			// Capture the exact window after beginTerminalFanout seals admission and
+			// before EnqueueTerminal runs on either lane.
+			recipients := runtime.lanes.beginTerminalFanout()
+			if len(recipients) != 2 {
+				t.Fatalf("fanout recipients = %d, want 2", len(recipients))
+			}
+			if _, err := runtime.lanes.add(
+				session.LaneIdentity{ID: 4, Epoch: 1}, newMemoryChannel(t),
+				permissiveInboundAuthenticator(), false,
+			); !errors.Is(err, session.ErrRuntimeClosed) {
+				t.Fatalf("late replacement add err = %v, want ErrRuntimeClosed", err)
+			}
+			if runtime.RetireLaneIfCovered(laneA.identity, &laneB.identity) {
+				t.Fatal("RetireLaneIfCovered detached snapshotted lane before EnqueueTerminal")
+			}
+
+			terminalDone := make(chan error, 1)
+			go func() {
+				terminalDone <- outbound.sendTerminalMessage(context.Background(), terminalMsg, recipients)
+			}()
+			<-laneAChannel.terminalEntered
+			<-laneB.done
+			synctest.Wait()
+
+			if err := runtime.Lifetime().Err(); err != nil {
+				t.Fatalf("fast sibling canceled lifetime while laneA delivered terminal: %v", err)
+			}
+			close(laneAChannel.terminalRelease)
+			if err := <-terminalDone; err != nil {
+				t.Fatalf("terminal fanout failed: %v", err)
+			}
+			if laneAChannel.delivered.Load() != 1 || laneBChannel.delivered.Load() != 1 {
+				t.Fatalf("deliveries laneA=%d laneB=%d, want 1/1", laneAChannel.delivered.Load(), laneBChannel.delivered.Load())
+			}
+			<-laneA.done
+		})
+	})
+
+	t.Run("invalid terminal body does not seal healthy lane admission or retirement", func(t *testing.T) {
+		runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
+		outbound := NewResponses(runtime, ResponseConfig{})
+		if err := outbound.SendTerminalAll(context.Background(), nil); err == nil {
+			t.Fatal("SendTerminalAll accepted invalid empty terminal body on healthy runtime")
+		}
+		replacement, err := runtime.lanes.add(
+			session.LaneIdentity{ID: runtime.initial.ID + 1, Epoch: 1}, newMemoryChannel(t),
+			permissiveInboundAuthenticator(), false,
+		)
+		if err != nil {
+			t.Fatalf("failed terminal validation sealed lane admission: %v", err)
+		}
+		if !runtime.RetireLaneIfCovered(runtime.initial, &replacement.identity) {
+			t.Fatal("failed terminal validation blocked healthy replacement retirement")
+		}
+	})
+
+	t.Run("stopped non-terminal writer still retires without spare", func(t *testing.T) {
+		runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
+		lane, err := runtime.lanes.selectLane(&runtime.initial)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stopWriterBeforeAdmission(t, lane.writer)
+		if !runtime.RetireLaneIfCovered(runtime.initial, nil) {
+			t.Fatal("stopped non-terminal writer failed to retire without a spare")
+		}
+	})
+}

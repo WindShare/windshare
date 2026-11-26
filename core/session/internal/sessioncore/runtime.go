@@ -387,7 +387,8 @@ func (runtime *Runtime) DetachLane(identity session.LaneIdentity) bool {
 
 // RetireLaneIfCovered permits reuse of an absent or draining predecessor.
 // Retiring a usable one requires another usable carrier. A named successor
-// must be selectable at the exact epoch in either case.
+// must be selectable at the exact epoch in either case. A lane actively
+// delivering SessionTerminal or participating in terminal fanout is never detached.
 func (runtime *Runtime) RetireLaneIfCovered(identity session.LaneIdentity, successor *session.LaneIdentity) bool {
 	return runtime.lanes.retireIfCovered(identity, successor)
 }

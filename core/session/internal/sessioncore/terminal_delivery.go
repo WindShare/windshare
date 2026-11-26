@@ -36,10 +36,17 @@ func (outbound *Responses) sendTerminalAll(
 	callerContext context.Context,
 	body []byte,
 ) error {
-	return outbound.sendTerminalRecipients(
+	message, err := protocolsession.NewMessage(protocolsession.MessageSessionTerminal, nil, body)
+	if err != nil {
+		if !outbound.runtime.lanes.hasUsable() {
+			return callerContext.Err()
+		}
+		return err
+	}
+	return outbound.sendTerminalMessage(
 		callerContext,
-		body,
-		outbound.runtime.lanes.snapshot(),
+		message,
+		outbound.runtime.lanes.beginTerminalFanout(),
 	)
 }
 
@@ -54,6 +61,17 @@ func (outbound *Responses) sendTerminalRecipients(
 	message, err := protocolsession.NewMessage(protocolsession.MessageSessionTerminal, nil, body)
 	if err != nil {
 		return err
+	}
+	return outbound.sendTerminalMessage(callerContext, message, lanes)
+}
+
+func (outbound *Responses) sendTerminalMessage(
+	callerContext context.Context,
+	message protocolsession.Message,
+	lanes []selectedLane,
+) error {
+	if len(lanes) == 0 {
+		return callerContext.Err()
 	}
 	type pendingTerminal struct {
 		lane session.LaneIdentity
