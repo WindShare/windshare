@@ -123,3 +123,86 @@ func TestTCPOptionalAllocationFailureLeavesUDPCapacityIntact(t *testing.T) {
 		t.Fatal("partial listener published")
 	}
 }
+
+func TestPrepareTCPIdempotentWhenListenerRewritesIPv6Zone(t *testing.T) {
+	// Simulate Windows/Linux net.Listen returning interface-name zones ("%WiFi")
+	// for link-local IPv6 addresses requested with numeric interface indexes ("%19").
+	rewriteZone := func(addr netip.Addr) netip.Addr {
+		if addr.Is6() && addr.Zone() == "19" {
+			return addr.WithZone("WiFi")
+		}
+		return addr
+	}
+	tcpCalls := 0
+	authority := New(Config{
+		UDPCapacity: 2,
+		TCPCapacity: 2,
+		ListenPacket: func(_, address string) (net.PacketConn, error) {
+			requested, err := netip.ParseAddrPort(address)
+			if err != nil {
+				return nil, err
+			}
+			conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+			if err != nil {
+				return nil, err
+			}
+			port := conn.LocalAddr().(*net.UDPAddr).AddrPort().Port()
+			return testAddressedPacket{PacketConn: conn, address: net.UDPAddrFromAddrPort(netip.AddrPortFrom(rewriteZone(requested.Addr()), port))}, nil
+		},
+		ListenTCP: func(_, address string) (net.Listener, error) {
+			tcpCalls++
+			requested, err := netip.ParseAddrPort(address)
+			if err != nil {
+				return nil, err
+			}
+			listener, err := net.Listen("tcp4", "127.0.0.1:0")
+			if err != nil {
+				return nil, err
+			}
+			port := listener.Addr().(*net.TCPAddr).AddrPort().Port()
+			return testAddressedListener{Listener: listener, address: net.TCPAddrFromAddrPort(netip.AddrPortFrom(rewriteZone(requested.Addr()), port))}, nil
+		},
+	})
+	defer authority.Close()
+	addresses := []netip.Addr{netip.MustParseAddr("192.0.2.1"), netip.MustParseAddr("fe80::1%19")}
+	lease, err := authority.Acquire([16]byte{1}, 1, [16]byte{1}, addresses)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.PrepareTCP(); err != nil {
+		t.Fatal(err)
+	}
+	first := lease.TCPEndpoints()
+	if err := lease.PrepareTCP(); err != nil {
+		t.Fatalf("second PrepareTCP failed or exceeded TCP capacity: %v", err)
+	}
+	_, release, err := lease.Claim()
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if err := lease.PrepareTCP(); err != nil {
+		t.Fatalf("retry PrepareTCP failed: %v", err)
+	}
+	if tcpCalls != len(addresses) || len(lease.TCPEndpoints()) != len(addresses) {
+		t.Fatalf("duplicate TCP listeners opened: calls=%d endpoints=%d want=%d", tcpCalls, len(lease.TCPEndpoints()), len(addresses))
+	}
+	if lease.TCPEndpoints()[1] != first[1] {
+		t.Fatalf("link-local TCP listener changed: got=%v want=%v", lease.TCPEndpoints()[1], first[1])
+	}
+	authority.mu.Lock()
+	used := authority.tcpCount
+	authority.mu.Unlock()
+	if used != len(addresses) {
+		t.Fatalf("tcpCount = %d, want %d", used, len(addresses))
+	}
+	if err := lease.Close(); err != nil {
+		t.Fatal(err)
+	}
+	authority.mu.Lock()
+	remaining := authority.tcpCount
+	authority.mu.Unlock()
+	if remaining != 0 {
+		t.Fatalf("tcpCount after close = %d, want 0", remaining)
+	}
+}

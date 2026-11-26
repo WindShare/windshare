@@ -89,6 +89,46 @@ func TestLoopbackIPv6DoesNotEnableIPv6OnlySTUNSelection(t *testing.T) {
 		t.Fatalf("loopback ::1 caused IPv6-only STUN selection: %v", got)
 	}
 }
+
+func TestLinkLocalIPv6ExcludedFromAddressAndSTUNSelection(t *testing.T) {
+	chosen := selectAddresses([]networkstate.Address{
+		{InterfaceIndex: 1, IP: netip.MustParseAddr("fe80::1%1")},
+		{InterfaceIndex: 2, IP: netip.MustParseAddr("fe80::2")},
+		{InterfaceIndex: 2, IP: netip.MustParseAddr("169.254.1.2")},
+		{InterfaceIndex: 3, IP: netip.MustParseAddr("fd00::1")},
+		{InterfaceIndex: 3, IP: netip.MustParseAddr("2001:4860::1")},
+		{InterfaceIndex: 4, IP: netip.MustParseAddr("192.168.1.10")},
+	})
+	want := []netip.Addr{
+		netip.MustParseAddr("169.254.1.2"),
+		netip.MustParseAddr("2001:4860::1"),
+		netip.MustParseAddr("192.168.1.10"),
+		netip.MustParseAddr("fd00::1"),
+	}
+	if !slices.Equal(chosen, want) {
+		t.Fatalf("selectAddresses = %v, want %v", chosen, want)
+	}
+	h := newHarness(t)
+	h.monitor.state = networkstate.State{Addresses: []networkstate.Address{
+		{InterfaceIndex: 19, IP: netip.MustParseAddr("fe80::d94f:e4af:9617:b213%19")},
+		{InterfaceIndex: 19, IP: netip.MustParseAddr("192.0.2.1")},
+	}}
+	pool, err := icepolicy.NewICEEndpointPool([]icepolicy.Endpoint{
+		{ID: "v6-only", URL: "stun:v6.example:3478", Family: "ipv6", Trust: "local", Enabled: true, FailureDomain: "v6"},
+		{ID: "v4-only", URL: "stun:v4.example:3478", Family: "ipv4", Trust: "local", Enabled: true, FailureDomain: "v4"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.native.config.Pool = func() icepolicy.ICEEndpointPool { return pool }
+	_, _ = h.native.NewPeerConnection(context.Background(), request(1))
+	if got := h.requests[0].ICE.DiscoveryServers(); !slices.Equal(got, []iceconfig.STUNServer{{Host: "v4.example", Port: 3478}}) {
+		t.Fatalf("link-local fe80:: caused IPv6-only STUN selection: %v", got)
+	}
+	if got := h.requests[0].SocketLease.Endpoints(); len(got) != 1 || got[0].Addr() != netip.MustParseAddr("192.0.2.1") {
+		t.Fatalf("link-local fe80:: allocated socket endpoint: %v", got)
+	}
+}
 func TestProfilesRotateOnceAndNeverLoseSingletonSTUNOnLaterAttempts(t *testing.T) {
 	for _, count := range []int{1, 4} {
 		t.Run(fmt.Sprint(count), func(t *testing.T) {

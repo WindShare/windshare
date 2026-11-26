@@ -85,33 +85,22 @@ func (l *Lease) PrepareTCP() error {
 	if l.entry.owner != iceUnclaimed {
 		return ErrActive
 	}
-	var needed []netip.Addr
-	for _, address := range l.entry.addresses {
-		existing := false
-		if l.entry.tcp != nil {
-			for _, endpoint := range l.entry.tcp.endpoints {
-				if endpoint.address.Addr() == address {
-					existing = true
-					break
-				}
-			}
-		}
-		if !existing {
-			needed = append(needed, address)
-		}
-	}
-	if len(needed) == 0 {
+	// Lease addresses are immutable and PrepareTCP allocates atomically for the
+	// full set, so an existing TCPMux already covers every address regardless of
+	// OS-rewritten IPv6 zone representations (numeric index vs interface name).
+	if l.entry.tcp != nil {
 		return nil
 	}
+	addresses := l.entry.addresses
 	reserve := 0
 	if l.entry.optional {
-		reserve = max(len(l.entry.addresses), a.essentialReserveLocked())
+		reserve = max(len(addresses), a.essentialReserveLocked())
 	}
-	if a.tcpCount+len(needed)+reserve > a.config.TCPCapacity {
-		return a.tcpCapacityLocked(len(needed))
+	if a.tcpCount+len(addresses)+reserve > a.config.TCPCapacity {
+		return a.tcpCapacityLocked(len(addresses))
 	}
 	allocated := &TCPMux{}
-	for _, address := range needed {
+	for _, address := range addresses {
 		network := "tcp4"
 		if address.Is6() {
 			network = "tcp6"
@@ -124,12 +113,8 @@ func (l *Lease) PrepareTCP() error {
 		endpoint := tcpEndpoint{address: listener.Addr().(*net.TCPAddr).AddrPort(), mux: ice.NewTCPMuxDefault(ice.TCPMuxParams{Listener: listener})}
 		allocated.endpoints = append(allocated.endpoints, endpoint)
 	}
-	if l.entry.tcp == nil {
-		l.entry.tcp = allocated
-	} else {
-		l.entry.tcp.endpoints = append(l.entry.tcp.endpoints, allocated.endpoints...)
-	}
-	a.tcpCount += len(needed)
+	l.entry.tcp = allocated
+	a.tcpCount += len(addresses)
 	return nil
 }
 func (l *Lease) TCPEndpoints() []netip.AddrPort {
