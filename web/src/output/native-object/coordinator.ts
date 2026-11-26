@@ -1,18 +1,9 @@
 import { FaultScope, OutputFaultCode, outputFailure } from '../../transfer/fault'
 import type { NativeObjectIO } from './contracts'
 
-class MutationAdmissionDeclined extends Error {
-  constructor(cause: unknown) { super('Native mutation admission declined', { cause }) }
-}
-
 export type NativeObjectTrace = (event: Readonly<{
   operationId: string; objectId: string; stage: string; reason?: string
 }>) => void
-
-type CheckpointPlan<T> =
-  | Readonly<{ kind: 'unchanged'; result: T }>
-  | Readonly<{ kind: 'rejected'; cause: unknown }>
-  | Readonly<{ kind: 'commit'; reason: string; commit: () => Promise<T> }>
 
 /** One queue owns the cut across every entry sharing an object's native handle. */
 export class ObjectCheckpointCoordinator implements NativeObjectIO {
@@ -36,20 +27,6 @@ export class ObjectCheckpointCoordinator implements NativeObjectIO {
   mutate<T>(operation: (io: NativeObjectIO) => Promise<T>): Promise<T> {
     return this.#enqueue(() => operation(this.#io))
   }
-  /** Capacity refusal precedes mutation, so other admitted regions remain writable. */
-  admittedMutation<Admission, Result>(
-    admit: (currentLength: bigint) => Promise<Admission>,
-    perform: (io: NativeObjectIO, admission: Admission) => Promise<Result>,
-  ): Promise<Result> {
-    return this.#enqueue(async () => {
-      const currentLength = await this.#io.size()
-      let admission: Admission
-      try { admission = await admit(currentLength) } catch (cause) {
-        throw new MutationAdmissionDeclined(cause)
-      }
-      return perform(this.#io, admission)
-    })
-  }
 
   writeAt(offset: bigint, bytes: Uint8Array): Promise<void> {
     return this.mutate(io => io.writeAt(offset, bytes))
@@ -60,15 +37,6 @@ export class ObjectCheckpointCoordinator implements NativeObjectIO {
 
   checkpoint<T>(reason: string, commit: () => Promise<T>): Promise<T> {
     return this.#enqueue(() => this.#flushAndCommit(reason, commit))
-  }
-
-  /** Decide from the latest queued state before incurring a native flush. */
-  checkpointFromPlan<T>(plan: () => CheckpointPlan<T> | Promise<CheckpointPlan<T>>): Promise<T> {
-    return this.#enqueue(async () => {
-      const cut = await plan()
-      if (cut.kind === 'rejected') throw new MutationAdmissionDeclined(cut.cause)
-      return cut.kind === 'commit' ? this.#flushAndCommit(cut.reason, cut.commit) : cut.result
-    })
   }
 
   async #flushAndCommit<T>(reason: string, commit: () => Promise<T>): Promise<T> {
@@ -96,7 +64,6 @@ export class ObjectCheckpointCoordinator implements NativeObjectIO {
       if (this.#failure !== undefined) throw this.#failure
       if (this.#closed) throw new Error('Native object coordinator is closed')
       try { return await operation() } catch (error) {
-        if (error instanceof MutationAdmissionDeclined) throw error.cause
         this.#failure = outputFailure(FaultScope.Job, error, OutputFaultCode.WriteFailed)
         this.#closed = true
         this.#emit('stopped')

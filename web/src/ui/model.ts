@@ -22,7 +22,6 @@ export interface Breadcrumb {
 
 export interface ReceiverProgress {
   readonly receivedObjectBytes: bigint
-  readonly phase: 'receiving' | 'finishing'
   readonly materializedBytes: bigint
   readonly discoveredFiles: number
   readonly discoveredBytes: bigint
@@ -149,7 +148,6 @@ export interface ReceiverSnapshot {
 }
 
 export const EMPTY_PROGRESS: ReceiverProgress = Object.freeze({
-  phase: 'receiving',
   materializedBytes: 0n,
   discoveredFiles: 0,
   discoveredBytes: 0n,

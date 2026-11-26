@@ -1,6 +1,6 @@
 import type { FrameChannel } from '../../contracts/channel'
 import type { Suite02CapabilityKey } from '../../crypto/suite02-link'
-import { relayEndpointForShare, type RelayEndpoint } from './endpoint'
+import { relayEndpointForShare, type RelayEndpoint } from '../../network/contracts/relay-endpoint'
 import { decodeDescriptorDelivery } from './protocol'
 import { encodeDeliveryJoin, type RelayReceiveCapacity } from './delivery-handshake-codec'
 import type { RelayHeartbeatTrace } from './heartbeat'

@@ -20,7 +20,7 @@ import {
   verifyLaneAccept,
   verifyLaneReject,
 } from '../../src/session/lane-codec'
-import { canonicalRelayEndpoint } from '../../src/transport/relay/endpoint'
+import { canonicalRelayEndpoint } from '../../src/network/contracts/relay-endpoint'
 import {
   CHALLENGE_PURPOSE,
   REGISTRATION_MODE,

@@ -72,9 +72,6 @@ function downloadingStage(
   language: Language,
 ): StageCopy {
   const t = receiverCopy[language].stage
-  if (facts.progress?.phase === 'finishing') {
-    return stage('finishing', t.finishing, t.finishingHint, 'finalizing')
-  }
   if (facts.outageCheckpointed && facts.blocking?.kind === 'reconnecting') {
     return stage('waiting', t.reconnectProgressSaved, t.reconnectAutomatically, 'reconnecting-checkpointed')
   }

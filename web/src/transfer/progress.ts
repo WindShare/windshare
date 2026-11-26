@@ -1,5 +1,4 @@
 export interface TransferProgress {
-  readonly phase: 'receiving' | 'finishing'
   readonly discovery: 'open' | 'complete' | 'failed'
   readonly discoveredFiles: number
   readonly discoveredBytes: bigint
@@ -23,7 +22,6 @@ export interface TransferProgress {
 }
 
 export const EMPTY_TRANSFER_PROGRESS: TransferProgress = Object.freeze({
-  phase: 'receiving',
   discovery: 'open',
   discoveredFiles: 0,
   discoveredBytes: 0n,
@@ -49,7 +47,6 @@ export class TransferProgressTracker {
   readonly #jobId: string
   readonly #outputSessionId: string | undefined
   readonly #onChange: (progress: TransferProgress) => void
-  #phase: 'receiving' | 'finishing' = 'receiving'
   #discovery: 'open' | 'complete' | 'failed' = 'open'
   #discoveredFiles = 0
   #discoveredBytes = 0n
@@ -136,12 +133,6 @@ export class TransferProgressTracker {
     this.#emit()
   }
 
-  observePhase(phase: 'receiving' | 'finishing'): void {
-    if (this.#phase === phase) return
-    this.#phase = phase
-    this.#emit()
-  }
-
   observeContentLanes(count: number): void {
     if (this.#contentLanes === count) return
     this.#contentLanes = count
@@ -164,7 +155,6 @@ export class TransferProgressTracker {
 
   snapshot(): TransferProgress {
     return Object.freeze({
-      phase: this.#phase,
       discovery: this.#discovery,
       discoveredFiles: this.#discoveredFiles,
       discoveredBytes: this.#discoveredBytes,

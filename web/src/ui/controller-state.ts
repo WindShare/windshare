@@ -227,7 +227,6 @@ export function initialReceiverSnapshot(): ReceiverSnapshot {
 
 export function receiverProgressSnapshot(progress: TransferProgress): ReceiverProgress {
   return Object.freeze({
-    phase: progress.phase,
     materializedBytes: progress.materializedBytes,
     discoveredFiles: progress.discoveredFiles,
     discoveredBytes: progress.discoveredBytes,

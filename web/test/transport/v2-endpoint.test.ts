@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { encodeSuite02CapabilityKey, parseSuite02CapabilityLink } from '../../src/crypto/suite02-link'
 
-import { canonicalRelayEndpoint, relayEndpointForShare } from '../../src/transport/relay/endpoint'
+import { canonicalRelayEndpoint, relayEndpointForShare } from '../../src/network/contracts/relay-endpoint'
 import { b64ToBytes, loadVectorFile } from '../vectors'
 
 interface ShareRoutingCase {

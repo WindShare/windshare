@@ -1,12 +1,11 @@
 import { snapshotCatalogPath } from '../../catalog/path-policy'
 
-export const ZIP_ENCODING_POLICY_VERSION = 1 as const
-export const ZIP_ENCODING_POLICY = 'windshare/zip-encoding/v1-store-data-descriptor' as const
+const ZIP_ENCODING_POLICY_VERSION = 1 as const
 
 export const ZIP_UINT16_SENTINEL = 0xffffn
 export const ZIP_UINT32_SENTINEL = 0xffff_ffffn
-export const ZIP_UINT64_MAXIMUM = (1n << 64n) - 1n
-export const ZIP_CRC32_INITIAL_ACCUMULATOR = 0xffff_ffff
+const ZIP_UINT64_MAXIMUM = (1n << 64n) - 1n
+const ZIP_CRC32_INITIAL_ACCUMULATOR = 0xffff_ffff
 
 const ZIP_LOCAL_FILE_HEADER = 0x0403_4b50
 const ZIP_DATA_DESCRIPTOR = 0x0807_4b50
@@ -40,7 +39,6 @@ const ZIP_DOS_MAXIMUM = Object.freeze({
 const ZIP_DOS_LOWER_GUARD_MILLISECONDS = BigInt(Date.UTC(ZIP_DOS_MINIMUM_YEAR - 1, 11, 30))
 const ZIP_DOS_UPPER_GUARD_MILLISECONDS = BigInt(Date.UTC(ZIP_DOS_MAXIMUM_YEAR + 1, 0, 2))
 const TEXT_ENCODER = new TextEncoder()
-const EMPTY_ZIP_EXTRA_FIELDS = new Uint8Array(0)
 
 export type ZipEntryKind = 'directory' | 'file'
 
@@ -63,7 +61,6 @@ export interface NormalizedZipEntry {
   readonly kind: ZipEntryKind
   readonly path: readonly string[]
   readonly artifactPath: string
-  readonly artifactPathBytes: readonly number[]
   readonly nameBytes: readonly number[]
   readonly exactSize: bigint
   readonly dosTime: number
@@ -104,7 +101,6 @@ export function normalizeZipEntry(spec: ZipEntrySpec): NormalizedZipEntry {
   if (spec.kind !== 'directory' && spec.kind !== 'file') throw new TypeError('ZIP entry kind is invalid')
   const path = snapshotCatalogPath(spec.path)
   const artifactPath = path.join('/')
-  const artifactPathBytes = frozenBytes(TEXT_ENCODER.encode(artifactPath))
   const name = zipEntryName(spec.kind, artifactPath)
   const nameBytes = frozenBytes(TEXT_ENCODER.encode(name))
   if (nameBytes.length === 0 || nameBytes.length > Number(ZIP_UINT16_SENTINEL)) {
@@ -117,7 +113,6 @@ export function normalizeZipEntry(spec: ZipEntrySpec): NormalizedZipEntry {
     kind: spec.kind,
     path,
     artifactPath,
-    artifactPathBytes,
     nameBytes,
     exactSize,
     dosTime,
@@ -130,16 +125,6 @@ function zipEntryName(kind: ZipEntryKind, artifactPath: string): string {
   // syntax. Catalog paths cannot contain a '.' component, so this encoding is injective.
   const relativePath = /^[a-z]:/iu.test(artifactPath) ? './' + artifactPath : artifactPath
   return kind === 'directory' ? relativePath + '/' : relativePath
-}
-
-export function compareNormalizedZipEntries(
-  left: NormalizedZipEntry,
-  right: NormalizedZipEntry,
-): number {
-  const pathOrder = compareUnsignedBytes(left.artifactPathBytes, right.artifactPathBytes)
-  if (pathOrder !== 0) return pathOrder
-  if (left.kind === right.kind) return 0
-  return left.kind === 'directory' ? -1 : 1
 }
 
 export function planZipEntry(
@@ -179,7 +164,6 @@ export function planZipEntry(
     kind: entry.kind,
     path: entry.path,
     artifactPath: entry.artifactPath,
-    artifactPathBytes: entry.artifactPathBytes,
     nameBytes: entry.nameBytes,
     exactSize: entry.exactSize,
     dosTime: entry.dosTime,
@@ -198,7 +182,7 @@ export function planZipEntry(
   })
 }
 
-export function validateZipEntryPlan(
+function validateZipEntryPlan(
   plan: ZipEntryPlanV1,
   expectedOffset: bigint,
 ): ZipEntryPlanV1 {
@@ -208,7 +192,6 @@ export function validateZipEntryPlan(
   requireDosDateTime(plan.dosTime, plan.dosDate)
   const path = snapshotCatalogPath(plan.path)
   const artifactPath = path.join('/')
-  const artifactPathBytes = frozenBytes(TEXT_ENCODER.encode(artifactPath))
   const nameBytes = frozenBytes(TEXT_ENCODER.encode(
     zipEntryName(plan.kind, artifactPath),
   ))
@@ -216,7 +199,6 @@ export function validateZipEntryPlan(
     kind: plan.kind,
     path,
     artifactPath,
-    artifactPathBytes,
     nameBytes,
     exactSize: plan.exactSize,
     dosTime: plan.dosTime,
@@ -227,12 +209,11 @@ export function validateZipEntryPlan(
   return expected
 }
 
-export function sameZipEntryPlan(left: ZipEntryPlanV1, right: ZipEntryPlanV1): boolean {
+function sameZipEntryPlan(left: ZipEntryPlanV1, right: ZipEntryPlanV1): boolean {
   return left.version === right.version &&
     left.kind === right.kind &&
     equalStrings(left.path, right.path) &&
     left.artifactPath === right.artifactPath &&
-    equalNumbers(left.artifactPathBytes, right.artifactPathBytes) &&
     equalNumbers(left.nameBytes, right.nameBytes) &&
     left.exactSize === right.exactSize &&
     left.dosTime === right.dosTime &&
@@ -251,21 +232,8 @@ export function sameZipEntryPlan(left: ZipEntryPlanV1, right: ZipEntryPlanV1): b
 }
 
 export function encodeZipLocalHeader(plan: ZipEntryPlanV1): Uint8Array<ArrayBuffer> {
-  return encodeZipLocalHeaderWithTrailingExtraFields(plan, EMPTY_ZIP_EXTRA_FIELDS)
-}
-
-export function encodeZipLocalHeaderWithTrailingExtraFields(
-  plan: ZipEntryPlanV1,
-  trailingExtraFields: Uint8Array,
-): Uint8Array<ArrayBuffer> {
   validateZipEntryPlan(plan, plan.localHeaderOffset)
-  const extraFields = snapshotTrailingExtraFields(
-    trailingExtraFields,
-    plan.localExtraBytes,
-    'ZIP local header',
-  )
-  const encodedBytes = checkedZipAdd(plan.localHeaderBytes, BigInt(extraFields.byteLength))
-  const output = new Uint8Array(toAllocationLength(encodedBytes, 'ZIP local header'))
+  const output = new Uint8Array(toAllocationLength(plan.localHeaderBytes, 'ZIP local header'))
   const view = new DataView(output.buffer)
   view.setUint32(0, ZIP_LOCAL_FILE_HEADER, true)
   view.setUint16(4, plan.versionNeeded, true)
@@ -277,7 +245,7 @@ export function encodeZipLocalHeaderWithTrailingExtraFields(
   view.setUint32(18, plan.zip64Size ? Number(ZIP_UINT32_SENTINEL) : 0, true)
   view.setUint32(22, plan.zip64Size ? Number(ZIP_UINT32_SENTINEL) : 0, true)
   view.setUint16(26, plan.nameBytes.length, true)
-  view.setUint16(28, Number(plan.localExtraBytes) + extraFields.byteLength, true)
+  view.setUint16(28, Number(plan.localExtraBytes), true)
   output.set(plan.nameBytes, Number(ZIP_LOCAL_HEADER_FIXED_BYTES))
   const extraOffset = Number(ZIP_LOCAL_HEADER_FIXED_BYTES) + plan.nameBytes.length
   if (plan.zip64Size) {
@@ -286,8 +254,7 @@ export function encodeZipLocalHeaderWithTrailingExtraFields(
     view.setBigUint64(extraOffset + 4, plan.exactSize, true)
     view.setBigUint64(extraOffset + 12, plan.exactSize, true)
   }
-  output.set(extraFields, extraOffset + Number(plan.localExtraBytes))
-  assertEncodedLength(output, encodedBytes, 'ZIP local header')
+  assertEncodedLength(output, plan.localHeaderBytes, 'ZIP local header')
   return output
 }
 
@@ -317,27 +284,9 @@ export function encodeZipCentralDirectoryRecord(
   plan: ZipEntryPlanV1,
   crc32: number,
 ): Uint8Array<ArrayBuffer> {
-  return encodeZipCentralDirectoryRecordWithTrailingExtraFields(
-    plan,
-    crc32,
-    EMPTY_ZIP_EXTRA_FIELDS,
-  )
-}
-
-export function encodeZipCentralDirectoryRecordWithTrailingExtraFields(
-  plan: ZipEntryPlanV1,
-  crc32: number,
-  trailingExtraFields: Uint8Array,
-): Uint8Array<ArrayBuffer> {
   validateZipEntryPlan(plan, plan.localHeaderOffset)
   requireUint32(crc32, 'ZIP CRC-32')
-  const extraFields = snapshotTrailingExtraFields(
-    trailingExtraFields,
-    plan.centralExtraBytes,
-    'ZIP central record',
-  )
-  const encodedBytes = checkedZipAdd(plan.centralRecordBytes, BigInt(extraFields.byteLength))
-  const output = new Uint8Array(toAllocationLength(encodedBytes, 'ZIP central record'))
+  const output = new Uint8Array(toAllocationLength(plan.centralRecordBytes, 'ZIP central record'))
   const view = new DataView(output.buffer)
   view.setUint32(0, ZIP_CENTRAL_DIRECTORY_HEADER, true)
   view.setUint16(4, ZIP64_VERSION, true)
@@ -350,7 +299,7 @@ export function encodeZipCentralDirectoryRecordWithTrailingExtraFields(
   view.setUint32(20, plan.zip64Size ? Number(ZIP_UINT32_SENTINEL) : Number(plan.exactSize), true)
   view.setUint32(24, plan.zip64Size ? Number(ZIP_UINT32_SENTINEL) : Number(plan.exactSize), true)
   view.setUint16(28, plan.nameBytes.length, true)
-  view.setUint16(30, Number(plan.centralExtraBytes) + extraFields.byteLength, true)
+  view.setUint16(30, Number(plan.centralExtraBytes), true)
   view.setUint16(32, 0, true)
   view.setUint16(34, 0, true)
   view.setUint16(36, 0, true)
@@ -373,8 +322,7 @@ export function encodeZipCentralDirectoryRecordWithTrailingExtraFields(
     }
     if (plan.zip64Offset) view.setBigUint64(zip64ValueOffset, plan.localHeaderOffset, true)
   }
-  output.set(extraFields, extraOffset + Number(plan.centralExtraBytes))
-  assertEncodedLength(output, encodedBytes, 'ZIP central record')
+  assertEncodedLength(output, plan.centralRecordBytes, 'ZIP central record')
   return output
 }
 
@@ -453,7 +401,7 @@ export function checkedZipAdd(...values: readonly bigint[]): bigint {
   return total
 }
 
-export function checkedZipMultiply(left: bigint, right: bigint): bigint {
+function checkedZipMultiply(left: bigint, right: bigint): bigint {
   requireZipUint64(left, 'ZIP multiplication operand')
   requireZipUint64(right, 'ZIP multiplication operand')
   if (left !== 0n && right > ZIP_UINT64_MAXIMUM / left) {
@@ -462,7 +410,7 @@ export function checkedZipMultiply(left: bigint, right: bigint): bigint {
   return left * right
 }
 
-export function requireZipUint64(value: bigint, label: string): void {
+function requireZipUint64(value: bigint, label: string): void {
   if (typeof value !== 'bigint' || value < 0n || value > ZIP_UINT64_MAXIMUM) {
     throw new RangeError(`${label} exceeds ZIP uint64`)
   }
@@ -492,36 +440,6 @@ export class ZipCrc32 {
     return this.#value >>> 0
   }
 }
-
-export interface ZipEncodingPolicyV1 {
-  readonly version: typeof ZIP_ENCODING_POLICY_VERSION
-  readonly discriminant: typeof ZIP_ENCODING_POLICY
-  readonly normalizeEntry: typeof normalizeZipEntry
-  readonly compareEntries: typeof compareNormalizedZipEntries
-  readonly planEntry: typeof planZipEntry
-  readonly validateEntryPlan: typeof validateZipEntryPlan
-  readonly sameEntryPlan: typeof sameZipEntryPlan
-  readonly encodeLocalHeader: typeof encodeZipLocalHeader
-  readonly encodeDataDescriptor: typeof encodeZipDataDescriptor
-  readonly encodeCentralRecord: typeof encodeZipCentralDirectoryRecord
-  readonly encodeEndRecords: typeof encodeZipEndRecords
-  readonly requiresZip64End: typeof requiresZip64End
-}
-
-export const ZIP_ENCODING_POLICY_V1: ZipEncodingPolicyV1 = Object.freeze({
-  version: ZIP_ENCODING_POLICY_VERSION,
-  discriminant: ZIP_ENCODING_POLICY,
-  normalizeEntry: normalizeZipEntry,
-  compareEntries: compareNormalizedZipEntries,
-  planEntry: planZipEntry,
-  validateEntryPlan: validateZipEntryPlan,
-  sameEntryPlan: sameZipEntryPlan,
-  encodeLocalHeader: encodeZipLocalHeader,
-  encodeDataDescriptor: encodeZipDataDescriptor,
-  encodeCentralRecord: encodeZipCentralDirectoryRecord,
-  encodeEndRecords: encodeZipEndRecords,
-  requiresZip64End,
-})
 
 // MS-DOS fields carry no zone, and by convention extractors read them as the extracting
 // machine's local time. Encoding the receiver's local wall clock therefore restores the
@@ -580,21 +498,11 @@ function requireNormalizedEntry(entry: NormalizedZipEntry): void {
   const canonicalPath = snapshotCatalogPath(entry.path)
   const artifactPath = canonicalPath.join('/')
   if (entry.artifactPath !== artifactPath ||
-      !equalNumbers(entry.artifactPathBytes, TEXT_ENCODER.encode(artifactPath)) ||
       !equalNumbers(entry.nameBytes, TEXT_ENCODER.encode(
         zipEntryName(entry.kind, artifactPath),
       ))) {
     throw new TypeError('ZIP entry name is not canonical')
   }
-}
-
-function compareUnsignedBytes(left: readonly number[], right: readonly number[]): number {
-  const shared = Math.min(left.length, right.length)
-  for (let index = 0; index < shared; index += 1) {
-    const difference = (left[index] ?? 0) - (right[index] ?? 0)
-    if (difference !== 0) return difference
-  }
-  return left.length - right.length
 }
 
 function frozenBytes(bytes: Uint8Array): readonly number[] {
@@ -621,18 +529,6 @@ function toAllocationLength(value: bigint, label: string): number {
 
 function assertEncodedLength(bytes: Uint8Array, expected: bigint, label: string): void {
   if (BigInt(bytes.byteLength) !== expected) throw new Error(`${label} length disagrees with its plan`)
-}
-
-function snapshotTrailingExtraFields(
-  bytes: Uint8Array,
-  plannedExtraBytes: bigint,
-  label: string,
-): Uint8Array<ArrayBuffer> {
-  if (!(bytes instanceof Uint8Array)) throw new TypeError(`${label} trailing extra fields are invalid`)
-  if (plannedExtraBytes + BigInt(bytes.byteLength) > ZIP_UINT16_SENTINEL) {
-    throw new RangeError(`${label} extra fields exceed the ZIP format`)
-  }
-  return Uint8Array.from(bytes)
 }
 
 function requireUint32(value: number, label: string): void {

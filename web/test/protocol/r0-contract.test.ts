@@ -24,7 +24,7 @@ import {
 import { MAX_FRAME_BYTES } from '../../src/contracts/channel'
 import { DESCRIPTOR_OBJECT_BYTES } from '../../src/crypto/sender-object'
 import { ENVELOPE_MAXIMUM_BYTES, EnvelopeOpener } from '../../src/session/envelope'
-import { canonicalRelayEndpoint } from '../../src/transport/relay/endpoint'
+import { canonicalRelayEndpoint } from '../../src/network/contracts/relay-endpoint'
 import {
   RELAY_ERROR,
   RELAY_MAX_DESCRIPTOR_BYTES,

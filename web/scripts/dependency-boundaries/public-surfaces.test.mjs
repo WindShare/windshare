@@ -157,7 +157,7 @@ test('reusable layers outside network permit network contracts while rejecting n
     'security/capability-redactor.ts', 'session/runtime.ts', 'output/model/offers.ts',
     'output/store/database.ts', 'transfer/job.ts', 'catalog/client.ts', 'content/broker.ts',
     'preview/preview.ts', 'connectivity/ice-policy/defaults.ts', 'receiver/browser-join.ts',
-    'transport/relay/endpoint.ts',
+    'transport/relay/receiver.ts',
   ]) {
     assert.deepEqual(findBoundaryViolations(new Map([
       [root, ['network/contracts/alias.ts']],
