@@ -447,6 +447,102 @@ describe('FSA placeholder verification', () => {
     expect(root.children.has('large')).toBe(true)
     await reopened.close()
   })
+
+  it('rejects reclaiming a completed 0-byte file, an unfinished 0-byte file, or a coarse-mtime same-session 0-byte commit', async () => {
+    const { root, session, store, memory } = await openFolderFixture()
+    const emptyCompleted = await session.transferOutput.openFile({
+      fileId: 'done-empty', path: ['a.txt'], sourcePath: ['a.txt'], revision: 'r1', exactSize: 0n,
+    }, signal)
+    await emptyCompleted.commit([])
+
+    // Leave an unfinished file whose pending publish still points at its 0-byte on-disk entry.
+    const unfinished = await session.transferOutput.openFile({
+      fileId: 'unfinished-empty', path: ['pending.txt'], sourcePath: ['pending.txt'], revision: 'r2', exactSize: 8n,
+    }, signal)
+    const pendingHandle = await root.getFileHandle('pending.txt')
+    const createWritable = pendingHandle.createWritable.bind(pendingHandle)
+    vi.spyOn(pendingHandle, 'createWritable').mockImplementationOnce(async options => ({
+      ...await createWritable(options), close: async () => { throw new Error('interrupted close') },
+    }))
+    await unfinished.writeAt(0n, Uint8Array.of(1, 2))
+    await expect(unfinished.pause(prefix)).rejects.toThrow('interrupted close')
+
+    // Also leave a genuine uncommitted 0-byte placeholder to verify crash recovery stays intact.
+    await session.transferOutput.openFile({
+      fileId: 'orphan', path: ['orphan.txt'], sourcePath: ['orphan.txt'], revision: 'r3', exactSize: 4n,
+    }, signal)
+    await session.close()
+
+    const traces: OutputTraceEvent[] = []
+    const persisted = (await memory.getTask(session.taskId))!
+    const reopened = await reopenFSASession({
+      task: persisted, store, allowPermissionPrompt: false,
+      diagnostics: { backend: 'file_system_access', trace: { current: event => traces.push(event) } },
+    })
+
+    // 1. Completed 0-byte file from Run 1 cannot be adopted by another fileId.
+    const doneHandle = await root.getFileHandle('a.txt')
+    await expect(reopened.transferOutput.openFile({
+      fileId: 'replacement', path: ['a.txt'], sourcePath: ['a.txt'], revision: 'r-new', exactSize: 8n,
+    }, signal)).rejects.toMatchObject({ fault: { code: 'target-collision' } })
+    expect(root.children.has('a.txt')).toBe(true)
+    expect(doneHandle.writableCalls).toEqual([])
+    expect(await memory.getFile(session.taskId, 'replacement')).toBeUndefined()
+    expect(await reopened.transferOutput.checkCompleted?.('done-empty', signal)).toEqual({ size: 0n })
+
+    // 2. Unfinished 0-byte file from Run 1 cannot be adopted by another fileId.
+    await expect(reopened.transferOutput.openFile({
+      fileId: 'other-pending', path: ['pending.txt'], sourcePath: ['pending.txt'], revision: 'r-new', exactSize: 8n,
+    }, signal)).rejects.toMatchObject({ fault: { code: 'target-collision' } })
+    expect(root.children.has('pending.txt')).toBe(true)
+    expect(await memory.getFile(session.taskId, 'other-pending')).toBeUndefined()
+
+    // 3. Same-session 0-byte commit whose coarse filesystem mtime falls <= reopenedAtMs stays protected.
+    const sameSession = await reopened.transferOutput.openFile({
+      fileId: 'run2-empty', path: ['b.txt'], sourcePath: ['b.txt'], revision: 'r4', exactSize: 0n,
+    }, signal)
+    await sameSession.commit([])
+    const run2Handle = await root.getFileHandle('b.txt')
+    run2Handle.lastModified = doneHandle.lastModified
+    await expect(reopened.transferOutput.openFile({
+      fileId: 'run2-collision', path: ['b.txt'], sourcePath: ['b.txt'], revision: 'r5', exactSize: 8n,
+    }, signal)).rejects.toMatchObject({ fault: { code: 'target-collision' } })
+    expect(root.children.has('b.txt')).toBe(true)
+    expect(await memory.getFile(session.taskId, 'run2-collision')).toBeUndefined()
+
+    // 4. Genuine uncommitted placeholder still reclaims without scanning unrelated completed handles.
+    const doneSameEntrySpy = vi.spyOn(doneHandle, 'isSameEntry')
+    const reclaimed = await reopened.transferOutput.openFile({
+      fileId: 'orphan', path: ['orphan.txt'], sourcePath: ['orphan.txt'], revision: 'r3', exactSize: 4n,
+    }, signal)
+    await reclaimed.writeAt(0n, Uint8Array.of(9, 8, 7, 6))
+    await reclaimed.commit([byteRange(0n, 4n)])
+    expect(doneSameEntrySpy).not.toHaveBeenCalled()
+    expect([...(await root.getFileHandle('orphan.txt')).bytes]).toEqual([9, 8, 7, 6])
+
+    expect(traces).toContainEqual({
+      eventName: 'reopen',
+      payload: {
+        backend: 'file_system_access', task_id: session.taskId, file_id: 'replacement',
+        transition: 'placeholder_owned', owner_kind: 'completed',
+      },
+    })
+    expect(traces).toContainEqual({
+      eventName: 'reopen',
+      payload: {
+        backend: 'file_system_access', task_id: session.taskId, file_id: 'other-pending',
+        transition: 'placeholder_owned', owner_kind: 'unfinished',
+      },
+    })
+    expect(traces).toContainEqual({
+      eventName: 'reopen',
+      payload: {
+        backend: 'file_system_access', task_id: session.taskId, file_id: 'run2-collision',
+        transition: 'placeholder_owned', owner_kind: 'completed',
+      },
+    })
+    await reopened.close()
+  })
 })
 
 describe('FSA terminal cleanup', () => {

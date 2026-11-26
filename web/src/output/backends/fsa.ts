@@ -19,7 +19,7 @@ import { emitOutputTrace, type OutputDiagnosticsPorts } from '../diagnostics'
 import type { ReceiveStore } from '../store/database'
 import { acquireTaskLock, withFSAReservationLock, type TaskLock } from '../store/tab-lock'
 import {
-  fileRecordId, summarizeStoredTaskFiles,
+  summarizeStoredTaskFiles,
   type FSADiskFingerprint,
   type FSAReservedFile,
   type FSATargetRecord,
@@ -39,6 +39,7 @@ import {
   matchesFSADiskFingerprint, readFSADiskFingerprint, sameFSAEntry, settleFSATerminalCleanup,
 } from './fsa-cleanup'
 import { destinationChanged, FSAOutputFile, verifyExistingFSAFile, type FSAFileOrigin } from './fsa-file'
+import { FSAFileRecords } from './fsa-records'
 import {
   buildFSATargetRecord, collectFSATopLevelClaims, ensureFSAPermission, openFSADirectory, openFSAFile,
   openOrCreateFSAFile, reserveFSATarget, retainsFSAReservationClaim, rollbackFSATaskTarget,
@@ -234,58 +235,6 @@ export async function discardFSATask(
   }
 }
 
-/** While the task lock is held, unfinished rows can be reused directly after each successful IndexedDB transaction. */
-class FSAFileRecords {
-  readonly completedAtOpen = new Map<string, ReceiveFileRecord>()
-  readonly #invalidatedCompleted = new Map<string, string>()
-  readonly #unfinished = new Map<string, ReceiveFileRecord>()
-  readonly #store: ReceiveStore
-
-  constructor(store: ReceiveStore, prior: readonly ReceiveFileRecord[]) {
-    this.#store = store
-    for (const file of prior) {
-      if (file.status === 'completed') this.completedAtOpen.set(file.fileId, file)
-      else this.#unfinished.set(file.id, file)
-    }
-  }
-
-  find(taskId: string, fileId: string): ReceiveFileRecord | undefined {
-    return this.#unfinished.get(fileRecordId(taskId, fileId)) ?? this.completedAtOpen.get(fileId)
-  }
-
-  invalidateCompleted(record: ReceiveFileRecord): boolean {
-    if (this.#invalidatedCompleted.has(record.fileId)) return false
-    this.#invalidatedCompleted.set(record.fileId, record.id)
-    return true
-  }
-
-  isInvalidatedCompleted(file: ReceiveFileRecord): boolean {
-    return file.status === 'completed' && this.#invalidatedCompleted.has(file.fileId)
-  }
-
-  async putFile(record: ReceiveFileRecord): Promise<void> {
-    await this.#store.putFile(record)
-    if (record.status === 'completed') {
-      this.#unfinished.delete(record.id)
-      this.#invalidatedCompleted.delete(record.fileId)
-    } else {
-      this.#unfinished.set(record.id, record)
-    }
-  }
-
-  async deleteFiles(ids: readonly string[]): Promise<void> {
-    await this.#store.deleteFiles(ids)
-    const deleted = new Set(ids)
-    for (const id of ids) this.#unfinished.delete(id)
-    for (const [fileId, id] of this.#invalidatedCompleted) {
-      if (deleted.has(id)) {
-        this.#invalidatedCompleted.delete(fileId)
-        this.completedAtOpen.delete(fileId)
-      }
-    }
-  }
-}
-
 class FSASessionHandle implements OutputSessionHandle {
   readonly taskId: string
   readonly backend = 'fsa' as const
@@ -303,7 +252,6 @@ class FSASessionHandle implements OutputSessionHandle {
   readonly #dirCache = new Map<string, Promise<FSADirectory>>()
   readonly #createdDirectories = new Set<FileSystemDirectoryHandle>()
   readonly #fileDirectories = new Set<FileSystemDirectoryHandle>()
-  readonly #reclaimedPlaceholders: FileSystemFileHandle[] = []
   #reservedPlaceholderActive = false
   #outputTouched = false
   #rolledBack = false
@@ -331,7 +279,7 @@ class FSASessionHandle implements OutputSessionHandle {
     this.#locks = locks
     this.#diagnostics = diagnostics
     this.#reopenedAtMs = reopenedAtMs
-    this.#files = new FSAFileRecords(store, priorFiles)
+    this.#files = new FSAFileRecords(store, priorFiles, reopenedAtMs !== undefined && !record.target.singleFile)
     this.transferOutput = Object.freeze({
       sessionId: record.taskId,
       capabilities: Object.freeze({
@@ -519,7 +467,8 @@ class FSASessionHandle implements OutputSessionHandle {
     const entry = target.singleFile
       ? await this.#openSingleFileEntry(parent.handle, target.reservedName, request.fileId)
       : await openFSAFile(parent.handle, request.path, leaf, this.#safeNames, this.taskId)
-    const candidatePath = this.#displayPath([...parent.physicalPath, entry.handle.name])
+    const physicalPath = [...parent.physicalPath, entry.handle.name]
+    const candidatePath = this.#displayPath(physicalPath)
     const releaseReserved = () => { this.#reservedPlaceholderActive = false }
     if (entry.created) {
       if (!target.singleFile) {
@@ -545,7 +494,9 @@ class FSASessionHandle implements OutputSessionHandle {
         origin: { kind: 'reserved-placeholder', fingerprint, onReleased: releaseReserved },
       }
     }
-    const fingerprint = await this.#reclaimUncommittedPlaceholder(entry.handle, target.reservedAtMs, request.fileId, candidatePath)
+    const fingerprint = await this.#reclaimUncommittedPlaceholder(
+      entry.handle, physicalPath, target.reservedAtMs, request.fileId, candidatePath,
+    )
     return {
       kind: 'placeholder',
       handle: entry.handle,
@@ -607,21 +558,35 @@ class FSASessionHandle implements OutputSessionHandle {
   }
 
   #reclaimUncommittedPlaceholder(
-    handle: FileSystemFileHandle, reservedAtMs: number, fileId: string, displayPath: string,
+    handle: FileSystemFileHandle,
+    physicalPath: readonly string[],
+    reservedAtMs: number,
+    fileId: string,
+    displayPath: string,
   ): Promise<FSADiskFingerprint> {
     if (this.#reopenedAtMs === undefined) return Promise.reject(destinationChanged(displayPath))
     const reopenedAtMs = this.#reopenedAtMs
     return this.#serializePlaceholderClaim(async () => {
-      for (const prior of this.#reclaimedPlaceholders) {
-        if (await sameFSAEntry(prior, handle)) throw destinationChanged(displayPath)
-      }
       const disk = await readFSADiskFingerprint(handle).catch((cause: unknown) => {
         throw destinationChanged(displayPath, cause)
       })
       if (!isUncommittedEmptyPlaceholder(disk, reservedAtMs, reopenedAtMs)) {
         throw destinationChanged(displayPath)
       }
-      this.#reclaimedPlaceholders.push(handle)
+      const ownerKind = await this.#files.findOwnerKind(handle, physicalPath).catch((cause: unknown) => {
+        throw destinationChanged(displayPath, cause)
+      })
+      if (ownerKind !== undefined) {
+        emitOutputTrace(this.#diagnostics?.trace, 'reopen', {
+          backend: 'file_system_access',
+          task_id: this.taskId,
+          file_id: fileId,
+          transition: 'placeholder_owned',
+          owner_kind: ownerKind,
+        })
+        throw destinationChanged(displayPath)
+      }
+      this.#files.recordReclaimedPlaceholder(handle, physicalPath)
       emitOutputTrace(this.#diagnostics?.trace, 'reopen', {
         backend: 'file_system_access', task_id: this.taskId, file_id: fileId, transition: 'placeholder_reclaimed',
       })
