@@ -66,6 +66,12 @@ func (runtime *Runtime) UsableLaneDone(identity session.LaneIdentity) (<-chan st
 	return runtime.core.UsableLaneDone(identity)
 }
 
+// HasUsableLanes reports whether at least one attached lane can still carry
+// new control traffic and authorize non-initial lane admission.
+func (runtime *Runtime) HasUsableLanes() bool {
+	return runtime != nil && runtime.core != nil && runtime.core.HasUsableLanes()
+}
+
 func (runtime *Runtime) AttachedLanes() int {
 	if runtime == nil {
 		return 0

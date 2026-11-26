@@ -79,9 +79,22 @@ type memoryPipe struct {
 	inbox  [2]chan framechannel.Frame
 }
 
+type pipeSendGate struct {
+	once    sync.Once
+	entered chan struct{}
+	release <-chan struct{}
+}
+
 type memoryPipeEnd struct {
-	pipe  *memoryPipe
-	index int
+	pipe     *memoryPipe
+	index    int
+	sendGate *pipeSendGate
+}
+
+func (e *memoryPipeEnd) armSendGate(entered chan struct{}, release <-chan struct{}) {
+	e.pipe.mu.Lock()
+	e.sendGate = &pipeSendGate{entered: entered, release: release}
+	e.pipe.mu.Unlock()
 }
 
 func newMemoryPipe() (*memoryPipeEnd, *memoryPipeEnd) {
@@ -96,6 +109,13 @@ func newMemoryPipe() (*memoryPipeEnd, *memoryPipeEnd) {
 
 func (e *memoryPipeEnd) Send(ctx context.Context, frame framechannel.Frame) error {
 	peer := 1 - e.index
+	e.pipe.mu.Lock()
+	gate := e.sendGate
+	e.pipe.mu.Unlock()
+	if gate != nil {
+		gate.once.Do(func() { close(gate.entered) })
+		<-gate.release
+	}
 	e.pipe.mu.Lock()
 	if e.pipe.closed[e.index] || e.pipe.closed[peer] {
 		e.pipe.mu.Unlock()
@@ -176,7 +196,7 @@ func (c *stagedCloseReceiverConnection) Close() error {
 	return c.channel.Close()
 }
 
-func newInMemoryLiveSender(t *testing.T, relayURL string) (*liveshare.PreparedSender, *sendersession.Factory) {
+func newInMemoryLiveSender(t *testing.T, relayURLs ...string) (*liveshare.PreparedSender, *sendersession.Factory) {
 	t.Helper()
 	pool, err := content.NewHandlePool(content.DefaultHandlePoolConfig())
 	if err != nil {
@@ -194,7 +214,7 @@ func newInMemoryLiveSender(t *testing.T, relayURL string) (*liveshare.PreparedSe
 	t.Cleanup(func() { _ = cacheBudget.Close() })
 	sender, err := liveshare.PrepareSender(context.Background(), liveshare.SenderConfig{
 		Source:           &memoryRelayFileSource{},
-		Relays:           []string{relayURL},
+		Relays:           relayURLs,
 		ChunkSize:        catalog.MinChunkSize,
 		RevisionCapacity: pool,
 		CatalogBudget:    catalogBudget,
@@ -493,4 +513,188 @@ func TestReceiverPublishInitialRejectsRetiredCandidateAndPreservesCompetingRelay
 			t.Fatalf("WaitReady = (%v, %v, %v), want live candidate", gotRuntime, gotConn, err)
 		}
 	})
+}
+
+func TestReceiverDetachAndClosingSoleLaneWindowsDoNotRetryDyingSession(t *testing.T) {
+	controlBody, err := protocolsession.EncodePeerPathControl(protocolsession.PeerPathControl{
+		PeerPathID:          [16]byte{1},
+		NetworkGenerationID: [16]byte{2},
+		ControlSequence:     1,
+		Kind:                protocolsession.PeerPathRevoke,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name              string
+		detachExplicitly  bool
+		wantAttachedLanes int
+	}{
+		{name: "explicit detach zero-lane window", detachExplicitly: true, wantAttachedLanes: 0},
+		{name: "natural markClosing drain window", detachExplicitly: false, wantAttachedLanes: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				const relayA = "http://127.0.0.1:18084"
+				const relayB = "http://127.0.0.1:18085"
+				sender, factory := newInMemoryLiveSender(t, relayA, relayB)
+				endpointA, err := v2.NormalizeRelayEndpoint(relayA)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var relayADials, relayBDials atomic.Int32
+				var obsMu sync.Mutex
+				var observations []ReceiverRecoveryObservation
+				var pipeMu sync.Mutex
+				var senderPipe, receiverPipe *memoryPipeEnd
+				var senderDone sync.WaitGroup
+				recovery, err := NewReceiverRecovery(ReceiverRecoveryOptions{
+					Jitter: func(delay time.Duration) time.Duration { return delay },
+					Observe: func(obs ReceiverRecoveryObservation) {
+						obsMu.Lock()
+						observations = append(observations, obs)
+						obsMu.Unlock()
+					},
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				set, err := recovery.Join(context.Background(), ReceiverConfig{
+					Receiver: liveshare.ReceiverConfig{
+						Capacity:   testReceiveCapacity(t),
+						Capability: sender.Capability(),
+					},
+					Dial: func(_ context.Context, cfg relayv2.ReceiverConfig) (ReceiverConnection, error) {
+						if cfg.RelayBaseURL == relayB {
+							relayBDials.Add(1)
+							return nil, &relayv2.RelayError{Code: v2.ErrorNotFound}
+						}
+						if relayADials.Add(1) > 1 {
+							return nil, errors.New("unexpected retry dial on primary relay")
+						}
+						sEnd, rEnd := newMemoryPipe()
+						pipeMu.Lock()
+						senderPipe, receiverPipe = sEnd, rEnd
+						pipeMu.Unlock()
+						senderDone.Go(func() {
+							admission, admitErr := factory.AdmitChannel(context.Background(), sEnd)
+							if admitErr != nil {
+								_ = sEnd.Close()
+								return
+							}
+							if admission.Session != nil {
+								<-admission.Session.Done()
+								admission.Session.Close()
+							}
+						})
+						return &stagedCloseReceiverConnection{
+							descriptor: sender.Registration().Descriptor,
+							channel:    rEnd,
+							endpoint:   endpointA,
+							done:       make(chan struct{}),
+						}, nil
+					},
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				var sendDone sync.WaitGroup
+				defer func() {
+					set.Close()
+					sendDone.Wait()
+					senderDone.Wait()
+				}()
+				runtime, _, err := set.WaitReady(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				// Let relayB finish its first retry backoff and park inside waitForDemand.
+				time.Sleep(2 * receiverRetryDelay)
+				synctest.Wait()
+				if relayBDials.Load() != 1 {
+					t.Fatalf("relayB dials before teardown = %d, want 1", relayBDials.Load())
+				}
+
+				// Hold the sole lane's writer in channel.Send so sessioncore cannot reach
+				// finishLane yet while teardown removes or marks the lane closing.
+				sendEntered := make(chan struct{})
+				releaseSend := make(chan struct{})
+				released := false
+				defer func() {
+					if !released {
+						close(releaseSend)
+					}
+				}()
+				pipeMu.Lock()
+				sPipe, rPipe := senderPipe, receiverPipe
+				pipeMu.Unlock()
+				rPipe.armSendGate(sendEntered, releaseSend)
+				sendDone.Go(func() {
+					_ = runtime.SendPeerPathControl(context.Background(), controlBody)
+				})
+				<-sendEntered
+
+				detachDone := make(chan bool, 1)
+				if tc.detachExplicitly {
+					laneID, laneEpoch := runtime.LaneIdentity()
+					go func() {
+						detachDone <- runtime.DetachLane(session.LaneIdentity{ID: laneID, Epoch: laneEpoch})
+					}()
+				} else {
+					if err := sPipe.Close(); err != nil {
+						t.Fatal(err)
+					}
+				}
+				synctest.Wait()
+
+				if runtime.AttachedLanes() != tc.wantAttachedLanes || runtime.HasUsableLanes() ||
+					runtime.Stopping() || runtime.PathsExhausted() {
+					t.Fatalf("unexpected pre-finishLane teardown state: attached=%d usable=%v stopping=%v exhausted=%v",
+						runtime.AttachedLanes(), runtime.HasUsableLanes(), runtime.Stopping(), runtime.PathsExhausted())
+				}
+				if err := set.waitForDemand(context.Background()); !errors.Is(err, session.ErrRuntimeClosed) {
+					t.Fatalf("waitForDemand during teardown window = %v, want %v", err, session.ErrRuntimeClosed)
+				}
+				if err := set.attemptError(context.Background()); !errors.Is(err, session.ErrRuntimeClosed) {
+					t.Fatalf("attemptError during teardown window = %v, want %v", err, session.ErrRuntimeClosed)
+				}
+
+				// Wake relayB's parked waitForDemand timer while teardown is still mid-flight.
+				time.Sleep(2 * receiverRetryDelay)
+				synctest.Wait()
+				if relayBDials.Load() != 1 {
+					t.Fatalf("parked relay worker dialed during teardown window: dials=%d", relayBDials.Load())
+				}
+
+				close(releaseSend)
+				released = true
+				if tc.detachExplicitly && !<-detachDone {
+					t.Fatal("DetachLane returned false for active sole lane")
+				}
+				<-runtime.Done()
+				if !runtime.PathsExhausted() {
+					t.Fatal("sole lane teardown did not settle as PathsExhausted")
+				}
+				set.Close()
+				sendDone.Wait()
+				senderDone.Wait()
+
+				if relayADials.Load() != 1 || relayBDials.Load() != 1 {
+					t.Fatalf("unexpected dials: relayA=%d relayB=%d", relayADials.Load(), relayBDials.Load())
+				}
+				obsMu.Lock()
+				defer obsMu.Unlock()
+				var relayBConnecting int
+				for _, obs := range observations {
+					if obs.Endpoint == relayB && obs.Phase == ReceiverRecoveryConnecting {
+						relayBConnecting++
+					}
+				}
+				if relayBConnecting != 1 {
+					t.Fatalf("relayB connecting observations = %d, want 1 (initial attempt only)", relayBConnecting)
+				}
+			})
+		})
+	}
 }

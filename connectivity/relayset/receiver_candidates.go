@@ -68,7 +68,9 @@ func (receiver *Receiver) expandCandidates() {
 }
 
 // Park only retries, preserving initial races and every admitted lane. Network
-// queue pressure or path loss wakes fallback; idle browsing makes no retry traffic.
+// queue pressure wakes fallback while another lane remains usable; once no
+// usable lane remains, this generation cannot admit a replacement and exits for
+// session-level recovery.
 func (receiver *Receiver) waitForDemand(ctx context.Context) error {
 	for {
 		if err := ctx.Err(); err != nil {
@@ -78,7 +80,7 @@ func (receiver *Receiver) waitForDemand(ctx context.Context) error {
 		if runtimeEnding(runtime) {
 			return session.ErrRuntimeClosed
 		}
-		if runtime.AttachedLanes() == 0 || runtime.LaneSet().SchedulingDemand().NetworkWaitingBytes > 0 {
+		if runtime.LaneSet().SchedulingDemand().NetworkWaitingBytes > 0 {
 			return nil
 		}
 		if err := receiver.config.Clock.Wait(ctx, receiverRetryDelay); err != nil {

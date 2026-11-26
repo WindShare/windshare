@@ -378,11 +378,12 @@ func (receiver *Receiver) admit(ctx context.Context, connection ReceiverConnecti
 	return err
 }
 
-// runtimeEnding closes the publication window between removing the last lane
-// (which claims TerminationPathsExhausted under lanes.mu) and canceling
-// runtime.Lifetime after the detach hook completes.
+// runtimeEnding closes the windows where a generation can no longer admit
+// another lane before runtime.Lifetime cancels: last-lane retirement (which
+// claims TerminationPathsExhausted under lanes.mu), markClosing during lane
+// drain, and explicit DetachLane teardown while awaiting lane.done.
 func runtimeEnding(runtime *receiversession.Runtime) bool {
-	return runtime == nil || runtime.Stopping() || runtime.PathsExhausted()
+	return runtime == nil || runtime.Stopping() || runtime.PathsExhausted() || !runtime.HasUsableLanes()
 }
 
 func (receiver *Receiver) attemptError(ctx context.Context) error {

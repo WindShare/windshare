@@ -67,6 +67,7 @@ func TestRuntimeDependencyAdaptersAndStableErrors(t *testing.T) {
 	}
 
 	if (*Runtime)(nil).DetachLane(session.LaneIdentity{}) || (*sendersession.Runtime)(nil).DetachLane(session.LaneIdentity{}) ||
+		(*Runtime)(nil).HasUsableLanes() ||
 		(*Runtime)(nil).AttachedLanes() != 0 || (*sendersession.Runtime)(nil).AttachedLanes() != 0 {
 		t.Fatal("nil lane accessors were not inert")
 	}
