@@ -222,6 +222,111 @@ func TestCandidateCloseIsReentrantAndRevokesQueuedCompletion(t *testing.T) {
 	}
 }
 
+func TestCloseRunsOnClosedSynchronouslyBeforeDeferredOrConcurrentObservation(t *testing.T) {
+	t.Run("active observation deferral", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			peer := lifecyclePeer(t, nil)
+			entered, releaseObserver := make(chan struct{}), make(chan struct{})
+			var observations []string
+			peer.request.Observe = func(e Event) {
+				observations = append(observations, e.Milestone)
+				if e.Candidate != nil {
+					close(entered)
+					<-releaseObserver
+				}
+			}
+			leaseReleased := false
+			peer.release = func() { leaseReleased = true }
+			onClosedCalls := 0
+			sawLeaseReleased := false
+			peer.request.OnClosed = func() {
+				onClosedCalls++
+				sawLeaseReleased = leaseReleased
+			}
+			peer.OnICECandidate(func(*pion.ICECandidate) {})
+			peer.candidates.receive(lifecycleHost(2000))
+			<-entered
+
+			if err := peer.Close(); err != nil {
+				t.Fatalf("Close err = %v", err)
+			}
+			if onClosedCalls != 1 || !sawLeaseReleased {
+				t.Fatalf("OnClosed calls = %d, sawLeaseReleased = %v", onClosedCalls, sawLeaseReleased)
+			}
+			if !slices.Equal(observations, []string{"candidate"}) {
+				t.Fatalf("observations before observer exit = %v, want [candidate]", observations)
+			}
+
+			close(releaseObserver)
+			synctest.Wait()
+			if onClosedCalls != 1 || !slices.Equal(observations, []string{"candidate", ProviderClosed}) {
+				t.Fatalf("final OnClosed calls = %d, observations = %v", onClosedCalls, observations)
+			}
+		})
+	})
+
+	t.Run("concurrent close", func(t *testing.T) {
+		peer := lifecyclePeer(t, nil)
+		onClosedEntered, releaseOnClosed := make(chan struct{}), make(chan struct{})
+		providerClosedEntered, releaseProviderClosed := make(chan struct{}), make(chan struct{})
+		leaseReleased := false
+		peer.release = func() { leaseReleased = true }
+		onClosedDone := false
+		onClosedCalls := 0
+		peer.request.OnClosed = func() {
+			onClosedCalls++
+			if !leaseReleased {
+				t.Error("OnClosed ran before socket release")
+			}
+			close(onClosedEntered)
+			<-releaseOnClosed
+			onClosedDone = true
+		}
+		var observations []string
+		peer.request.Observe = func(e Event) {
+			if e.Milestone == ProviderClosed {
+				close(providerClosedEntered)
+				<-releaseProviderClosed
+			}
+			observations = append(observations, e.Milestone)
+		}
+
+		firstDone := make(chan error, 1)
+		go func() { firstDone <- peer.Close() }()
+		<-onClosedEntered
+
+		secondStarted := make(chan struct{})
+		secondDone := make(chan error, 1)
+		go func() {
+			close(secondStarted)
+			secondDone <- peer.Close()
+		}()
+		<-secondStarted
+		select {
+		case err := <-secondDone:
+			t.Fatalf("concurrent Close returned before OnClosed finished: %v", err)
+		default:
+		}
+
+		close(releaseOnClosed)
+		<-providerClosedEntered
+		if err := <-secondDone; err != nil {
+			t.Fatalf("concurrent Close err = %v", err)
+		}
+		if !onClosedDone || onClosedCalls != 1 {
+			t.Fatalf("after concurrent Close: onClosedDone = %v, calls = %d", onClosedDone, onClosedCalls)
+		}
+
+		close(releaseProviderClosed)
+		if err := <-firstDone; err != nil {
+			t.Fatalf("winner Close err = %v", err)
+		}
+		if onClosedCalls != 1 || !slices.Equal(observations, []string{ProviderClosed}) {
+			t.Fatalf("final OnClosed calls = %d, observations = %v", onClosedCalls, observations)
+		}
+	})
+}
+
 func TestLateActiveTCPCandidateObservedAfterEndOfTrickle(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		peer := lifecyclePeer(t, nil)

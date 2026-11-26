@@ -233,10 +233,19 @@ func (p *PreparedAttempt) connect(ctx context.Context) (*pionpeer.Connection, er
 	}
 	config := pionpeer.AttemptConfig{ProtocolSessionID: p.key.session, PeerPathID: [16]byte(p.key.path), AttemptID: [16]byte(p.request.Binding.AttemptID),
 		NetworkGenerationID: path.generation, ICEProfileID: p.profile.ID(), ICE: iceConfiguration, SocketLease: path.lease, MappedEndpoints: n.mappedLocked(path)}
+	// Release admission capacity synchronously inside Connection.Close so an
+	// immediate retry never observes stale concurrency/active-time accounting
+	// while a candidate observation or concurrent Close is still in flight.
+	// Keeping finish on ProviderClosed preserves ClosePath's wait for terminal
+	// observation delivery before CompleteObservations cuts the stream.
+	config.OnClosed = func() {
+		p.release()
+		p.cancel()
+	}
 	observer := n.attemptObserver(p.key, path, p.profile, p.request.Binding)
 	config.Observe = func(event pionpeer.Event) {
 		observer(event)
-		if event.Milestone == "provider_closed" {
+		if event.Milestone == pionpeer.ProviderClosed {
 			p.finish()
 		}
 	}

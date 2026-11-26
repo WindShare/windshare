@@ -10,6 +10,7 @@ import (
 const (
 	HostSTUNDiscovered = "stun_host_port_discovered"
 	GatheringComplete  = "gathering_complete"
+	ProviderClosed     = "provider_closed"
 )
 
 type CandidateFacts struct {

@@ -3,10 +3,14 @@ package nativepeer
 import (
 	"context"
 	"errors"
-	"github.com/windshare/windshare/connectivity/networkstate"
-	"github.com/windshare/windshare/core/session/protocolsession"
+	"sync"
 	"testing"
 	"time"
+
+	pion "github.com/pion/webrtc/v4"
+	"github.com/windshare/windshare/connectivity/networkstate"
+	"github.com/windshare/windshare/connectivity/pionpeer"
+	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
 type expiringSnapshot struct{ expire func() }
@@ -152,6 +156,152 @@ func TestRetiredPathOrNetworkCancelsQueuedAdmissionWithoutChargingStart(t *testi
 			defer gate.mu.Unlock()
 			if gate.starts != StartsPerWindow-ConcurrentAttempts || len(gate.queue) != 0 {
 				t.Fatal("retirement charged a new start")
+			}
+		})
+	}
+}
+
+func TestCloseReleasesAdmissionSynchronouslyWhilePreservingProviderClosedDrain(t *testing.T) {
+	for _, mode := range []string{"active-observation", "concurrent-close"} {
+		t.Run(mode, func(t *testing.T) {
+			gate, _, makeNative := newAdmissionFixture(t, 0)
+			n := makeNative()
+			targetReq := attemptFor(ConcurrentAttempts)
+			entered, release := make(chan struct{}), make(chan struct{})
+			var enterOnce, releaseOnce sync.Once
+			unblock := func() { releaseOnce.Do(func() { close(release) }) }
+			t.Cleanup(unblock)
+
+			n.config.Connect = func(cfg pion.Configuration, req pionpeer.AttemptConfig) (*pionpeer.Connection, error) {
+				if req.ProtocolSessionID == targetReq.ProtocolSessionID {
+					origObserve := req.Observe
+					req.Observe = func(event pionpeer.Event) {
+						shouldBlock := (mode == "active-observation" && event.Candidate != nil) ||
+							(mode == "concurrent-close" && event.Milestone == pionpeer.ProviderClosed)
+						if shouldBlock {
+							enterOnce.Do(func() {
+								close(entered)
+								<-release
+							})
+						}
+						origObserve(event)
+					}
+				}
+				return pionpeer.NewPeerConnection(cfg, req)
+			}
+
+			peers := make([]*pionpeer.Connection, 0, ConcurrentAttempts)
+			for i := byte(1); i <= ConcurrentAttempts; i++ {
+				peers = append(peers, startActual(t, n, i))
+			}
+			t.Cleanup(func() {
+				unblock()
+				for _, pc := range peers {
+					_ = pc.Close()
+				}
+			})
+			target := peers[ConcurrentAttempts-1]
+
+			var firstCloseDone chan error
+			if mode == "active-observation" {
+				if _, err := target.CreateDataChannel("close-quiescence", nil); err != nil {
+					t.Fatal(err)
+				}
+				offer, err := target.CreateOffer(nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := target.SetLocalDescription(offer); err != nil {
+					t.Fatal(err)
+				}
+				select {
+				case <-entered:
+				case <-time.After(2 * time.Second):
+					t.Fatal("candidate observation did not start")
+				}
+				if err := target.Close(); err != nil {
+					t.Fatalf("target.Close err = %v", err)
+				}
+			} else {
+				firstCloseDone = make(chan error, 1)
+				go func() { firstCloseDone <- target.Close() }()
+				select {
+				case <-entered:
+				case <-time.After(2 * time.Second):
+					t.Fatal("provider_closed observation did not start")
+				}
+				if err := target.Close(); err != nil {
+					t.Fatalf("concurrent target.Close err = %v", err)
+				}
+			}
+
+			gate.mu.Lock()
+			active := gate.active
+			gate.mu.Unlock()
+			if active != ConcurrentAttempts-1 {
+				t.Fatalf("active after Close = %d, want %d", active, ConcurrentAttempts-1)
+			}
+			immediate, err := n.PrepareAttemptWithin(t.Context(), attemptFor(ConcurrentAttempts+1), 0)
+			if err != nil {
+				t.Fatalf("immediate retry after Close failed: %v", err)
+			}
+			immediate.Close()
+
+			// ClosePath must still wait for the in-flight ProviderClosed observation
+			// so CompleteObservations cannot truncate the terminal provider event.
+			closePathDone := make(chan struct{})
+			go func() {
+				n.ClosePath(targetReq.ProtocolSessionID, targetReq.Binding.PeerPathID)
+				close(closePathDone)
+			}()
+			sawPathClosed := false
+			for !sawPathClosed {
+				select {
+				case event := <-n.Observations():
+					if event.Subject.ProtocolSessionID == targetReq.ProtocolSessionID &&
+						event.Lifecycle != nil && event.Lifecycle.Kind == PathClosed {
+						sawPathClosed = true
+					}
+					if event.Subject.ProtocolSessionID == targetReq.ProtocolSessionID &&
+						event.Provider != nil && event.Provider.Milestone == pionpeer.ProviderClosed {
+						t.Fatal("provider_closed observed before blocked observer was released")
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("missing PathClosed observation")
+				}
+			}
+			select {
+			case <-closePathDone:
+				t.Fatal("ClosePath returned before ProviderClosed observation finished")
+			default:
+			}
+
+			unblock()
+			select {
+			case <-closePathDone:
+			case <-time.After(2 * time.Second):
+				t.Fatal("ClosePath did not finish after observer release")
+			}
+			if firstCloseDone != nil {
+				if err := <-firstCloseDone; err != nil {
+					t.Fatalf("winner target.Close err = %v", err)
+				}
+			}
+			for _, pc := range peers[:ConcurrentAttempts-1] {
+				if err := pc.Close(); err != nil {
+					t.Fatalf("sibling Close err = %v", err)
+				}
+			}
+			n.CompleteObservations()
+			sawProviderClosed := false
+			for event := range n.Observations() {
+				if event.Subject.ProtocolSessionID == targetReq.ProtocolSessionID &&
+					event.Provider != nil && event.Provider.Milestone == pionpeer.ProviderClosed {
+					sawProviderClosed = true
+				}
+			}
+			if !sawProviderClosed {
+				t.Fatal("CompleteObservations after ClosePath missed target provider_closed event")
 			}
 		})
 	}

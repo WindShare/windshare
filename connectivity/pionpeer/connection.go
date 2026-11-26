@@ -35,6 +35,10 @@ type AttemptConfig struct {
 	SocketLease         *socketauthority.Lease
 	MappedEndpoints     []MappedEndpoint
 	Observe             func(Event)
+	// OnClosed runs once synchronously inside Close after physical teardown and
+	// socket lease release, before Close returns to any concurrent caller. It
+	// must be lightweight, non-blocking, and must not reenter Connection.Close.
+	OnClosed func()
 	// allowLoopback is package-private so only local in-package ICE handshake
 	// tests can opt into loopback sockets/candidates; production stays RFC 8445.
 	allowLoopback bool
@@ -246,10 +250,13 @@ func (c *Connection) Close() error {
 		c.closeErr = c.PeerConnection.Close()
 		c.release()
 		c.closeErr = errors.Join(c.closeErr, c.lease.Close())
+		if c.request.OnClosed != nil {
+			c.request.OnClosed()
+		}
 		publishClosed = true
 	})
 	if publishClosed {
-		c.candidates.observeClosed(func() { c.observe("provider_closed", "") })
+		c.candidates.observeClosed(func() { c.observe(ProviderClosed, "") })
 	}
 	return c.closeErr
 }
