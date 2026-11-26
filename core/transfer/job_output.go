@@ -275,7 +275,7 @@ func (r JobResult) OnlySourceChangedFiles() bool {
 		return false
 	}
 	for _, file := range r.Files {
-		if !file.Fault.SourceChanged() || file.SettlementFailure != nil || file.SettlementFault.Valid() {
+		if !file.Fault.SourceChanged() || file.Interruption != 0 || file.SettlementFailure != nil || file.SettlementFault.Valid() {
 			return false
 		}
 	}

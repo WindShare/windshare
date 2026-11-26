@@ -446,26 +446,42 @@ func (a *App) promptReceiveRecovery(ctx context.Context, reader *bufio.Reader, p
 	}
 }
 
+const defaultBlockedFileReason = "transfer or output failure"
+
+func blockedReceiveFileReason(item transfer.FileJobFailure) string {
+	if _, blocked, ok := item.Settlement.ItemBlock(); ok {
+		switch blocked {
+		case transfer.ItemBlockOwnedObjectUnknown, transfer.ItemBlockOwnershipUnknown:
+			return "staged data could not be verified for resume"
+		default:
+			return blocked.DiagnosticName()
+		}
+	}
+	switch {
+	case item.Settlement.Kind() == transfer.FileCollision:
+		return "destination collision"
+	// Concrete settlement, source-change, or transfer/output faults outrank
+	// caller interruption so a real failure is never masked by cancellation.
+	case item.SettlementFault.Valid():
+		return defaultBlockedFileReason
+	case item.Fault.SourceChanged():
+		return changedSourceLabel
+	case item.Fault.Valid(), item.Settlement.Kind() == transfer.FileFailed:
+		return defaultBlockedFileReason
+	case item.Interruption == transfer.TransferInterruptionCanceled:
+		return "interrupted"
+	case item.Interruption == transfer.TransferInterruptionDeadline:
+		return "timed out"
+	default:
+		return defaultBlockedFileReason
+	}
+}
+
 // Job diagnostics are already bounded by the transfer; never rebuild a manifest
 // merely to explain why a user needs to intervene.
 func (a *App) reportBlockedReceiveItems(result transfer.JobResult) {
 	for _, item := range result.Files {
-		reason := "transfer or output failure"
-		switch {
-		case item.Settlement.Kind() == transfer.FileCollision:
-			reason = "destination collision"
-		case item.Fault.SourceChanged():
-			reason = changedSourceLabel
-		}
-		if _, blocked, ok := item.Settlement.ItemBlock(); ok {
-			switch blocked {
-			case transfer.ItemBlockOwnedObjectUnknown, transfer.ItemBlockOwnershipUnknown:
-				reason = "staged data could not be verified for resume"
-			default:
-				reason = blocked.DiagnosticName()
-			}
-		}
-		a.writeCompleteLine("  %q: %s", item.Path, reason)
+		a.writeCompleteLine("  %q: %s", item.Path, blockedReceiveFileReason(item))
 	}
 	for _, item := range result.Directories {
 		reason := "directory unavailable"

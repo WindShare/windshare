@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/terminalcanvas"
+	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
@@ -488,5 +490,222 @@ func TestGetResultReportsNameAdjustmentsWithoutChangingSuccessExit(t *testing.T)
 	}
 	if !foundSettled || settledPayload.NameAdjustments != "1" {
 		t.Fatalf("transfer_settled name_adjustments = %q (found=%t)", settledPayload.NameAdjustments, foundSettled)
+	}
+}
+
+func testFileSettlementFixtures(t *testing.T) (paused, failed, collision, ownershipBlocked, revisionConflict transfer.FileSettlement) {
+	t.Helper()
+	var share catalog.ShareInstance
+	var fileID catalog.FileID
+	var revision content.FileRevision
+	var session transfer.OutputSessionID
+	var object transfer.OwnedObjectID
+	share[0], fileID[0], revision[0], session[0], object[0] = 1, 2, 3, 4, 5
+	geometry, err := content.NewFileGeometry(uint64(catalog.MinChunkSize), catalog.MinChunkSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor, err := content.NewFileRevisionDescriptor(share, fileID, revision, geometry, catalog.ModifiedTime{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	locator, err := transfer.NewPathMaterializationLocator("dir/file.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := transfer.NewMaterializedFileBinding(session, descriptor, locator, object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpoint, err := transfer.VerifyRestartRanges(binding, 1, content.RangeSet{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	paused, err = transfer.NewVerifiedFileSettlement(transfer.FilePaused, checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, err = transfer.NewFailedFileSettlement(binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	collision, err = transfer.NewTransactionCollisionFileSettlement(binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := transfer.NewMaterializationStateRef(binding.OutputSessionID(), binding.Locator().Digest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownershipBlocked, err = transfer.NewTransactionItemBlockedFileSettlement(binding, ref, transfer.ItemBlockOwnershipUnknown)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revisionConflict, err = transfer.NewTransactionItemBlockedFileSettlement(binding, ref, transfer.ItemBlockRevisionConflict)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return paused, failed, collision, ownershipBlocked, revisionConflict
+}
+
+func TestBlockedReceiveFileReasonPrecedence(t *testing.T) {
+	paused, failed, collision, ownershipBlocked, revisionConflict := testFileSettlementFixtures(t)
+	ioFault, err := transferfault.NewOutput(transferfault.ScopeFileLocal, transferfault.OutputStateIO)
+	if err != nil {
+		t.Fatal(err)
+	}
+	driftFault, err := transferfault.NewSource(transferfault.ScopeFileLocal, transferfault.SourceRevisionChanged)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		item transfer.FileJobFailure
+		want string
+	}{
+		{
+			name: "canceled interruption",
+			item: transfer.FileJobFailure{Settlement: paused, Interruption: transfer.TransferInterruptionCanceled},
+			want: "interrupted",
+		},
+		{
+			name: "deadline interruption",
+			item: transfer.FileJobFailure{Settlement: paused, Interruption: transfer.TransferInterruptionDeadline},
+			want: "timed out",
+		},
+		{
+			name: "concrete fault outranks interruption",
+			item: transfer.FileJobFailure{Fault: ioFault, Settlement: paused, Interruption: transfer.TransferInterruptionCanceled},
+			want: defaultBlockedFileReason,
+		},
+		{
+			name: "source changed preserves drift label",
+			item: transfer.FileJobFailure{Fault: driftFault},
+			want: changedSourceLabel,
+		},
+		{
+			name: "source changed outranks interruption",
+			item: transfer.FileJobFailure{Fault: driftFault, Interruption: transfer.TransferInterruptionCanceled},
+			want: changedSourceLabel,
+		},
+		{
+			name: "settlement fault outranks source changed",
+			item: transfer.FileJobFailure{Fault: driftFault, SettlementFault: ioFault},
+			want: defaultBlockedFileReason,
+		},
+		{
+			name: "settlement fault with paused settlement outranks interruption",
+			item: transfer.FileJobFailure{Settlement: paused, SettlementFault: ioFault, Interruption: transfer.TransferInterruptionCanceled},
+			want: defaultBlockedFileReason,
+		},
+		{
+			name: "failed settlement outranks interruption",
+			item: transfer.FileJobFailure{Settlement: failed, Interruption: transfer.TransferInterruptionCanceled},
+			want: defaultBlockedFileReason,
+		},
+		{
+			name: "destination collision outranks fault and interruption",
+			item: transfer.FileJobFailure{Fault: ioFault, Settlement: collision, Interruption: transfer.TransferInterruptionCanceled},
+			want: "destination collision",
+		},
+		{
+			name: "ownership item block outranks fault and interruption",
+			item: transfer.FileJobFailure{Fault: ioFault, Settlement: ownershipBlocked, Interruption: transfer.TransferInterruptionCanceled},
+			want: "staged data could not be verified for resume",
+		},
+		{
+			name: "diagnostic item block outranks fault and interruption",
+			item: transfer.FileJobFailure{Fault: driftFault, Settlement: revisionConflict, Interruption: transfer.TransferInterruptionDeadline},
+			want: transfer.ItemBlockRevisionConflict.DiagnosticName(),
+		},
+		{
+			name: "zero fallback",
+			item: transfer.FileJobFailure{},
+			want: defaultBlockedFileReason,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := blockedReceiveFileReason(test.item); got != test.want {
+				t.Fatalf("blockedReceiveFileReason(%+v) = %q, want %q", test.item, got, test.want)
+			}
+		})
+	}
+}
+
+func TestGetResultReportsInterruptedFileReasonMatchingSummary(t *testing.T) {
+	paused, _, _, _, _ := testFileSettlementFixtures(t)
+	tests := []struct {
+		name         string
+		interruption transfer.TransferInterruption
+		cause        error
+		wantFileLine string
+		wantReason   string
+	}{
+		{
+			name:         "canceled",
+			interruption: transfer.TransferInterruptionCanceled,
+			cause:        context.Canceled,
+			wantFileLine: `"dir/file.bin": interrupted`,
+			wantReason:   "The operation was interrupted.",
+		},
+		{
+			name:         "deadline",
+			interruption: transfer.TransferInterruptionDeadline,
+			cause:        context.DeadlineExceeded,
+			wantFileLine: `"dir/file.bin": timed out`,
+			wantReason:   "The operation timed out.",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stderr := &bytes.Buffer{}
+			app := &App{
+				Stderr: stderr,
+				terminalCapabilities: terminalcanvas.CapabilityProviderFunc(func() terminalcanvas.Capabilities {
+					return terminalcanvas.Capabilities{Columns: 500}
+				}),
+			}
+			runtime, err := app.newCommandRuntime(commandGet, observationOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			job := transfer.JobResult{
+				Outcome:                 transfer.DirectTreeOutcomePaused,
+				TerminationCause:        test.cause,
+				TerminationInterruption: test.interruption,
+				Files: []transfer.FileJobFailure{{
+					Path:         "dir/file.bin",
+					Stage:        transfer.FailureBlockTransfer,
+					Cause:        test.cause,
+					Interruption: test.interruption,
+					Settlement:   paused,
+				}},
+				Progress: transfer.ReceiveProgressSnapshot{
+					Discovery:       transfer.DiscoveryComplete,
+					CountersExact:   true,
+					DiscoveredFiles: 1,
+					FileOutcomes:    transfer.FileOutcomeSummary{PausedFiles: 1},
+				},
+			}
+			code := app.reportTransferResultWithAdmission(
+				t, t.Context(), job, nil, nil, nil,
+				t.TempDir(), false, runtime.Clock().Now(), runtime,
+			)
+			runtime.Close()
+			output := stderr.String()
+			if code != ExitFailure {
+				t.Fatalf("exit=%d, want %d; stderr=%q", code, ExitFailure, output)
+			}
+			for _, want := range []string{"Download paused", test.wantFileLine, test.wantReason} {
+				if !strings.Contains(output, want) {
+					t.Fatalf("stderr=%q missing %q", output, want)
+				}
+			}
+			if strings.Contains(output, defaultBlockedFileReason) {
+				t.Fatalf("stderr=%q unexpectedly contains %q", output, defaultBlockedFileReason)
+			}
+		})
 	}
 }

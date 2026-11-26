@@ -493,6 +493,9 @@ func (r *jobRun) recordFileFailure(failure FileJobFailure) {
 	if !failure.Fault.Valid() {
 		failure.Fault = fault.FaultOf(failure.Cause)
 	}
+	if !failure.Interruption.Valid() {
+		failure.Interruption = closedInterruption(failure.Cause)
+	}
 	if !failure.SettlementFault.Valid() {
 		failure.SettlementFault = fault.FaultOf(failure.SettlementFailure)
 	}

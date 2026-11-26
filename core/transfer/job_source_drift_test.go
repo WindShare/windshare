@@ -176,6 +176,7 @@ func TestOnlySourceChangedFilesRequiresEveryInvariant(t *testing.T) {
 		{"sibling session failure", func(r *JobResult) { listed(r, FileJobFailure{Path: "d/c.bin", Fault: session}) }, false},
 		{"sibling output failure", func(r *JobResult) { listed(r, FileJobFailure{Path: "d/c.bin", Fault: output}) }, false},
 		{"changed file with settlement fault", func(r *JobResult) { r.Files[0].SettlementFault = output }, false},
+		{"changed file with file interruption", func(r *JobResult) { r.Files[0].Interruption = TransferInterruptionCanceled }, false},
 		{"unchanged file unfinished", func(r *JobResult) { r.Progress.DiscoveredFiles++ }, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {

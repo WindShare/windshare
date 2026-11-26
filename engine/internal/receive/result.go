@@ -120,6 +120,11 @@ func Settle(input SettlementInput) (task.Completion[Result], error) {
 		!input.NameAdjustments.Valid() {
 		return task.Completion[Result]{}, ErrInvalidResult
 	}
+	for _, file := range r.Files {
+		if file.Interruption != 0 && !file.Interruption.Valid() {
+			return task.Completion[Result]{}, ErrInvalidResult
+		}
+	}
 	outcome := task.OutcomeFailed
 	switch r.Outcome {
 	case transfer.DirectTreeOutcomeSuccess:

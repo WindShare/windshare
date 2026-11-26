@@ -339,3 +339,25 @@ func TestReceiveSettlementRetainsValidNameAdjustmentsAndRejectsInvalid(t *testin
 		t.Fatalf("invalid adjustments err = %v, want ErrInvalidResult", err)
 	}
 }
+
+func TestReceiveSettlementRejectsInvalidFileInterruption(t *testing.T) {
+	for _, valid := range []transfer.TransferInterruption{
+		0,
+		transfer.TransferInterruptionCanceled,
+		transfer.TransferInterruptionDeadline,
+	} {
+		result := successfulJobResult(t)
+		result.Outcome = transfer.DirectTreeOutcomePaused
+		result.Files = []transfer.FileJobFailure{{Path: "dir/file.bin", Interruption: valid}}
+		if _, err := Settle(SettlementInput{Result: result}); err != nil {
+			t.Fatalf("valid file interruption %v rejected: %v", valid, err)
+		}
+	}
+
+	invalid := successfulJobResult(t)
+	invalid.Outcome = transfer.DirectTreeOutcomePaused
+	invalid.Files = []transfer.FileJobFailure{{Path: "dir/file.bin", Interruption: transfer.TransferInterruption(99)}}
+	if _, err := Settle(SettlementInput{Result: invalid}); !errors.Is(err, ErrInvalidResult) {
+		t.Fatalf("invalid file interruption err = %v, want ErrInvalidResult", err)
+	}
+}

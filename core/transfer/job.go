@@ -100,6 +100,7 @@ type FileJobFailure struct {
 	Stage             FailureStage
 	Cause             error
 	Fault             fault.Fault
+	Interruption      TransferInterruption
 	Settlement        FileSettlement
 	SettlementFailure error
 	SettlementFault   fault.Fault
