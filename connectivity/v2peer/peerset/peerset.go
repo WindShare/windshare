@@ -203,6 +203,7 @@ type Path struct {
 	supply            *transferlanes.RouteSupply
 	resourceActive    bool
 	retired           bool
+	closing           bool
 	resourceChanges   chan struct{}
 	deferred          *reservedAttempt
 	owner             *PeerSet
@@ -210,6 +211,7 @@ type Path struct {
 	key               pathKey
 	ctx               context.Context
 	cancel            context.CancelFunc
+	nativeMu          sync.Mutex
 	mu                sync.Mutex
 	demand            Demand
 	slot              *peerslot.Lease
@@ -227,16 +229,33 @@ func (p *Path) SetDemand(demand Demand) error {
 		return ErrConfig
 	}
 	p.mu.Lock()
+	if demand == NoDemand {
+		if p.closing {
+			p.mu.Unlock()
+			return nil
+		}
+		p.demand = NoDemand
+		p.closing = true
+		p.mu.Unlock()
+		if p.cancel != nil {
+			p.cancel()
+		}
+		p.signalWake()
+		return nil
+	}
+	if p.closing || p.retired || (p.ctx != nil && p.ctx.Err() != nil) {
+		p.mu.Unlock()
+		return ErrPathTerminal
+	}
+	changed := p.demand != demand
 	p.demand = demand
 	p.mu.Unlock()
-	p.resourceDemand(false)
-	if demand == NoDemand {
-		p.cancel()
+	if changed {
+		// Route native demand updates through maintainResources so every Native.SetDemand
+		// strictly happens-before closeResources calls Native.ClosePath.
+		p.signalResourceChange()
 	}
-	select {
-	case p.wake <- struct{}{}:
-	default:
-	}
+	p.signalWake()
 	return nil
 }
 func (p *Path) currentDemand() Demand  { p.mu.Lock(); defer p.mu.Unlock(); return p.demand }
@@ -255,10 +274,30 @@ func (p *Path) Lane() (session.LaneIdentity, bool) {
 		return p.lane, true
 	}
 }
-func (p *Path) Result() Result       { p.mu.Lock(); defer p.mu.Unlock(); return p.result }
-func (p *Path) Err() error           { return p.Result().Cause }
-func (p *Path) Close() error         { p.cancel(); <-p.done; return p.Err() }
-func (p *Path) finish(result Result) { p.mu.Lock(); p.result = result; p.mu.Unlock() }
+func (p *Path) Result() Result { p.mu.Lock(); defer p.mu.Unlock(); return p.result }
+func (p *Path) Err() error     { return p.Result().Cause }
+func (p *Path) Close() error   { p.cancel(); <-p.done; return p.Err() }
+func (p *Path) finishLocked(result Result) {
+	p.closing = true
+	p.result = result
+}
+func (p *Path) finish(result Result) {
+	p.mu.Lock()
+	p.finishLocked(result)
+	p.mu.Unlock()
+}
+func (p *Path) signalWake() {
+	select {
+	case p.wake <- struct{}{}:
+	default:
+	}
+}
+func (p *Path) signalResourceChange() {
+	select {
+	case p.resourceChanges <- struct{}{}:
+	default:
+	}
+}
 func (p *Path) wait(delay time.Duration) bool {
 	timer := p.owner.config.Clock.NewTimer(delay)
 	defer timer.Stop()

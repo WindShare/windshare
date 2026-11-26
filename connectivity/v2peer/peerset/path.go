@@ -112,9 +112,14 @@ func (p *Path) nextWave(wave *recoveryWave) *Result {
 	p.deferred.settle(false, 0)
 	p.deferred = nil
 	p.setResourceActive(false)
-	if p.config.StopAfterWave || p.currentDemand() == BrowseDemand {
-		return &Result{Cause: ErrWaveExhausted}
+	p.mu.Lock()
+	if p.config.StopAfterWave || p.demand == BrowseDemand {
+		result := Result{Cause: ErrWaveExhausted}
+		p.finishLocked(result)
+		p.mu.Unlock()
+		return &result
 	}
+	p.mu.Unlock()
 	if !p.wait(max(RefillWindow-p.owner.config.Clock.Now().Sub(wave.started), 0)) {
 		return &Result{Stopped: true}
 	}
@@ -218,8 +223,8 @@ func (p *Path) afterAttempt(wave *recoveryWave, result Result, progress attemptP
 		return &result
 	}
 	if p.currentDemand() == BrowseDemand && p.ctx.Err() == nil && result.Scope != protocolsession.PeerFailureSessionTerminal && result.Scope != protocolsession.PeerFailurePathTerminal {
-		if !p.awaitContentDemand() {
-			return &Result{Stopped: true}
+		if stop := p.awaitContentDemand(); stop != nil {
+			return stop
 		}
 		*wave = recoveryWave{started: p.owner.config.Clock.Now()}
 		return nil
@@ -253,21 +258,34 @@ func (p *Path) afterAttempt(wave *recoveryWave, result Result, progress attemptP
 // Finished prewarm work stays dormant until the same intent acquires content
 // demand. This preserves the one speculative attempt without making a slow
 // catalog browse permanently disable later direct recovery.
-func (p *Path) awaitContentDemand() bool {
-	for p.currentDemand() == BrowseDemand {
+func (p *Path) awaitContentDemand() *Result {
+	for {
+		p.mu.Lock()
+		if p.retired {
+			result := Result{Scope: protocolsession.PeerFailurePathTerminal, Cause: ErrPathTerminal}
+			p.finishLocked(result)
+			p.mu.Unlock()
+			return &result
+		}
+		if p.demand != BrowseDemand {
+			if p.ctx.Err() != nil || p.demand != ContentDemand {
+				result := Result{Stopped: true}
+				p.finishLocked(result)
+				p.mu.Unlock()
+				return &result
+			}
+			p.mu.Unlock()
+			return nil
+		}
+		p.mu.Unlock()
 		select {
 		case <-p.ctx.Done():
-			return false
+			result := Result{Stopped: true}
+			p.finish(result)
+			return &result
 		case <-p.wake:
-			p.mu.Lock()
-			retired := p.retired
-			p.mu.Unlock()
-			if retired {
-				return false
-			}
 		}
 	}
-	return p.ctx.Err() == nil && p.currentDemand() == ContentDemand
 }
 
 func (p *Path) executeStart(start Starter, binding v2signal.Binding, opportunity time.Duration, refund func(time.Duration)) (Result, attemptProgress) {

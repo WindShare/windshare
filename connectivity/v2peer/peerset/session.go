@@ -2,9 +2,11 @@ package peerset
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	"github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session/protocolsession"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
@@ -99,9 +101,12 @@ func (s *ReceiverSession) admitted(path *Path) {
 	}
 }
 func (s *ReceiverSession) SetDemand(demand Demand) error {
+	if demand > ContentDemand {
+		return ErrConfig
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
+	if s.closed || s.ctx.Err() != nil {
 		return ErrPathTerminal
 	}
 	s.config.Demand = demand
@@ -109,15 +114,18 @@ func (s *ReceiverSession) SetDemand(demand Demand) error {
 		s.cancel()
 		return nil
 	}
-	select {
-	case <-s.direct.Done():
-		if demand == ContentDemand {
-			return s.startDirectLocked()
-		}
-		return nil
-	default:
-		return s.direct.SetDemand(demand)
+	if err := s.direct.SetDemand(demand); !errors.Is(err, ErrPathTerminal) {
+		return err
 	}
+	// Never respawn direct recovery after a session-terminal failure; the
+	// watcher is already canceling the session.
+	if s.direct.Result().Scope == protocolsession.PeerFailureSessionTerminal {
+		return ErrPathTerminal
+	}
+	if demand == ContentDemand {
+		return s.startDirectLocked()
+	}
+	return nil
 }
 func (s *ReceiverSession) Ready() <-chan struct{} { return s.ready }
 func (s *ReceiverSession) Done() <-chan struct{}  { return s.done }

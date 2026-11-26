@@ -13,10 +13,16 @@ import (
 func (p *Path) maintainResources(ctx context.Context, done chan<- struct{}) {
 	defer close(done)
 	native := p.config.Native
-	if native == nil {
+	if native == nil || ctx.Err() != nil {
 		return
 	}
-	changes, err := native.SetDemand([16]byte(p.key.session), p.key.path, p.mappingDemand(), false)
+	p.nativeMu.Lock()
+	p.mu.Lock()
+	admitted := p.lane.ID != 0
+	mapping := p.demand == ContentDemand && p.resourceActive
+	p.mu.Unlock()
+	changes, err := native.SetDemand([16]byte(p.key.session), p.key.path, mapping, admitted)
+	p.nativeMu.Unlock()
 	if err != nil {
 		return
 	}
@@ -36,6 +42,7 @@ func (p *Path) maintainResources(ctx context.Context, done chan<- struct{}) {
 			return
 		case <-p.resourceChanges:
 			timer.Stop()
+			p.resourceDemand(false)
 			p.sendControl(ctx, protocolsession.PeerPathDemand)
 		case change := <-changes:
 			timer.Stop()
@@ -57,13 +64,16 @@ func (p *Path) resourceDemand(direct bool) {
 	if p.config.Native == nil {
 		return
 	}
+	p.nativeMu.Lock()
+	defer p.nativeMu.Unlock()
 	p.mu.Lock()
 	admitted := direct || p.lane.ID != 0
+	mapping := p.demand == ContentDemand && p.resourceActive
 	p.mu.Unlock()
 	if admitted {
 		p.config.Native.SetAdmitted([16]byte(p.key.session), p.key.path, true)
 	}
-	_, _ = p.config.Native.SetDemand([16]byte(p.key.session), p.key.path, p.mappingDemand(), admitted)
+	_, _ = p.config.Native.SetDemand([16]byte(p.key.session), p.key.path, mapping, admitted)
 	p.mu.Lock()
 	p.networkGeneration = p.config.Native.Generation([16]byte(p.key.session), p.key.path)
 	p.mu.Unlock()
@@ -97,10 +107,7 @@ func (p *Path) setResourceActive(active bool) {
 	p.resourceActive = active
 	p.mu.Unlock()
 	p.resourceDemand(false)
-	select {
-	case p.resourceChanges <- struct{}{}:
-	default:
-	}
+	p.signalResourceChange()
 }
 
 // PeerPathControl is session-scoped; bind the demuxing handler once per session
