@@ -220,4 +220,165 @@ func TestReleaseRevisionHonorsCallerCancellationAndShorterDeadline(t *testing.T)
 			}
 		})
 	})
+
+	t.Run("pre-expired caller deadline still relinquishes local state when uncontended", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			reader, source, opened := fixture(t)
+			source.releaseCtx = func(ctx context.Context, _ content.LeaseID) error {
+				<-ctx.Done()
+				return ctx.Err()
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+			defer cancel()
+			time.Sleep(20 * time.Millisecond)
+
+			started := time.Now()
+			err := reader.ReleaseRevision(ctx, opened.Handle)
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("release err = %v, want context.DeadlineExceeded", err)
+			}
+			if elapsed := time.Since(started); elapsed >= time.Second {
+				t.Fatalf("expired release stalled for %v", elapsed)
+			}
+			if len(source.released) != 1 || source.released[0][0] != 1 {
+				t.Fatalf("local release handoff skipped: %v", source.released)
+			}
+		})
+	})
+
+	t.Run("shorter caller deadline bounds contended acquire", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			reader, source, opened := fixture(t)
+			entered, releaseRead := make(chan struct{}), make(chan struct{})
+			source.read = func(context.Context, content.LeaseID, content.Range, transfer.RangeSink) error {
+				close(entered)
+				<-releaseRead
+				return context.Canceled
+			}
+			readDone := make(chan error, 1)
+			go func() {
+				readDone <- reader.ReadRange(context.Background(), opened.Handle, opened.Descriptor, content.Range{End: 6}, transfer.RangeSinkFunc(func(context.Context, uint64, []byte) error { return nil }))
+			}()
+			<-entered
+
+			const shortBudget = 100 * time.Millisecond
+			ctx, cancel := context.WithTimeout(context.Background(), shortBudget)
+			defer cancel()
+
+			started := time.Now()
+			err := reader.ReleaseRevision(ctx, opened.Handle)
+			elapsed := time.Since(started)
+			close(releaseRead)
+			<-readDone
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("release err = %v, want context.DeadlineExceeded", err)
+			}
+			if elapsed >= time.Second {
+				t.Fatalf("contended release extended short deadline to %v", elapsed)
+			}
+		})
+	})
+
+	t.Run("caller cancellation wakes contended acquire", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			reader, source, opened := fixture(t)
+			entered, releaseRead := make(chan struct{}), make(chan struct{})
+			source.read = func(context.Context, content.LeaseID, content.Range, transfer.RangeSink) error {
+				close(entered)
+				<-releaseRead
+				return context.Canceled
+			}
+			readDone := make(chan error, 1)
+			go func() {
+				readDone <- reader.ReadRange(context.Background(), opened.Handle, opened.Descriptor, content.Range{End: 6}, transfer.RangeSinkFunc(func(context.Context, uint64, []byte) error { return nil }))
+			}()
+			<-entered
+
+			ctx, cancel := context.WithCancel(context.Background())
+			releaseDone := make(chan error, 1)
+			go func() {
+				releaseDone <- reader.ReleaseRevision(ctx, opened.Handle)
+			}()
+			synctest.Wait()
+
+			started := time.Now()
+			cancel()
+			err := <-releaseDone
+			elapsed := time.Since(started)
+			close(releaseRead)
+			<-readDone
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("release err = %v, want context.Canceled", err)
+			}
+			if elapsed >= time.Second {
+				t.Fatalf("canceled contended release stalled for %v", elapsed)
+			}
+		})
+	})
+}
+
+func TestStopWakesBlockedReleaseRevision(t *testing.T) {
+	t.Run("during contended acquire", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			reader, source, opened := fixture(t)
+			entered, releaseRead := make(chan struct{}), make(chan struct{})
+			source.read = func(context.Context, content.LeaseID, content.Range, transfer.RangeSink) error {
+				close(entered)
+				<-releaseRead
+				return context.Canceled
+			}
+			readDone := make(chan error, 1)
+			go func() {
+				readDone <- reader.ReadRange(context.Background(), opened.Handle, opened.Descriptor, content.Range{End: 6}, transfer.RangeSinkFunc(func(context.Context, uint64, []byte) error { return nil }))
+			}()
+			<-entered
+
+			releaseDone := make(chan error, 1)
+			go func() {
+				releaseDone <- reader.ReleaseRevision(context.Background(), opened.Handle)
+			}()
+			synctest.Wait()
+
+			started := time.Now()
+			reader.Stop()
+			err := <-releaseDone
+			elapsed := time.Since(started)
+			close(releaseRead)
+			<-readDone
+			if !errors.Is(err, ErrClosed) {
+				t.Fatalf("release err = %v, want ErrClosed", err)
+			}
+			if elapsed >= time.Second {
+				t.Fatalf("stopped release stalled in acquire for %v", elapsed)
+			}
+		})
+	})
+
+	t.Run("during remote release wait", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			reader, source, opened := fixture(t)
+			entered := make(chan struct{})
+			source.releaseCtx = func(ctx context.Context, _ content.LeaseID) error {
+				close(entered)
+				<-ctx.Done()
+				return ctx.Err()
+			}
+
+			releaseDone := make(chan error, 1)
+			go func() {
+				releaseDone <- reader.ReleaseRevision(context.Background(), opened.Handle)
+			}()
+			<-entered
+
+			started := time.Now()
+			reader.Stop()
+			err := <-releaseDone
+			if !errors.Is(err, ErrClosed) {
+				t.Fatalf("release err = %v, want ErrClosed", err)
+			}
+			if elapsed := time.Since(started); elapsed >= time.Second {
+				t.Fatalf("stopped release stalled in remote wait for %v", elapsed)
+			}
+		})
+	})
 }

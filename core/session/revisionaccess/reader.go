@@ -216,16 +216,19 @@ func (r *Reader) ReleaseRevision(ctx context.Context, handle transfer.RevisionHa
 		return content.ErrInvalidLease
 	}
 	b.cancel()
-	acquireCtx, cancelAcquire := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
-	defer cancelAcquire()
-	if err := b.acquire(acquireCtx); err != nil {
-		return err
+	releaseCtx, stopLink := linkedContextWithCause(ctx, r.ctx, ErrClosed)
+	defer stopLink()
+	// Bound both waiting for an unwinding ReadRange and the remote RELEASE_LEASE
+	// by caller cancellation, any shorter caller deadline, cleanupTimeout, and
+	// Reader.Stop(). Uncontended handles still acquire immediately so pre-canceled
+	// or pre-expired teardown relinquishes local lease state without remote waits.
+	boundedCtx, cancelBounded := context.WithTimeout(releaseCtx, cleanupTimeout)
+	defer cancelBounded()
+	if err := b.acquireForRelease(boundedCtx); err != nil {
+		return normalizeReleaseErr(releaseCtx, err)
 	}
 	defer b.unlock()
-	// Explicit handle release honors caller cancellation and shorter caller
-	// deadlines so tearing down a canceled job relinquishes local state without
-	// blocking on a remote RPC.
-	return errors.Join(b.cleanupErr, r.releaseCallerScoped(ctx, b.lease.LeaseID))
+	return errors.Join(b.cleanupErr, normalizeReleaseErr(releaseCtx, r.releaseWithContext(boundedCtx, b.lease.LeaseID)))
 }
 
 // A download can replace many leases. Keep the first unconfirmed release for
@@ -252,21 +255,31 @@ func (r *Reader) release(ctx context.Context, id content.LeaseID) error {
 	return r.releaseWithContext(cleanup, id)
 }
 
-func (r *Reader) releaseCallerScoped(ctx context.Context, id content.LeaseID) error {
+func (r *Reader) releaseWithContext(ctx context.Context, id content.LeaseID) error {
 	if id.IsZero() {
 		return nil
 	}
-	cleanup, cancel := context.WithTimeout(ctx, cleanupTimeout)
-	defer cancel()
-	return r.releaseWithContext(cleanup, id)
-}
-
-func (r *Reader) releaseWithContext(ctx context.Context, id content.LeaseID) error {
 	err := r.source.ReleaseLease(ctx, id)
 	if errors.Is(err, content.ErrLeaseExpired) || errors.Is(err, content.ErrInvalidLease) {
 		return nil
 	}
 	return err
+}
+
+func normalizeReleaseErr(releaseCtx context.Context, err error) error {
+	if errors.Is(err, context.Canceled) && errors.Is(context.Cause(releaseCtx), ErrClosed) {
+		return ErrClosed
+	}
+	return err
+}
+
+func (b *binding) acquireForRelease(ctx context.Context) error {
+	select {
+	case b.gate <- struct{}{}:
+		return nil
+	default:
+	}
+	return b.acquire(ctx)
 }
 
 func (b *binding) acquire(ctx context.Context) error {
@@ -287,12 +300,16 @@ func (b *binding) acquire(ctx context.Context) error {
 func (b *binding) unlock() { <-b.gate }
 
 func linkedContext(parent, lifetime context.Context) (context.Context, context.CancelFunc) {
-	ctx, cancel := context.WithCancel(parent)
-	stop := context.AfterFunc(lifetime, cancel)
+	return linkedContextWithCause(parent, lifetime, nil)
+}
+
+func linkedContextWithCause(parent, lifetime context.Context, cause error) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancelCause(parent)
+	stop := context.AfterFunc(lifetime, func() { cancel(cause) })
 	if lifetime.Err() != nil {
-		cancel()
+		cancel(cause)
 	}
-	return ctx, func() { stop(); cancel() }
+	return ctx, func() { stop(); cancel(nil) }
 }
 
 type progressSink struct {
