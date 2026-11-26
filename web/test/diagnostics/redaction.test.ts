@@ -4,8 +4,9 @@ import type { BrowserReceiverGateway } from '../../src/application/browser-share
 import { createFailureReporter, projectProtocolTraceEvent } from '../../src/application/diagnostics/receive-trace'
 import { parseSuite02CapabilityLink } from '../../src/crypto/suite02-link'
 import { createDiagnosticsRuntime } from '../../src/diagnostics'
+import { safeRelayIdentity } from '../../src/network/contracts/relay-endpoint'
 import { RelayEndpointFailure } from '../../src/receiver/relay-selection/race'
-import { sanitizeDiagnosticText } from '../../src/security/url-sanitizer'
+import { sanitizeDiagnosticText, stripRawUrlCredentials } from '../../src/security/url-sanitizer'
 import { ReceiverController } from '../../src/ui/controller'
 
 describe('diagnostic redaction boundaries', () => {
@@ -16,14 +17,64 @@ describe('diagnostic redaction boundaries', () => {
       'at fn (http://localhost:5173/src/ui/controller.ts?t=1732531200000:583:12)',
     )).toBe('at fn (http://localhost:5173/src/ui/controller.ts:583:12)')
     expect(sanitizeDiagnosticText(
+      'at fn (http://localhost:5173/src/(auth)/controller.ts?t=1732531200000:583:12)',
+    )).toBe('at fn (http://localhost:5173/src/(auth)/controller.ts:583:12)')
+    expect(sanitizeDiagnosticText(
       'at fn (https://windshare.top/assets/index-abc.js:1:2345)',
     )).toBe('at fn (https://windshare.top/assets/index-abc.js:1:2345)')
     expect(sanitizeDiagnosticText(
       'https://windshare.top/s/abc#secret:12:34',
     )).toBe('https://windshare.top/s/abc')
     expect(sanitizeDiagnosticText(
-      '[https://user:pass@[2001:db8::1]:8443/path/@team/file?token=s3cr3t#frag]',
+      '[https://user:pass@[2001:db8::1]:8443/path/@team/file?token=(s3cr3t)#frag]',
     )).toBe('[https://[2001:db8::1]:8443/path/@team/file]')
+  })
+
+  it('sanitizes RFC 3986 parentheses and apostrophes inside free-text URLs without swallowing surrounding prose', () => {
+    expect(sanitizeDiagnosticText(
+      "WebSocket connection to 'wss://relay.example/v2/ws?token=(SECRET)' failed",
+    )).toBe("WebSocket connection to 'wss://relay.example/v2/ws' failed")
+    expect(sanitizeDiagnosticText(
+      "WebSocket connection to 'wss://relay.example/v2/ws?token=a)SECRET' failed",
+    )).toBe("WebSocket connection to 'wss://relay.example/v2/ws' failed")
+    expect(sanitizeDiagnosticText(
+      'failed (see https://relay.example/v2/ws?token=(SECRET))',
+    )).toBe('failed (see https://relay.example/v2/ws)')
+    expect(sanitizeDiagnosticText(
+      'https://host/item(1)#READ_SECRET',
+    )).toBe('https://host/item(1)')
+    expect(sanitizeDiagnosticText(
+      'https://user:p(1)@relay.example/v2/ws?token=SECRET',
+    )).toBe('https://relay.example/v2/ws')
+    expect(sanitizeDiagnosticText(
+      "https://user:o'hara@relay.example/v2/ws?token=SECRET",
+    )).toBe('https://relay.example/v2/ws')
+    expect(sanitizeDiagnosticText(
+      `"https://host/don't#READ_SECRET" rejected`,
+    )).toBe(`"https://host/don't" rejected`)
+  })
+
+  it('strips credentials directly from raw, whitespace-bearing, and scheme-less endpoint strings', () => {
+    expect(stripRawUrlCredentials('https://user:my secret@relay.example/v2/ws?token=(SECRET)#frag'))
+      .toBe('https://relay.example/v2/ws')
+    expect(stripRawUrlCredentials('https://user:my secret@relay.example'))
+      .toBe('https://relay.example')
+    expect(stripRawUrlCredentials('user:secret@relay.example/v2/ws?token=1'))
+      .toBe('relay.example/v2/ws')
+    expect(stripRawUrlCredentials('user:secret@host/redirect/https://other?k=v'))
+      .toBe('host/redirect/https://other')
+    expect(stripRawUrlCredentials('//user:secret@relay.example/v2/ws#frag'))
+      .toBe('//relay.example/v2/ws')
+    expect(stripRawUrlCredentials('https://relay.example/path/@team/file?token=1'))
+      .toBe('https://relay.example/path/@team/file')
+    expect(stripRawUrlCredentials('invalid')).toBe('invalid')
+
+    expect(safeRelayIdentity('https://user:my secret@relay.example/v2/ws'))
+      .toBe('https://relay.example/v2/ws')
+    expect(safeRelayIdentity('user:secret@relay.example/v2/ws'))
+      .toBe('relay.example/v2/ws')
+    expect(safeRelayIdentity('https://relay.example/base?token=(SECRET)'))
+      .toBe('wss://relay.example/base/v2/ws')
   })
 
   it('omits raw native URL parser causes on malformed Suite-02 capability links', async () => {
