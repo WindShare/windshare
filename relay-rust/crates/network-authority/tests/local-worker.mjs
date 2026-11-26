@@ -117,6 +117,7 @@ export async function fixture(
         this.alarmSetFailCount = 0;
         this.alarmDeleteFailCount = 0;
         this.deliverySqlFailCount = 0;
+        this.txCommitFailCount = 0;
         this.signingCertReads = 0;
         this.signingSeedReads = 0;
         this.ddlCount = 0;
@@ -167,7 +168,14 @@ export async function fixture(
               return callback => {
                 self.transactionDepth += 1;
                 try {
-                  return target.transactionSync(callback);
+                  return target.transactionSync(() => {
+                    const result = callback();
+                    if (self.txCommitFailCount > 0) {
+                      self.txCommitFailCount -= 1;
+                      throw new Error('DO transactionSync commit failed');
+                    }
+                    return result;
+                  });
                 } finally {
                   self.transactionDepth -= 1;
                 }
@@ -233,6 +241,11 @@ export async function fixture(
           const { count } = await request.json();
           this.kvFailCount = count;
           return Response.json({ count: this.kvFailCount });
+        }
+        if (path === '/__test/tx-commit-fail' && request.method === 'POST') {
+          const { count } = await request.json();
+          this.txCommitFailCount = count;
+          return Response.json({ count: this.txCommitFailCount });
         }
         if (path === '/__test/alarm-faults' && request.method === 'POST') {
           const { setAlarm = 0, deleteAlarm = 0, deliverySql = 0 } = await request.json();

@@ -199,9 +199,19 @@ pub fn transaction<T: 'static>(
         }
     });
     let called = method.call1(raw, callback.as_ref());
-    let result = output.borrow_mut().take();
-    if let Some(result) = result {
-        return result;
+    // Inspect both the JS transactionSync outcome and the Rust callback result so a
+    // commit failure after action() returns Ok can never masquerade as a committed write.
+    match (called, output.borrow_mut().take()) {
+        (Ok(_), Some(Ok(value))) => Ok(value),
+        (Err(_), Some(Err(error))) => Err(error),
+        (Ok(_), Some(Err(error))) => {
+            tracing::error!(event = "authority_transaction_abort_ignored", %error);
+            Err(anyhow!("authority transaction failed to abort: {error}"))
+        }
+        (Err(error), Some(Ok(_))) => {
+            tracing::error!(event = "authority_transaction_commit_failed", error = ?error);
+            Err(anyhow!("authority transaction commit failed: {error:?}"))
+        }
+        (called, None) => Err(anyhow!("authority transaction did not execute: {called:?}")),
     }
-    Err(anyhow!("authority transaction did not execute: {called:?}"))
 }

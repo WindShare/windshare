@@ -407,6 +407,39 @@ test('enrolling and managing a canary publishes signed revisions and coalesces K
     ddlCount: 4,
     ddlInTransaction: 0,
   });
+
+  // A transactionSync failure at commit must surface as 503 rather than returning 200
+  // for an uncommitted write on both fleet and standard DO routes.
+  const drainedNode = (
+    await call('/v1/admin/nodes/' + enrollment.node_key, undefined, { method: 'GET', adminAuth: true })
+  ).value;
+  await authority.fetch('https://authority/__test/tx-commit-fail', {
+    method: 'POST',
+    body: JSON.stringify({ count: 1 }),
+  });
+  await call('/v1/admin/nodes/manage', {
+    node_key: enrollment.node_key,
+    expected_state: drainedNode.state,
+    expected_policy_version: drainedNode.version,
+    action: { kind: 'activate' },
+  }, { adminAuth: true, status: 503 });
+  assert.deepEqual(
+    (await call('/v1/admin/nodes/' + enrollment.node_key, undefined, { method: 'GET', adminAuth: true })).value,
+    drainedNode,
+  );
+  assert.equal((await directory()).serial, drained.serial);
+  assert.equal((await directory()).kv_sync_pending, false);
+  assert.equal(await getAlarm(), null);
+
+  await authority.fetch('https://authority/__test/tx-commit-fail', {
+    method: 'POST',
+    body: JSON.stringify({ count: 1 }),
+  });
+  await call('/v1/admin/settings', { registration: 'open' }, { method: 'PATCH', adminAuth: true, status: 503 });
+  const stillPow = (
+    await call('/v1/accounts', { client_secret: randomBytes(32).toString('base64url') }, { status: 428 })
+  ).value;
+  assert.equal(stillPow.kind, 'verification');
 });
 
 test('directory KV publish failures retry via bounded Durable Object alarms and recover cleanly', async t => {
