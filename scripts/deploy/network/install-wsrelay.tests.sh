@@ -412,4 +412,27 @@ stderr=$(install_node 4 2>&1)
 [[ ! -e $WS_TEST_ROOT/releases/.incoming.reinst11 && ! -e $WS_TEST_ROOT/releases/.incoming.failrm11 && ! -e $WS_TEST_ROOT/.switch.reinst22 ]]
 [[ $(find "$WS_TEST_ROOT/releases" -mindepth 1 -maxdepth 1 -type d -name '.incoming.*' | wc -l) == 3 ]]
 [[ $(find "$WS_TEST_ROOT" -mindepth 1 -maxdepth 1 -type d -name '.switch.*' | wc -l) == 2 ]]
+
+# Failed new-release cleanup withdraws $release atomically back to $stage before
+# EXIT cleanup removes it, so rmdir failure or a crash after withdrawal cannot
+# leave an empty release directory blocking retry of the same revision.
+reset_host
+install_node 2
+stderr=$(FAIL_RMDIR=$(revision 3) FAIL_RESTART=$(revision 2) FAIL_HEALTH=$(revision 3) fails install_node 3 2>&1)
+[[ $stderr == *"wsrelay installation: rollback to $(revision 2) failed"* ]]
+[[ ! -e $WS_TEST_ROOT/releases/$(revision 3) ]]
+[[ $(find "$WS_TEST_ROOT/releases" -mindepth 1 -maxdepth 1 -name '.incoming.*' | wc -l) == 0 ]]
+[[ $(find "$WS_TEST_ROOT" -mindepth 1 -maxdepth 1 -name '.switch.*' | wc -l) == 0 ]]
+stderr=$(FAIL_RMDIR='.incoming.*' FAIL_HEALTH=$(revision 3) fails install_node 3 2>&1)
+[[ $(selected) == "$(revision 2)" && $(last_healthy) == "$(revision 2)" ]]
+[[ ! -e $WS_TEST_ROOT/releases/$(revision 3) ]]
+orphan_stage=$(find "$WS_TEST_ROOT/releases" -mindepth 1 -maxdepth 1 -type d -name '.incoming.*' -printf '%f\n')
+[[ $orphan_stage == .incoming.* && $(printf '%s\n' "$orphan_stage" | wc -l) == 1 && ! -e $WS_TEST_ROOT/releases/$orphan_stage/wsrelay ]]
+stderr=$(install_node 3 2>&1)
+[[ $(selected) == "$(revision 3)" && $(last_healthy) == "$(revision 3)" ]]
+[[ $stderr == *"event=wsrelay_install revision=$(revision 3) note=pruned_orphan target=$orphan_stage"* ]]
+[[ $stderr == *"event=wsrelay_install revision=$(revision 3) result=healthy"* ]]
+[[ ! -e $WS_TEST_ROOT/releases/$orphan_stage ]]
+[[ $(find "$WS_TEST_ROOT/releases" -mindepth 1 -maxdepth 1 -name '.incoming.*' | wc -l) == 0 ]]
+[[ $(find "$WS_TEST_ROOT" -mindepth 1 -maxdepth 1 -name '.switch.*' | wc -l) == 0 ]]
 echo "wsrelay install, preflight, rollback and retention passed"

@@ -177,8 +177,9 @@ if ! restart_healthy "$release"; then
         fi
     fi
     if [[ $new_release == true ]]; then
-        rm -- "$release/wsrelay"
-        rmdir -- "$release"
+        # Withdraw atomically back to $stage so a crash before cleanup finishes
+        # cannot leave an empty release dir blocking retry of the same revision.
+        mv -T -- "$release" "$stage"
     fi
     [[ -z $rollback_error ]] || die "$rollback_error"
     exit 1
