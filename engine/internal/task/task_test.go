@@ -285,3 +285,96 @@ func TestInvalidSettlementCannotLookSuccessful(t *testing.T) {
 		}
 	}
 }
+
+func TestCompletionHidesFinishedUntilDoneClosesAndRejectsLateStop(t *testing.T) {
+	for _, stopBeforeReturn := range []bool{false, true} {
+		name := "natural completion"
+		wantStateWhileJoining := Running
+		wantStopReason := NoStop
+		wantLifecycleCount := 2
+		if stopBeforeReturn {
+			name = "stopped completion"
+			wantStateWhileJoining = Stopping
+			wantStopReason = ShareStopped
+			wantLifecycleCount = 3
+		}
+		t.Run(name, func(t *testing.T) {
+			entered, releaseRun := make(chan struct{}), make(chan struct{})
+			joining, releaseCompleted := make(chan struct{}), make(chan struct{})
+			config := testConfig(func(_ context.Context, _ Control) Completion[int] {
+				close(entered)
+				<-releaseRun
+				return Completion[int]{Value: 42, Outcome: OutcomeSuccess}
+			})
+			config.Completed = func(error) {
+				close(joining)
+				<-releaseCompleted
+			}
+			current, err := Start(context.Background(), config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			<-entered
+			if stopBeforeReturn {
+				current.Stop(ShareStopped)
+			}
+			var states []State
+			for range wantLifecycleCount - 1 {
+				item := <-current.Observations()
+				lifecycle, ok := item.Event.(Lifecycle)
+				if !ok {
+					t.Fatalf("unexpected event before completion: %+v", item)
+				}
+				states = append(states, lifecycle.State)
+			}
+			close(releaseRun)
+			<-joining
+
+			if got := current.State(); got != wantStateWhileJoining {
+				t.Fatalf("state during Completed = %v, want %v", got, wantStateWhileJoining)
+			}
+			select {
+			case <-current.Done():
+				t.Fatal("Done closed before Completed returned")
+			default:
+			}
+			select {
+			case item, ok := <-current.Observations():
+				t.Fatalf("observations emitted or closed during Completed: item=%+v ok=%v", item, ok)
+			default:
+			}
+			// Late stops during Completed must neither alter state/StopReason nor emit Stopping.
+			current.Cancel()
+			if got := current.State(); got != wantStateWhileJoining {
+				t.Fatalf("state after late Cancel during Completed = %v, want %v", got, wantStateWhileJoining)
+			}
+
+			changed := current.Changes()
+			close(releaseCompleted)
+			<-changed
+			select {
+			case <-current.Done():
+			default:
+				t.Fatal("Done still open after terminal change notification")
+			}
+			if got := current.State(); got != Finished {
+				t.Fatalf("terminal state = %v, want %v", got, Finished)
+			}
+			result, err := current.Wait(context.Background())
+			if err != nil || result.Value != 42 || result.StopReason != wantStopReason {
+				t.Fatalf("result = %+v, err = %v, want stop reason %v", result, err, wantStopReason)
+			}
+			for item := range current.Observations() {
+				if lifecycle, ok := item.Event.(Lifecycle); ok {
+					states = append(states, lifecycle.State)
+				}
+			}
+			if len(states) != wantLifecycleCount || states[0] != Running || states[len(states)-1] != Finished {
+				t.Fatalf("lifecycle states = %v, want len %d ending in Finished", states, wantLifecycleCount)
+			}
+			if stopBeforeReturn && states[1] != Stopping {
+				t.Fatalf("stopped lifecycle states = %v, want Stopping second", states)
+			}
+		})
+	}
+}

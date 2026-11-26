@@ -28,6 +28,7 @@ type Task[T any] struct {
 	mu           sync.Mutex
 	id           ID
 	state        State
+	completing   bool
 	reason       StopReason
 	cancel       context.CancelCauseFunc
 	done         chan struct{}
@@ -72,19 +73,26 @@ func Start[T any](parent context.Context, config Config[T]) (*Task[T], error) {
 		completion.Settlement = completion.Checked()
 		stopParent()
 		current.mu.Lock()
-		current.state = Finished
-		current.result.Completion = completion
-		current.result.StopReason = current.reason
-		current.result.FinishedAt = config.Now()
-		current.emit(Lifecycle{State: Finished, StopReason: current.reason, Settlement: completion.Settlement})
-		current.result.Observations = current.producer.Complete()
+		// Freeze stop admission before running Completed outside mu so a late
+		// Stop cannot alter StopReason or emit Stopping after Run returns, while
+		// Finished remains unobservable until Done closes atomically below.
+		current.completing = true
+		stopReason := current.reason
 		current.mu.Unlock()
 		cancel(nil)
 		if config.Completed != nil {
 			config.Completed(completion.LocalCleanupError())
 		}
+		current.mu.Lock()
+		current.state = Finished
+		current.result.Completion = completion
+		current.result.StopReason = stopReason
+		current.result.FinishedAt = config.Now()
+		current.emit(Lifecycle{State: Finished, StopReason: stopReason, Settlement: completion.Settlement})
+		current.result.Observations = current.producer.Complete()
 		close(current.done)
-		current.notifyChanged()
+		current.notifyLocked()
+		current.mu.Unlock()
 	}()
 	return current, nil
 }
@@ -112,7 +120,7 @@ func (current *Task[T]) Stop(reason StopReason) {
 	}
 	current.mu.Lock()
 	defer current.mu.Unlock()
-	if current.state != Running {
+	if current.state != Running || current.completing {
 		return
 	}
 	current.state = Stopping

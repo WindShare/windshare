@@ -164,13 +164,13 @@ func projectTaskSnapshot(view *Share, current running, state engine.ShareSnapsho
 			view.Error = engineFailure("startup_failed", state.StartupError)
 		}
 	}
-	if current.publicationError != nil || state.State == engine.TaskStopping || state.State == engine.TaskFinished {
+	if current.publicationError != nil || state.State == engine.TaskStopping {
 		view.State = Stopping
 		view.URL = ""
 		view.BackupURL = ""
 		view.Authorization = nil
 	}
-	if view.State == Sharing && state.RelayAvailability != nil {
+	if state.Result == nil && view.State == Sharing && state.RelayAvailability != nil {
 		view.Relay = &RelayAvailability{
 			Available: state.RelayAvailability.Available,
 			Total:     state.RelayAvailability.Total,

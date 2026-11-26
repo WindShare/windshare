@@ -1,14 +1,18 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"runtime"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/liveshare"
+	"github.com/windshare/windshare/engine/internal/share"
+	"github.com/windshare/windshare/engine/internal/task"
 	"github.com/windshare/windshare/engine/relayprofile"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
@@ -66,6 +70,9 @@ func TestShareSnapshotTerminalIncludesOmissionsRecordedBeforeDone(t *testing.T) 
 		var terminal ShareSnapshot
 		for {
 			snapshot := current.Snapshot()
+			if (snapshot.State == TaskFinished) != (snapshot.Result != nil) {
+				t.Fatalf("torn snapshot: state=%v result=%+v", snapshot.State, snapshot.Result)
+			}
 			if snapshot.Result != nil {
 				terminal = snapshot
 				break
@@ -110,6 +117,9 @@ func TestShareSnapshotTerminalPreservesStartupFailureAndRelayStatus(t *testing.T
 		var terminal ShareSnapshot
 		for {
 			snapshot := current.Snapshot()
+			if (snapshot.State == TaskFinished) != (snapshot.Result != nil) {
+				t.Fatalf("torn snapshot: state=%v result=%+v", snapshot.State, snapshot.Result)
+			}
 			if snapshot.Result != nil {
 				terminal = snapshot
 				break
@@ -188,5 +198,58 @@ func (relays *failingStatusRelays) WaitReady(ctx context.Context) error {
 		return relays.waitErr
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+func TestShareSnapshotNeverTearsFinishedWithoutResultDuringCompleted(t *testing.T) {
+	for _, stopShare := range []bool{false, true} {
+		name := "natural completion"
+		wantIntermediate := TaskRunning
+		if stopShare {
+			name = "stopped completion"
+			wantIntermediate = TaskStopping
+		}
+		t.Run(name, func(t *testing.T) {
+			entered, releaseRun := make(chan struct{}), make(chan struct{})
+			joining, releaseCompleted := make(chan struct{}), make(chan struct{})
+			raw, err := task.Start(t.Context(), task.Config[ShareResult]{
+				ID:                  "share-completed-window",
+				Now:                 func() time.Time { return time.Unix(100, 0) },
+				Random:              bytes.NewReader([]byte{1}),
+				CleanupTimeout:      time.Minute,
+				ObservationCapacity: 4,
+				Run: func(context.Context, task.Control) task.Completion[ShareResult] {
+					close(entered)
+					<-releaseRun
+					return task.Completion[ShareResult]{Outcome: OutcomeStopped}
+				},
+				Completed: func(error) {
+					close(joining)
+					<-releaseCompleted
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			current := &ShareTask{Task: &Task[ShareResult]{current: raw}, controller: share.NewController()}
+			<-entered
+			if stopShare {
+				current.StopShare()
+			}
+			close(releaseRun)
+			<-joining
+
+			snapshot := current.Snapshot()
+			if snapshot.State != wantIntermediate || snapshot.Result != nil {
+				t.Fatalf("snapshot during Completed = (state=%v, result=%+v), want (state=%v, result=nil)", snapshot.State, snapshot.Result, wantIntermediate)
+			}
+
+			close(releaseCompleted)
+			<-current.Done()
+			terminal := current.Snapshot()
+			if terminal.State != TaskFinished || terminal.Result == nil || terminal.Result.Outcome != OutcomeStopped {
+				t.Fatalf("terminal snapshot = (state=%v, result=%+v), want Finished with OutcomeStopped", terminal.State, terminal.Result)
+			}
+		})
 	}
 }
