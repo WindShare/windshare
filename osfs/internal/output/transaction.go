@@ -583,6 +583,18 @@ func (tx *fileTransaction) settlePublishedLocked(warnings []transfer.FileMetadat
 	return settlement, nil
 }
 
+func (tx *fileTransaction) persistAndCloseForPauseLocked() error {
+	var persistErr error
+	if tx.file != nil {
+		if tx.unpersistedBytes > 0 || (tx.persistedGen == 0 && !tx.accepted.IsEmpty()) {
+			persistErr = tx.persistLocked()
+		}
+		persistErr = errors.Join(persistErr, tx.file.Close())
+		tx.file = nil
+	}
+	return persistErr
+}
+
 func (tx *fileTransaction) Pause(ctx context.Context) (transfer.FileSettlement, error) {
 	if ctx == nil {
 		return transfer.FileSettlement{}, transfer.ErrInvalidOutputBinding
@@ -592,15 +604,7 @@ func (tx *fileTransaction) Pause(ctx context.Context) (transfer.FileSettlement, 
 	if tx.settled {
 		return transfer.FileSettlement{}, transfer.ErrInvalidOutputBinding
 	}
-	var persistErr error
-	if tx.file != nil {
-		if tx.unpersistedBytes > 0 || (tx.persistedGen == 0 && !tx.accepted.IsEmpty()) {
-			persistErr = tx.persistLocked()
-		}
-		persistErr = errors.Join(persistErr, tx.file.Close())
-		tx.file = nil
-	}
-	if persistErr != nil {
+	if persistErr := tx.persistAndCloseForPauseLocked(); persistErr != nil {
 		tx.settled = true
 		// Detach the closed transaction so a subsequent PauseTree does not
 		// re-enter Pause and turn a durability error into an invalid-binding fault.
@@ -619,6 +623,26 @@ func (tx *fileTransaction) Pause(ctx context.Context) (transfer.FileSettlement, 
 	// Paused files remain resumable within the same session (e.g. revision reopen).
 	tx.session.releaseActiveFile(tx.canonicalPath, tx)
 	return settlement, nil
+}
+
+// pauseForSessionClose drains an active transaction snapshotted by Session.PauseTree.
+// Because PauseTree releases s.mu before acquiring tx.mu (lock order: tx.mu -> s.mu),
+// a concurrent Commit/Pause/Retire may settle and detach tx before this call runs;
+// observing tx.settled under tx.mu is therefore an expected no-op rather than a
+// caller contract violation.
+func (tx *fileTransaction) pauseForSessionClose() error {
+	tx.mu.Lock()
+	defer tx.mu.Unlock()
+	if tx.settled {
+		return nil
+	}
+	persistErr := tx.persistAndCloseForPauseLocked()
+	tx.settled = true
+	tx.session.releaseActiveFile(tx.canonicalPath, tx)
+	if persistErr != nil {
+		return wrapOutputFaultError(transferfault.OutputStateIO, "pause staged file", persistErr)
+	}
+	return nil
 }
 
 func (tx *fileTransaction) Retire(ctx context.Context) (transfer.FileSettlement, error) {

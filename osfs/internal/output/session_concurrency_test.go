@@ -6,8 +6,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 
@@ -15,6 +17,7 @@ import (
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 func testAdmitSubdir(
@@ -442,5 +445,270 @@ func TestSessionConcurrentBeginFileLookupAndPauseTreeIsRaceFree(t *testing.T) {
 		if err := auth.Close(); err != nil {
 			t.Fatalf("iter %d auth.Close: %v", i, err)
 		}
+	}
+}
+
+func waitForSessionClosedSnapshot(session *Session) {
+	for {
+		session.mu.Lock()
+		closed := session.closed
+		session.mu.Unlock()
+		if closed {
+			return
+		}
+		runtime.Gosched()
+	}
+}
+
+func TestSessionPauseTreeConcurrentFileSettlementSucceedsCleanly(t *testing.T) {
+	ctx := context.Background()
+
+	runCase := func(
+		t *testing.T,
+		seed byte,
+		hookKind string,
+		prepare func(t *testing.T, tx transfer.FileTransaction, payload []byte),
+		settle func(tx transfer.FileTransaction) (transfer.FileSettlement, error),
+		wantKind transfer.FileSettlementKind,
+		verify func(t *testing.T, root string, intent transfer.ReceiveIntent, file transfer.MaterializationFile, payload []byte),
+	) {
+		t.Helper()
+		root := t.TempDir()
+		auth, session, intent, rootAdm := openTestResultRootSession(t, root, seed)
+		subAdm, subReq := testAdmitSubdir(t, session, intent, rootAdm, "race", seed+2)
+		payload := []byte("concurrent-settlement-payload")
+		file := testSubdirMaterializationFile(t, session, intent, subAdm, subReq, "race", "item.bin", seed+4, uint64(len(payload)))
+		start, err := session.BeginFile(ctx, file)
+		if err != nil {
+			_ = auth.Close()
+			t.Fatal(err)
+		}
+		tx, _, ok := start.Transaction()
+		if !ok {
+			_ = auth.Close()
+			t.Fatal("expected active file transaction")
+		}
+		prepare(t, tx, payload)
+
+		hookEntered := make(chan struct{})
+		releaseSettlement := make(chan struct{})
+		var hookOnce sync.Once
+		session.op.journal.mu.Lock()
+		session.op.journal.appendHook = func(kind string) error {
+			if kind == hookKind {
+				hookOnce.Do(func() {
+					close(hookEntered)
+					<-releaseSettlement
+				})
+			}
+			return nil
+		}
+		session.op.journal.mu.Unlock()
+
+		var (
+			fileSettled transfer.FileSettlement
+			fileErr     error
+			pauseSettle transfer.DirectTreeSettlement
+			pauseErr    error
+			wg          sync.WaitGroup
+		)
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			fileSettled, fileErr = settle(tx)
+		}()
+
+		// Wait until the file worker holds tx.mu inside Commit/Pause/Retire
+		// before detaching from s.activeFiles, then let PauseTree snapshot
+		// s.activeFiles and release s.mu before resuming the worker.
+		<-hookEntered
+		go func() {
+			defer wg.Done()
+			pauseSettle, pauseErr = session.PauseTree(ctx)
+		}()
+		waitForSessionClosedSnapshot(session)
+		close(releaseSettlement)
+		wg.Wait()
+
+		if fileErr != nil || fileSettled.Kind() != wantKind {
+			_ = auth.Close()
+			t.Fatalf("concurrent file settlement = (%v, %v), want %v", fileSettled.Kind(), fileErr, wantKind)
+		}
+		if pauseErr != nil || pauseSettle.Kind() != transfer.DirectTreeSettlementPaused {
+			_ = auth.Close()
+			t.Fatalf("PauseTree = (%v, %v), want Paused without error", pauseSettle.Kind(), pauseErr)
+		}
+		// Public tx.Pause must keep rejecting already-settled transactions.
+		if _, err := tx.Pause(ctx); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
+			_ = auth.Close()
+			t.Fatalf("post-settlement public tx.Pause = %v, want ErrInvalidOutputBinding", err)
+		}
+		if err := auth.Close(); err != nil {
+			t.Fatalf("auth.Close: %v", err)
+		}
+		verify(t, root, intent, file, payload)
+	}
+
+	t.Run("commit", func(t *testing.T) {
+		runCase(
+			t,
+			0x81,
+			"delivered",
+			func(t *testing.T, tx transfer.FileTransaction, payload []byte) {
+				if err := tx.WriteRange(ctx, 0, payload); err != nil {
+					t.Fatal(err)
+				}
+			},
+			func(tx transfer.FileTransaction) (transfer.FileSettlement, error) {
+				return tx.Commit(ctx)
+			},
+			transfer.FilePublished,
+			func(t *testing.T, root string, intent transfer.ReceiveIntent, file transfer.MaterializationFile, payload []byte) {
+				res, _ := intent.MaterializationPlan().DestinationReservation()
+				got, err := os.ReadFile(filepath.Join(root, res.PhysicalName(), "race", "item.bin"))
+				if err != nil || string(got) != string(payload) {
+					t.Fatalf("published file = (%q, %v), want %q", got, err, payload)
+				}
+				reopen, err := New(Config{RootPath: root})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer reopen.Close()
+				if err := reopen.BindDestination(ctx); err != nil {
+					t.Fatal(err)
+				}
+				lookup, err := reopen.SelectOperation(ctx, intent.SelectionSpec(), receivecontract.AutomaticOperation())
+				if err != nil || lookup.Kind() != LookupReopened {
+					t.Fatalf("reopen select = (%v, %v)", lookup.Kind(), err)
+				}
+				reSession, err := reopen.OpenOperation(ctx, lookup.Operation())
+				if err != nil {
+					t.Fatal(err)
+				}
+				delivery, found, err := reSession.(*Session).LookupDelivery(
+					ctx, file.Descriptor().FileID(), file.MaterializationRelativePath().String(),
+				)
+				if err != nil || !found || delivery.Size != uint64(len(payload)) {
+					t.Fatalf("reopen LookupDelivery = (%+v, %t, %v), want found size %d", delivery, found, err, len(payload))
+				}
+				if _, err := reSession.PauseTree(ctx); err != nil {
+					t.Fatal(err)
+				}
+			},
+		)
+	})
+
+	t.Run("pause", func(t *testing.T) {
+		runCase(
+			t,
+			0x89,
+			"partial",
+			func(t *testing.T, tx transfer.FileTransaction, payload []byte) {
+				if err := tx.WriteRange(ctx, 0, payload[:10]); err != nil {
+					t.Fatal(err)
+				}
+			},
+			func(tx transfer.FileTransaction) (transfer.FileSettlement, error) {
+				return tx.Pause(ctx)
+			},
+			transfer.FilePaused,
+			func(t *testing.T, root string, intent transfer.ReceiveIntent, file transfer.MaterializationFile, _ []byte) {
+				reopen, err := New(Config{RootPath: root})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer reopen.Close()
+				if err := reopen.BindDestination(ctx); err != nil {
+					t.Fatal(err)
+				}
+				lookup, err := reopen.SelectOperation(ctx, intent.SelectionSpec(), receivecontract.AutomaticOperation())
+				if err != nil || lookup.Kind() != LookupReopened {
+					t.Fatalf("reopen select = (%v, %v)", lookup.Kind(), err)
+				}
+				partial, ok := lookup.Operation().journal.lookupPartial(file.MaterializationRelativePath().String())
+				if !ok || rangeTotalBytes(partial.Ranges) != 10 {
+					t.Fatalf("reopen partial = (%+v, %t), want 10 persisted bytes", partial, ok)
+				}
+			},
+		)
+	})
+
+	t.Run("retire", func(t *testing.T) {
+		runCase(
+			t,
+			0x91,
+			"retired",
+			func(t *testing.T, tx transfer.FileTransaction, payload []byte) {
+				if err := tx.WriteRange(ctx, 0, payload[:8]); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := tx.Checkpoint(ctx); err != nil {
+					t.Fatal(err)
+				}
+			},
+			func(tx transfer.FileTransaction) (transfer.FileSettlement, error) {
+				return tx.Retire(ctx)
+			},
+			transfer.FileFailed,
+			func(t *testing.T, root string, intent transfer.ReceiveIntent, file transfer.MaterializationFile, _ []byte) {
+				reopen, err := New(Config{RootPath: root})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer reopen.Close()
+				if err := reopen.BindDestination(ctx); err != nil {
+					t.Fatal(err)
+				}
+				lookup, err := reopen.SelectOperation(ctx, intent.SelectionSpec(), receivecontract.AutomaticOperation())
+				if err != nil || lookup.Kind() != LookupReopened {
+					t.Fatalf("reopen select = (%v, %v)", lookup.Kind(), err)
+				}
+				if partial, ok := lookup.Operation().journal.lookupPartial(file.MaterializationRelativePath().String()); ok {
+					t.Fatalf("retired file unexpectedly retained partial entry: %+v", partial)
+				}
+			},
+		)
+	})
+}
+
+func TestSessionPauseTreePreservesActiveFileDurabilityFaultUnderCanceledContext(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	auth, session, intent, rootAdm := openTestResultRootSession(t, root, 0x99)
+	defer auth.Close()
+
+	payload := []byte("unpersisted-bytes")
+	file := testMaterializationFile(t, session, intent, 0x9b, "dirty.bin", uint64(len(payload)), rootAdm)
+	start, err := session.BeginFile(ctx, file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, _, ok := start.Transaction()
+	if !ok {
+		t.Fatal("expected active file transaction")
+	}
+	if err := tx.WriteRange(ctx, 0, payload); err != nil {
+		t.Fatal(err)
+	}
+
+	ioErr := &fs.PathError{Op: "write", Path: "state.log", Err: fs.ErrPermission}
+	session.op.journal.mu.Lock()
+	session.op.journal.appendHook = func(kind string) error {
+		if kind == "partial" {
+			return ioErr
+		}
+		return nil
+	}
+	session.op.journal.mu.Unlock()
+
+	canceledCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	settlement, err := session.PauseTree(canceledCtx)
+	if settlement.Kind() != 0 {
+		t.Fatalf("failed PauseTree returned non-zero settlement: %+v", settlement)
+	}
+	assertOutputStateIODiagnostic(t, err, FailureDurability, ioErr)
+	if _, pauseErr := tx.Pause(ctx); !errors.Is(pauseErr, transfer.ErrInvalidOutputBinding) {
+		t.Fatalf("tx.Pause after failed PauseTree = %v, want ErrInvalidOutputBinding", pauseErr)
 	}
 }

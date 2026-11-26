@@ -432,7 +432,7 @@ func (s *Session) PauseTree(ctx context.Context) (transfer.DirectTreeSettlement,
 
 	var pauseErr error
 	for _, tx := range active {
-		if _, err := tx.Pause(ctx); err != nil {
+		if err := tx.pauseForSessionClose(); err != nil {
 			pauseErr = errors.Join(pauseErr, err)
 		}
 	}
