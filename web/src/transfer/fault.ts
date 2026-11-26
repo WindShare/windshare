@@ -305,6 +305,7 @@ export type NativeErrorClass =
   | 'security'
   | 'not_supported'
   | 'no_modification_allowed'
+  | 'type_mismatch'
   | 'unknown'
 
 const DOM_ERROR_CLASSES: Readonly<Record<string, NativeErrorClass>> = Object.freeze({
@@ -318,11 +319,20 @@ const DOM_ERROR_CLASSES: Readonly<Record<string, NativeErrorClass>> = Object.fre
   SecurityError: 'security',
   NotSupportedError: 'not_supported',
   NoModificationAllowedError: 'no_modification_allowed',
+  TypeMismatchError: 'type_mismatch',
 })
 
+const MAX_NATIVE_CAUSE_DEPTH = 8
+
 export function classifyNativeError(error: unknown): NativeErrorClass {
-  if (error instanceof DOMException || error instanceof Error) {
-    return DOM_ERROR_CLASSES[error.name] ?? 'unknown'
+  let current: unknown = error
+  for (let depth = 0; depth < MAX_NATIVE_CAUSE_DEPTH; depth++) {
+    if (!(current instanceof DOMException || current instanceof Error)) return 'unknown'
+    const direct = DOM_ERROR_CLASSES[current.name]
+    if (direct !== undefined) return direct
+    // Unwrap wrapped domain faults so trace logs retain the underlying native exception class.
+    if (!(current instanceof TransferFaultError) || current.cause === undefined) return 'unknown'
+    current = current.cause
   }
   return 'unknown'
 }

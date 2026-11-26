@@ -4,6 +4,7 @@ import { foldPortableName15 } from '../../unicode/case-fold'
 import type { ReceiveStore } from '../store/database'
 import type { FSADiskFingerprint, FSATargetRecord } from '../store/types'
 import {
+  isFSATypeMismatch,
   isMissingFSAEntry,
   readFSADiskFingerprint,
   removeDirectoryIfEmpty,
@@ -145,6 +146,30 @@ function isNameOrPolicyRefusal(error: unknown): boolean {
  */
 export function requiresSafeComponent(error: unknown): boolean {
   return isNameOrPolicyRefusal(error) || (error instanceof DOMException && error.name === 'TypeMismatchError')
+}
+
+/**
+ * Reopens a directory task's reserved root slot without safe-renaming or drifting
+ * `reservedName`. An opposite-kind entry (`TypeMismatchError`) fails at job scope
+ * so the paused task remains intact until the user moves the conflicting file aside.
+ */
+export async function reopenFSARootDirectory(
+  parentHandle: FileSystemDirectoryHandle,
+  reservedName: string,
+): Promise<FileSystemDirectoryHandle> {
+  try {
+    return await parentHandle.getDirectoryHandle(reservedName, { create: true })
+  } catch (error) {
+    if (isFSATypeMismatch(error)) {
+      const destinationPath = [parentHandle.name, reservedName].filter(Boolean).join('/')
+      throw new TransferFaultError(
+        outputFault(FaultScope.Job, OutputFaultCode.TargetCollision),
+        `WindShare could not reopen "${destinationPath}" because a file now exists at that path. Move it aside before continuing.`,
+        { cause: error },
+      )
+    }
+    throw error
+  }
 }
 
 export async function openDirectory(parent: FSADirectory, name: string): Promise<FSADirectory> {

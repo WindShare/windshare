@@ -7,7 +7,16 @@ import { deterministicSafeCandidates } from '../../src/output/backends/safe-name
 import type { OutputTraceEvent } from '../../src/output/diagnostics'
 import type { ReceiveStore } from '../../src/output/store/database'
 import type { ReceiveTaskRecord } from '../../src/output/store/types'
-import { FileDestinationConflictError, OutputFaultCode, isPermissionDeniedError } from '../../src/transfer/fault'
+import {
+  FaultDomain,
+  FaultScope,
+  FileDestinationConflictError,
+  OutputFaultCode,
+  TransferFaultError,
+  classifyNativeError,
+  isPermissionDeniedError,
+  outputFault,
+} from '../../src/transfer/fault'
 import type { SettledTransferJobResult } from '../../src/transfer/job'
 import { initialReceiveState, transitionReceiveState, type SafeRenamedSummary } from '../../src/transfer/state'
 import { FakeDirectoryHandle, FakeFileHandle, MemoryReceiveStore } from './fsa-fixture'
@@ -900,5 +909,122 @@ describe('FSA single-file reserved slot reopen boundaries', () => {
     expect([...(parent.children.get(expectedSafeName!) as FakeFileHandle).bytes]).toEqual([1, 2, 3, 4])
     const plan = await loadFSARestorePlan(store as unknown as ReceiveStore, 'single-root-safe-recreate', 'windows')
     expect(plan.restorable.map(step => [step.fromName, step.toName])).toEqual([[expectedSafeName, 'setup.exe']])
+  })
+})
+
+describe('FSA directory root reopen boundaries', () => {
+  it('maps root TypeMismatchError to a job-scoped TargetCollision, keeps the task paused and retryable, and traces type_mismatch', async () => {
+    const store = new MemoryReceiveStore()
+    const parent = new FakeDirectoryHandle('Downloads', store.events)
+    const traces: OutputTraceEvent[] = []
+    const diagnostics = {
+      backend: 'file_system_access' as const,
+      trace: { current: (event: OutputTraceEvent) => traces.push(event) },
+    }
+
+    const initial = await openNewFSASession({
+      task: folderTask('dir-type-mismatch', 'Album'),
+      parentHandle: parent as unknown as FileSystemDirectoryHandle,
+      store: store as unknown as ReceiveStore,
+      diagnostics,
+    })
+    const paused = await initial.settle(pausedEmpty)
+    await initial.close()
+
+    await parent.removeEntry('Album')
+    const userFile = await parent.getFileHandle('Album', { create: true })
+
+    const reopenError = await reopenFSASession({
+      task: paused,
+      store: store as unknown as ReceiveStore,
+      allowPermissionPrompt: false,
+      diagnostics,
+    }).catch((error: unknown) => error)
+
+    expect(reopenError).toBeInstanceOf(TransferFaultError)
+    expect(reopenError).not.toBeInstanceOf(FileDestinationConflictError)
+    expect(reopenError).toMatchObject({
+      fault: {
+        domain: FaultDomain.Output,
+        scope: FaultScope.Job,
+        code: OutputFaultCode.TargetCollision,
+      },
+    })
+    expect((reopenError as Error).message).toContain('Downloads/Album')
+    expect((reopenError as Error).cause).toMatchObject({ name: 'TypeMismatchError' })
+    expect(parent.children.get('Album')).toBe(userFile)
+
+    const storedAfterFailure = await store.getTask('dir-type-mismatch')
+    expect(storedAfterFailure?.lifecycle.kind).toBe('paused')
+    expect(reservedNameOf(storedAfterFailure!)).toBe('Album')
+
+    const failedTrace = traces.find(event => event.eventName === 'reopen' && event.payload.transition === 'failed')
+    expect(failedTrace).toEqual({
+      eventName: 'reopen',
+      payload: {
+        backend: 'file_system_access',
+        task_id: 'dir-type-mismatch',
+        transition: 'failed',
+        error_class: 'type_mismatch',
+      },
+    })
+    expect(JSON.stringify(failedTrace!.payload)).not.toContain('Album')
+
+    // Permission loss at root directory open stays NotAllowedError rather than TargetCollision.
+    const permSpy = vi.spyOn(parent, 'getDirectoryHandle').mockRejectedValueOnce(
+      new DOMException('permission revoked', 'NotAllowedError'),
+    )
+    try {
+      const permError = await reopenFSASession({
+        task: paused,
+        store: store as unknown as ReceiveStore,
+        allowPermissionPrompt: false,
+        diagnostics,
+      }).catch((error: unknown) => error)
+      expect(isPermissionDeniedError(permError)).toBe(true)
+      expect(permError).not.toBeInstanceOf(TransferFaultError)
+      expect(traces.at(-1)).toEqual({
+        eventName: 'reopen',
+        payload: {
+          backend: 'file_system_access',
+          task_id: 'dir-type-mismatch',
+          transition: 'failed',
+          error_class: 'not_allowed',
+        },
+      })
+    } finally {
+      permSpy.mockRestore()
+    }
+
+    // Moving the conflicting file aside lets the still-paused task reopen and recreate its root folder.
+    await parent.removeEntry('Album')
+    const reopened = await reopenFSASession({
+      task: storedAfterFailure!,
+      store: store as unknown as ReceiveStore,
+      allowPermissionPrompt: false,
+      diagnostics,
+    })
+    expect(parent.children.get('Album')).toBeInstanceOf(FakeDirectoryHandle)
+    expect(reservedNameOf(reopened.record)).toBe('Album')
+    await reopened.close()
+  })
+
+  it('classifies TypeMismatchError directly, unwraps TransferFaultError causes, and guards cyclic causes', () => {
+    const raw = new DOMException('type mismatch', 'TypeMismatchError')
+    expect(classifyNativeError(raw)).toBe('type_mismatch')
+
+    const wrapped = new TransferFaultError(
+      outputFault(FaultScope.Job, OutputFaultCode.TargetCollision),
+      'conflict',
+      { cause: raw },
+    )
+    expect(classifyNativeError(wrapped)).toBe('type_mismatch')
+
+    const cyclic = new TransferFaultError(
+      outputFault(FaultScope.Job, OutputFaultCode.TargetCollision),
+      'cycle',
+    )
+    ;(cyclic as { cause: unknown }).cause = cyclic
+    expect(classifyNativeError(cyclic)).toBe('unknown')
   })
 })

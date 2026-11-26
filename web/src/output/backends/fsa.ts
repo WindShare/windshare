@@ -42,8 +42,8 @@ import { destinationChanged, FSAOutputFile, verifyExistingFSAFile, type FSAFileO
 import { FSAFileRecords } from './fsa-records'
 import {
   buildFSATargetRecord, collectFSATopLevelClaims, ensureFSAPermission, openFSADirectory, openFSAFile,
-  openOrCreateFSAFile, reserveFSATarget, retainsFSAReservationClaim, rollbackFSATaskTarget,
-  rollbackReservedTarget, type FSADirectory,
+  openOrCreateFSAFile, reopenFSARootDirectory, reserveFSATarget, retainsFSAReservationClaim,
+  rollbackFSATaskTarget, rollbackReservedTarget, type FSADirectory,
 } from './fsa-reservation'
 import { nextFSALifecycle } from './fsa-settlement'
 import {
@@ -168,7 +168,7 @@ export async function reopenFSASession(input: Readonly<{
     const target = current.target
     const rootHandle = target.singleFile
       ? target.parentHandle
-      : await target.parentHandle.getDirectoryHandle(target.reservedName, { create: true })
+      : await reopenFSARootDirectory(target.parentHandle, target.reservedName)
     const downloading = transitionReceiveState(current.lifecycle, { kind: 'downloading' })
     const updated: FSATaskRecord = Object.freeze({ ...current, target, lifecycle: downloading, updatedAt: Date.now() })
     const priorFiles = await input.store.listTaskFiles(updated.taskId)
