@@ -3,8 +3,12 @@ package content
 import (
 	"context"
 	"errors"
+	"runtime"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/windshare/windshare/core/catalog"
 )
 
 func TestExplicitLeaseEndingsRetireIdleRevisionImmediately(t *testing.T) {
@@ -192,6 +196,80 @@ func TestEndLeaseRejectsMissingEvidenceKind(t *testing.T) {
 	}
 	if err := store.ValidateLease(lease.ID(), lease.Descriptor()); err != nil {
 		t.Fatalf("invalid ending mutated active lease: %v", err)
+	}
+}
+
+func TestEndLeasePinsStoreCloseUntilCleanupAndObserversComplete(t *testing.T) {
+	clock := &testClock{now: time.Unix(100, 0)}
+	pool := newCapacityTestPool(t, CapacityLimits{StableHandles: 2, ActiveLeases: 2}, nil)
+	limits := CapacityLimits{StableHandles: 2, ActiveLeases: 2}
+	file, record := capacityRecord(t, 87)
+	stable := &capacityStableFile{
+		data: []byte{1}, closeStarted: make(chan struct{}), closeRelease: make(chan struct{}),
+	}
+	cache := &recordingInvalidator{}
+	traces := &revisionTraceRecorder{}
+	store := newObservedCapacityStore(
+		t, pool, 1, limits, clock,
+		map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record},
+		&mappedRevisionSource{files: map[catalog.FileID]StableFile{file: stable}, calls: make(map[catalog.FileID]int)},
+		cache, traces,
+	)
+	var releaseOnce sync.Once
+	releaseClose := func() { releaseOnce.Do(func() { close(stable.closeRelease) }) }
+	t.Cleanup(releaseClose)
+
+	session := capacitySession(t, store, "close-join-session", limits)
+	lease, err := store.OpenRevision(context.Background(), file, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	endErr := make(chan error, 1)
+	go func() {
+		endErr <- store.EndLease(lease.ID(), LeaseRelinquished)
+	}()
+	<-stable.closeStarted
+
+	closeErr := make(chan error, 1)
+	go func() {
+		closeErr <- store.Close()
+	}()
+	for !store.CapacitySnapshot().Closed() {
+		runtime.Gosched()
+	}
+	if err := store.EndLease(lease.ID(), LeaseRelinquished); err != nil {
+		t.Fatalf("EndLease on closing store = %v", err)
+	}
+	select {
+	case err := <-closeErr:
+		t.Fatalf("store Close returned while EndLease cleanup was in flight: %v", err)
+	default:
+	}
+
+	releaseClose()
+	if err := <-closeErr; err != nil {
+		t.Fatalf("store Close during in-flight EndLease = %v", err)
+	}
+	// Once store.Close returns, the detached handle close, handleHold release,
+	// cache retirement, and revision traces must already be settled.
+	if stable.closed.Load() != 1 {
+		t.Fatalf("stable closes = %d, want 1", stable.closed.Load())
+	}
+	invalidated, retired := cache.snapshot()
+	if len(invalidated) != 0 || len(retired) != 1 || retired[0] != lease.Descriptor().FileRevision() {
+		t.Fatalf("cache events on Close return invalidated=%v retired=%v", invalidated, retired)
+	}
+	events := traces.snapshot()
+	if !hasRevisionTrace(events, RevisionTraceStageLeaseSettlement, RevisionTraceCauseRelinquished) ||
+		!hasRevisionTrace(events, RevisionTraceStageCleanRelease, RevisionTraceCauseRelinquished) {
+		t.Fatalf("missing EndLease traces on Close return: %+v", events)
+	}
+	if err := <-endErr; err != nil {
+		t.Fatalf("in-flight EndLease = %v", err)
+	}
+	if snapshot := store.CapacitySnapshot(); snapshot.Process().Used() != (CapacityUsage{}) {
+		t.Fatalf("post-close capacity retained: %+v", snapshot)
 	}
 }
 

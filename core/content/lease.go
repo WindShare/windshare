@@ -154,6 +154,10 @@ func (s *RevisionStore) EndLease(id LeaseID, kind LeaseEndKind) error {
 	// from replacing that evidence or extending its recovery deadline.
 	s.reap(now)
 	s.pool.mu.Lock()
+	if s.closed {
+		s.pool.mu.Unlock()
+		return nil
+	}
 	state := s.leases[id]
 	if state == nil {
 		s.pool.mu.Unlock()
@@ -168,7 +172,13 @@ func (s *RevisionStore) EndLease(id LeaseID, kind LeaseEndKind) error {
 	s.rememberLeaseTombstoneLocked(id, leaseEnded)
 	cleanup, retire, retired := s.retireRevisionIfIdleLocked(state.revision, now)
 	identity := state.revision.identity()
+	// Pin store.Close() until detached StableFile close, handleHold release,
+	// cache retirement, and traces complete outside pool.mu. Checking s.closed
+	// under pool.mu guarantees this Add happens before closeStore() reaches
+	// closeWG.Wait().
+	s.closeWG.Add(1)
 	s.pool.mu.Unlock()
+	defer s.closeWG.Done()
 
 	err := cleanup.run()
 	if !retire.file.IsZero() {
