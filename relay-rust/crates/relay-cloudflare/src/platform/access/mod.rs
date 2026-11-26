@@ -90,56 +90,70 @@ impl AccessObject {
 
     async fn read_body(
         &self,
-        req: &mut Request,
+        req: &Request,
         path: &str,
     ) -> Result<std::result::Result<Value, ConsoleError>> {
         match req.method() {
             Method::Get => Ok(Ok(json!({}))),
-            Method::Post => {
-                let expected_origin = self.console_origin()?;
-                let origin = req.headers().get("Origin")?;
-                let sec_fetch_site = req.headers().get("Sec-Fetch-Site")?;
-                let content_type = req.headers().get("Content-Type")?;
-                if let Err(error) = check_mutation_headers(
-                    path,
-                    &expected_origin,
-                    origin.as_deref(),
-                    sec_fetch_site.as_deref(),
-                    content_type.as_deref(),
-                ) {
-                    return Ok(Err(error));
-                }
-                if req
-                    .headers()
-                    .get("Content-Length")?
-                    .and_then(|v| v.parse::<usize>().ok())
-                    .is_some_and(|n| n > MAX_BODY_BYTES)
-                {
-                    return Ok(Err(ConsoleError::new(
-                        STATUS_PAYLOAD_TOO_LARGE,
-                        "body_too_large",
-                    )));
-                }
-                let bytes = req.bytes().await?;
-                if bytes.len() > MAX_BODY_BYTES {
-                    return Ok(Err(ConsoleError::new(
-                        STATUS_PAYLOAD_TOO_LARGE,
-                        "body_too_large",
-                    )));
-                }
-                let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
-                    return Ok(Err(ConsoleError::bad_request("invalid_json")));
-                };
-                if !value.is_object() {
-                    return Ok(Err(ConsoleError::bad_request("invalid_request")));
-                }
-                Ok(Ok(value))
-            }
+            Method::Post => self.read_post_body(req, path).await,
             _ => Ok(Err(ConsoleError::new(
                 STATUS_METHOD_NOT_ALLOWED,
                 "method_not_allowed",
             ))),
         }
+    }
+
+    async fn read_post_body(
+        &self,
+        req: &Request,
+        path: &str,
+    ) -> Result<std::result::Result<Value, ConsoleError>> {
+        let expected_origin = self.console_origin()?;
+        let origin = req.headers().get("Origin")?;
+        let sec_fetch_site = req.headers().get("Sec-Fetch-Site")?;
+        let content_type = req.headers().get("Content-Type")?;
+        if let Err(error) = check_mutation_headers(
+            path,
+            &expected_origin,
+            origin.as_deref(),
+            sec_fetch_site.as_deref(),
+            content_type.as_deref(),
+        ) {
+            return Ok(Err(error));
+        }
+        if req
+            .headers()
+            .get("Content-Length")?
+            .and_then(|v| v.parse::<usize>().ok())
+            .is_some_and(|n| n > MAX_BODY_BYTES)
+        {
+            return Ok(Err(ConsoleError::new(
+                STATUS_PAYLOAD_TOO_LARGE,
+                "body_too_large",
+            )));
+        }
+        let bytes = match req.inner().body() {
+            None => Vec::new(),
+            // Stream with a hard cap instead of req.bytes() so chunked or HTTP/2
+            // POSTs without Content-Length cannot buffer unboundedly in Wasm memory.
+            Some(stream) => match io::read_bounded_stream(stream, MAX_BODY_BYTES).await {
+                Ok(bytes) => bytes,
+                Err(io::BodyReadError::TooLarge) => {
+                    return Ok(Err(ConsoleError::new(
+                        STATUS_PAYLOAD_TOO_LARGE,
+                        "body_too_large",
+                    )));
+                }
+                Err(io::BodyReadError::Stream(reason)) => return Err(failure(reason)),
+            },
+        };
+        let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
+            return Ok(Err(ConsoleError::bad_request("invalid_json")));
+        };
+        if !value.is_object() {
+            return Ok(Err(ConsoleError::bad_request("invalid_request")));
+        }
+        Ok(Ok(value))
     }
 
     async fn route(&self, mut req: Request) -> Result<Response> {
@@ -149,23 +163,22 @@ impl AccessObject {
             // Avoid provisioning schema on uninitialized objects for TURN probes.
             return self.authorize_turn(&Database::new(&self.state), &digest, io::now().0);
         }
-        if path != "/internal/authorize" {
-            if req.url()?.origin().ascii_serialization() != self.console_origin()? {
-                return reply_error(ConsoleError::forbidden("console_origin_required"));
-            }
-            if !path.starts_with("/api/") {
-                return reply_error(ConsoleError::not_found());
-            }
-        }
-        let db = self.database()?;
-        let now = io::now().0;
         if path == "/internal/authorize" {
-            return Self::authorize(&db, &req.json().await?, now);
+            let db = self.database()?;
+            return Self::authorize(&db, &req.json().await?, io::now().0);
         }
-        let body = match self.read_body(&mut req, &path).await? {
+        if req.url()?.origin().ascii_serialization() != self.console_origin()? {
+            return reply_error(ConsoleError::forbidden("console_origin_required"));
+        }
+        if !path.starts_with("/api/") {
+            return reply_error(ConsoleError::not_found());
+        }
+        let body = match self.read_body(&req, &path).await? {
             Ok(body) => body,
             Err(error) => return reply_error(error),
         };
+        let db = self.database()?;
+        let now = io::now().0;
         db.cleanup(now)?;
         let response = match (req.method(), path.as_str()) {
             (Method::Post, "/api/login") => self.login(&db, &req, &body, now),

@@ -510,3 +510,80 @@ test('AccessObject provisions partial indexes once per instance and runs zero DD
 
   assert.deepEqual(await audit(), { indexes: expectedIndexes, ddlCount: 8 });
 });
+
+test('AccessObject bounds streamed POST bodies without Content-Length and preserves empty-body validation', { timeout: 30_000 }, async t => {
+  const mf = new Miniflare(options(password, origin, 'https://127.0.0.1', true));
+  t.after(() => mf.dispose());
+  const consoleWorker = await mf.getWorker('console');
+  const authority = (await mf.getBindings('relay')).ACCESS.getByName('authority');
+  const audit = async () => (await authority.fetch('https://internal/__test/schema-audit')).json();
+  const limit = 4096;
+
+  // Empty POST without a body must remain 400 invalid_json (not 503) and skip schema DDL.
+  const empty = await consoleWorker.fetch(origin + '/api/enrollments', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+  });
+  assert.equal(empty.status, 400);
+  assert.deepEqual(await empty.json(), { error: 'invalid_json' });
+  assert.equal((await audit()).ddlCount, 0);
+
+  // Oversized chunked stream without Content-Length that stalls open after crossing
+  // MAX_BODY_BYTES must reject 413 immediately instead of buffering until EOF.
+  let emitted = 0;
+  let releaseStall;
+  const stalled = new Promise(resolve => { releaseStall = resolve; });
+  t.after(() => releaseStall());
+  const multiChunk = new ReadableStream({
+    pull(controller) {
+      if (emitted < 5) {
+        emitted += 1;
+        controller.enqueue(new Uint8Array(1024).fill(0x20));
+        return;
+      }
+      return stalled;
+    },
+    cancel() { releaseStall(); },
+  });
+  const oversized = await consoleWorker.fetch(origin + '/api/enrollments', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: multiChunk, duplex: 'half',
+  });
+  assert.equal(oversized.status, 413);
+  assert.deepEqual(await oversized.json(), { error: 'body_too_large' });
+  assert.equal((await audit()).ddlCount, 0);
+
+  // A single chunk larger than MAX_BODY_BYTES without Content-Length must also reject 413.
+  const singleOversized = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new Uint8Array(64 * 1024).fill(0x20));
+      controller.close();
+    },
+  });
+  const singleRes = await consoleWorker.fetch(origin + '/api/enrollments', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: singleOversized, duplex: 'half',
+  });
+  assert.equal(singleRes.status, 413);
+  assert.deepEqual(await singleRes.json(), { error: 'body_too_large' });
+
+  // Streamed POST at the exact 4096-byte boundary without Content-Length must still succeed.
+  const device = claimant();
+  const exactBytes = new TextEncoder().encode(
+    JSON.stringify({ device_name: 'Streamed', claim_digest: device.claim_digest }).padEnd(limit),
+  );
+  assert.equal(exactBytes.length, limit);
+  const exactStream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(exactBytes.subarray(0, 2048));
+      controller.enqueue(exactBytes.subarray(2048));
+      controller.close();
+    },
+  });
+  const ok = await consoleWorker.fetch(origin + '/api/enrollments', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: exactStream, duplex: 'half',
+  });
+  assert.equal(ok.status, 200, await ok.clone().text());
+  const enrollment = await ok.json();
+  assert.ok(enrollment.enrollment_id);
+});

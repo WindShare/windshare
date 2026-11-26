@@ -1,9 +1,6 @@
-use super::access;
+use super::{access, io};
 use crate::turn_credentials::{Key, select};
-use futures_util::StreamExt;
-use js_sys::Uint8Array;
 use serde_json::{Value, json};
-use wasm_bindgen::JsCast;
 use windshare_relay_access::Digest;
 use worker::{
     Env, Fetch, Headers, Method, Request, RequestInit, RequestRedirect, Response, ResponseBody,
@@ -18,21 +15,9 @@ async fn upstream_json(response: &Response) -> Option<Value> {
     let ResponseBody::Stream(stream) = response.body() else {
         return None;
     };
-    let mut chunks = wasm_streams::ReadableStream::from_raw(stream.clone())
-        .try_into_stream()
+    let bytes = io::read_bounded_stream(stream.clone(), MAX_UPSTREAM_BYTES)
+        .await
         .ok()?;
-    let mut bytes = Vec::new();
-    while let Some(item) = chunks.next().await {
-        // Check the JS buffer before copying it into Wasm. The stream cancels on early return.
-        let chunk = item.ok()?.dyn_into::<Uint8Array>().ok()?;
-        let start = bytes.len();
-        let length = chunk.length() as usize;
-        if length > MAX_UPSTREAM_BYTES - start {
-            return None;
-        }
-        bytes.resize(start + length, 0);
-        chunk.copy_to(&mut bytes[start..]);
-    }
     serde_json::from_slice(&bytes).ok()
 }
 

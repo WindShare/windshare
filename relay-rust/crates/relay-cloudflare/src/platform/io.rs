@@ -8,6 +8,7 @@ use crate::{
     runtime::Host,
 };
 use anyhow::{Result, anyhow, ensure};
+use futures_util::StreamExt;
 use js_sys::{ArrayBuffer, Uint8Array};
 use wasm_bindgen::JsCast;
 use windshare_relay_core::{
@@ -17,11 +18,45 @@ use windshare_relay_core::{
     lifecycle::{ConnectionRef, Incarnation},
     share::{Identity, Storage},
 };
-use worker::{State, WebSocket, worker_sys::ext::WebSocketExt};
+use worker::{State, WebSocket, web_sys, worker_sys::ext::WebSocketExt};
 
 const SOCKET_OPEN: u16 = 1;
 const CLOSE_NORMAL: u16 = 1000;
 const MAX_JS_DATE_MS: u64 = 8_640_000_000_000_000;
+
+pub enum BodyReadError {
+    TooLarge,
+    Stream(String),
+}
+
+pub async fn read_bounded_stream(
+    stream: web_sys::ReadableStream,
+    limit: usize,
+) -> std::result::Result<Vec<u8>, BodyReadError> {
+    let mut chunks = wasm_streams::ReadableStream::from_raw(stream)
+        .try_into_stream()
+        .map_err(|(error, _)| BodyReadError::Stream(format!("{error:?}")))?;
+    let mut bytes = Vec::new();
+    while let Some(item) = chunks.next().await {
+        let raw = item.map_err(|error| BodyReadError::Stream(format!("{error:?}")))?;
+        let Ok(chunk) = raw.dyn_into::<Uint8Array>() else {
+            // Explicitly await cancel so wasm-streams' Drop does not leak a
+            // forgotten JS catch closure on early return.
+            let _ = chunks.cancel().await;
+            return Err(BodyReadError::Stream("non-binary stream chunk".into()));
+        };
+        let start = bytes.len();
+        let length = chunk.length() as usize;
+        // Check the JS buffer length before copying it into Wasm memory.
+        if length > limit - start {
+            let _ = chunks.cancel().await;
+            return Err(BodyReadError::TooLarge);
+        }
+        bytes.resize(start + length, 0);
+        chunk.copy_to(&mut bytes[start..]);
+    }
+    Ok(bytes)
+}
 
 pub fn random<const N: usize>() -> Result<[u8; N]> {
     let mut bytes = [0; N];
