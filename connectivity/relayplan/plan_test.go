@@ -61,3 +61,28 @@ func TestPlanFiltersTrustRolesAndExpiredObservations(t *testing.T) {
 		t.Fatal("missing rejection reasons")
 	}
 }
+
+func TestPlanDirectoryCandidatesIncludesStandbyAfterNetwork(t *testing.T) {
+	plan := Plan{
+		Configured: []Candidate{{URL: "https://own.example", Configured: true}},
+		Network:    []Candidate{{URL: "https://active1.example"}, {URL: "https://active2.example"}},
+		Standby:    []Candidate{{URL: "https://canary1.example", Canary: true}},
+	}
+	got := plan.DirectoryCandidates()
+	want := []string{"https://active1.example", "https://active2.example", "https://canary1.example"}
+	if len(got) != len(want) {
+		t.Fatalf("DirectoryCandidates() = %+v, want %d items", got, len(want))
+	}
+	for i, url := range want {
+		if got[i].URL != url {
+			t.Fatalf("DirectoryCandidates()[%d].URL = %q, want %q", i, got[i].URL, url)
+		}
+	}
+	got[0].URL = "https://mutated.example"
+	if plan.Network[0].URL != "https://active1.example" {
+		t.Fatal("DirectoryCandidates mutated Plan.Network")
+	}
+	if empty := (Plan{Configured: plan.Configured}).DirectoryCandidates(); len(empty) != 0 {
+		t.Fatalf("configured-only DirectoryCandidates() = %+v, want empty", empty)
+	}
+}

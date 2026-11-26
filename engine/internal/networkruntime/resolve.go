@@ -18,7 +18,7 @@ import (
 func (selection Selection) PublishRelayHints(capability *link.Link, selected []string) []networkconfig.Candidate {
 	capability.Relays, capability.NodeAliases = nil, nil
 	var published []networkconfig.Candidate
-	for _, group := range [][]relayplan.Candidate{selection.Plan.Configured, selection.Plan.Network, selection.Plan.Standby} {
+	for _, group := range [][]relayplan.Candidate{selection.Plan.Configured, selection.Plan.DirectoryCandidates()} {
 		for _, candidate := range group {
 			if !slices.Contains(selected, candidate.URL) {
 				continue

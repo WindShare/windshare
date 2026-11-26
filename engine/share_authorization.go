@@ -31,7 +31,7 @@ func shareAuthorization(err error, selection networkruntime.Selection) *ShareAut
 			return &ShareAuthorization{Kind: ShareSelfHostedAuthorization, RelayURL: candidate.URL}
 		}
 	}
-	for _, candidate := range selection.Plan.Network {
+	for _, candidate := range selection.Plan.DirectoryCandidates() {
 		if denied[candidate.URL] {
 			return &ShareAuthorization{Kind: ShareOfficialAuthorization}
 		}

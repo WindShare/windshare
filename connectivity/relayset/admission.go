@@ -106,7 +106,7 @@ func NewNetworkAdmissions(plan relayplan.Plan, clock Clock, serverRetryAt func(s
 	if clock == nil {
 		clock = SystemClock{}
 	}
-	candidates := append(append([]relayplan.Candidate(nil), plan.Network...), plan.Standby...)
+	candidates := plan.DirectoryCandidates()
 	a := &NetworkAdmissions{clock: clock, serverRetryAt: serverRetryAt, candidates: candidates, policy: plan.Policy,
 		target: min(relayplan.TargetNetworkRegistrations, MaximumEndpoints-len(plan.Configured)),
 		states: make([]admissionState, len(candidates)), changed: make(chan struct{}), primary: -1}

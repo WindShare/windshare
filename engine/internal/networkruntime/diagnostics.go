@@ -3,7 +3,6 @@ package networkruntime
 import (
 	"context"
 	"errors"
-	"slices"
 	"sync"
 	"time"
 
@@ -92,8 +91,9 @@ func deadlineField(fields diagnostics.Fields, key string, deadline time.Time) {
 }
 
 func (r *Runtime) Observer(selection Selection, sink diagnostics.Sink) func(string, relayset.Attempt) {
-	identities := make(map[string]string, len(selection.Plan.Network))
-	for _, candidate := range slices.Concat(selection.Plan.Network, selection.Plan.Standby) {
+	candidates := selection.Plan.DirectoryCandidates()
+	identities := make(map[string]string, len(candidates))
+	for _, candidate := range candidates {
 		identities[candidate.URL] = candidate.Identity
 	}
 	var mu sync.Mutex

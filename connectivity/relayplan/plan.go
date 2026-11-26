@@ -3,6 +3,7 @@ package relayplan
 
 import (
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/windshare/windshare/core/networkendpoint"
@@ -149,6 +150,13 @@ type Plan struct {
 	Standby    []Candidate
 	Policy     Policy
 	Decision   Decision
+}
+
+// DirectoryCandidates returns every directory-sourced candidate in startup wave
+// order (initial Network followed by canary Standby) so consumers that classify
+// or coordinate official relays cannot overlook the standby wave.
+func (p Plan) DirectoryCandidates() []Candidate {
+	return slices.Concat(p.Network, p.Standby)
 }
 
 func Build(input Input) (Plan, error) {
