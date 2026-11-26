@@ -102,13 +102,24 @@ func safeIdentity(value string) bool {
 
 func buildEnvironment() []string {
 	var environment []string
+	goflags := ""
 	for _, item := range os.Environ() {
-		key, _, _ := strings.Cut(item, "=")
+		key, value, _ := strings.Cut(item, "=")
 		switch strings.ToUpper(key) {
-		case "GOWORK", "CGO_ENABLED", "GOOS", "GOARCH", "GOFLAGS":
+		case "GOWORK", "CGO_ENABLED", "GOOS", "GOARCH":
+			continue
+		case "GOFLAGS":
+			// Release scripts pass -modcacherw so disposable module caches stay removable
+			// on exit cleanup; strip every other ambient flag to keep builds deterministic.
+			for _, flag := range strings.Fields(value) {
+				if flag == "-modcacherw" {
+					goflags = "-modcacherw"
+					break
+				}
+			}
 			continue
 		}
 		environment = append(environment, item)
 	}
-	return append(environment, "GOWORK=off", "CGO_ENABLED=0", "GOOS="+runtime.GOOS, "GOARCH="+runtime.GOARCH, "GOFLAGS=")
+	return append(environment, "GOWORK=off", "CGO_ENABLED=0", "GOOS="+runtime.GOOS, "GOARCH="+runtime.GOARCH, "GOFLAGS="+goflags)
 }

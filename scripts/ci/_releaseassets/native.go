@@ -38,9 +38,16 @@ func buildNativeRelay(source, destination string) error {
 		return err
 	}
 	workspace := filepath.Join(source, "relay-rust")
+	// Keep Cargo's target directory outside the nested release checkout so MSVC
+	// link.exe stays below Windows MAX_PATH on deep Cargo build-dir paths.
+	targetDir, err := os.MkdirTemp("", "ws-r-")
+	if err != nil {
+		return fmt.Errorf("create native relay target directory: %w", err)
+	}
+	defer os.RemoveAll(targetDir)
 	command := exec.Command("rustup", "run", "stable", "cargo", "build",
 		"--locked", "--release", "--package", nativeRelayPackage, "--bin", nativeRelayBinary,
-		"--target", target, "--target-dir", filepath.Join(workspace, ".target"),
+		"--target", target, "--target-dir", targetDir,
 		"--message-format=json-render-diagnostics")
 	command.Dir = workspace
 	command.Env = nativeReleaseEnvironment(os.Environ(), target)

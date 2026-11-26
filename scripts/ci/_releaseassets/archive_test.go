@@ -52,10 +52,30 @@ func TestAssetInputAndBuildEnvironment(t *testing.T) {
 	}
 	t.Setenv("GOFLAGS", "-overlay=outside.json")
 	t.Setenv("GOOS", "alien")
+	var gotGoflags string
 	for _, item := range buildEnvironment() {
 		if strings.Contains(item, "outside.json") || item == "GOOS=alien" {
 			t.Fatal(item)
 		}
+		if value, ok := strings.CutPrefix(item, "GOFLAGS="); ok {
+			gotGoflags = value
+		}
+	}
+	if gotGoflags != "" {
+		t.Fatalf("unexpected GOFLAGS=%q", gotGoflags)
+	}
+	t.Setenv("GOFLAGS", "-overlay=outside.json -modcacherw -race")
+	gotGoflags = ""
+	for _, item := range buildEnvironment() {
+		if strings.Contains(item, "outside.json") || strings.Contains(item, "-race") {
+			t.Fatal(item)
+		}
+		if value, ok := strings.CutPrefix(item, "GOFLAGS="); ok {
+			gotGoflags = value
+		}
+	}
+	if gotGoflags != "-modcacherw" {
+		t.Fatalf("GOFLAGS = %q, want -modcacherw", gotGoflags)
 	}
 	if err := buildAssets("", "", "", "", ""); err == nil {
 		t.Fatal("missing identity accepted")
