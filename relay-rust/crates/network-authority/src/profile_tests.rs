@@ -464,22 +464,6 @@ fn email_registration_recovers_existing_accounts_and_blocks_evasion() {
     assert_eq!(retry.account, recovered.account);
     assert_eq!(retry.credential, recovered.credential);
 
-    // Password registration refuses an already-bound canonical email atomically.
-    let pw_request =
-        verified_email_registration(&mut authority, "pw-ip", 4, "alice+pw@googlemail.com");
-    let pw_commit = Registration {
-        username: Some("newuser".into()),
-        password_verifier: Some(test_verifier("correct horse battery")),
-        ..pw_request
-    };
-    assert!(matches!(
-        authority
-            .register("pw-ip", pw_commit)
-            .unwrap_err()
-            .downcast_ref::<Fault>(),
-        Some(Fault::Denied { reason }) if reason == "email_taken"
-    ));
-
     // Blocking Account 1 stops email recovery and burns the OTP so it cannot replay after unblock.
     authority
         .block(

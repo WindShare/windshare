@@ -1,4 +1,4 @@
-use crate::{PasswordVerifier, StoredPassword};
+use crate::StoredPassword;
 use serde::{Deserialize, Deserializer, Serialize};
 use windshare_relay_access::{
     AccountId, CredentialId,
@@ -172,8 +172,6 @@ pub struct Registration {
     pub client_secret: String,
     pub challenge: Option<String>,
     pub solution: Option<String>,
-    pub username: Option<String>,
-    pub password_verifier: Option<PasswordVerifier>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Session {

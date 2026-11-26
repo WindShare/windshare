@@ -119,21 +119,36 @@ test('the Worker verifies client-derived password verifiers atomically inside th
   assert.deepEqual(dismissed.value, []);
   await call('/v1/admin/reviews/dismiss', { count: 0 }, { admin: true, status: 400 });
 
-  // Password registration + idempotent retry + login + malformed verifier rejection.
+  // Passwordless registration + idempotent retry + authenticated password setup + login.
   const secret = randomBytes(32).toString('base64url');
   const firstVerifier = derivePasswordVerifier('account', 'alice', 'Correct-Horse-Battery-1');
   const secondVerifier = derivePasswordVerifier('account', 'alice', 'Correct-Horse-Battery-2');
   const wrongAccountVerifier = derivePasswordVerifier('account', 'alice', 'wrong-password-attempt');
   await call('/v1/accounts', { client_secret: secret, username: 'alice' }, { status: 400 });
   await call('/v1/accounts', { client_secret: secret, username: 'alice', password: 'plaintext-rejected' }, { status: 400 });
-  const created = (await call('/v1/accounts', {
+  await call('/v1/accounts', {
     client_secret: secret, username: 'alice', password_verifier: firstVerifier,
-  }, { source: '198.51.100.10' })).value;
-  const retried = (await call('/v1/accounts', {
-    client_secret: secret, username: 'alice', password_verifier: firstVerifier,
-  }, { source: '198.51.100.10' })).value;
+  }, { status: 400, source: '198.51.100.10' });
+  const created = (await call('/v1/accounts', { client_secret: secret }, {
+    source: '198.51.100.10',
+  })).value;
+  const retried = (await call('/v1/accounts', { client_secret: secret }, {
+    source: '198.51.100.10',
+  })).value;
   assert.deepEqual(retried.account, created.account);
   assert.deepEqual(retried.credential, created.credential);
+  await call('/v1/accounts/password', { username: 'alice', password_verifier: firstVerifier }, {
+    secret, source: '198.51.100.10',
+  });
+  // Unauthenticated /v1/accounts rejects credential fields identically for existing and unknown usernames.
+  for (const probeName of ['alice', 'nonexistent-probe']) {
+    const probe = await call('/v1/accounts', {
+      client_secret: randomBytes(32).toString('base64url'),
+      username: probeName,
+      password_verifier: firstVerifier,
+    }, { status: 400, source: '198.51.100.99' });
+    assert.deepEqual(probe.value, { kind: 'invalid' });
+  }
 
   await call('/v1/accounts/login', { username: 'alice', password_verifier: 'not-a-32-byte-verifier' }, {
     status: 400, source: '198.51.100.11',
@@ -208,7 +223,8 @@ test('the Worker verifies client-derived password verifiers atomically inside th
   await call('/v1/device/approve', { invitation, username: 'alice' }, {
     cookie: deviceCookie, status: 403, source: '198.51.100.12',
   });
-  for (let i = 0; i < 3; i++) {
+  // Initial password setup + two A -> B -> A rotations spent 3 of the 5 per-account tokens.
+  for (let i = 0; i < 2; i++) {
     await call('/v1/accounts/password', { username: 'alice', password_verifier: secondVerifier }, {
       secret, source: `198.51.100.${30 + i}`,
     });

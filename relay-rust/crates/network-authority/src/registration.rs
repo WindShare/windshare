@@ -94,10 +94,10 @@ impl<R: Store, E: Environment> Authority<R, E> {
         Ok(load(&self.store, ACCOUNT_COUNT_KEY)?.unwrap_or(0))
     }
 
-    fn ensure_username_available(&self, name: &str, account: Option<AccountId>) -> Result<()> {
+    fn ensure_username_available(&self, name: &str, account: AccountId) -> Result<()> {
         let owner = load::<AccountId>(&self.store, &format!("username/{name}"))?;
         ensure!(
-            owner.is_none() || owner == account,
+            owner.is_none_or(|id| id == account),
             Fault::Denied {
                 reason: "username_taken".into()
             }
@@ -113,14 +113,6 @@ impl<R: Store, E: Environment> Authority<R, E> {
         // creating another principal or spending another creation-rate token.
         if load::<Credential>(&self.store, &key("credential", attempt.digest()))?.is_some() {
             return self.refresh(&request.client_secret);
-        }
-        let name = request.username.as_deref().map(username).transpose()?;
-        ensure!(
-            name.is_some() == request.password_verifier.is_some(),
-            Fault::Invalid
-        );
-        if let Some(name) = &name {
-            self.ensure_username_available(name, None)?;
         }
         let settings = self.settings()?;
         let account_count = self.account_count()?;
@@ -141,17 +133,9 @@ impl<R: Store, E: Environment> Authority<R, E> {
             .transpose()?
             .flatten();
         if let Some(existing_id) = existing_owner {
-            // Password registration explicitly creates a new named account and must
-            // not silently overwrite or merge into another account's credentials.
-            ensure!(
-                name.is_none(),
-                Fault::Denied {
-                    reason: "email_taken".into()
-                }
-            );
-            // Passwordless email verification recovers the existing account with a
-            // new device credential so reinstalls work while keeping one allowance
-            // and block state per canonical mailbox.
+            // Email verification recovers the existing account with a new device
+            // credential so reinstalls work while keeping one allowance and block
+            // state per canonical mailbox.
             let source_bucket = admission.source_bucket().to_owned();
             admission.consume(&mut self.store)?;
             let account = self.ensure_account(existing_id)?;
@@ -168,22 +152,11 @@ impl<R: Store, E: Environment> Authority<R, E> {
         let verified_email = admission.consume(&mut self.store)?;
         let id = self.environment.random()?;
         anyhow::ensure!(id != [0; 16], "account ID generator returned zero");
-        let password = match request.password_verifier {
-            Some(verifier) => {
-                let salt = self.environment.random::<PASSWORD_SALT_BYTES>()?;
-                Some(StoredPassword::seal(
-                    &verifier,
-                    salt,
-                    self.environment.password_peppers(),
-                ))
-            }
-            None => None,
-        };
         let account = Account {
             id,
             created_at: self.environment.now(),
-            username: name.clone(),
-            password,
+            username: None,
+            password: None,
             profile: Profile {
                 revision: u64::from(verified_email.is_some()),
                 email: verified_email.as_ref().map(|email| email.address.clone()),
@@ -192,9 +165,6 @@ impl<R: Store, E: Environment> Authority<R, E> {
         };
         if let Some(email) = &verified_email {
             save(&mut self.store, &email_owner_key(&email.canonical), &id)?;
-        }
-        if let Some(name) = name {
-            save(&mut self.store, &format!("username/{name}"), &id)?;
         }
         save(&mut self.store, &key("account", &id), &account)?;
         // Registration order is immutable, while accounts are updated only on login/profile edits.
@@ -332,7 +302,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 return Err(error);
             }
         };
-        self.ensure_username_available(&name, Some(account.id))?;
+        self.ensure_username_available(&name, account.id)?;
         self.throttle_all([
             (
                 "account-password-source",

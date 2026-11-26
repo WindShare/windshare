@@ -12,12 +12,12 @@ fn seed_password_account(
     username: &str,
     verifier: &PasswordVerifier,
 ) -> (AccountId, String) {
-    let mut request = registration(secret_byte);
+    let request = registration(secret_byte);
     let secret = request.client_secret.clone();
-    request.username = Some(username.into());
-    request.password_verifier = Some(verifier.clone());
-    let session = authority
-        .register(&format!("seed-{secret_byte}"), request)
+    let source = format!("seed-{secret_byte}");
+    let session = authority.register(&source, request).unwrap();
+    authority
+        .set_password(&source, &secret, username, verifier)
         .unwrap();
     (session.account, secret)
 }
@@ -110,10 +110,12 @@ fn shared_password_verifier_vectors_parse_and_verify_with_domain_separation() {
     authority
         .initialize_admin("init", "init", username, &admin_verifier)
         .unwrap();
-    let mut req = registration(40);
-    req.username = Some(username.into());
-    req.password_verifier = Some(account_verifier.clone());
+    let req = registration(40);
+    let secret = req.client_secret.clone();
     authority.register("vector-ip", req).unwrap();
+    authority
+        .set_password("vector-ip", &secret, username, &account_verifier)
+        .unwrap();
 
     // Admin verifier cannot sign into the account, and account verifier cannot sign into admin.
     assert!(
@@ -209,6 +211,9 @@ fn password_change_limits_atomically_without_burning_global_on_invalid_input() {
     let verifier = test_verifier("correct horse battery");
     let (_, secret_a) = seed_password_account(&mut authority, 1, "alice", &verifier);
     let (_, secret_b) = seed_password_account(&mut authority, 2, "bob", &verifier);
+    // Refill the buckets touched while seeding alice and bob so the test starts from full limits.
+    authority.environment.now += 60;
+    let writes_before_invalid = authority.store.put_count;
 
     // Invalid usernames and taken usernames do not spend account or global quotas.
     for _ in 0..10 {
@@ -221,14 +226,7 @@ fn password_change_limits_atomically_without_burning_global_on_invalid_input() {
             Fault::Denied { reason } if reason == "username_taken"
         ));
     }
-    assert_eq!(
-        authority
-            .store
-            .scan("throttle/account-password-global/", None)
-            .unwrap()
-            .len(),
-        0
-    );
+    assert_eq!(authority.store.put_count, writes_before_invalid);
 
     // Invalid credentials count against only the caller's source bucket.
     for _ in 0..5 {
@@ -256,12 +254,11 @@ fn password_change_limits_atomically_without_burning_global_on_invalid_input() {
     // Exhaust the remaining global password-change burst (60 total; 5 spent above).
     let mut spent = 5;
     for acct_idx in 3..=20u8 {
-        let (_, secret) = seed_password_account(
-            &mut authority,
-            acct_idx,
-            &format!("user{acct_idx}"),
-            &verifier,
-        );
+        let req = registration(acct_idx);
+        let secret = req.client_secret.clone();
+        authority
+            .register(&format!("seed-{acct_idx}"), req)
+            .unwrap();
         for attempt in 0..5 {
             let source = format!("global-{acct_idx}-{attempt}");
             let result =
@@ -475,7 +472,7 @@ fn admin_login_isolates_unknown_usernames_and_enforces_limits() {
 }
 
 #[test]
-fn password_registration_consumes_pow_proof_atomically_and_handles_retries() {
+fn registration_rejects_credential_fields_and_consumes_pow_proof_atomically() {
     let mut authority = fixture();
     let settings = Settings {
         registration: RegistrationPolicy::ProofOfWork,
@@ -484,13 +481,9 @@ fn password_registration_consumes_pow_proof_atomically_and_handles_retries() {
     };
     save(&mut authority.store, "settings", &settings).unwrap();
 
-    let base = registration(4);
+    let mut request = registration(4);
+    let secret = request.client_secret.clone();
     let verifier = test_verifier("correct horse battery");
-    let mut request = Registration {
-        username: Some("carol".into()),
-        password_verifier: Some(verifier),
-        ..base
-    };
     let challenge = match fault_of(authority.register("src", request.clone())) {
         Fault::Verification { challenge } => challenge,
         other => panic!("expected work challenge, got {other:?}"),
@@ -512,12 +505,17 @@ fn password_registration_consumes_pow_proof_atomically_and_handles_retries() {
     let retried = authority.register("src", request).unwrap();
     assert_eq!(retried.account, created.account);
     assert_eq!(retried.credential, created.credential);
+    let named = authority
+        .set_password("src", &secret, "carol", &verifier)
+        .unwrap();
+    assert_eq!(named.username.as_deref(), Some("carol"));
 
-    // Mismatched username/verifier pair in register is rejected.
-    let mut mismatched = registration(5);
-    mismatched.username = Some("orphan".into());
-    assert!(matches!(
-        fault_of(authority.register("src", mismatched)),
-        Fault::Invalid
-    ));
+    // Registration rejects credential fields at deserialization so POST /v1/accounts
+    // cannot be abused as an unauthenticated username enumeration oracle.
+    let probe = serde_json::json!({
+        "client_secret": registration(5).client_secret,
+        "username": "carol",
+        "password_verifier": String::from(verifier),
+    });
+    assert!(serde_json::from_value::<Registration>(probe).is_err());
 }

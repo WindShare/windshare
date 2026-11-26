@@ -203,8 +203,6 @@ fn registration(secret: u8) -> Registration {
         client_secret: URL_SAFE_NO_PAD.encode([secret; 32]),
         challenge: None,
         solution: None,
-        username: None,
-        password_verifier: None,
     }
 }
 
@@ -248,13 +246,13 @@ impl Authority<Memory, Clock> {
     fn register_with_password(
         &mut self,
         source: &str,
-        mut request: Registration,
+        request: Registration,
         name: &str,
         password: &str,
     ) -> Result<Session> {
-        request.username = Some(name.into());
-        request.password_verifier = Some(test_verifier(password));
-        self.register(source, request)
+        let secret = request.client_secret.clone();
+        self.register(source, request)?;
+        self.set_password(source, &secret, name, &test_verifier(password))
     }
 }
 fn batch(
