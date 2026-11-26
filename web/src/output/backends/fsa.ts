@@ -1,5 +1,6 @@
 import {
   FaultScope,
+  FileDestinationConflictError,
   OutputFaultCode,
   TransferFaultError,
   classifyNativeError,
@@ -236,6 +237,7 @@ export async function discardFSATask(
 /** While the task lock is held, unfinished rows can be reused directly after each successful IndexedDB transaction. */
 class FSAFileRecords {
   readonly completedAtOpen = new Map<string, ReceiveFileRecord>()
+  readonly #invalidatedCompleted = new Map<string, string>()
   readonly #unfinished = new Map<string, ReceiveFileRecord>()
   readonly #store: ReceiveStore
 
@@ -251,15 +253,36 @@ class FSAFileRecords {
     return this.#unfinished.get(fileRecordId(taskId, fileId)) ?? this.completedAtOpen.get(fileId)
   }
 
+  invalidateCompleted(record: ReceiveFileRecord): boolean {
+    if (this.#invalidatedCompleted.has(record.fileId)) return false
+    this.#invalidatedCompleted.set(record.fileId, record.id)
+    return true
+  }
+
+  isInvalidatedCompleted(file: ReceiveFileRecord): boolean {
+    return file.status === 'completed' && this.#invalidatedCompleted.has(file.fileId)
+  }
+
   async putFile(record: ReceiveFileRecord): Promise<void> {
     await this.#store.putFile(record)
-    if (record.status === 'completed') this.#unfinished.delete(record.id)
-    else this.#unfinished.set(record.id, record)
+    if (record.status === 'completed') {
+      this.#unfinished.delete(record.id)
+      this.#invalidatedCompleted.delete(record.fileId)
+    } else {
+      this.#unfinished.set(record.id, record)
+    }
   }
 
   async deleteFiles(ids: readonly string[]): Promise<void> {
     await this.#store.deleteFiles(ids)
+    const deleted = new Set(ids)
     for (const id of ids) this.#unfinished.delete(id)
+    for (const [fileId, id] of this.#invalidatedCompleted) {
+      if (deleted.has(id)) {
+        this.#invalidatedCompleted.delete(fileId)
+        this.completedAtOpen.delete(fileId)
+      }
+    }
   }
 }
 
@@ -338,7 +361,13 @@ class FSASessionHandle implements OutputSessionHandle {
 
   async settle(result: SettledTransferJobResult): Promise<ReceiveTaskRecord> {
     this.#outputTouched = true
-    const files = await this.#store.listTaskFiles(this.taskId)
+    const allFiles = await this.#store.listTaskFiles(this.taskId)
+    const files: ReceiveFileRecord[] = []
+    const invalidatedCompletedIds: string[] = []
+    for (const file of allFiles) {
+      if (this.#files.isInvalidatedCompleted(file)) invalidatedCompletedIds.push(file.id)
+      else files.push(file)
+    }
     const stored = summarizeStoredTaskFiles(files)
 
     const nextLifecycle = nextFSALifecycle(this.#record.lifecycle, result, {
@@ -378,6 +407,7 @@ class FSASessionHandle implements OutputSessionHandle {
         record: nextRecord,
         rootHandle: this.#rootHandle,
         files,
+        invalidatedCompletedIds,
         initialSafe,
         store: {
           putTask: row => this.#store.putTask(row),
@@ -387,6 +417,14 @@ class FSASessionHandle implements OutputSessionHandle {
         directories,
       })
       this.#record = nextRecord
+    } else if (nextLifecycle.kind === 'saved' && invalidatedCompletedIds.length > 0) {
+      // Terminal saved tasks never reopen; retire invalidated rows so post-settlement
+      // restore plans cannot emit steps for files that failed verification.
+      await this.#files.deleteFiles(invalidatedCompletedIds).catch(() => {
+        emitOutputTrace(this.#diagnostics?.trace, 'cleanup', {
+          backend: 'file_system_access', task_id: this.taskId, transition: 'deferred',
+        })
+      })
     }
     emitOutputTrace(this.#diagnostics?.trace, 'settlement', {
       backend: 'file_system_access',
@@ -433,8 +471,13 @@ class FSASessionHandle implements OutputSessionHandle {
     const existing = this.#files.completedAtOpen.get(fileId)
     if (existing === undefined) return undefined
     const path = this.#displayPath(existing.fsaPath ?? existing.path)
-    if (existing.handle === undefined) throw destinationChanged(path)
-    await verifyExistingFSAFile(existing, existing.handle, path)
+    try {
+      if (existing.handle === undefined) throw destinationChanged(path)
+      await verifyExistingFSAFile(existing, existing.handle, path)
+    } catch (error) {
+      this.#recordCompletedVerificationConflict(existing, error)
+      throw error
+    }
     return Object.freeze({ size: existing.size })
   }
 
@@ -638,7 +681,9 @@ class FSASessionHandle implements OutputSessionHandle {
       return await parent.handle.getFileHandle(leaf)
     } catch (error) {
       if (!isMissingFSAEntry(error) || record.status === 'completed') {
-        throw destinationChanged(this.#displayPath([...parent.physicalPath, leaf]), error)
+        const mapped = destinationChanged(this.#displayPath([...parent.physicalPath, leaf]), error)
+        this.#recordCompletedVerificationConflict(record, mapped)
+        throw mapped
       }
       // Moving an unverified file aside lets the user restart at byte zero.
       await this.#files.deleteFiles([record.id])
@@ -647,10 +692,30 @@ class FSASessionHandle implements OutputSessionHandle {
   }
 
   async #verifyFile(record: ReceiveFileRecord, handle: FileSystemFileHandle, path: string): Promise<ReceiveFileRecord> {
-    if (record.handle === undefined || !await sameFSAEntry(handle, record.handle)) throw destinationChanged(path)
-    const existing = await verifyExistingFSAFile(record, handle, path)
-    if (record.fsaPendingPublish !== undefined) await this.#files.putFile(existing)
-    return existing
+    try {
+      if (record.handle === undefined || !await sameFSAEntry(handle, record.handle)) throw destinationChanged(path)
+      const existing = await verifyExistingFSAFile(record, handle, path)
+      if (record.fsaPendingPublish !== undefined) await this.#files.putFile(existing)
+      return existing
+    } catch (error) {
+      this.#recordCompletedVerificationConflict(record, error)
+      throw error
+    }
+  }
+
+  #recordCompletedVerificationConflict(record: ReceiveFileRecord, error: unknown): void {
+    if (record.status !== 'completed' || !(error instanceof FileDestinationConflictError)) return
+    // Keep the IndexedDB row until terminal settlement: if a resumed run pauses again, retaining
+    // the row preserves local conflict detection and stops a 0-byte user edit from being reclaimed
+    // as an uncommitted crash placeholder on a later reopen.
+    if (this.#files.invalidateCompleted(record)) {
+      emitOutputTrace(this.#diagnostics?.trace, 'reopen', {
+        backend: 'file_system_access',
+        task_id: this.taskId,
+        file_id: record.fileId,
+        transition: 'completed_verification_conflict',
+      })
+    }
   }
 
   #displayPath(path: readonly string[]): string {

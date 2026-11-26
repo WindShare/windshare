@@ -55,6 +55,7 @@ export async function sameFSAEntry(left: FileSystemHandle, right: FileSystemHand
 }
 
 type CleanupOutcome = 'removed' | 'missing' | 'changed'
+type ResolvedFSADirectory = FileSystemDirectoryHandle | 'missing' | 'changed'
 
 export async function readFSALeafFingerprint(
   parent: FileSystemDirectoryHandle, name: string, expected: FileSystemFileHandle,
@@ -106,6 +107,7 @@ interface CleanupOptions {
   store: Pick<ReceiveStore, 'deleteFiles'>
   diagnostics: OutputDiagnosticsPorts | undefined
   directories?: readonly FileSystemDirectoryHandle[]
+  invalidatedCompletedIds?: readonly string[]
   beginRemoval?: () => void
 }
 
@@ -118,11 +120,46 @@ export async function cleanupFSATaskEntries(
   const unfinished = files.filter(file => file.status !== 'completed')
   const directories = new Map<string, readonly string[]>()
   const { retired, removed, changed, failures } = await cleanupUnfinishedFiles(root, target, unfinished, directories, options)
-  let removedFiles = removed
-  let skippedFiles = changed
-  let removedRoot = false
-  if (target.singleFile && files.length === 0) {
-    try {
+  const invalidatedCompletedIds = options.invalidatedCompletedIds ?? []
+  const rootOutcome = await cleanupTaskRoot(
+    root,
+    target,
+    directories,
+    files.length,
+    unfinished.length,
+    invalidatedCompletedIds.length,
+    options,
+  )
+  if (rootOutcome.error !== undefined) failures.push(rootOutcome.error)
+  const retiredIds = [...retired, ...invalidatedCompletedIds]
+  if (retiredIds.length > 0) {
+    options.beginRemoval?.()
+    await options.store.deleteFiles(retiredIds)
+  }
+  emitOutputTrace(options.diagnostics?.trace, 'cleanup', {
+    backend: 'file_system_access', task_id: taskId, transition: failures.length === 0 ? 'completed' : 'failed',
+    removed_files: removed + rootOutcome.removedFiles,
+    skipped_unverified_files: changed + rootOutcome.skippedFiles,
+    removed_root: rootOutcome.removedRoot,
+  })
+  if (failures.length > 0) throw failures[0]
+}
+
+async function cleanupTaskRoot(
+  root: ResolvedFSADirectory,
+  target: FSATargetRecord,
+  directories: Map<string, readonly string[]>,
+  fileCount: number,
+  unfinishedCount: number,
+  invalidatedCompletedCount: number,
+  options: CleanupOptions,
+): Promise<Readonly<{ removedFiles: number; skippedFiles: number; removedRoot: boolean; error?: unknown }>> {
+  try {
+    if (target.singleFile) {
+      // Invalidated single-file completions already moved past reservation; never treat the disk entry as a 0-byte placeholder.
+      if (fileCount !== 0 || invalidatedCompletedCount > 0) {
+        return { removedFiles: 0, skippedFiles: 0, removedRoot: false }
+      }
       const outcome = await removeVerifiedFSALeaf(
         target.parentHandle,
         target.reservedName,
@@ -130,31 +167,22 @@ export async function cleanupFSATaskEntries(
         target.reservedFile.fingerprint,
         options.beginRemoval,
       )
-      if (outcome === 'removed') removedFiles++
-      else if (outcome === 'changed') skippedFiles++
-    } catch (error) {
-      failures.push(error)
+      return {
+        removedFiles: outcome === 'removed' ? 1 : 0,
+        skippedFiles: outcome === 'changed' ? 1 : 0,
+        removedRoot: false,
+      }
     }
-  } else if (!target.singleFile && typeof root !== 'string') {
-    try {
-      removedRoot = await pruneTaskDirectories(root, target, directories, files.length === unfinished.length, options)
-    } catch (error) {
-      failures.push(error)
-    }
+    if (typeof root === 'string') return { removedFiles: 0, skippedFiles: 0, removedRoot: false }
+    const removedRoot = await pruneTaskDirectories(root, target, directories, fileCount === unfinishedCount, options)
+    return { removedFiles: 0, skippedFiles: 0, removedRoot }
+  } catch (error) {
+    return { removedFiles: 0, skippedFiles: 0, removedRoot: false, error }
   }
-  if (retired.length > 0) {
-    options.beginRemoval?.()
-    await options.store.deleteFiles(retired)
-  }
-  emitOutputTrace(options.diagnostics?.trace, 'cleanup', {
-    backend: 'file_system_access', task_id: taskId, transition: failures.length === 0 ? 'completed' : 'failed',
-    removed_files: removedFiles, skipped_unverified_files: skippedFiles, removed_root: removedRoot,
-  })
-  if (failures.length > 0) throw failures[0]
 }
 
 async function cleanupUnfinishedFiles(
-  root: FileSystemDirectoryHandle | 'missing' | 'changed', target: FSATargetRecord, unfinished: readonly ReceiveFileRecord[],
+  root: ResolvedFSADirectory, target: FSATargetRecord, unfinished: readonly ReceiveFileRecord[],
   directories: Map<string, readonly string[]>, options: CleanupOptions,
 ) {
   const retired: string[] = []
@@ -244,15 +272,21 @@ export async function settleFSATerminalCleanup(
     record: FSATaskRecord
     rootHandle: FileSystemDirectoryHandle
     files: readonly ReceiveFileRecord[]
+    invalidatedCompletedIds?: readonly string[]
     initialSafe: CollectedSafeRenamedState
     store: Pick<ReceiveStore, 'putTask' | 'deleteFiles'>
     diagnostics: OutputDiagnosticsPorts | undefined
     directories: readonly FileSystemDirectoryHandle[]
   }>,
 ): Promise<FSATaskRecord> {
-  const { record, rootHandle, files, initialSafe, store, diagnostics, directories } = input
+  const { record, rootHandle, files, invalidatedCompletedIds, initialSafe, store, diagnostics, directories } = input
   let cleanupSucceeded = true
-  await cleanupFSATaskEntries(record.taskId, record.target, files, { store, diagnostics, directories }).catch(() => {
+  await cleanupFSATaskEntries(record.taskId, record.target, files, {
+    store,
+    diagnostics,
+    directories,
+    ...(invalidatedCompletedIds === undefined ? {} : { invalidatedCompletedIds }),
+  }).catch(() => {
     cleanupSucceeded = false
     emitOutputTrace(diagnostics?.trace, 'cleanup', {
       backend: 'file_system_access', task_id: record.taskId, transition: 'deferred',
@@ -317,7 +351,7 @@ export async function filterExistingFSADirectories(
 
 async function resolveDirectoryChain(
   root: FileSystemDirectoryHandle, segments: readonly string[],
-): Promise<FileSystemDirectoryHandle | 'missing' | 'changed'> {
+): Promise<ResolvedFSADirectory> {
   let current = root
   for (const segment of segments) {
     const next = await current.getDirectoryHandle(segment).catch(entryFailure)

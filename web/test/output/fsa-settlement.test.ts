@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { loadRetainedTasks, retainedTaskEnvironment } from '../../src/application/receive/retained'
 import type { CatalogClient } from '../../src/catalog/client'
 import type { CommittedDirectory } from '../../src/catalog/page-store'
 import { CatalogPageStoreError } from '../../src/catalog/page-store'
@@ -9,15 +10,17 @@ import { FileGeometry, byteRange } from '../../src/content/geometry'
 import type { FileRevisionDescriptor } from '../../src/content/records'
 import type { RevisionReader } from '../../src/content/session-services'
 import { encodeBase64Url } from '../../src/crypto/bytes'
+import type { BrowserOutputWindow } from '../../src/output/backends/contract'
 import { openNewFSASession, reopenFSASession } from '../../src/output/backends/fsa'
 import { loadFSARestorePlan, writeFSARestoreArtifact } from '../../src/output/backends/fsa-restore'
 import { nextFSALifecycle } from '../../src/output/backends/fsa-settlement'
 import type { OutputTraceEvent } from '../../src/output/diagnostics'
 import type { ReceiveStore } from '../../src/output/store/database'
 import { summarizeStoredTaskFiles, type ReceiveFileRecord } from '../../src/output/store/types'
+import { FileDestinationConflictError, OutputFaultCode } from '../../src/transfer/fault'
 import { TransferJob, type SettledTransferJobResult, type TransferJobFacts } from '../../src/transfer/job'
 import { initialReceiveState, type ReceivePartialReason } from '../../src/transfer/state'
-import { FakeDirectoryHandle, MemoryReceiveStore } from './fsa-fixture'
+import { FakeDirectoryHandle, FakeFileHandle, MemoryReceiveStore } from './fsa-fixture'
 
 const SIGNAL = new AbortController().signal
 const SPEC = Object.freeze({ shareInstance: 's1', syntheticRoot: 'r1', defaultSelected: true, rules: [] })
@@ -589,5 +592,296 @@ describe('TransferJob partialReason and FSA terminal directory cleanup', () => {
     portableRef.current = portableJob
     const portableResult = await portableJob.run()
     expect(portableResult.status).toBe('stopped')
+  })
+})
+
+describe('FSA completed-file verification conflict settlement', () => {
+  it.each(['deleted', 'truncated-zero'] as const)(
+    'settles a crash-recovered single-file FSA task as failed (not saved) when the committed file is %s before resume',
+    async mutation => {
+      const taskId = `fsa-single-conflict-${mutation}`
+      const memory = new MemoryReceiveStore()
+      const store = memory as unknown as ReceiveStore
+      const parent = new FakeDirectoryHandle('Downloads', memory.events, name => name.includes(':'))
+      const traces: OutputTraceEvent[] = []
+      const diagnostics = {
+        backend: 'file_system_access' as const,
+        trace: { current: (event: OutputTraceEvent) => traces.push(event) },
+      }
+
+      const run1 = await openNewFSASession({
+        task: {
+          taskId,
+          selection: SPEC,
+          selectionKey: `sel-${taskId}`,
+          artifact: { kind: 'original-file', name: 'report:final.txt', singleFileId: 'f1' },
+          lifecycle: initialReceiveState(taskId),
+        },
+        parentHandle: parent as unknown as FileSystemDirectoryHandle,
+        store,
+        diagnostics,
+      })
+      const writer = await run1.transferOutput.openFile({
+        fileId: 'f1',
+        path: ['report:final.txt'],
+        sourcePath: ['report:final.txt'],
+        revision: 'r1',
+        exactSize: 4n,
+      }, SIGNAL)
+      await writer.writeAt(0n, Uint8Array.of(1, 2, 3, 4))
+      await writer.commit([byteRange(0n, 4n)])
+      // Simulate crashing after committing the file row and before settle() persists `saved`.
+      await run1.close()
+
+      const recovered = (await loadRetainedTasks(retainedTaskEnvironment(store, { windowPort: {} as BrowserOutputWindow })))[0]!
+      expect(recovered.lifecycle.kind).toBe('paused')
+      const paused = (await memory.getTask(taskId))!
+      const reservedName = paused.target.kind === 'fsa' ? paused.target.reservedName : ''
+      const physical = parent.children.get(reservedName) as FakeFileHandle
+      if (mutation === 'deleted') {
+        await parent.removeEntry(reservedName)
+        vi.spyOn(physical, 'getFile').mockRejectedValue(new DOMException('missing', 'NotFoundError'))
+      } else {
+        // Same timestamp as the initial 0-byte reservation tests that terminal cleanup never deletes an invalidated single file.
+        const reservedMtime = paused.target.kind === 'fsa' && paused.target.singleFile
+          ? paused.target.reservedFile.fingerprint.lastModified
+          : Date.now()
+        physical.overwriteExternally(new Uint8Array(0), reservedMtime)
+      }
+
+      traces.length = 0
+      const run2 = await reopenFSASession({ task: paused, store, allowPermissionPrompt: false, diagnostics })
+      let conflictError: unknown
+      try {
+        await run2.transferOutput.checkCompleted?.('f1', SIGNAL)
+      } catch (error) {
+        conflictError = error
+      }
+      expect(conflictError).toBeInstanceOf(FileDestinationConflictError)
+      const destinationPath = (conflictError as FileDestinationConflictError).destinationPath
+
+      const terminal = await run2.settle(settled('failed', {
+        completedFiles: 0n,
+        completedBytes: 0n,
+        discoveredFiles: 1n,
+        discoveredBytes: 4n,
+        discoveryComplete: true,
+        failedFiles: 1n,
+        error: conflictError,
+        contentWarning: {
+          selectedFileCount: 1n,
+          completedFileCount: 0n,
+          missingFiles: [{ path: ['report:final.txt'], reason: 'destination-conflict', destinationPath }],
+        },
+      }))
+      await run2.close()
+
+      expect(terminal.lifecycle).toMatchObject({
+        kind: 'failed',
+        reason: 'error',
+        contentWarning: {
+          selectedFileCount: 1n,
+          completedFileCount: 0n,
+          missingFiles: [{ path: ['report:final.txt'], reason: 'destination-conflict', destinationPath }],
+        },
+      })
+      if (terminal.lifecycle.kind === 'failed') {
+        expect(terminal.lifecycle.cleanupPending).toBeUndefined()
+      }
+      expect(terminal.safeRenamed).toBeUndefined()
+      expect(await memory.listTaskFiles(taskId)).toEqual([])
+      expect((await loadFSARestorePlan(store, taskId, 'posix')).restorable).toEqual([])
+      expect(parent.children.has(reservedName)).toBe(mutation !== 'deleted')
+      if (mutation === 'truncated-zero') {
+        expect([...physical.bytes]).toEqual([])
+      }
+      const conflictTrace = traces.find(event => event.payload.transition === 'completed_verification_conflict')
+      expect(conflictTrace).toEqual({
+        eventName: 'reopen',
+        payload: {
+          backend: 'file_system_access',
+          task_id: taskId,
+          file_id: 'f1',
+          transition: 'completed_verification_conflict',
+        },
+      })
+      expect(JSON.stringify(conflictTrace!.payload)).not.toContain('report:final.txt')
+    },
+  )
+
+  it('prevents double-counting, stale safe-name restore steps, and false partial promotion on multi-file FSA resume conflicts', async () => {
+    // 1. 2-file folder: safe-renamed file was edited before resume, other file completes -> partial(savedFiles: 1n, failedFiles: 1n).
+    const partialCase = await seedPausedFolderWithSafeRename('fsa-multi-conflict-partial')
+    const bundleDir = partialCase.parent.children.get('Bundle') as FakeDirectoryHandle
+    const renamedRow = (await partialCase.memory.getFile('fsa-multi-conflict-partial', 'f-renamed'))!
+    const renamedName = renamedRow.fsaPath![0]!
+    const renamedHandle = bundleDir.children.get(renamedName) as FakeFileHandle
+    renamedHandle.overwriteExternally(Uint8Array.of(99, 98))
+
+    const run2 = await reopenFSASession({
+      task: partialCase.paused,
+      store: partialCase.store,
+      allowPermissionPrompt: false,
+      diagnostics: partialCase.diagnostics,
+    })
+    await expect(run2.transferOutput.checkCompleted?.('f-renamed', SIGNAL))
+      .rejects.toBeInstanceOf(FileDestinationConflictError)
+    // Only `a.bin` (already completed) remains valid; `f-unfinished` also fails.
+    const partial = await run2.settle(settled('partial', {
+      completedFiles: 1n,
+      completedBytes: 4n,
+      discoveredFiles: 3n,
+      discoveredBytes: 20n,
+      discoveryComplete: true,
+      failedFiles: 2n,
+    }))
+    await run2.close()
+
+    expect(partial.lifecycle).toMatchObject({
+      kind: 'partial',
+      reason: 'failures',
+      savedFiles: 1n,
+      failedFiles: 2n,
+    })
+    expect(partial.safeRenamed).toBeUndefined()
+    expect((await partialCase.memory.listTaskFiles('fsa-multi-conflict-partial')).map(row => row.fileId)).toEqual(['f-a'])
+    expect((await loadFSARestorePlan(partialCase.store, 'fsa-multi-conflict-partial', 'posix')).restorable).toEqual([])
+    expect([...renamedHandle.bytes]).toEqual([99, 98])
+
+    // 2. All previously completed files were deleted before resume and remaining files fail -> settles as failed (not partial) and prunes empty root.
+    const failedCase = await seedPausedFolderWithSafeRename('fsa-multi-conflict-failed')
+    const failedBundle = failedCase.parent.children.get('Bundle') as FakeDirectoryHandle
+    const failedRenamedRow = (await failedCase.memory.getFile('fsa-multi-conflict-failed', 'f-renamed'))!
+    const failedRenamedName = failedRenamedRow.fsaPath![0]!
+    const failedA = failedBundle.children.get('a.bin') as FakeFileHandle
+    const failedRenamed = failedBundle.children.get(failedRenamedName) as FakeFileHandle
+    await failedBundle.removeEntry('a.bin')
+    await failedBundle.removeEntry(failedRenamedName)
+    vi.spyOn(failedA, 'getFile').mockRejectedValue(new DOMException('missing', 'NotFoundError'))
+    vi.spyOn(failedRenamed, 'getFile').mockRejectedValue(new DOMException('missing', 'NotFoundError'))
+
+    const failedRun = await reopenFSASession({
+      task: failedCase.paused,
+      store: failedCase.store,
+      allowPermissionPrompt: false,
+    })
+    await expect(failedRun.transferOutput.checkCompleted?.('f-a', SIGNAL))
+      .rejects.toBeInstanceOf(FileDestinationConflictError)
+    await expect(failedRun.transferOutput.checkCompleted?.('f-renamed', SIGNAL))
+      .rejects.toBeInstanceOf(FileDestinationConflictError)
+    const terminalFailed = await failedRun.settle(settled('failed', {
+      completedFiles: 0n,
+      completedBytes: 0n,
+      discoveredFiles: 3n,
+      discoveredBytes: 20n,
+      discoveryComplete: true,
+      failedFiles: 3n,
+      error: new FileDestinationConflictError('Downloads/Bundle/a.bin'),
+    }))
+    await failedRun.close()
+
+    expect(terminalFailed.lifecycle).toMatchObject({ kind: 'failed', reason: 'error' })
+    if (terminalFailed.lifecycle.kind === 'failed') {
+      expect(terminalFailed.lifecycle.cleanupPending).toBeUndefined()
+    }
+    expect(terminalFailed.safeRenamed).toBeUndefined()
+    expect(await failedCase.memory.listTaskFiles('fsa-multi-conflict-failed')).toEqual([])
+    expect(failedCase.parent.children.has('Bundle')).toBe(false)
+    expect(failedCase.parent.stats.recursiveRemoveCalls).toBe(0)
+  })
+
+  it('retains the IndexedDB row across re-pause so 0-byte user truncations are never reclaimed and restored files recover cleanly', async () => {
+    // 1. 0-byte user truncation across pause -> resume (conflict + re-pause) -> resume must never reclaim/overwrite the user file.
+    const truncCase = await seedPausedFolderWithSafeRename('fsa-repause-zero-byte')
+    const bundleDir = truncCase.parent.children.get('Bundle') as FakeDirectoryHandle
+    const fileA = bundleDir.children.get('a.bin') as FakeFileHandle
+    const writableBefore = fileA.writableCalls.length
+    // Truncate to 0 bytes with mtime inside [reservedAtMs, reopenedAtMs], which would otherwise match isUncommittedEmptyPlaceholder.
+    fileA.overwriteExternally(new Uint8Array(0), Date.now())
+
+    const run2 = await reopenFSASession({ task: truncCase.paused, store: truncCase.store, allowPermissionPrompt: false })
+    await expect(run2.transferOutput.checkCompleted?.('f-a', SIGNAL))
+      .rejects.toBeInstanceOf(FileDestinationConflictError)
+    const repaused = await run2.settle(settled('paused', {
+      pauseReason: 'interrupted',
+      completedFiles: 0n,
+      completedBytes: 0n,
+      discoveredFiles: 3n,
+      discoveredBytes: 20n,
+    }))
+    await run2.close()
+
+    // Paused counts exclude the invalidated file (`f-renamed` still counts = 1n, 6n bytes), while the IDB row survives re-pause.
+    expect(repaused.lifecycle).toMatchObject({
+      kind: 'paused',
+      reason: 'interrupted',
+      completedFiles: 1n,
+      completedBytes: 6n,
+      retainedBytes: 8n,
+    })
+    expect((await truncCase.memory.getFile('fsa-repause-zero-byte', 'f-a'))?.status).toBe('completed')
+
+    const run3 = await reopenFSASession({ task: repaused, store: truncCase.store, allowPermissionPrompt: false })
+    await expect(run3.transferOutput.checkCompleted?.('f-a', SIGNAL))
+      .rejects.toBeInstanceOf(FileDestinationConflictError)
+    await expect(run3.transferOutput.openFile({
+      fileId: 'f-a', path: ['a.bin'], sourcePath: ['Bundle', 'a.bin'], revision: 'r1', exactSize: 4n,
+    }, SIGNAL)).rejects.toBeInstanceOf(FileDestinationConflictError)
+    expect(fileA.writableCalls).toHaveLength(writableBefore)
+    expect(bundleDir.children.get('a.bin')).toBe(fileA)
+    await run3.close()
+
+    // 2. Temporarily moved file restored before a later resume verifies cleanly without conflict.
+    const restoreCase = await seedPausedFolderWithSafeRename('fsa-repause-restored')
+    const restoreBundle = restoreCase.parent.children.get('Bundle') as FakeDirectoryHandle
+    const restoreA = restoreBundle.children.get('a.bin') as FakeFileHandle
+    const missingSpy = vi.spyOn(restoreA, 'getFile').mockRejectedValue(new DOMException('missing', 'NotFoundError'))
+
+    const missingRun = await reopenFSASession({ task: restoreCase.paused, store: restoreCase.store, allowPermissionPrompt: false })
+    await expect(missingRun.transferOutput.checkCompleted?.('f-a', SIGNAL))
+      .rejects.toBeInstanceOf(FileDestinationConflictError)
+    const pausedWhileMissing = await missingRun.settle(settled('paused', {
+      pauseReason: 'user',
+      completedFiles: 0n,
+      completedBytes: 0n,
+    }))
+    await missingRun.close()
+
+    missingSpy.mockRestore()
+    const restoredRun = await reopenFSASession({ task: pausedWhileMissing, store: restoreCase.store, allowPermissionPrompt: false })
+    expect(await restoredRun.transferOutput.checkCompleted?.('f-a', SIGNAL)).toEqual({ size: 4n })
+    await restoredRun.close()
+  })
+
+  it('does not invalidate completed records when verification fails with PermissionDenied', async () => {
+    const { memory, store, parent, paused, diagnostics, traces } = await seedPausedFolderWithSafeRename('fsa-perm-denied')
+    const bundleDir = parent.children.get('Bundle') as FakeDirectoryHandle
+    const fileA = bundleDir.children.get('a.bin') as FakeFileHandle
+    const permSpy = vi.spyOn(fileA, 'getFile').mockRejectedValueOnce(new DOMException('denied', 'NotAllowedError'))
+
+    const run2 = await reopenFSASession({ task: paused, store, allowPermissionPrompt: false, diagnostics })
+    await expect(run2.transferOutput.checkCompleted?.('f-a', SIGNAL)).rejects.toMatchObject({
+      fault: { code: OutputFaultCode.PermissionDenied },
+    })
+    const repaused = await run2.settle(settled('paused', {
+      pauseReason: 'permission-needed',
+      completedFiles: 0n,
+      completedBytes: 0n,
+    }))
+    await run2.close()
+
+    expect(permSpy).toHaveBeenCalledOnce()
+    expect(repaused.lifecycle).toMatchObject({
+      kind: 'paused',
+      reason: 'permission-needed',
+      completedFiles: 2n,
+      completedBytes: 10n,
+    })
+    expect((await memory.getFile('fsa-perm-denied', 'f-a'))?.status).toBe('completed')
+    expect(traces.some(event => event.payload.transition === 'completed_verification_conflict')).toBe(false)
+
+    const run3 = await reopenFSASession({ task: repaused, store, allowPermissionPrompt: false })
+    expect(await run3.transferOutput.checkCompleted?.('f-a', SIGNAL)).toEqual({ size: 4n })
+    await run3.close()
   })
 })
