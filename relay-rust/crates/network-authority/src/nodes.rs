@@ -14,7 +14,6 @@ use windshare_relay_access::usage::{Admission, Load, NodePolicy, REPORT_INTERVAL
 
 const REPORT_STALE_SECONDS: u64 = 3 * REPORT_INTERVAL_SECONDS;
 const NODE_PAGE_SIZE: usize = 1000;
-pub const NODE_LOAD_CHECKPOINT_SECONDS: u64 = 15 * 60;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -148,24 +147,6 @@ impl NodeLoadReport {
     }
 }
 
-pub fn merge_load_report(
-    persisted: Option<NodeLoadReport>,
-    live: Option<&NodeLoadReport>,
-) -> Option<NodeLoadReport> {
-    match (persisted, live.cloned()) {
-        (Some(persisted), Some(live)) => {
-            if live.reported_at >= persisted.reported_at {
-                Some(live)
-            } else {
-                Some(persisted)
-            }
-        }
-        (Some(persisted), None) => Some(persisted),
-        (None, Some(live)) => Some(live),
-        (None, None) => None,
-    }
-}
-
 #[derive(Serialize)]
 pub struct NodePage {
     pub entries: Vec<NodeDetails>,
@@ -211,11 +192,10 @@ impl<R: Store, E: Environment> Authority<R, E> {
             .into_iter()
             .map(|(_, value)| {
                 let node: Node = serde_json::from_str(&value)?;
-                let persisted = loads
+                let report = loads
                     .get(&key("node-load", &node.key))
                     .map(|value| serde_json::from_str::<NodeLoadReport>(value))
                     .transpose()?;
-                let report = merge_load_report(persisted, self.live_loads.get(&node.key));
                 Ok(NodeDetails::new(node, report, self.environment.now()))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -246,8 +226,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
     }
 
     pub(crate) fn node_details(&self, node: Node) -> Result<NodeDetails> {
-        let persisted = load::<NodeLoadReport>(&self.store, &key("node-load", &node.key))?;
-        let report = merge_load_report(persisted, self.live_loads.get(&node.key));
+        let report = load::<NodeLoadReport>(&self.store, &key("node-load", &node.key))?;
         Ok(NodeDetails::new(node, report, self.environment.now()))
     }
 

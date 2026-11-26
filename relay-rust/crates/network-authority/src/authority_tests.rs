@@ -369,11 +369,11 @@ fn late_reports_charge_the_original_day_and_restart_retries_do_not_double_charge
     let (before, _) = status(&mut authority, &refresh);
     assert_eq!(before[0].entitlement.remaining_bytes, 1000);
     assert_eq!(before[0].entitlement.version, session.entitlement.version);
-    // Queued usage cannot confirm admission. Only the first status checkpoints load.
+    // Queued usage cannot confirm admission; each status heartbeat persists only its node-load row.
     assert_eq!(authority.store.put_count, writes_before_idle + 1);
     let writes_after_status = authority.store.put_count;
     status(&mut authority, &refresh);
-    assert_eq!(authority.store.put_count, writes_after_status);
+    assert_eq!(authority.store.put_count, writes_after_status + 1);
     let store = authority.store.clone();
     authority = Authority::new(store, authority.environment, authority.signing).unwrap();
     assert!(matches!(
@@ -403,7 +403,8 @@ fn late_reports_charge_the_original_day_and_restart_retries_do_not_double_charge
     authority.environment.now += ENTITLEMENT_LIFETIME - 1;
     let refresh = batch(&authority, &node, session.account, 4, 2, 0);
     let (fresh, _) = status(&mut authority, &refresh);
-    assert_eq!(authority.store.put_count, writes_after_charge);
+    // Entitlement refreshes stay read-only; the single write persists the node-load heartbeat.
+    assert_eq!(authority.store.put_count, writes_after_charge + 1);
     assert_eq!(fresh[0].entitlement.version, current[0].entitlement.version);
     assert!(fresh[0].entitlement.valid_until > current[0].entitlement.valid_until);
     assert_eq!(
@@ -430,13 +431,6 @@ fn late_reports_charge_the_original_day_and_restart_retries_do_not_double_charge
     let (raised, _) = status(&mut authority, &refresh);
     assert_eq!(raised[0].entitlement.remaining_bytes, 1700);
     assert!(raised[0].entitlement.version > fresh[0].entitlement.version);
-
-    // Advancing past the load checkpoint interval persists a single node-load row.
-    let writes_before_checkpoint = authority.store.put_count;
-    authority.environment.now += crate::nodes::NODE_LOAD_CHECKPOINT_SECONDS;
-    let refresh = batch(&authority, &node, session.account, 6, 2, 0);
-    let _ = status(&mut authority, &refresh);
-    assert_eq!(authority.store.put_count, writes_before_checkpoint + 1);
 }
 #[test]
 fn credential_revocation_preserves_siblings_and_is_not_reset_by_new_days() {

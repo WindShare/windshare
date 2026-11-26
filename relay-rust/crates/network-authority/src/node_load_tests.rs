@@ -277,3 +277,46 @@ fn status_heartbeats_enforce_symmetric_clock_skew_while_queued_usage_retries_rem
         ReportResult::UsageReceived
     ));
 }
+
+#[test]
+fn status_heartbeats_persist_across_authority_restarts_for_liveness_and_drain_cutoff() {
+    let mut authority = fixture();
+    let admin = authority
+        .initialize("once", "once", "admin", "correct horse battery")
+        .unwrap();
+    let node = SigningKey::from_bytes(&[29; 32]);
+    let node_key = node.verifying_key().to_bytes();
+    save(
+        &mut authority.store,
+        &key("node", &node_key),
+        &draining_node(node_key),
+    )
+    .unwrap();
+
+    for step in 1u8..=5 {
+        if step > 1 {
+            authority.environment.now += REPORT_INTERVAL_SECONDS;
+        }
+        let now = authority.environment.now;
+        let signed = sign_report(&authority, &node, step, now, 2, 0, vec![]);
+        let _ = status(&mut authority, &signed);
+        // Simulate Durable Object idle eviction between heartbeats by reconstructing Authority
+        // from persisted storage alone.
+        let store = authority.store.clone();
+        authority = Authority::new(store, authority.environment, authority.signing).unwrap();
+
+        let detail = authority.node_by_key(&admin, &node_key).unwrap();
+        assert_eq!(detail.report.as_ref().unwrap().reported_at, now);
+        assert!(!detail.report_stale);
+        assert!(detail.cutoff_ready);
+    }
+
+    let page = authority.nodes(&admin, None).unwrap();
+    assert_eq!(page.entries.len(), 1);
+    assert_eq!(
+        page.entries[0].report.as_ref().unwrap().reported_at,
+        authority.environment.now
+    );
+    assert!(!page.entries[0].report_stale);
+    assert!(page.entries[0].cutoff_ready);
+}

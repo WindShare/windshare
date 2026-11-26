@@ -9,13 +9,9 @@ mod mail;
 mod routes;
 mod storage;
 mod telemetry;
-use crate::{Authority, Environment, Fault, NodeLoadReport, PepperRing, Signing};
+use crate::{Authority, Environment, Fault, PepperRing, Signing};
 use futures_util::StreamExt;
-use std::{
-    cell::{Cell, OnceCell, RefCell},
-    collections::BTreeMap,
-    rc::Rc,
-};
+use std::cell::{Cell, OnceCell};
 use storage::Database;
 use worker::{DurableObject, Env, Method, Request, Response, Result, State, durable_object};
 
@@ -69,7 +65,6 @@ pub struct NetworkAuthority {
     schema_ready: Cell<bool>,
     publishing: futures_util::lock::Mutex<()>,
     kv_alarm_deadline: Cell<Option<u64>>,
-    node_loads: Rc<RefCell<BTreeMap<[u8; 32], NodeLoadReport>>>,
 }
 impl NetworkAuthority {
     pub(super) fn database(&self) -> anyhow::Result<Database> {
@@ -114,8 +109,6 @@ impl NetworkAuthority {
         Ok(self.peppers.get_or_init(|| peppers).clone())
     }
 
-    // Keep live isolate load state synchronized across every DO transaction so
-    // uncheckpointed node heartbeats are never lost between HTTP entry points.
     fn transact<T: 'static>(
         &self,
         registration_email_configured: bool,
@@ -126,19 +119,14 @@ impl NetworkAuthority {
         let peppers = self.peppers()?;
         let database = self.database()?;
         let env = self.env.clone();
-        let loads = self.node_loads.borrow().clone();
         let environment = WorkerEnvironment {
             registration_email_configured,
             peppers,
         };
-        let (value, updated_loads) = storage::transaction(&self.state, move || {
+        storage::transaction(&self.state, move || {
             let mut authority = Authority::new(database, environment, signing)?;
-            authority.set_live_loads(loads);
-            let value = action(&mut authority, &env)?;
-            Ok((value, authority.into_live_loads()))
-        })?;
-        *self.node_loads.borrow_mut() = updated_loads;
-        Ok(value)
+            action(&mut authority, &env)
+        })
     }
 }
 impl DurableObject for NetworkAuthority {
@@ -150,7 +138,6 @@ impl DurableObject for NetworkAuthority {
             signing: OnceCell::new(),
             peppers: OnceCell::new(),
             schema_ready: Cell::new(false),
-            node_loads: Rc::default(),
             publishing: futures_util::lock::Mutex::new(()),
             kv_alarm_deadline: Cell::new(None),
         }

@@ -130,7 +130,6 @@ impl<R: Store, E: Environment> Authority<R, E> {
                     )?;
                     self.store.delete(&record)?;
                     self.store.delete(&key("node-load", &node.key))?;
-                    self.live_loads.remove(&node.key);
                     tracing::info!(event="node_removed", %operation_id, node_id=%cmd.node_key, early_cutoff);
                     return Ok(());
                 }
