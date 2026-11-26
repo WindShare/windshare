@@ -171,6 +171,11 @@ export type ResolvedRetainedCandidate = Readonly<{
   updatedAt: number
 }>
 
+export type ResolvedRetainedScan = Readonly<{
+  entries: readonly ResolvedRetainedCandidate[]
+  unreadableTaskIds: ReadonlySet<string>
+}>
+
 /**
  * Loads all persisted tasks from `ReceiveStore`, normalizing any abandoned `downloading`
  * task whose tab crashed (no active Web Lock) into `paused (interrupted)`.
@@ -180,8 +185,8 @@ export async function loadRetainedTasks(
   isLocalTask: (taskId: string) => boolean = () => false,
 ): Promise<readonly RetainedTaskSnapshot[]> {
   const records = await env.store.listTasks()
-  const resolved = await resolveRetainedCandidates(env, records, isLocalTask)
-  return Object.freeze(resolved.map(entry => entry.snapshot))
+  const { entries } = await resolveRetainedCandidates(env, records, isLocalTask)
+  return Object.freeze(entries.map(entry => entry.snapshot))
 }
 
 /** Normalizes abandoned records and checks cross-tab locks only for the given candidate subset. */
@@ -189,24 +194,26 @@ export async function resolveRetainedCandidates(
   env: RetainedTaskEnvironment,
   records: readonly ReceiveTaskRecord[],
   isLocalTask: (taskId: string) => boolean,
-): Promise<readonly ResolvedRetainedCandidate[]> {
-  const resolved: ResolvedRetainedCandidate[] = []
+): Promise<ResolvedRetainedScan> {
+  const entries: ResolvedRetainedCandidate[] = []
+  const unreadableTaskIds = new Set<string>()
   for (const record of records) {
     env.signal?.throwIfAborted()
     try {
       const normalized = await normalizeAbandonedTask(record, env, isLocalTask)
       if (normalized === undefined) continue
       const activeElsewhere = !isLocalTask(normalized.taskId) && await isTaskLockedElsewhere(normalized.taskId, env.locks)
-      resolved.push(Object.freeze({
+      entries.push(Object.freeze({
         snapshot: retainedSnapshot(normalized, activeElsewhere),
         updatedAt: normalized.updatedAt,
       }))
     } catch (error) {
       env.signal?.throwIfAborted()
+      unreadableTaskIds.add(record.taskId)
       traceInventoryFailure(env, record, 'read_failed', error)
     }
   }
-  return Object.freeze(resolved)
+  return Object.freeze({ entries: Object.freeze(entries), unreadableTaskIds })
 }
 
 export function retainedSnapshot(record: ReceiveTaskRecord, activeElsewhere: boolean): RetainedTaskSnapshot {

@@ -29,6 +29,7 @@ export interface RetainedTaskInventoryOptions {
   readonly isDisposed: () => boolean
   readonly isLocalTask: (taskId: string) => boolean
   readonly onChange: () => void
+  readonly onAuthoritativeSync?: (changed: boolean) => void
 }
 
 /**
@@ -47,11 +48,15 @@ export class RetainedTaskInventory {
   readonly #isDisposed: () => boolean
   readonly #isLocalTask: (taskId: string) => boolean
   readonly #onChange: () => void
+  readonly #onAuthoritativeSync: ((changed: boolean) => void) | undefined
 
   #fullKind: RetainedInventorySnapshot['kind'] = 'unloaded'
   #fullEntries = new Map<string, ResolvedInventoryEntry>()
   #fullTasksCache: readonly RetainedTaskSnapshot[] = Object.freeze([])
   #fullLoadEpoch = 0
+  // Tracks task IDs present (or transiently unreadable) in the last completed IndexedDB scan
+  // so workspace reconciliation only clears tasks confirmed deleted from the store.
+  #authoritativeTaskIds: Set<string> | null = null
 
   #mutationSeq = 0
   #inFlightLoads = 0
@@ -66,10 +71,17 @@ export class RetainedTaskInventory {
     this.#isDisposed = options.isDisposed
     this.#isLocalTask = options.isLocalTask
     this.#onChange = options.onChange
+    this.#onAuthoritativeSync = options.onAuthoritativeSync
   }
 
   get tasks(): readonly RetainedTaskSnapshot[] {
     return this.#fullTasksCache
+  }
+
+  isConfirmedAbsent(taskId: string): boolean {
+    return (this.#fullKind === 'available' || this.#fullKind === 'empty') &&
+      this.#authoritativeTaskIds !== null &&
+      !this.#authoritativeTaskIds.has(taskId)
   }
 
   snapshot(pending: PendingRetainedAction | null): RetainedInventorySnapshot {
@@ -116,6 +128,7 @@ export class RetainedTaskInventory {
     if (this.#inFlightLoads > 0) {
       this.#mutationOverlay.set(record.taskId, Object.freeze({ seq, kind: 'upsert', snapshot, updatedAt: record.updatedAt }))
     }
+    this.#authoritativeTaskIds?.add(record.taskId)
     if (this.#fullKind === 'available' || this.#fullKind === 'empty') {
       this.#fullEntries.set(record.taskId, entry)
       this.#fullKind = 'available'
@@ -159,10 +172,14 @@ export class RetainedTaskInventory {
       const env = retainedTaskEnvironment(store, this.#envPorts(), this.#signal)
       const records = await store.listTasks()
       if (this.#isStaleLoad(epoch)) return
-      const resolved = await resolveRetainedCandidates(env, records, this.#isLocalTask)
+      const { entries: resolved, unreadableTaskIds } = await resolveRetainedCandidates(env, records, this.#isLocalTask)
       if (this.#isStaleLoad(epoch)) return
       const entries = new Map(resolved.map(entry => [entry.snapshot.taskId, entry]))
-      if (this.#commitFullEntries(entries, startSeq)) {
+      const changed = this.#commitFullEntries(entries, startSeq)
+      this.#recordAuthoritativeScan(resolved, unreadableTaskIds, startSeq)
+      if (this.#onAuthoritativeSync !== undefined) {
+        this.#onAuthoritativeSync(changed)
+      } else if (changed) {
         this.#onChange()
       }
     } catch (error) {
@@ -175,6 +192,19 @@ export class RetainedTaskInventory {
     return this.#isDisposed() || epoch !== this.#fullLoadEpoch
   }
 
+  #recordAuthoritativeScan(
+    resolved: readonly ResolvedInventoryEntry[],
+    unreadableTaskIds: ReadonlySet<string>,
+    startSeq: number,
+  ): void {
+    const present = new Set<string>(unreadableTaskIds)
+    for (const entry of resolved) present.add(entry.snapshot.taskId)
+    for (const [taskId, op] of this.#mutationOverlay) {
+      if (op.seq > startSeq && op.kind === 'upsert') present.add(taskId)
+    }
+    this.#authoritativeTaskIds = present
+  }
+
   #handleStoreUnavailable(startSeq: number, mode: InventoryLoadMode): void {
     if (mode === 'silent') {
       if (this.#fullEntries.size > 0) {
@@ -182,6 +212,7 @@ export class RetainedTaskInventory {
       }
       return
     }
+    this.#authoritativeTaskIds = null
     if (this.#commitFullEntries(new Map(), startSeq)) {
       this.#onChange()
     }
@@ -195,6 +226,7 @@ export class RetainedTaskInventory {
       })
       return
     }
+    this.#authoritativeTaskIds = null
     this.#fullEntries = new Map()
     this.#fullTasksCache = Object.freeze([])
     this.#fullKind = 'failed'

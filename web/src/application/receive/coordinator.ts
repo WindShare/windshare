@@ -131,9 +131,10 @@ export class ReceiveCoordinator {
       signal: this.#lifetimeAbort.signal,
       isDisposed: () => this.#disposed,
       isLocalTask: taskId => this.#execution.ownsTask(taskId),
-      onChange: () => {
-        this.#reconcileWorkspaceFromInventory()
-        this.#publish()
+      onChange: () => this.#publish(),
+      onAuthoritativeSync: changed => {
+        const reconciled = this.#reconcileWorkspaceFromInventory()
+        if (changed || reconciled) this.#publish()
       },
     })
     this.#sessions = new ReceiveSessionRunner({
@@ -146,11 +147,7 @@ export class ReceiveCoordinator {
       onSettledRecord: record => this.#inventory.upsertRecord(record),
       onSessionFinished: () => {
         void this.#capabilities.refreshStorageEstimate()
-        void this.refreshRetained().then(() => {
-          if (!this.#disposed && this.#reconcileWorkspaceFromInventory()) {
-            this.#publish()
-          }
-        })
+        void this.refreshRetained()
       },
       reportError: error => this.#reportError(error),
       dispatchAsyncError: (error, custom) => this.#dispatchAsyncError(error, custom),
@@ -673,13 +670,35 @@ export class ReceiveCoordinator {
     const taskId = this.#workspace.taskId
     if (taskId === null || this.#execution.ownsTask(taskId)) return false
     const stored = this.#inventory.tasks.find(task => task.taskId === taskId)
-    if (stored === undefined || !this.#workspace.reconcileFromRetained(stored)) return false
+    if (stored === undefined) return this.#clearMissingWorkspaceTask(taskId)
+    if (!this.#workspace.reconcileFromRetained(stored)) return false
     emitOutputTrace(this.#options.outputTrace, 'settlement', {
       backend: diagnosticBackendName(stored.backend),
       task_id: stored.taskId,
       transition: 'reconciled_from_inventory',
       lifecycle: stored.lifecycle.kind,
       generation: String(stored.lifecycle.generation),
+    })
+    return true
+  }
+
+  #clearMissingWorkspaceTask(taskId: string): boolean {
+    const backend = this.#workspace.backend
+    // Portable tasks may exist solely in memory (e.g. without IndexedDB or after a
+    // pre-persistence failure); only store-backed tasks can be cleared on DB absence.
+    if (backend === null || backend === 'portable' || !this.#inventory.isConfirmedAbsent(taskId)) {
+      return false
+    }
+    const lifecycle = this.#workspace.lifecycle
+    this.#workspace.clear()
+    emitOutputTrace(this.#options.outputTrace, 'settlement', {
+      backend: diagnosticBackendName(backend),
+      task_id: taskId,
+      transition: 'cleared_missing_from_inventory',
+      ...(lifecycle === null ? {} : {
+        lifecycle: lifecycle.kind,
+        generation: String(lifecycle.generation),
+      }),
     })
     return true
   }

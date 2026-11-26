@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { BrowseDirectory, BrowserReceiverGateway, JoinedBrowserShare } from '../../src/application/browser-share/gateway'
 import type { ReceiverTraceEvent } from '../../src/application/receive/contracts'
 import { ReceiveCoordinator, type ReceiveWindowPort } from '../../src/application/receive/coordinator'
+import { ReceiveStorage } from '../../src/application/receive/receive-storage'
+import { RetainedTaskInventory } from '../../src/application/receive/retained-inventory'
 import * as sessionOpener from '../../src/application/receive/session-opener'
 import { ReceiveBlockedError } from '../../src/application/receive/single-file'
 import type { CatalogEntry } from '../../src/catalog/records'
@@ -9,11 +11,16 @@ import { SelectionPolicy } from '../../src/catalog/selection'
 import { byteRange } from '../../src/content/geometry'
 import * as outputContract from '../../src/output/backends/contract'
 import { openNewFSASession } from '../../src/output/backends/fsa'
+import type { OutputTraceEvent } from '../../src/output/diagnostics'
 import { ReceiveStore } from '../../src/output/store/database'
 import type { ReceiveTaskRecord } from '../../src/output/store/types'
 import { initialReceiveState, transitionReceiveState } from '../../src/transfer/state'
 import { ReceiverController } from '../../src/ui/controller'
+import { EMPTY_SELECTION_DRAFT } from '../../src/ui/draft/model'
+import { resolveWorkspaceTaskLayout } from '../../src/ui/experience/retained-match'
 import { TaskComposer } from '../../src/ui/experience/task-composition'
+import { EMPTY_PROGRESS } from '../../src/ui/model'
+import { presentReceiveOutput } from '../../src/ui/output'
 import { FakeDirectoryHandle, MemoryReceiveStore as FSAMemoryReceiveStore } from '../output/fsa-fixture'
 import { createMemoryOPFSEnv, createMockDownloadWindow, MemoryReceiveStore } from '../output/opfs-fixture'
 import {
@@ -536,3 +543,267 @@ describe('receive state sync invariants', () => {
     await coordinator.dispose()
   })
 })
+
+describe('cross-tab workspace deletion reconciliation', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('clears a cross-tab deleted ready-to-save OPFS workspace task on inventory refresh and restores remote saving', async () => {
+    const { coordinator, store, traceEvents, shareInstance, taskId } = await createReadyToSaveOpfsWorkspace()
+
+    const beforeLayout = projectSingleFileWorkspace(coordinator, shareInstance)
+    expect(beforeLayout.current?.operationId).toBe(taskId)
+    expect(beforeLayout.tasks.map(task => task.operationId)).toEqual([taskId])
+    expect(beforeLayout.collapseRemoteSaving).toBe(true)
+
+    // Tab 2 discards the retained OPFS task behind Tab 1's back.
+    await store.deleteTask(taskId)
+    await coordinator.refreshRetained()
+
+    expect(coordinator.activeTaskId).toBeNull()
+    expect(coordinator.getSnapshot().lifecycle).toBeNull()
+    expect(coordinator.getSnapshot().retained.tasks).toEqual([])
+    const afterLayout = projectSingleFileWorkspace(coordinator, shareInstance)
+    expect(afterLayout.current).toBeNull()
+    expect(afterLayout.tasks).toEqual([])
+    expect(afterLayout.primaryTask).toBeNull()
+    expect(afterLayout.collapseRemoteSaving).toBe(false)
+    expect(traceEvents).toContainEqual(expect.objectContaining({
+      eventName: 'settlement',
+      payload: expect.objectContaining({
+        backend: 'origin_private',
+        task_id: taskId,
+        transition: 'cleared_missing_from_inventory',
+        lifecycle: 'ready-to-save',
+      }),
+    }))
+    await coordinator.dispose()
+  })
+
+  it('clears a cross-tab deleted workspace task when direct save or continue hits NotFoundError without an inventory diff', async () => {
+    // 1. Direct Save on an OPFS ready-to-save card after Tab 2 deleted it.
+    const opfs = await createReadyToSaveOpfsWorkspace()
+    await opfs.store.deleteTask(opfs.taskId)
+    const saveError = deferred<unknown>()
+    let workspaceLifecycleAtError: unknown = 'unset'
+    let pendingAtError: unknown = 'unset'
+    opfs.setOnActionError(error => {
+      workspaceLifecycleAtError = opfs.coordinator.getSnapshot().lifecycle
+      pendingAtError = opfs.coordinator.getSnapshot().retained.pending
+      saveError.resolve(error)
+    })
+
+    opfs.coordinator.performActiveAction('save')
+    const err = await saveError.promise
+    expect(err).toBeInstanceOf(DOMException)
+    expect((err as DOMException).name).toBe('NotFoundError')
+    expect(workspaceLifecycleAtError).toBeNull()
+    expect(pendingAtError).toBeNull()
+    expect(opfs.coordinator.activeTaskId).toBeNull()
+    expect(opfs.coordinator.getSnapshot().retained.tasks).toEqual([])
+    expect(projectSingleFileWorkspace(opfs.coordinator, opfs.shareInstance).collapseRemoteSaving).toBe(false)
+    await opfs.coordinator.dispose()
+
+    // 2. Direct Continue on a paused FSA workspace task after Tab 2 deleted it.
+    const file = makeFileEntry(11, 'paused.bin', 16n)
+    const store = new FSAMemoryReceiveStore()
+    const parent = new FakeDirectoryHandle('Downloads', store.events)
+    const { locks } = makeTrackingLocks()
+    vi.spyOn(ReceiveStore, 'open').mockResolvedValue(
+      Object.assign(store, { close: vi.fn() }) as unknown as ReceiveStore,
+    )
+    vi.spyOn(outputContract, 'probeBrowserOutputCapabilities').mockResolvedValue(Object.freeze({
+      indexedDb: true, fsa: true, opfs: false, portable: false, availableStorageBytes: null,
+    }))
+    const jobGate = deferred<ReturnType<typeof makeJobResult>>()
+    const joined = makeSingleFileShare('share-fsa', file, {
+      createTransferJob: () => ({
+        pause: vi.fn(),
+        stop: vi.fn(),
+        detach: vi.fn(),
+        run: () => jobGate.promise,
+      }) as unknown as ReturnType<JoinedBrowserShare['createTransferJob']>,
+    })
+    const continueError = deferred<unknown>()
+    let fsaLifecycleAtError: unknown = 'unset'
+    const coordinator = new ReceiveCoordinator({
+      windowPort: makeWindowPort({ parent, locks }),
+      currentJoinedShare: () => joined,
+      onActionError: error => {
+        fsaLifecycleAtError = coordinator.getSnapshot().lifecycle
+        continueError.resolve(error)
+      },
+    })
+    coordinator.refreshOffers(joined)
+    await coordinator.loadRetained()
+    await waitForSnapshot(coordinator, s => s.offers?.kind === 'ready')
+    expect(coordinator.startDownload('fsa:file')).toBe(true)
+    await waitForSnapshot(coordinator, s => s.lifecycle?.kind === 'downloading')
+    jobGate.resolve(makeJobResult('paused', 0n))
+    await waitForSnapshot(coordinator, s => s.lifecycle?.kind === 'paused' && s.retained.tasks.length === 1)
+
+    const pausedTaskId = coordinator.activeTaskId!
+    await store.deleteTask(pausedTaskId)
+    coordinator.performActiveAction('continue')
+    const resumeErr = await continueError.promise
+    expect((resumeErr as DOMException).name).toBe('NotFoundError')
+    expect(fsaLifecycleAtError).toBeNull()
+    expect(coordinator.activeTaskId).toBeNull()
+    expect(coordinator.getSnapshot().retained.tasks).toEqual([])
+    await coordinator.dispose()
+  })
+
+  it('preserves workspace task on OPFS file eviction, per-record read_failed, and unavailable store scans', async () => {
+    const { coordinator, root, locks, traceEvents, taskId, setOnActionError } = await createReadyToSaveOpfsWorkspace()
+
+    // 1. Browser evicts the OPFS object while the IndexedDB task row still exists:
+    // Save throws NotFoundError, but authoritative refresh sees the IDB row and preserves workspace.
+    const tasksDir = await root.getDirectoryHandle('windshare-tasks')
+    await tasksDir.removeEntry(`${taskId}.part`)
+    const evictionErr = deferred<unknown>()
+    setOnActionError(error => evictionErr.resolve(error))
+    coordinator.performActiveAction('save')
+    const err = await evictionErr.promise
+    expect((err as DOMException).name).toBe('NotFoundError')
+    expect(coordinator.activeTaskId).toBe(taskId)
+    expect(coordinator.getSnapshot().lifecycle?.kind).toBe('ready-to-save')
+    expect(coordinator.getSnapshot().retained.tasks.map(task => task.taskId)).toEqual([taskId])
+
+    // 2. Per-record transient read_failed during scan must not be mistaken for deletion.
+    vi.spyOn(locks, 'request').mockRejectedValueOnce(new Error('transient lock probe failure'))
+    await coordinator.refreshRetained()
+    expect(traceEvents).toContainEqual(expect.objectContaining({
+      eventName: 'continuation',
+      payload: expect.objectContaining({ task_id: taskId, transition: 'read_failed' }),
+    }))
+    expect(coordinator.activeTaskId).toBe(taskId)
+    expect(coordinator.getSnapshot().lifecycle?.kind).toBe('ready-to-save')
+    await coordinator.dispose()
+
+    // 3. Foreground scan with unavailable IndexedDB sets empty UI state without confirming absence.
+    const abort = new AbortController()
+    const storage = new ReceiveStorage(undefined)
+    const { windowPort } = createMockDownloadWindow()
+    const inventory = new RetainedTaskInventory({
+      storage,
+      windowPort,
+      signal: abort.signal,
+      isDisposed: () => false,
+      isLocalTask: () => false,
+      onChange: () => undefined,
+    })
+    await inventory.loadAll()
+    expect(inventory.snapshot(null).kind).toBe('empty')
+    expect(inventory.isConfirmedAbsent(taskId)).toBe(false)
+    abort.abort()
+    await storage.close()
+  })
+})
+
+async function createReadyToSaveOpfsWorkspace() {
+  const shareInstance = 'share-opfs'
+  const file = makeFileEntry(10, 'bundle.bin', 0n)
+  const store = new MemoryReceiveStore()
+  const { env, root } = createMemoryOPFSEnv()
+  const { locks } = makeTrackingLocks()
+  const opfsEnv = { ...env, locks }
+  vi.spyOn(ReceiveStore, 'open').mockResolvedValue(
+    Object.assign(store, { close: vi.fn() }) as unknown as ReceiveStore,
+  )
+  vi.spyOn(outputContract, 'probeBrowserOutputCapabilities').mockResolvedValue(Object.freeze({
+    indexedDb: true, fsa: false, opfs: true, portable: false, availableStorageBytes: 64n * 1024n * 1024n,
+  }))
+
+  const { windowPort: baseWin } = createMockDownloadWindow()
+  const baseUrl = baseWin.URL!
+  let blockAutoHandoff = true
+  const windowPort: ReceiveWindowPort = {
+    ...baseWin,
+    indexedDB: { open: vi.fn() } as unknown as IDBFactory,
+    navigator: { locks },
+    URL: {
+      createObjectURL: blob => {
+        if (blockAutoHandoff) {
+          blockAutoHandoff = false
+          throw new DOMException('User gesture required', 'NotAllowedError')
+        }
+        return baseUrl.createObjectURL(blob)
+      },
+      revokeObjectURL: url => baseUrl.revokeObjectURL(url),
+    },
+  }
+
+  const joined = makeSingleFileShare(shareInstance, file, {
+    createTransferJob: output => ({
+      pause: vi.fn(),
+      stop: vi.fn(),
+      detach: vi.fn(),
+      run: async () => {
+        await commitMockOutputFile(output, file)
+        return makeJobResult('completed', file.expectedSize)
+      },
+    }) as unknown as ReturnType<JoinedBrowserShare['createTransferJob']>,
+  })
+  const traceEvents: OutputTraceEvent[] = []
+  let actionErrorHandler: ((error: unknown) => void) | undefined
+  const coordinator = new ReceiveCoordinator({
+    windowPort,
+    opfsEnv,
+    outputTrace: { current: event => traceEvents.push(event) },
+    currentJoinedShare: () => joined,
+    onActionError: error => actionErrorHandler?.(error),
+  })
+  coordinator.refreshOffers(joined)
+  await coordinator.loadRetained()
+  await waitForSnapshot(coordinator, s => s.offers?.kind === 'ready')
+  expect(coordinator.startDownload('opfs:file')).toBe(true)
+  await waitForSnapshot(coordinator, s =>
+    s.activeTaskId === null && s.lifecycle?.kind === 'ready-to-save' && s.retained.tasks.length === 1)
+
+  return {
+    coordinator,
+    store,
+    root,
+    locks,
+    traceEvents,
+    shareInstance,
+    taskId: coordinator.activeTaskId!,
+    setOnActionError: (handler: (error: unknown) => void) => { actionErrorHandler = handler },
+  }
+}
+
+function projectSingleFileWorkspace(coordinator: ReceiveCoordinator, shareInstance: string) {
+  const runtime = coordinator.getSnapshot()
+  const base = {
+    output: presentReceiveOutput(runtime, 'en'),
+    progress: EMPTY_PROGRESS,
+    taskDisplay: runtime.display,
+    connection: { kind: 'connected' as const },
+    share: {
+      kind: 'single-file' as const,
+      shareInstance,
+      label: 'bundle.bin',
+      fileCount: 1n,
+      totalBytes: 4n,
+      discoveryComplete: true,
+    } as never,
+    retained: runtime.retained,
+    activeReceiveOperationId: runtime.activeTaskId,
+    startAdmission: {
+      allowed: coordinator.startBlockedReason() === null,
+      reason: coordinator.startBlockedReason(),
+      canReleaseCurrent: coordinator.canReleaseCurrent,
+      localChoice: null,
+    },
+    draft: EMPTY_SELECTION_DRAFT,
+    hasContent: true,
+  }
+  const composed = new TaskComposer().compose(
+    base,
+    (task, action) => coordinator.retainedActionAdmission(task, action),
+    action => coordinator.activeActionAdmission(action),
+  )
+  return {
+    ...composed,
+    ...resolveWorkspaceTaskLayout({ ...base, ...composed }),
+  }
+}
