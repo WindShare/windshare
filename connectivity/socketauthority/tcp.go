@@ -60,18 +60,18 @@ func (m *TCPMux) Close() error {
 	}
 	return err
 }
-func (entry *pathSockets) socketCount() int {
-	count := len(entry.addresses)
-	if entry.tcp != nil {
-		count += len(entry.tcp.endpoints)
+func (entry *pathSockets) tcpCount() int {
+	if entry.tcp == nil {
+		return 0
 	}
-	return count
+	return len(entry.tcp.endpoints)
 }
 func (entry *pathSockets) close() error { return errors.Join(entry.mux.Close(), entry.tcp.Close()) }
 
 // PrepareTCP allocates optional passive TCP listeners for all lease addresses.
-// It is demand-owned and bounded by the same process socket capacity as UDP so
-// TCP listeners never starve mandatory UDP paths.
+// Listeners draw from an independent TCP capacity pool so they can never starve
+// mandatory UDP paths; optional paths additionally leave room for one essential
+// path's TCP listeners.
 func (l *Lease) PrepareTCP() error {
 	if l == nil {
 		return ErrInvalid
@@ -103,8 +103,12 @@ func (l *Lease) PrepareTCP() error {
 	if len(needed) == 0 {
 		return nil
 	}
-	if a.socketCount+a.reservedCount+len(needed)+a.essentialReserveLocked() > a.config.Capacity {
-		return a.capacityLocked(len(needed))
+	reserve := 0
+	if l.entry.optional {
+		reserve = max(len(l.entry.addresses), a.essentialReserveLocked())
+	}
+	if a.tcpCount+len(needed)+reserve > a.config.TCPCapacity {
+		return a.tcpCapacityLocked(len(needed))
 	}
 	allocated := &TCPMux{}
 	for _, address := range needed {
@@ -125,7 +129,7 @@ func (l *Lease) PrepareTCP() error {
 	} else {
 		l.entry.tcp.endpoints = append(l.entry.tcp.endpoints, allocated.endpoints...)
 	}
-	a.socketCount += len(needed)
+	a.tcpCount += len(needed)
 	return nil
 }
 func (l *Lease) TCPEndpoints() []netip.AddrPort {

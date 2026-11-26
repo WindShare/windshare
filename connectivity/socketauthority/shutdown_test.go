@@ -63,10 +63,13 @@ func TestClosingPathRetainsCapacityAndAllCloseCallersJoin(t *testing.T) {
 	var unblocked sync.Once
 	unblock := func() { unblocked.Do(func() { close(closeGate) }) }
 	defer unblock()
-	a := New(Config{Capacity: 1, ListenPacket: func(string, string) (net.PacketConn, error) { return socket, nil }})
+	a := New(Config{UDPCapacity: 1, TCPCapacity: 1, ListenPacket: func(string, string) (net.PacketConn, error) { return socket, nil }})
 	t.Cleanup(func() { _ = a.Close() })
 	lease, err := a.Acquire([16]byte{1}, 1, [16]byte{2}, []netip.Addr{netip.MustParseAddr("127.0.0.1")})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.PrepareTCP(); err != nil {
 		t.Fatal(err)
 	}
 	closing := runAsync(lease.Close)
@@ -96,8 +99,8 @@ func TestClosingPathRetainsCapacityAndAllCloseCallersJoin(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if a.socketCount != 0 || len(a.paths) != 0 {
-		t.Fatal("closed resources retained capacity")
+	if a.udpCount != 0 || a.tcpCount != 0 || len(a.paths) != 0 {
+		t.Fatalf("closed resources retained capacity: udp=%d tcp=%d paths=%d", a.udpCount, a.tcpCount, len(a.paths))
 	}
 }
 
@@ -109,7 +112,7 @@ func TestAcquireReplacesClosingPathOnlyAfterSocketCloses(t *testing.T) {
 	unblock := func() { unblocked.Do(func() { close(closeGate) }) }
 	defer unblock()
 	calls := 0
-	a := New(Config{Capacity: 1, ListenPacket: func(string, string) (net.PacketConn, error) {
+	a := New(Config{UDPCapacity: 1, ListenPacket: func(string, string) (net.PacketConn, error) {
 		calls++
 		if calls == 1 {
 			return first, nil

@@ -1,6 +1,7 @@
-// Package socketauthority owns bounded, independent per-path UDP endpoints.
-// A lease survives a serialized fresh ICE attempt, while no endpoint is shared
-// between peer paths whose remote tuples can otherwise collide in Pion's mux.
+// Package socketauthority owns bounded, independent per-path UDP endpoints and
+// optional passive TCP listeners under separate capacity ledgers. A lease
+// survives a serialized fresh ICE attempt, while no endpoint is shared between
+// peer paths whose remote tuples can otherwise collide in Pion's mux.
 package socketauthority
 
 import (
@@ -16,7 +17,12 @@ import (
 )
 
 const (
-	DefaultCapacity     = 64
+	// DefaultUDPCapacity and DefaultTCPCapacity each accommodate four full
+	// MaxAddressesPerPath paths (three active direct paths plus one reserved
+	// essential opportunity) under independent ledgers so optional passive TCP
+	// listeners can never starve mandatory UDP paths.
+	DefaultUDPCapacity  = 64
+	DefaultTCPCapacity  = 64
 	MaxAddressesPerPath = 16
 )
 
@@ -32,7 +38,8 @@ var (
 type ListenPacket func(network, address string) (net.PacketConn, error)
 
 type Config struct {
-	Capacity     int
+	UDPCapacity  int
+	TCPCapacity  int
 	ListenPacket ListenPacket
 	ListenTCP    func(network, address string) (net.Listener, error)
 	// Observe must publish promptly; it is never called while holding the authority lock.
@@ -62,16 +69,20 @@ type Authority struct {
 	config         Config
 	paths          map[pathKey]*pathSockets
 	retiredThrough uint64
-	socketCount    int
-	reservedCount  int
+	udpCount       int
+	udpReserved    int
+	tcpCount       int
 	reservations   map[pathKey]*Reservation
 	changed        chan struct{}
 	closing        *socketClosure
 }
 
 func New(config Config) *Authority {
-	if config.Capacity <= 0 {
-		config.Capacity = DefaultCapacity
+	if config.UDPCapacity <= 0 {
+		config.UDPCapacity = DefaultUDPCapacity
+	}
+	if config.TCPCapacity <= 0 {
+		config.TCPCapacity = DefaultTCPCapacity
 	}
 	if config.ListenTCP == nil {
 		config.ListenTCP = net.Listen
@@ -116,7 +127,7 @@ func (a *Authority) Request(session [16]byte, generation uint64, path [16]byte, 
 	// PeerPathID is session-scoped; equal values in independent authenticated
 	// sessions must never share socket or exclusive ICE ownership.
 	key := pathKey{session, generation, path}
-	if len(addresses) > a.config.Capacity {
+	if len(addresses) > a.config.UDPCapacity {
 		return nil, fmt.Errorf("%w: socket request exceeds total capacity", ErrInvalid)
 	}
 	return &Request{authority: a, key: key, addresses: addresses}, nil
@@ -147,8 +158,8 @@ func (a *Authority) acquireLocked(key pathKey, addresses []netip.Addr) (*Lease, 
 		entry.refs++
 		return &Lease{authority: a, entry: entry}, nil
 	}
-	if a.reservations[key] != nil || a.socketCount+a.reservedCount+len(addresses) > a.config.Capacity {
-		return nil, a.capacityLocked(len(addresses))
+	if a.reservations[key] != nil || a.udpCount+a.udpReserved+len(addresses) > a.config.UDPCapacity {
+		return nil, a.udpCapacityLocked(len(addresses))
 	}
 	mux := &Mux{}
 	for _, address := range addresses {
@@ -170,7 +181,7 @@ func (a *Authority) acquireLocked(key pathKey, addresses []netip.Addr) (*Lease, 
 	}
 	entry := &pathSockets{key: key, addresses: addresses, mux: mux, refs: 1}
 	a.paths[key] = entry
-	a.socketCount += len(addresses)
+	a.udpCount += len(addresses)
 	return &Lease{authority: a, entry: entry}, nil
 }
 

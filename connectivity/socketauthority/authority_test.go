@@ -11,7 +11,7 @@ import (
 )
 
 func TestPathIsolationReferencesRetirementAndBounds(t *testing.T) {
-	authority := New(Config{Capacity: 2})
+	authority := New(Config{UDPCapacity: 2})
 	defer authority.Close()
 	addresses := []netip.Addr{netip.MustParseAddr("127.0.0.1")}
 	first, err := authority.Acquire([16]byte{1}, 1, [16]byte{1}, addresses)

@@ -26,7 +26,8 @@ func (a *Authority) startCloseLocked(entry *pathSockets) *socketClosure {
 		err := entry.close()
 		a.mu.Lock()
 		delete(a.paths, entry.key)
-		a.socketCount -= entry.socketCount()
+		a.udpCount -= len(entry.addresses)
+		a.tcpCount -= entry.tcpCount()
 		a.notifyLocked()
 		closing.err = err
 		close(closing.done)

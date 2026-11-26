@@ -20,7 +20,7 @@ func (p addressedPacket) LocalAddr() net.Addr { return p.address }
 func testSocketAuthority(t *testing.T, capacity int) *socketauthority.Authority {
 	t.Helper()
 	authority := socketauthority.New(socketauthority.Config{
-		Capacity: capacity,
+		UDPCapacity: capacity,
 		ListenPacket: func(_, address string) (net.PacketConn, error) {
 			requested, err := netip.ParseAddrPort(address)
 			if err != nil {

@@ -15,7 +15,9 @@ const (
 	UDP Protocol = 17
 )
 const (
-	DefaultCapacity         = 64
+	// DefaultCapacity accommodates UDP+TCP endpoint demands across four full
+	// paths (4 * 16 addresses * 2 protocols = 128), matching socketauthority.
+	DefaultCapacity         = 128
 	DefaultDemandTTL        = 60 * time.Second
 	DefaultLeaseTTL         = 120 * time.Second
 	DefaultHeadStart        = 2 * time.Second

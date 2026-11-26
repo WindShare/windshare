@@ -7,13 +7,14 @@ import (
 	"testing"
 
 	pion "github.com/pion/webrtc/v4"
+	"github.com/windshare/windshare/connectivity/networkstate"
 	"github.com/windshare/windshare/connectivity/socketauthority"
 	"github.com/windshare/windshare/connectivity/v2signal"
 )
 
 func TestReceiverFairnessCannotPromoteExplorationPastEssentialWork(t *testing.T) {
 	gate, _, _ := newAdmissionFixture(t, 0)
-	pool := socketauthority.New(socketauthority.Config{Capacity: 8})
+	pool := socketauthority.New(socketauthority.Config{UDPCapacity: 8})
 	a, b := &NativePeerConnectivity{}, &NativePeerConnectivity{}
 	var granted []v2signal.ConnectionPurpose
 	var waiters []*admissionWaiter
@@ -49,9 +50,9 @@ func TestReceiverFairnessCannotPromoteExplorationPastEssentialWork(t *testing.T)
 func TestEssentialReceiverReclaimsAnAdmittedOptionalSocketOwner(t *testing.T) {
 	_, _, makeNative := newAdmissionFixture(t, 0)
 	n := makeNative()
-	// Capacity 5 fits first (UDP+TCP), optional (UDP+TCP), and third (UDP, with
-	// optional TCP gracefully skipped), so fourth must reclaim optional.
-	n.config.Sockets = testSocketAuthority(t, 5)
+	// UDPCapacity 3 fits first, optional, and third without TCP listeners
+	// consuming UDP headroom, so fourth must reclaim optional.
+	n.config.Sockets = testSocketAuthority(t, 3)
 	first := startActual(t, n, 1)
 	defer first.Close()
 	n.SetAdmitted(attemptFor(1).ProtocolSessionID, attemptFor(1).Binding.PeerPathID, true)
@@ -82,8 +83,8 @@ func TestEssentialReceiverReclaimsAnAdmittedOptionalSocketOwner(t *testing.T) {
 func TestOptionalPreparationDefersWithoutSpendingReservedEssentialOpportunity(t *testing.T) {
 	gate, _, makeNative := newAdmissionFixture(t, 0)
 	n := makeNative()
-	// Capacity 3 leaves one reserved essential UDP slot after first (UDP+TCP).
-	n.config.Sockets = testSocketAuthority(t, 3)
+	// UDPCapacity 2 leaves one reserved essential UDP slot after first.
+	n.config.Sockets = testSocketAuthority(t, 2)
 	first := startActual(t, n, 1)
 	defer first.Close()
 	n.SetAdmitted(attemptFor(1).ProtocolSessionID, attemptFor(1).Binding.PeerPathID, true)
@@ -103,5 +104,34 @@ func TestOptionalPreparationDefersWithoutSpendingReservedEssentialOpportunity(t 
 	n.CloseSession(request.ProtocolSessionID)
 	if err := n.Close(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMultiHomedThreeDirectPathsAndTCPFitDefaultSocketCapacity(t *testing.T) {
+	_, _, makeNative := newAdmissionFixture(t, 0)
+	n := makeNative()
+	addresses := make([]networkstate.Address, 0, 11)
+	for i := 1; i <= 11; i++ {
+		addresses = append(addresses, networkstate.Address{IP: netip.AddrFrom4([4]byte{192, 0, 2, byte(i)}), InterfaceIndex: i})
+	}
+	n.config.Monitor.(*testMonitor).state = networkstate.State{Addresses: addresses}
+	for path := byte(1); path <= 3; path++ {
+		req := attemptFor(1)
+		req.Binding.PeerPathID = [16]byte{path}
+		if path > 1 {
+			req.Binding.Purpose = v2signal.ThroughputExploration
+		}
+		pc, err := n.NewPeerConnection(t.Context(), req)
+		if err != nil {
+			t.Fatalf("path %d failed with 11 addresses under default capacity: %v", path, err)
+		}
+		defer pc.Close()
+		n.mu.Lock()
+		lease := n.paths[pathKey{req.ProtocolSessionID, req.Binding.PeerPathID}].lease
+		n.mu.Unlock()
+		if len(lease.Endpoints()) != 11 || len(lease.TCPEndpoints()) != 11 {
+			t.Fatalf("path %d endpoints udp=%d tcp=%d, want 11/11", path, len(lease.Endpoints()), len(lease.TCPEndpoints()))
+		}
+		n.SetAdmitted(req.ProtocolSessionID, req.Binding.PeerPathID, true)
 	}
 }

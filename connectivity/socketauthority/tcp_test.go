@@ -8,7 +8,7 @@ import (
 )
 
 func TestTCPListenerUsesPathDemandCapacityAndRetirement(t *testing.T) {
-	authority := New(Config{Capacity: 2})
+	authority := New(Config{UDPCapacity: 2, TCPCapacity: 1})
 	defer authority.Close()
 	lease, err := authority.Acquire([16]byte{1}, 1, [16]byte{1}, []netip.Addr{netip.MustParseAddr("127.0.0.1")})
 	if err != nil {
@@ -24,7 +24,15 @@ func TestTCPListenerUsesPathDemandCapacityAndRetirement(t *testing.T) {
 	if lease.TCPEndpoints()[0] != first {
 		t.Fatal("TCP listener changed across preparation")
 	}
-	if _, err = authority.Acquire([16]byte{1}, 1, [16]byte{2}, []netip.Addr{netip.MustParseAddr("127.0.0.1")}); !errors.Is(err, ErrCapacity) {
+	second, err := authority.Acquire([16]byte{1}, 1, [16]byte{2}, []netip.Addr{netip.MustParseAddr("127.0.0.1")})
+	if err != nil {
+		t.Fatalf("TCP listener blocked mandatory UDP acquisition: %v", err)
+	}
+	defer second.Close()
+	if err = second.PrepareTCP(); !errors.Is(err, ErrCapacity) {
+		t.Fatalf("expected TCP capacity exhaustion, got %v", err)
+	}
+	if _, err = authority.Acquire([16]byte{1}, 1, [16]byte{3}, []netip.Addr{netip.MustParseAddr("127.0.0.1")}); !errors.Is(err, ErrCapacity) {
 		t.Fatal(err)
 	}
 	mux := lease.TCP()
@@ -75,9 +83,9 @@ func TestTCPListenerUsesPathDemandCapacityAndRetirement(t *testing.T) {
 	}
 }
 func TestTCPOptionalAllocationFailureLeavesUDPCapacityIntact(t *testing.T) {
-	authority := New(Config{Capacity: 1})
+	authority := New(Config{UDPCapacity: 2, TCPCapacity: 1})
 	defer authority.Close()
-	lease, err := authority.Acquire([16]byte{1}, 1, [16]byte{1}, []netip.Addr{netip.MustParseAddr("127.0.0.1")})
+	lease, err := authority.Acquire([16]byte{1}, 1, [16]byte{1}, []netip.Addr{netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("127.0.0.2")})
 	if err != nil {
 		t.Fatal(err)
 	}

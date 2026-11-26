@@ -131,13 +131,23 @@ func TestCandidateFactsPreserveMappedProvenanceAndActualMilestones(t *testing.T)
 }
 
 func TestOptionalTCPFailureDoesNotPreventUDPAttempt(t *testing.T) {
-	authority := socketauthority.New(socketauthority.Config{Capacity: 1})
+	authority := socketauthority.New(socketauthority.Config{UDPCapacity: 2, TCPCapacity: 1})
 	defer authority.Close()
+	occupied := testLease(t, authority, 2, "127.0.0.1")
+	if err := occupied.PrepareTCP(); err != nil {
+		t.Fatal(err)
+	}
 	lease := testLease(t, authority, 1, "127.0.0.1")
+	var sawTCPUnavailable bool
 	connection, err := NewPeerConnection(pion.Configuration{}, AttemptConfig{
 		ProtocolSessionID: lease.SessionID(), NetworkGenerationID: 1, PeerPathID: lease.PathID(), SocketLease: lease,
 		MappedEndpoints: []MappedEndpoint{{Local: netip.MustParseAddrPort("127.0.0.1:1"), External: netip.MustParseAddrPort("203.0.113.1:1"), Protocol: "tcp"}},
-		allowLoopback:   true,
+		Observe: func(event Event) {
+			if event.Milestone == "tcp_unavailable" {
+				sawTCPUnavailable = true
+			}
+		},
+		allowLoopback: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -145,6 +155,9 @@ func TestOptionalTCPFailureDoesNotPreventUDPAttempt(t *testing.T) {
 	defer connection.Close()
 	if len(lease.TCPEndpoints()) != 0 {
 		t.Fatal("capacity failure created listener")
+	}
+	if !sawTCPUnavailable {
+		t.Fatal("missing tcp_unavailable observation")
 	}
 }
 func TestMappingProtocolValidation(t *testing.T) {

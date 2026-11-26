@@ -271,3 +271,24 @@ func TestConcurrentReconcileCreatesOnce(t *testing.T) {
 	}
 	a.Close(context.Background())
 }
+func TestDefaultCapacityFitsDualProtocolMultiPathDemands(t *testing.T) {
+	now := time.Unix(1000, 0)
+	a := New(Config{Now: func() time.Time { return now }})
+	defer a.Close(context.Background())
+	for i := range DefaultCapacity {
+		d := testDemand(now)
+		d.ID = "demand/" + string(rune('a'+i/26)) + string(rune('a'+i%26))
+		if i%2 == 1 {
+			d.Endpoint.Protocol = TCP
+		}
+		d.Endpoint.Local = netip.AddrPortFrom(netip.MustParseAddr("192.168.1.5"), uint16(4000+i))
+		if err := a.SetDemand(d); err != nil {
+			t.Fatalf("demand %d rejected under DefaultCapacity=%d: %v", i, DefaultCapacity, err)
+		}
+	}
+	overflow := testDemand(now)
+	overflow.ID = "demand/overflow"
+	if err := a.SetDemand(overflow); !errors.Is(err, ErrCapacity) {
+		t.Fatalf("demand past DefaultCapacity=%d accepted: %v", DefaultCapacity, err)
+	}
+}

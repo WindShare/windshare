@@ -8,16 +8,23 @@ import (
 
 // CapacityError preserves the accounting decision across admission and tracing.
 type CapacityError struct {
+	Protocol                         string
 	Used, Reserved, Requested, Limit int
 }
 
 func (e *CapacityError) Error() string {
+	if e.Protocol != "" {
+		return fmt.Sprintf("%s (%s): used=%d reserved=%d requested=%d limit=%d", ErrCapacity, e.Protocol, e.Used, e.Reserved, e.Requested, e.Limit)
+	}
 	return fmt.Sprintf("%s: used=%d reserved=%d requested=%d limit=%d", ErrCapacity, e.Used, e.Reserved, e.Requested, e.Limit)
 }
 func (*CapacityError) Unwrap() error { return ErrCapacity }
 
-func (a *Authority) capacityLocked(requested int) *CapacityError {
-	return &CapacityError{Used: a.socketCount, Reserved: a.reservedCount, Requested: requested, Limit: a.config.Capacity}
+func (a *Authority) udpCapacityLocked(requested int) *CapacityError {
+	return &CapacityError{Protocol: "udp", Used: a.udpCount, Reserved: a.udpReserved, Requested: requested, Limit: a.config.UDPCapacity}
+}
+func (a *Authority) tcpCapacityLocked(requested int) *CapacityError {
+	return &CapacityError{Protocol: "tcp", Used: a.tcpCount, Requested: requested, Limit: a.config.TCPCapacity}
 }
 func (a *Authority) notifyLocked() { close(a.changed); a.changed = make(chan struct{}) }
 
@@ -35,8 +42,8 @@ func (r *Request) Changes() <-chan struct{} {
 	return r.authority.changed
 }
 
-// Reserve performs no network I/O. Optional TCP listeners share this ledger but
-// cannot consume capacity already promised to another path's mandatory UDP set.
+// Reserve performs no network I/O and accounts exclusively against the mandatory
+// UDP ledger. Optional passive TCP listeners use an independent capacity pool.
 func (r *Request) Reserve() (*Reservation, error) {
 	return r.reserve(false)
 }
@@ -71,7 +78,7 @@ func (r *Request) reserve(optional bool) (*Reservation, error) {
 	}
 	if entry := a.paths[r.key]; entry != nil {
 		if entry.closing != nil {
-			return nil, a.capacityLocked(len(r.addresses))
+			return nil, a.udpCapacityLocked(len(r.addresses))
 		}
 		if !slices.Equal(entry.addresses, r.addresses) {
 			return nil, ErrInvalid
@@ -83,12 +90,12 @@ func (r *Request) reserve(optional bool) (*Reservation, error) {
 	if optional {
 		reserve = max(len(r.addresses), a.essentialReserveLocked())
 	}
-	if a.reservations[r.key] != nil || a.socketCount+a.reservedCount+len(r.addresses)+reserve > a.config.Capacity {
-		return nil, a.capacityLocked(len(r.addresses))
+	if a.reservations[r.key] != nil || a.udpCount+a.udpReserved+len(r.addresses)+reserve > a.config.UDPCapacity {
+		return nil, a.udpCapacityLocked(len(r.addresses))
 	}
 	reservation := &Reservation{request: r, optional: optional}
 	a.reservations[r.key] = reservation
-	a.reservedCount += len(r.addresses)
+	a.udpReserved += len(r.addresses)
 	return reservation, nil
 }
 
@@ -119,7 +126,7 @@ func (r *Reservation) Activate() (*Lease, error) {
 		return r.lease, nil
 	}
 	delete(a.reservations, r.request.key)
-	a.reservedCount -= len(r.request.addresses)
+	a.udpReserved -= len(r.request.addresses)
 	lease, err := a.acquireLocked(r.request.key, r.request.addresses)
 	if err == nil {
 		lease.entry.optional = r.optional
@@ -142,7 +149,7 @@ func (r *Reservation) Close() {
 	r.settled = true
 	if r.lease == nil {
 		delete(a.reservations, r.request.key)
-		a.reservedCount -= len(r.request.addresses)
+		a.udpReserved -= len(r.request.addresses)
 		a.notifyLocked()
 	}
 	a.mu.Unlock()
