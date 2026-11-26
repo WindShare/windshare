@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -206,6 +207,7 @@ type faultyJournalFile struct {
 	base         journalFile
 	writeAtHook  func(base journalFile, b []byte, off int64) (int, error)
 	truncateHook func(base journalFile, size int64) error
+	closeHook    func(base journalFile) error
 	writeCalls   int
 	truncateArgs []int64
 }
@@ -226,8 +228,13 @@ func (f *faultyJournalFile) Truncate(size int64) error {
 	return f.base.Truncate(size)
 }
 
-func (f *faultyJournalFile) Sync() error  { return f.base.Sync() }
-func (f *faultyJournalFile) Close() error { return f.base.Close() }
+func (f *faultyJournalFile) Sync() error { return f.base.Sync() }
+func (f *faultyJournalFile) Close() error {
+	if f.closeHook != nil {
+		return f.closeHook(f.base)
+	}
+	return f.base.Close()
+}
 
 func TestJournalShortWriteRollbackAllowsRetryAndReopen(t *testing.T) {
 	ctx := context.Background()
@@ -582,6 +589,54 @@ func TestOpenTaskJournalToleratesCompactionFailureWhenFileStaysOpen(t *testing.T
 	reopened := reopenReusableRangesForTest(t, root, sel, seed, fileName, totalSize)
 	if got := rangeTotalBytes(reopened); got != 2*partSize {
 		t.Fatalf("reusable bytes after fallback append = %d, want %d", got, 2*partSize)
+	}
+}
+
+func TestJournalCompactionUnlinksTempFileOnCloseFailure(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	auth, op, intent := openActiveSingleFileOp(t, root, 0xe0)
+	defer auth.Close()
+
+	errClose := errors.New("simulated journal close failure")
+	op.journal.mu.Lock()
+	op.journal.file = &faultyJournalFile{
+		base: op.journal.file,
+		closeHook: func(base journalFile) error {
+			_ = base.Close()
+			return errClose
+		},
+	}
+	compactErr := op.journal.compactLocked()
+	fileAfter := op.journal.file
+	op.journal.mu.Unlock()
+
+	if !errors.Is(compactErr, errClose) {
+		t.Fatalf("compactLocked err = %v, want %v", compactErr, errClose)
+	}
+	if fileAfter != nil {
+		t.Fatal("expected j.file == nil after close failure")
+	}
+
+	opPath := filepath.Join(root, ControlDirName, hex.EncodeToString(intent.OperationID().Bytes()))
+	if _, err := os.Stat(filepath.Join(opPath, "state.log.compact")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("state.log.compact survived close failure: %v", err)
+	}
+	if err := op.RecordShareStopped(ctx); !errors.Is(err, fs.ErrClosed) {
+		t.Fatalf("append after failed close = %v, want fs.ErrClosed", err)
+	}
+	if err := auth.Close(); err != nil {
+		t.Fatalf("auth.Close after failed compaction close = %v", err)
+	}
+
+	opDir, err := openDirHandle(opPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opDir.Close()
+	state, _, err := readJournalState(opDir)
+	if err != nil || state.meta.Intent.OperationID() != intent.OperationID() {
+		t.Fatalf("readJournalState after failed compaction close = (%+v, %v)", state.meta, err)
 	}
 }
 

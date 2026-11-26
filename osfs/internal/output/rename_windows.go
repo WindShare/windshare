@@ -158,27 +158,41 @@ var windowsHeaderReadBackoff = [...]time.Duration{
 }
 
 func openJournalHeaderFile(opDir *Dir) (*os.File, error) {
-	return retryWindowsHeaderOpen(func() (*os.File, error) {
+	return retryWindowsJournalOpen(windowsHeaderReadBackoff[:], func() (*os.File, error) {
 		return openChildFile(opDir, journalFileName, os.O_RDONLY, 0)
 	}, time.Sleep)
 }
 
-func retryWindowsHeaderOpen(attempt func() (*os.File, error), wait func(time.Duration)) (*os.File, error) {
+// Reopening state.log right after compaction closes and renames it runs outside
+// normal dirLock scans and faces the same 10-200ms AV/indexer scan window as
+// rename, while keeping retries scoped to sharing/delete-pending races so
+// permanent ACL denials still fail immediately.
+func reopenJournalFile(opDir *Dir) (*os.File, error) {
+	return retryWindowsJournalOpen(windowsRenameBackoff[:], func() (*os.File, error) {
+		return openChildFile(opDir, journalFileName, os.O_RDWR, privateFileMode)
+	}, time.Sleep)
+}
+
+func retryWindowsJournalOpen(
+	backoff []time.Duration,
+	attempt func() (*os.File, error),
+	wait func(time.Duration),
+) (*os.File, error) {
 	f, err := attempt()
-	if !isTransientWindowsHeaderReadError(err) {
+	if !isTransientWindowsJournalOpenError(err) {
 		return f, err
 	}
-	for _, delay := range windowsHeaderReadBackoff {
+	for _, delay := range backoff {
 		wait(delay)
 		f, err = attempt()
-		if !isTransientWindowsHeaderReadError(err) {
+		if !isTransientWindowsJournalOpenError(err) {
 			return f, err
 		}
 	}
 	return nil, err
 }
 
-func isTransientWindowsHeaderReadError(err error) bool {
+func isTransientWindowsJournalOpenError(err error) bool {
 	if err == nil || errors.Is(err, ErrUnsafeNamespace) {
 		return false
 	}

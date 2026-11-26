@@ -842,55 +842,128 @@ func TestWindowsRenameReplaceSucceedsWithOpenShareDeleteReader(t *testing.T) {
 	}
 }
 
-func TestWindowsRetryHeaderOpenBoundedPolicy(t *testing.T) {
+func TestWindowsRetryJournalOpenBoundedPolicy(t *testing.T) {
 	sharingErr := &os.PathError{Op: "openat", Path: "state.log", Err: windows.ERROR_SHARING_VIOLATION}
 	deletePendingErr := &os.PathError{Op: "openat", Path: "state.log", Err: ntStatusToError(windows.STATUS_DELETE_PENDING, windowsSyncFileOpts)}
 	permDeniedErr := &os.PathError{Op: "openat", Path: "state.log", Err: windows.ERROR_ACCESS_DENIED}
 	unsafeErr := errors.Join(ErrUnsafeNamespace, windows.ERROR_SHARING_VIOLATION)
 	notExistErr := &os.PathError{Op: "openat", Path: "state.log", Err: windows.ERROR_FILE_NOT_FOUND}
-	allWaits := windowsHeaderReadBackoff[:]
 
 	if !errors.Is(deletePendingErr, windows.ERROR_DELETE_PENDING) || !errors.Is(deletePendingErr, windows.ERROR_ACCESS_DENIED) {
 		t.Fatalf("ntStatusToError(STATUS_DELETE_PENDING) = %v, want both ERROR_DELETE_PENDING and ERROR_ACCESS_DENIED", deletePendingErr)
 	}
 
-	for _, tc := range []struct {
-		name      string
-		results   []error
-		wantErr   error
-		wantWaits []time.Duration
+	for _, schedule := range []struct {
+		name    string
+		backoff []time.Duration
 	}{
-		{name: "immediate success", results: []error{nil}},
-		{name: "recovers after sharing violation", results: []error{sharingErr, nil}, wantWaits: allWaits[:1]},
-		{name: "recovers after delete pending", results: []error{deletePendingErr, nil}, wantWaits: allWaits[:1]},
-		{
-			name:      "exhausts bounded retries",
-			results:   []error{sharingErr, deletePendingErr, sharingErr, deletePendingErr, sharingErr, sharingErr},
-			wantErr:   sharingErr,
-			wantWaits: allWaits,
-		},
-		{name: "permanent access denied does not retry", results: []error{permDeniedErr}, wantErr: permDeniedErr},
-		{name: "not exist does not retry", results: []error{notExistErr}, wantErr: notExistErr},
-		{name: "unsafe namespace does not retry", results: []error{unsafeErr}, wantErr: unsafeErr},
+		{name: "header_read", backoff: windowsHeaderReadBackoff[:]},
+		{name: "compaction_reopen", backoff: windowsRenameBackoff[:]},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			attempts := 0
-			var waited []time.Duration
-			_, err := retryWindowsHeaderOpen(func() (*os.File, error) {
-				res := tc.results[attempts]
-				attempts++
-				return nil, res
-			}, func(delay time.Duration) {
-				waited = append(waited, delay)
-			})
-			if !errors.Is(err, tc.wantErr) || (tc.wantErr == nil && err != nil) {
-				t.Fatalf("retryWindowsHeaderOpen = %v, want %v", err, tc.wantErr)
+		t.Run(schedule.name, func(t *testing.T) {
+			finalAttemptResults := make([]error, len(schedule.backoff)+1)
+			exhaustedResults := make([]error, len(schedule.backoff)+1)
+			for i := range schedule.backoff {
+				if i%2 == 0 {
+					finalAttemptResults[i] = sharingErr
+					exhaustedResults[i] = sharingErr
+				} else {
+					finalAttemptResults[i] = deletePendingErr
+					exhaustedResults[i] = deletePendingErr
+				}
 			}
-			if attempts != len(tc.results) || !slices.Equal(waited, tc.wantWaits) {
-				t.Fatalf("attempts=%d waits=%v, want %d and %v", attempts, waited, len(tc.results), tc.wantWaits)
+			exhaustedResults[len(schedule.backoff)] = sharingErr
+
+			for _, tc := range []struct {
+				name      string
+				results   []error
+				wantErr   error
+				wantWaits []time.Duration
+			}{
+				{name: "immediate success", results: []error{nil}},
+				{name: "recovers after sharing violation", results: []error{sharingErr, nil}, wantWaits: schedule.backoff[:1]},
+				{name: "recovers after delete pending", results: []error{deletePendingErr, nil}, wantWaits: schedule.backoff[:1]},
+				{name: "recovers on final attempt", results: finalAttemptResults, wantWaits: schedule.backoff},
+				{name: "exhausts bounded retries", results: exhaustedResults, wantErr: sharingErr, wantWaits: schedule.backoff},
+				{name: "permanent access denied does not retry", results: []error{permDeniedErr}, wantErr: permDeniedErr},
+				{name: "not exist does not retry", results: []error{notExistErr}, wantErr: notExistErr},
+				{name: "unsafe namespace does not retry", results: []error{unsafeErr}, wantErr: unsafeErr},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					attempts := 0
+					var waited []time.Duration
+					_, err := retryWindowsJournalOpen(schedule.backoff, func() (*os.File, error) {
+						res := tc.results[attempts]
+						attempts++
+						return nil, res
+					}, func(delay time.Duration) {
+						waited = append(waited, delay)
+					})
+					if !errors.Is(err, tc.wantErr) || (tc.wantErr == nil && err != nil) {
+						t.Fatalf("retryWindowsJournalOpen = %v, want %v", err, tc.wantErr)
+					}
+					if attempts != len(tc.results) || !slices.Equal(waited, tc.wantWaits) {
+						t.Fatalf("attempts=%d waits=%v, want %d and %v", attempts, waited, len(tc.results), tc.wantWaits)
+					}
+				})
 			}
 		})
 	}
+
+	t.Run("reopen recovers after write-blocking scanner handle releases", func(t *testing.T) {
+		base := t.TempDir()
+		journalPath := filepath.Join(base, journalFileName)
+		if err := os.WriteFile(journalPath, []byte("header\n"), privateFileMode); err != nil {
+			t.Fatal(err)
+		}
+		dir, _, err := OpenContainer(base, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer dir.Close()
+
+		// Omit FILE_SHARE_WRITE (keeping FILE_SHARE_DELETE) to mirror an AV/indexer
+		// handle that lets rename succeed while blocking the immediate O_RDWR reopen.
+		encoded, err := windows.UTF16PtrFromString(journalPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		scanner, err := windows.CreateFile(
+			encoded,
+			windows.GENERIC_READ,
+			windows.FILE_SHARE_READ|windows.FILE_SHARE_DELETE,
+			nil,
+			windows.OPEN_EXISTING,
+			windows.FILE_ATTRIBUTE_NORMAL,
+			0,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		released := false
+		releaseScanner := func() {
+			if !released {
+				released = true
+				_ = windows.CloseHandle(scanner)
+			}
+		}
+		t.Cleanup(releaseScanner)
+
+		var waited []time.Duration
+		reopened, err := retryWindowsJournalOpen(windowsRenameBackoff[:], func() (*os.File, error) {
+			return openChildFile(dir, journalFileName, os.O_RDWR, privateFileMode)
+		}, func(delay time.Duration) {
+			waited = append(waited, delay)
+			releaseScanner()
+		})
+		if err != nil {
+			t.Fatalf("retryWindowsJournalOpen(O_RDWR) = %v, want nil after scanner release", err)
+		}
+		defer reopened.Close()
+		if !slices.Equal(waited, windowsRenameBackoff[:1]) {
+			t.Fatalf("waited = %v, want %v", waited, windowsRenameBackoff[:1])
+		}
+	})
 }
 
 func TestWindowsJournalCompactionConcurrentWithHeaderReaderAndOpenFallback(t *testing.T) {

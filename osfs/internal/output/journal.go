@@ -399,6 +399,7 @@ func (j *taskJournal) compactLocked() error {
 	// Close old file handle before replacing so Windows permits overwrite rename.
 	if err := j.file.Close(); err != nil {
 		j.file = nil
+		_ = removeChild(j.opDir, tmpName, false)
 		return err
 	}
 	j.file = nil
@@ -408,7 +409,7 @@ func (j *taskJournal) compactLocked() error {
 	} else {
 		_ = j.opDir.Sync()
 	}
-	reopened, reopenErr := openChildFile(j.opDir, journalFileName, os.O_RDWR, privateFileMode)
+	reopened, reopenErr := reopenJournalFile(j.opDir)
 	if reopenErr != nil {
 		return errors.Join(renameErr, reopenErr)
 	}
