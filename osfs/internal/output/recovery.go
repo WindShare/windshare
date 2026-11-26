@@ -181,24 +181,37 @@ func ListOperations(ctx context.Context, rootPath string) (RecoveryInventory, er
 }
 
 func inspectOperationDir(opID receivecontract.OperationID, opDir *Dir) (RecoverySummary, bool) {
-	if lock, _, lockErr := acquireLockFile(opDir, taskLockFileName, true); errors.Is(lockErr, ErrNamespaceLockBusy) {
-		// Another process owns task.lock and may be appending or compacting
-		// state.log; read only the immutable header and omit checkpoint details
-		// so running operations stay consistent with the recovery contract.
+	lock, _, lockErr := acquireLockFile(opDir, taskLockFileName, true)
+	if lockErr != nil && !errors.Is(lockErr, fs.ErrNotExist) {
+		// Without proving task.lock is idle (or absent under dirLock), another
+		// writer may still be mutating or compacting state.log, or the lease
+		// itself is unsafe/unreadable. Inspect only the immutable header and
+		// omit checkpoint details so recovery never misreports an unverified lease.
 		header, err := readVerifiedJournalHeader(opDir, opID)
 		if err != nil {
 			return RecoverySummary{}, false
+		}
+		if errors.Is(lockErr, ErrNamespaceLockBusy) {
+			return RecoverySummary{
+				valid:           true,
+				operationID:     opID,
+				intentDigest:    header.Intent.Digest(),
+				stateGeneration: initialStateGeneration,
+				state:           RecoveryOperationIncomplete,
+				attention:       AttentionNone,
+				busy:            true,
+			}, true
 		}
 		return RecoverySummary{
 			valid:           true,
 			operationID:     opID,
 			intentDigest:    header.Intent.Digest(),
 			stateGeneration: initialStateGeneration,
-			state:           RecoveryOperationIncomplete,
-			attention:       AttentionNone,
-			busy:            true,
+			state:           RecoveryOperationNeedsAttention,
+			attention:       AttentionLease,
 		}, true
-	} else if lock != nil {
+	}
+	if lock != nil {
 		_ = lock.Close()
 	}
 

@@ -4,6 +4,7 @@ package output
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"io/fs"
 	"os"
@@ -242,5 +243,53 @@ func TestWindowsOpenContainerPreservesTrailingDotNormalization(t *testing.T) {
 	}
 	if err := longDir.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestWindowsListOperationsReportsSharingViolationTaskLockAsAttentionLease(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	_, intent, _ := createPausedSingleFileOp(t, root, 0x99)
+	lockPath := filepath.Join(root, ControlDirName, hex.EncodeToString(intent.OperationID().Bytes()), taskLockFileName)
+
+	// Open task.lock without FILE_SHARE_WRITE so acquireLockFile's O_RDWR open
+	// receives ERROR_SHARING_VIOLATION rather than LockFileEx's ERROR_LOCK_VIOLATION.
+	encoded, err := windows.UTF16PtrFromString(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := windows.CreateFile(encoded, windows.FILE_GENERIC_READ, windows.FILE_SHARE_READ, nil,
+		windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := false
+	t.Cleanup(func() {
+		if !closed {
+			_ = windows.CloseHandle(held)
+		}
+	})
+
+	inv, err := ListOperations(ctx, root)
+	if err != nil || inv.Status() != RecoveryListNeedsAttention || inv.UnknownEntries() || len(inv.Summaries()) != 1 {
+		t.Fatalf("sharing-violation inventory = (%+v, %v), want needs-attention without unknownEntries", inv, err)
+	}
+	got := inv.Summaries()[0]
+	if got.OperationID() != intent.OperationID() || got.Busy() ||
+		got.State() != RecoveryOperationNeedsAttention ||
+		got.NeedsAttentionReason() != AttentionLease ||
+		len(got.Items()) != 0 {
+		t.Fatalf("sharing-violation summary = %+v, want AttentionLease without items", got)
+	}
+
+	if err := windows.CloseHandle(held); err != nil {
+		t.Fatal(err)
+	}
+	closed = true
+
+	recovered, err := ListOperations(ctx, root)
+	if err != nil || recovered.Status() != RecoveryListReady || recovered.UnknownEntries() || len(recovered.Summaries()) != 1 ||
+		recovered.Summaries()[0].State() != RecoveryOperationResumable {
+		t.Fatalf("recovered inventory = (%+v, %v), want ready resumable", recovered, err)
 	}
 }

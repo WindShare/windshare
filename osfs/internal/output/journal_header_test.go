@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -716,4 +717,150 @@ func TestHeaderScanIsolatesUnreadableSiblingAndEmitsTrace(t *testing.T) {
 	if lookupSkips == 0 || createSkips == 0 {
 		t.Fatalf("skip_unreadable_header traces = (lookup=%d, create=%d), want both > 0", lookupSkips, createSkips)
 	}
+}
+
+func TestListOperationsReportsUnsafeOrUnreadableTaskLockAsAttentionLease(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("unsafe task.lock directory isolates fault and omits checkpoints", func(t *testing.T) {
+		root := t.TempDir()
+		_, intentA, _ := createPausedSingleFileOp(t, root, 0xb1)
+		_, intentB, _ := createPausedSingleFileOp(t, root, 0xb5)
+		opIDA := intentA.OperationID()
+		opIDB := intentB.OperationID()
+
+		lockPathA := filepath.Join(root, ControlDirName, hex.EncodeToString(opIDA.Bytes()), taskLockFileName)
+		if err := os.Remove(lockPathA); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(lockPathA, privateDirMode); err != nil {
+			t.Fatal(err)
+		}
+
+		inv, err := ListOperations(ctx, root)
+		if err != nil {
+			t.Fatalf("ListOperations = %v", err)
+		}
+		if inv.Status() != RecoveryListNeedsAttention || inv.UnknownEntries() || len(inv.Summaries()) != 2 {
+			t.Fatalf("inventory = (status=%v unknown=%t count=%d), want needs-attention with 2 known summaries",
+				inv.Status(), inv.UnknownEntries(), len(inv.Summaries()))
+		}
+		var gotA, gotB RecoverySummary
+		for _, s := range inv.Summaries() {
+			switch s.OperationID() {
+			case opIDA:
+				gotA = s
+			case opIDB:
+				gotB = s
+			}
+		}
+		if !gotA.Valid() || gotA.Busy() ||
+			gotA.ReceiveIntentDigest() != intentA.Digest() ||
+			gotA.StateGeneration() != initialStateGeneration ||
+			gotA.State() != RecoveryOperationNeedsAttention ||
+			gotA.NeedsAttentionReason() != AttentionLease ||
+			len(gotA.Items()) != 0 {
+			t.Fatalf("unsafe-lock opA summary = %+v, want needs-attention(%q) without items", gotA, AttentionLease)
+		}
+		if !gotB.Valid() || gotB.Busy() || gotB.State() != RecoveryOperationResumable {
+			t.Fatalf("healthy sibling opB summary = %+v, want resumable", gotB)
+		}
+
+		if _, discardErr := DiscardOperation(ctx, root, opIDA); !errors.Is(discardErr, ErrUnsafeNamespace) {
+			t.Fatalf("DiscardOperation(unsafe task.lock) = %v, want ErrUnsafeNamespace", discardErr)
+		}
+		if summary, discardErr := DiscardOperation(ctx, root, opIDB); discardErr != nil || summary.State() != RecoveryOperationDiscarded {
+			t.Fatalf("DiscardOperation(healthy sibling) = (%+v, %v), want discarded", summary, discardErr)
+		}
+	})
+
+	t.Run("unsafe task.lock uses header only when journal body is corrupt", func(t *testing.T) {
+		root := t.TempDir()
+		_, intent, _ := createPausedSingleFileOp(t, root, 0xb9)
+		opDir := filepath.Join(root, ControlDirName, hex.EncodeToString(intent.OperationID().Bytes()))
+		lockPath := filepath.Join(opDir, taskLockFileName)
+		if err := os.Remove(lockPath); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(lockPath, privateDirMode); err != nil {
+			t.Fatal(err)
+		}
+		journalPath := filepath.Join(opDir, journalFileName)
+		f, err := os.OpenFile(journalPath, os.O_WRONLY|os.O_APPEND, privateFileMode)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.WriteString("deadbeef {\"k\":\"partial\",\"corrupt\":true}\nstill-corrupt\n"); err != nil {
+			_ = f.Close()
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		inv, err := ListOperations(ctx, root)
+		if err != nil || inv.Status() != RecoveryListNeedsAttention || inv.UnknownEntries() || len(inv.Summaries()) != 1 {
+			t.Fatalf("inventory = (%+v, %v), want needs-attention without unknownEntries", inv, err)
+		}
+		got := inv.Summaries()[0]
+		if got.OperationID() != intent.OperationID() ||
+			got.State() != RecoveryOperationNeedsAttention ||
+			got.NeedsAttentionReason() != AttentionLease ||
+			len(got.Items()) != 0 {
+			t.Fatalf("summary = %+v, want header-only AttentionLease", got)
+		}
+	})
+
+	t.Run("unsafe task.lock with corrupt header falls back to unknown entry", func(t *testing.T) {
+		root := t.TempDir()
+		_, intent, _ := createPausedSingleFileOp(t, root, 0xbd)
+		opDir := filepath.Join(root, ControlDirName, hex.EncodeToString(intent.OperationID().Bytes()))
+		lockPath := filepath.Join(opDir, taskLockFileName)
+		if err := os.Remove(lockPath); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(lockPath, privateDirMode); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(opDir, journalFileName), []byte("corrupt-header\n"), privateFileMode); err != nil {
+			t.Fatal(err)
+		}
+
+		inv, err := ListOperations(ctx, root)
+		if err != nil || inv.Status() != RecoveryListNeedsAttention || !inv.UnknownEntries() || len(inv.Summaries()) != 0 {
+			t.Fatalf("inventory = (%+v, %v), want unknownEntries with 0 summaries", inv, err)
+		}
+	})
+
+	t.Run("read-only task.lock reports lease attention until writable again", func(t *testing.T) {
+		if runtime.GOOS != "windows" && os.Geteuid() == 0 {
+			t.Skip("POSIX permission refusal requires non-root")
+		}
+		root := t.TempDir()
+		_, intent, _ := createPausedSingleFileOp(t, root, 0xc1)
+		lockPath := filepath.Join(root, ControlDirName, hex.EncodeToString(intent.OperationID().Bytes()), taskLockFileName)
+		if err := os.Chmod(lockPath, 0o400); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(lockPath, privateFileMode) })
+
+		inv, err := ListOperations(ctx, root)
+		if err != nil || inv.Status() != RecoveryListNeedsAttention || inv.UnknownEntries() || len(inv.Summaries()) != 1 {
+			t.Fatalf("read-only task.lock inventory = (%+v, %v)", inv, err)
+		}
+		got := inv.Summaries()[0]
+		if got.Busy() || got.State() != RecoveryOperationNeedsAttention ||
+			got.NeedsAttentionReason() != AttentionLease || len(got.Items()) != 0 {
+			t.Fatalf("read-only task.lock summary = %+v, want AttentionLease without items", got)
+		}
+
+		if err := os.Chmod(lockPath, privateFileMode); err != nil {
+			t.Fatal(err)
+		}
+		recovered, err := ListOperations(ctx, root)
+		if err != nil || recovered.Status() != RecoveryListReady || recovered.UnknownEntries() || len(recovered.Summaries()) != 1 ||
+			recovered.Summaries()[0].State() != RecoveryOperationResumable {
+			t.Fatalf("recovered inventory = (%+v, %v), want ready resumable", recovered, err)
+		}
+	})
 }

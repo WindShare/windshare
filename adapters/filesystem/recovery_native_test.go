@@ -423,6 +423,62 @@ func TestFilesystemRecoveryProjectsEmptyCleanupPendingOpDirAndUnblocksSibling(t 
 	}
 }
 
+func TestFilesystemResumeInventoryReportsUnsafeTaskLockAsLeaseAttentionAndPreservesSiblingDiscard(t *testing.T) {
+	ctx := context.Background()
+	root := newResumeCertifiedOutputTestRoot(t)
+
+	opAuthA, intentA := createNativeResumeOperation(t, ctx, root, 85)
+	if err := opAuthA.Close(); err != nil {
+		t.Fatal(err)
+	}
+	opAuthB, intentB := createNativeResumeOperation(t, ctx, root, 90)
+	if err := opAuthB.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	opDirA := filepath.Join(root, nativeResumeControlDirectoryName, hex.EncodeToString(intentA.OperationID().Bytes()))
+	lockPathA := filepath.Join(opDirA, "task.lock")
+	if err := os.Remove(lockPathA); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(lockPathA, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	inventory, err := recovery.Inspect(ctx, Recovery(root))
+	if err != nil {
+		t.Fatalf("Inspect() with unsafe task.lock = %v", err)
+	}
+	snapshot, err := inventory.Snapshot()
+	if err != nil || snapshot.RegistryUnknown || !snapshot.NeedsAttention() || len(snapshot.Operations) != 2 {
+		t.Fatalf("snapshot = (%+v, %v), want 2 operations with NeedsAttention=true and RegistryUnknown=false", snapshot, err)
+	}
+	byID := make(map[receivecontract.OperationID]recovery.Operation, len(snapshot.Operations))
+	for _, op := range snapshot.Operations {
+		byID[op.ID] = op
+	}
+	gotA, ok := byID[intentA.OperationID()]
+	if !ok || gotA.Running || gotA.State != recovery.OperationNeedsAttention ||
+		gotA.Attention != recovery.AttentionLease || len(gotA.BlockedItems) != 0 {
+		t.Fatalf("unsafe-lock opA = (%+v, found=%t), want OperationNeedsAttention(%q)", gotA, ok, recovery.AttentionLease)
+	}
+	gotB, ok := byID[intentB.OperationID()]
+	if !ok || gotB.Running || gotB.State != recovery.OperationIncomplete || len(gotB.BlockedItems) != 0 {
+		t.Fatalf("sibling opB = (%+v, found=%t), want idle incomplete", gotB, ok)
+	}
+
+	if siblingRes := inventory.Discard(ctx, intentB.OperationID()); !siblingRes.Successful() {
+		t.Fatalf("sibling discard = %+v, want success", siblingRes)
+	}
+	badRes := inventory.Discard(ctx, intentA.OperationID())
+	if badRes.Successful() || badRes.Failure == nil || badRes.Failure.Kind != recovery.FailureNeedsAttention {
+		t.Fatalf("unsafe-lock discard = %+v, want FailureNeedsAttention", badRes)
+	}
+	if _, statErr := os.Stat(opDirA); statErr != nil {
+		t.Fatalf("unsafe-lock operation directory disappeared after refused discard: %v", statErr)
+	}
+}
+
 func openRunningConflictedNativeOperation(
 	t *testing.T,
 	ctx context.Context,
