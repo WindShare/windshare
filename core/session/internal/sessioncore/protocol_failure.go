@@ -40,11 +40,67 @@ func RequestProvenNotDelivered(err error) bool {
 	return protocolsession.IsNotSent(err)
 }
 
-func rpcDeliveryError(runtime *Runtime, notDelivered error, cause error) error {
-	if runtime.ctx.Err() != nil {
-		return errors.Join(notDelivered, cause, session.ErrRuntimeClosed, runtime.Err())
+// rpcDeliveryWrapper attaches a delivery sentinel as a single-child wrapper
+// instead of an errors.Join sibling so downstream classifiers peel pure benign
+// cancellations cleanly while still retaining genuine sibling faults.
+type rpcDeliveryWrapper struct {
+	sentinel error
+	cause    error
+}
+
+func (w *rpcDeliveryWrapper) Error() string {
+	return w.sentinel.Error() + ": " + w.cause.Error()
+}
+
+func (w *rpcDeliveryWrapper) Unwrap() error { return w.cause }
+
+func (w *rpcDeliveryWrapper) Is(target error) bool {
+	return target == w.sentinel
+}
+
+func joinNonNilErrors(errs ...error) error {
+	var single error
+	var multiple []error
+	for _, err := range errs {
+		if err == nil {
+			continue
+		}
+		if single == nil && len(multiple) == 0 {
+			single = err
+			continue
+		}
+		if len(multiple) == 0 {
+			multiple = append(multiple, single, err)
+			single = nil
+			continue
+		}
+		multiple = append(multiple, err)
 	}
-	return errors.Join(notDelivered, cause)
+	if len(multiple) > 0 {
+		return errors.Join(multiple...)
+	}
+	return single
+}
+
+func rpcDeliveryError(runtime *Runtime, notDelivered error, cause error, runtimeClosed bool) error {
+	if runtimeClosed {
+		cause = joinNonNilErrors(cause, session.ErrRuntimeClosed, runtime.Err())
+	}
+	if cause == nil {
+		return notDelivered
+	}
+	return &rpcDeliveryWrapper{sentinel: notDelivered, cause: cause}
+}
+
+func rpcUncertainDeliveryError(runtime *Runtime, notDelivered error, cause error, runtimeClosed bool) error {
+	if runtimeClosed {
+		cause = joinNonNilErrors(cause, session.ErrRuntimeClosed, runtime.Err())
+	}
+	cause = protocolsession.MarkSendUncertain(cause)
+	if cause == nil {
+		return protocolsession.MarkSendUncertain(notDelivered)
+	}
+	return &rpcDeliveryWrapper{sentinel: notDelivered, cause: cause}
 }
 
 func (runtime *Runtime) failRPCOperationAuthority() error {

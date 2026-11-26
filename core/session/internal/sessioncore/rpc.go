@@ -219,14 +219,12 @@ func (client *Requests) BeginCall(
 	if protocolsession.IsNotSent(err) {
 		call.recordProtocolTraceSend(sessionobs.SendStatusNotSent)
 		call.RecordTraceFailure(err)
-		if client.runtime.ctx.Err() != nil {
+		runtimeClosed := client.runtime.ctx.Err() != nil
+		if runtimeClosed {
 			call.RecordTraceFailure(session.ErrRuntimeClosed)
 		}
 		client.End(call)
-		if client.runtime.ctx.Err() == nil && isPreAdmissionContextErr(ctx, err) {
-			return ctx.Err()
-		}
-		return protocolsession.MarkNotSent(rpcDeliveryError(client.runtime, errRequestNotDelivered, err))
+		return protocolsession.MarkNotSent(rpcDeliveryError(client.runtime, errRequestNotDelivered, err, runtimeClosed))
 	}
 	// Uncertain physical send: the operation remains admitted in operationTable.
 	call.recordProtocolTraceSend(sessionobs.SendStatusUncertain)
@@ -238,12 +236,15 @@ func (client *Requests) BeginCall(
 		return nil
 	}
 	cleanupErr := client.admitCancellation(call, contentflow.CancelReasonTimeout)
-	deliveryErr := rpcDeliveryError(client.runtime, errRequestNotDelivered, errors.Join(err, cleanupErr))
 	call.RecordTraceFailure(err)
 	call.RecordTraceCleanup(cleanupErr)
-	if client.runtime.ctx.Err() != nil {
+	runtimeClosed := client.runtime.ctx.Err() != nil
+	if runtimeClosed {
 		call.RecordTraceFailure(session.ErrRuntimeClosed)
 	}
+	deliveryErr := rpcUncertainDeliveryError(
+		client.runtime, errRequestNotDelivered, joinNonNilErrors(err, cleanupErr), runtimeClosed,
+	)
 	client.End(call)
 	return deliveryErr
 }
@@ -381,9 +382,10 @@ func (client *Requests) deliverContinuation(
 		if !protocolsession.IsNotSent(sendErr) {
 			// Uncertain send: keep continuation recorded while attemptPin holds
 			// retention until laneWriter settles the in-flight frame.
-			return protocolsession.OperationDeliver, protocolsession.MarkSendUncertain(rpcDeliveryError(
-				client.runtime, errContinuationNotDelivered, errors.Join(retryCause, sendErr),
-			))
+			return protocolsession.OperationDeliver, rpcUncertainDeliveryError(
+				client.runtime, errContinuationNotDelivered,
+				joinNonNilErrors(retryCause, sendErr), client.runtime.ctx.Err() != nil,
+			)
 		}
 		if client.canRetryContinuation(ctx, attempt, sendErr) {
 			client.runtime.lanes.markSelectedClosing(selected)
@@ -391,12 +393,15 @@ func (client *Requests) deliverContinuation(
 			continue
 		}
 		lease.rollback()
-		return protocolsession.OperationDrop, rpcDeliveryError(
-			client.runtime, errContinuationNotDelivered, errors.Join(retryCause, sendErr),
-		)
+		return protocolsession.OperationDrop, protocolsession.MarkNotSent(rpcDeliveryError(
+			client.runtime, errContinuationNotDelivered,
+			joinNonNilErrors(retryCause, sendErr), client.runtime.ctx.Err() != nil,
+		))
 	}
 	lease.rollback()
-	return protocolsession.OperationDrop, errors.Join(retryCause, errContinuationNotDelivered)
+	return protocolsession.OperationDrop, protocolsession.MarkNotSent(rpcDeliveryError(
+		client.runtime, errContinuationNotDelivered, retryCause, client.runtime.ctx.Err() != nil,
+	))
 }
 
 func (client *Requests) canRetryContinuation(ctx context.Context, attempt int, sendErr error) bool {
@@ -608,17 +613,6 @@ func (client *Requests) enqueueBestEffortCancel(call *Call, message protocolsess
 		}
 		return
 	}
-}
-
-func isPreAdmissionContextErr(ctx context.Context, err error) bool {
-	if ctx == nil {
-		return false
-	}
-	ctxErr := ctx.Err()
-	if ctxErr != context.Canceled && ctxErr != context.DeadlineExceeded {
-		return false
-	}
-	return err == ctxErr || errors.Unwrap(err) == ctxErr //nolint:errorlint // Only an exact pre-admission context leaf (optionally tagged NotSent) aligns with PrepareCall.
 }
 
 func retryableLaneFailure(err error) bool {

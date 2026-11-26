@@ -43,6 +43,11 @@ type candidateTransactionPipe struct {
 	closed [2]bool
 }
 
+type candidateTransactionSendHold struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
 type candidateTransactionChannel struct {
 	pipe  *candidateTransactionPipe
 	index int
@@ -51,6 +56,7 @@ type candidateTransactionChannel struct {
 	deliveredFailures atomic.Int64
 	failureMu         sync.Mutex
 	nextDeliveredErr  error
+	holdNextSend      *candidateTransactionSendHold
 }
 
 func newCandidateTransactionChannelPair() (*candidateTransactionChannel, *candidateTransactionChannel) {
@@ -66,7 +72,26 @@ func (channel *candidateTransactionChannel) armNextDeliveredSendError(err error)
 	channel.failureMu.Unlock()
 }
 
+func (channel *candidateTransactionChannel) armNextSendHold() *candidateTransactionSendHold {
+	hold := &candidateTransactionSendHold{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	channel.failureMu.Lock()
+	channel.holdNextSend = hold
+	channel.failureMu.Unlock()
+	return hold
+}
+
 func (channel *candidateTransactionChannel) Send(ctx context.Context, frame framechannel.Frame) error {
+	channel.failureMu.Lock()
+	hold := channel.holdNextSend
+	channel.holdNextSend = nil
+	channel.failureMu.Unlock()
+	if hold != nil {
+		close(hold.entered)
+		<-hold.release
+	}
 	channel.pipe.mu.Lock()
 	defer channel.pipe.mu.Unlock()
 	target := 1 - channel.index
@@ -124,12 +149,13 @@ func (channel *candidateTransactionChannel) Close() error {
 }
 
 type candidateRuntimeHarness struct {
-	ctx               context.Context
-	factory           *sendersession.Factory
-	receiver          *receiversession.Runtime
-	sender            *sendersession.Runtime
-	senderPeer        *testPeerConnection
-	initialSenderLane *candidateTransactionChannel
+	ctx                 context.Context
+	factory             *sendersession.Factory
+	receiver            *receiversession.Runtime
+	sender              *sendersession.Runtime
+	senderPeer          *testPeerConnection
+	initialSenderLane   *candidateTransactionChannel
+	initialReceiverLane *candidateTransactionChannel
 }
 
 func newCandidateRuntimeHarness(t *testing.T, maxCandidates int) *candidateRuntimeHarness {
@@ -218,7 +244,7 @@ func newCandidateRuntimeHarness(t *testing.T, maxCandidates int) *candidateRunti
 	t.Cleanup(acceptedResult.runtime.Close)
 	return &candidateRuntimeHarness{
 		ctx: ctx, factory: runtimeFactory, receiver: receiverRuntime, sender: acceptedResult.runtime,
-		senderPeer: senderPeer, initialSenderLane: initialSenderLane,
+		senderPeer: senderPeer, initialSenderLane: initialSenderLane, initialReceiverLane: initialReceiverLane,
 	}
 }
 
@@ -427,6 +453,192 @@ func TestReceiverCandidateConcurrentAuthenticatedIngressChargesSenderOnce(t *tes
 	if senderErr, receiverErr := harness.sender.Err(), harness.receiver.Err(); senderErr != nil || receiverErr != nil {
 		t.Fatalf("authenticated ingress damaged runtime health sender=%v receiver=%v", senderErr, receiverErr)
 	}
+}
+
+func TestReceiverSignalingDeliveryCancellationAvoidsUnknownCause(t *testing.T) {
+	t.Run("OpenPeerOperation queued and in-flight cancels stay benign", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			harness := newCandidateRuntimeHarness(t, 2)
+			hold := harness.initialReceiverLane.armNextSendHold()
+			var releaseOnce sync.Once
+			release := func() { releaseOnce.Do(func() { close(hold.release) }) }
+			defer release()
+
+			receiverFactory, err := newTestReceiverFactory(t, ReceiverFactoryConfig{
+				MaxCandidates: 2,
+				PeerConnections: ReceiverPeerConnectionFactoryFunc(func(pion.Configuration) (ReceiverPeerConnection, error) {
+					return newReceiverTestPeerConnection(), nil
+				}),
+				DataChannels: DataChannelAdapterFunc(func(*pion.DataChannel) (PeerDataChannel, error) {
+					return newReceiverTestChannel(), nil
+				}),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			signaling, err := NewRuntimeReceiverSignaling(harness.receiver)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			attemptCtx, cancelAttempt := context.WithCancel(harness.ctx)
+			defer cancelAttempt()
+			attempt, err := receiverFactory.Start(attemptCtx, signaling, harness.receiver, testPeerSlot(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = attempt.Close() }()
+			<-hold.entered
+
+			queuedBinding := testBinding(149)
+			queuedBinding.PeerSlot = 1
+			queuedOfferBody, err := v2signal.EncodeOffer(v2signal.Offer{
+				Binding: queuedBinding,
+				SDP:     "v=0\r\ns=queued-open-cancel\r\n",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			queuedCtx, cancelQueued := context.WithCancel(harness.ctx)
+			queuedErrCh := make(chan error, 1)
+			go func() {
+				_, openErr := harness.receiver.OpenPeerOperation(queuedCtx, queuedOfferBody)
+				queuedErrCh <- openErr
+			}()
+			synctest.Wait()
+			cancelQueued()
+			queuedErr := <-queuedErrCh
+			if !errors.Is(queuedErr, context.Canceled) || !protocolsession.IsNotSent(queuedErr) {
+				t.Fatalf("queued OpenPeerOperation cancel = %v (notSent=%v), want NotSent Canceled",
+					queuedErr, protocolsession.IsNotSent(queuedErr))
+			}
+			queuedClassified := classifyReceiverCause(queuedErr, receiverCausePolicy{contextCanceled: true})
+			if queuedClassified.retained != nil || len(queuedClassified.classes) != 0 ||
+				!containsReceiverBenignCause(queuedClassified.benign, ReceiverBenignContextCanceled) {
+				t.Fatalf("queued OpenPeerOperation classification = %+v, want benign Canceled only", queuedClassified)
+			}
+
+			cancelAttempt()
+			<-attempt.Done()
+			outcome := attempt.Outcome()
+			if outcome.RetainedCause() != nil || len(outcome.RetainedCauseClasses()) != 0 ||
+				outcome.HasRetainedCauseClass(ReceiverCauseUnknown) ||
+				!containsReceiverBenignCause(outcome.BenignComponents(), ReceiverBenignContextCanceled) ||
+				!outcome.LocallyCanceled() {
+				t.Fatalf("in-flight OpenPeerOperation outcome = %+v (retained=%v classes=%v benign=%v)",
+					outcome, outcome.RetainedCause(), outcome.RetainedCauseClasses(), outcome.BenignComponents())
+			}
+
+			release()
+			synctest.Wait()
+		})
+	})
+
+	t.Run("SendCandidate queued and in-flight cancels stay benign", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			harness := newCandidateRuntimeHarness(t, 2)
+			binding := testBinding(150)
+			offerBody, err := v2signal.EncodeOffer(v2signal.Offer{
+				Binding: binding,
+				SDP:     "v=0\r\ns=candidate-cancel\r\n",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			operation, err := harness.receiver.OpenPeerOperation(harness.ctx, offerBody)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = operation.Terminate(harness.ctx) }()
+			if received := operation.Receive(harness.ctx); func() bool { _, ok := received.Control(); return !ok }() {
+				t.Fatalf("expected peer answer before candidate cancel, got %+v", received)
+			}
+
+			// Park the lane writer with an unrelated request so SendCandidate queues
+			// inside laneWriter rather than blocking on the operation's candidate gate.
+			blockerHold := harness.initialReceiverLane.armNextSendHold()
+			var releaseBlockerOnce sync.Once
+			releaseBlocker := func() { releaseBlockerOnce.Do(func() { close(blockerHold.release) }) }
+			defer releaseBlocker()
+			blockerBinding := testBinding(151)
+			blockerBinding.PeerSlot = 1
+			blockerBody, err := v2signal.EncodeOffer(v2signal.Offer{
+				Binding: blockerBinding,
+				SDP:     "v=0\r\ns=lane-park\r\n",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			blockerCtx, cancelBlocker := context.WithCancel(harness.ctx)
+			blockerDone := make(chan *receiversession.PeerOperation, 1)
+			go func() {
+				op, _ := harness.receiver.OpenPeerOperation(blockerCtx, blockerBody)
+				blockerDone <- op
+			}()
+			<-blockerHold.entered
+
+			_, queuedCandBody := testCandidate(t, binding, 152)
+			queuedCtx, cancelQueued := context.WithCancel(harness.ctx)
+			type sendResult struct {
+				disposition protocolsession.OperationDisposition
+				err         error
+			}
+			queuedResultCh := make(chan sendResult, 1)
+			go func() {
+				disposition, sendErr := operation.SendCandidate(queuedCtx, queuedCandBody)
+				queuedResultCh <- sendResult{disposition: disposition, err: sendErr}
+			}()
+			synctest.Wait()
+			cancelQueued()
+			queuedRes := <-queuedResultCh
+			if queuedRes.disposition != protocolsession.OperationDrop ||
+				!errors.Is(queuedRes.err, context.Canceled) || !protocolsession.IsNotSent(queuedRes.err) {
+				t.Fatalf("queued SendCandidate cancel = (%d, %v, notSent=%v)",
+					queuedRes.disposition, queuedRes.err, protocolsession.IsNotSent(queuedRes.err))
+			}
+			queuedClassified := classifyReceiverCause(queuedRes.err, receiverCausePolicy{contextCanceled: true})
+			if queuedClassified.retained != nil || len(queuedClassified.classes) != 0 ||
+				!containsReceiverBenignCause(queuedClassified.benign, ReceiverBenignContextCanceled) {
+				t.Fatalf("queued SendCandidate classification = %+v, want benign Canceled only", queuedClassified)
+			}
+
+			cancelBlocker()
+			releaseBlocker()
+			if blockerOp := <-blockerDone; blockerOp != nil {
+				_ = blockerOp.Terminate(harness.ctx)
+			}
+			synctest.Wait()
+
+			inFlightHold := harness.initialReceiverLane.armNextSendHold()
+			var releaseInFlightOnce sync.Once
+			releaseInFlight := func() { releaseInFlightOnce.Do(func() { close(inFlightHold.release) }) }
+			defer releaseInFlight()
+
+			_, inFlightCandBody := testCandidate(t, binding, 153)
+			inFlightCtx, cancelInFlight := context.WithCancel(harness.ctx)
+			inFlightResultCh := make(chan sendResult, 1)
+			go func() {
+				disposition, sendErr := operation.SendCandidate(inFlightCtx, inFlightCandBody)
+				inFlightResultCh <- sendResult{disposition: disposition, err: sendErr}
+			}()
+			<-inFlightHold.entered
+			cancelInFlight()
+			inFlightRes := <-inFlightResultCh
+			if inFlightRes.disposition != protocolsession.OperationDeliver ||
+				!errors.Is(inFlightRes.err, context.Canceled) || protocolsession.IsNotSent(inFlightRes.err) {
+				t.Fatalf("in-flight SendCandidate cancel = (%d, %v, notSent=%v)",
+					inFlightRes.disposition, inFlightRes.err, protocolsession.IsNotSent(inFlightRes.err))
+			}
+			inFlightClassified := classifyReceiverCause(inFlightRes.err, receiverCausePolicy{contextCanceled: true})
+			if inFlightClassified.retained != nil || len(inFlightClassified.classes) != 0 ||
+				!containsReceiverBenignCause(inFlightClassified.benign, ReceiverBenignContextCanceled) {
+				t.Fatalf("in-flight SendCandidate classification = %+v, want benign Canceled only", inFlightClassified)
+			}
+
+			releaseInFlight()
+			synctest.Wait()
+		})
+	})
 }
 
 func sourceBoundarySenderConfig(paths []string, config liveshare.SenderConfig) liveshare.SenderConfig {

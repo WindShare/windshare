@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/windshare/windshare/core/framechannel"
@@ -248,7 +249,8 @@ func TestRPCContinuationDoesNotRetryAdmittedUnknownAcrossLane(t *testing.T) {
 	select {
 	case sent := <-result:
 		if sent.disposition != protocolsession.OperationDeliver ||
-			!errors.Is(sent.err, context.Canceled) || !errors.Is(sent.err, errContinuationNotDelivered) {
+			!errors.Is(sent.err, context.Canceled) || !errors.Is(sent.err, errContinuationNotDelivered) ||
+			protocolsession.IsNotSent(sent.err) || singleChildLeaf(t, sent.err) != context.Canceled {
 			t.Fatalf("admitted unsettled continuation = disposition %d, error %v", sent.disposition, sent.err)
 		}
 	case <-time.After(continuationReplayTestTimeout):
@@ -265,6 +267,55 @@ func TestRPCContinuationDoesNotRetryAdmittedUnknownAcrossLane(t *testing.T) {
 			replayRetained, fixture.call.lane)
 	}
 	releaseOnce.Do(func() { close(releaseSend) })
+}
+
+func TestRPCContinuationQueuedCancelPreservesNotSentAndSingleChildLeaf(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		fixture := newContinuationReplayFixture(t, 104)
+		sendStarted := make(chan struct{})
+		releaseSend := make(chan struct{})
+		var sendStartedOnce sync.Once
+		var releaseOnce sync.Once
+		fixture.preferredChannel.onSend = func(framechannel.Frame) {
+			sendStartedOnce.Do(func() { close(sendStarted) })
+			<-releaseSend
+		}
+		startContinuationReplayWriter(t, fixture.preferred.writer)
+		defer releaseOnce.Do(func() { close(releaseSend) })
+
+		// Park the preferred writer on an unrelated in-flight request so the
+		// continuation queues in laneWriter without blocking on acquireCandidateSend.
+		parkCall, parkMsg, err := fixture.rpc.PrepareCall(context.Background(), protocolsession.MessageListChildren, []byte{0xa1, 0x00, 0x01})
+		if err != nil {
+			t.Fatal(err)
+		}
+		parkDone := make(chan error, 1)
+		go func() { parkDone <- fixture.rpc.BeginCall(context.Background(), &fixture.runtime.initial, parkCall, parkMsg) }()
+		<-sendStarted
+
+		ctx, cancel := context.WithCancel(context.Background())
+		result := make(chan continuationSendResult, 1)
+		go func() {
+			disposition, sendErr := fixture.rpc.SendContinuation(
+				ctx, fixture.call, protocolsession.MessagePeerCandidate, []byte{0xf6},
+			)
+			result <- continuationSendResult{disposition: disposition, err: sendErr}
+		}()
+		synctest.Wait()
+		cancel()
+
+		sent := <-result
+		if sent.disposition != protocolsession.OperationDrop ||
+			!errors.Is(sent.err, context.Canceled) || !errors.Is(sent.err, errContinuationNotDelivered) ||
+			!protocolsession.IsNotSent(sent.err) || singleChildLeaf(t, sent.err) != context.Canceled {
+			t.Fatalf("queued continuation cancel = (%d, %v, notSent=%v)",
+				sent.disposition, sent.err, protocolsession.IsNotSent(sent.err))
+		}
+		releaseOnce.Do(func() { close(releaseSend) })
+		if err := <-parkDone; err != nil {
+			t.Fatalf("parked BeginCall: %v", err)
+		}
+	})
 }
 
 type countingMemoryChannel struct {
