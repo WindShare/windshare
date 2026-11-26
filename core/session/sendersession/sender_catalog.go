@@ -101,6 +101,9 @@ func (handler *catalogHandler) Run(ctx context.Context) error {
 				continue
 			}
 			wait.Go(func() {
+				// Detach the per-operation child context from the long-lived session
+				// parent on completion instead of pinning it until session close.
+				defer cancel()
 				select {
 				case handler.workers <- struct{}{}:
 					defer func() { <-handler.workers }()

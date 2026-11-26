@@ -177,6 +177,9 @@ func (h *SenderHandler) Run(ctx context.Context) error {
 				continue
 			}
 			operations.Go(func() {
+				// Detach the per-operation child context from the long-lived session
+				// parent on completion instead of pinning it until session close.
+				defer cancel()
 				select {
 				case h.workers <- struct{}{}:
 					defer func() { <-h.workers }()
