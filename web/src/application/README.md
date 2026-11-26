@@ -7,5 +7,6 @@ active transfers, and retained browser downloads over `output/`.
 `diagnostics/` connects runtime observations to the diagnostic bundle exporter.
 
 The dependency boundary gate keeps `application/`, `transfer/`, and `output/`
-independent of UI/React, keeps `transfer/` independent of `output/`, and limits
-UI imports from `output/` to pure types in `output/model/`.
+independent of UI/React, keeps `transfer/` independent of `output/`, limits
+non-network reusable modules to `network/contracts/`, and limits UI imports
+from `output/` and `network/` to `output/model/` and `network/contracts/`.

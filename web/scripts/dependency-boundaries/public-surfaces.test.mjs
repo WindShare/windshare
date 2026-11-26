@@ -9,8 +9,10 @@ import { BOUNDARY_POLICIES } from './policies.mjs'
 
 const presentation = BOUNDARY_POLICIES.find(policy => policy.roots.includes('ui'))
 const model = BOUNDARY_POLICIES.find(policy => policy.roots.includes('output/model'))
-const wireContracts = BOUNDARY_POLICIES.find(policy => policy.name === 'wire contracts do not depend on runtime implementations')
-const sessions = BOUNDARY_POLICIES.find(policy => policy.roots.length === 1 && policy.roots[0] === 'session')
+const pureContracts = BOUNDARY_POLICIES.find(policy =>
+  policy.name === 'pure contracts and security primitives do not depend on runtime implementations')
+const networkContracts = BOUNDARY_POLICIES.find(policy =>
+  policy.name === 'reusable layers outside network only depend on network contracts')
 
 test('a scoped public subtree permits facts without broad prefix matches', () => {
   const policy = {
@@ -113,23 +115,28 @@ test('resolved aliases, inline types, re-exports and dynamic imports obey the sa
   }
 })
 
-test('wire contracts permit network contracts while denying network runtime and preview by default', () => {
+test('pure contracts and security primitives reject runtime implementations and diagnostics', () => {
   assert.deepEqual(findBoundaryViolations(new Map([
     ['protocol/turn-control.ts', ['network/contracts/stun-endpoint.ts']],
     ['crypto/suite02-link.ts', ['network/contracts/alias.ts']],
     ['network/contracts/stun-endpoint.ts', ['network/contracts/relay-endpoint.ts']],
     ['network/contracts/relay-endpoint.ts', ['crypto/suite02-link.ts', 'security/url-sanitizer.ts']],
     ['network/contracts/alias.ts', []],
+    ['security/capability-redactor.ts', ['security/diagnostic-formatter.ts']],
+    ['security/diagnostic-formatter.ts', ['security/url-sanitizer.ts']],
     ['security/url-sanitizer.ts', []],
-  ]), wireContracts), [])
+  ]), pureContracts), [])
 
-  for (const root of ['protocol/turn-control.ts', 'crypto/suite02-link.ts', 'network/contracts/node-directory.ts']) {
-    for (const dependency of ['network/directory.ts', 'network/directory-cache.ts', 'network/future-runtime.ts', 'preview/preview.ts']) {
+  for (const root of [
+    'protocol/turn-control.ts', 'crypto/suite02-link.ts',
+    'network/contracts/node-directory.ts', 'security/capability-redactor.ts',
+  ]) {
+    for (const dependency of ['diagnostics/runtime.ts', 'output/store/database.ts', 'preview/preview.ts']) {
       assert.deepEqual(findBoundaryViolations(new Map([
         [root, ['network/contracts/barrel.ts']],
         ['network/contracts/barrel.ts', [dependency]],
         [dependency, []],
-      ]), wireContracts), [
+      ]), pureContracts), [
         [root, 'network/contracts/barrel.ts', dependency],
         ['network/contracts/barrel.ts', dependency],
       ])
@@ -137,15 +144,63 @@ test('wire contracts permit network contracts while denying network runtime and 
   }
 })
 
-test('sessions and output models reject private network runtime paths', () => {
-  for (const [policy, root] of [[sessions, 'session/runtime.ts'], [model, 'output/model/offers.ts']]) {
+test('reusable layers outside network permit network contracts while rejecting network runtime I/O', () => {
+  assert.deepEqual(findBoundaryViolations(new Map([
+    ['network/directory.ts', ['network/directory-cache.ts', 'network/contracts/node-directory.ts']],
+    ['network/directory-cache.ts', ['network/contracts/node-directory.ts']],
+    ['network/contracts/node-directory.ts', ['security/url-sanitizer.ts']],
+    ['security/url-sanitizer.ts', []],
+  ]), networkContracts), [])
+
+  for (const root of [
+    'protocol/turn-control.ts', 'crypto/suite02-link.ts', 'network/contracts/node-directory.ts',
+    'security/capability-redactor.ts', 'session/runtime.ts', 'output/model/offers.ts',
+    'output/store/database.ts', 'transfer/job.ts', 'catalog/client.ts', 'content/broker.ts',
+    'preview/preview.ts', 'connectivity/ice-policy/defaults.ts', 'receiver/browser-join.ts',
+    'transport/relay/endpoint.ts',
+  ]) {
     assert.deepEqual(findBoundaryViolations(new Map([
       [root, ['network/contracts/alias.ts']],
       ['network/contracts/alias.ts', []],
-    ]), policy), [])
-    assert.deepEqual(findBoundaryViolations(new Map([
-      [root, ['network/directory.ts']],
-      ['network/directory.ts', []],
-    ]), policy), [[root, 'network/directory.ts']])
+    ]), networkContracts), [])
+
+    for (const dependency of ['network/directory.ts', 'network/directory-cache.ts', 'network/future-runtime.ts']) {
+      assert.deepEqual(findBoundaryViolations(new Map([
+        [root, ['network/contracts/barrel.ts']],
+        ['network/contracts/barrel.ts', [dependency]],
+        [dependency, []],
+      ]), networkContracts), [
+        [root, 'network/contracts/barrel.ts', dependency],
+        ['network/contracts/barrel.ts', dependency],
+      ])
+    }
   }
+})
+
+test('presentation delegates network runtime ownership while allowing network contracts', () => {
+  assert.deepEqual(findBoundaryViolations(new Map([
+    ['ui/controller/share-report.ts', ['application/network/report.ts', 'network/contracts/relay-endpoint.ts']],
+    ['application/network/report.ts', ['network/directory.ts']],
+    ['network/contracts/relay-endpoint.ts', ['security/url-sanitizer.ts']],
+    ['network/directory.ts', ['network/directory-cache.ts']],
+    ['network/directory-cache.ts', []],
+    ['security/url-sanitizer.ts', []],
+  ]), presentation), [])
+
+  for (const dependency of [
+    'network/directory.ts', 'network/directory-cache.ts',
+    'network/future-runtime.ts', 'network/contracts-private/cache.ts', 'network/contracts.ts',
+  ]) {
+    assert.deepEqual(findBoundaryViolations(new Map([['ui/view.ts', [dependency]]]), presentation), [
+      ['ui/view.ts', dependency],
+    ])
+  }
+
+  assert.deepEqual(findBoundaryViolations(new Map([
+    ['ui/view.ts', ['network/contracts/barrel.ts']],
+    ['network/contracts/barrel.ts', ['network/directory.ts']],
+    ['network/directory.ts', []],
+  ]), presentation), [
+    ['ui/view.ts', 'network/contracts/barrel.ts', 'network/directory.ts'],
+  ])
 })

@@ -39,6 +39,22 @@ test('network modules cannot depend on application or React', () => {
   }
 })
 
+test('security stays decoupled from diagnostics and runtime layers while diagnostics may call security', () => {
+  assert.deepEqual(violations([
+    ['diagnostics/runtime.ts', ['security/diagnostic-formatter.ts', 'crypto/bytes.ts']],
+    ['security/diagnostic-formatter.ts', ['security/url-sanitizer.ts']],
+    ['security/url-sanitizer.ts', []],
+    ['crypto/bytes.ts', []],
+  ]), [])
+
+  for (const target of ['diagnostics/runtime.ts', 'network/directory.ts', 'output/store/database.ts', 'session/runtime.ts']) {
+    assert.ok(violations([
+      ['security/capability-redactor.ts', [target]],
+      [target, []],
+    ]).some(chain => chain[0] === 'security/capability-redactor.ts' && chain.at(-1) === target))
+  }
+})
+
 test('protocol sessions and wire codecs cannot reach connectivity implementations', () => {
   for (const root of ['session/runtime.ts', 'protocol/peer-path-control.ts']) {
     assert.ok(violations([
