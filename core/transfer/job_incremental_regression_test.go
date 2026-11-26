@@ -97,7 +97,7 @@ func (*duplicatePageCursor) Close() error { return nil }
 
 func TestNodeLedgerRollbackReleasesOnlyDiscardedSuffix(t *testing.T) {
 	root := transferID[catalog.DirectoryID](197)
-	run, err := newJobRun(&TransferJob{root: root})
+	run, err := newJobRun(&TransferJob{root: root}, context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

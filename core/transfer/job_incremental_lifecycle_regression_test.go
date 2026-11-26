@@ -611,7 +611,7 @@ func TestTransferJobSelectionResolutionSurvivesSaturatedDiagnostics(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	run, err := newJobRun(job)
+	run, err := newJobRun(job, context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

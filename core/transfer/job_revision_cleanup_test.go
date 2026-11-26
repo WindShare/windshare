@@ -3,11 +3,13 @@ package transfer
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/transfer/fault"
 )
@@ -260,6 +262,222 @@ func TestCanceledTransferRelinquishesRevisionWithoutWaitingForSettlementTimeout(
 			}
 			if fault.ContextCause(releaseCtx) != nil {
 				t.Fatalf("leaked sibling boundary error: %v", fault.ContextCause(releaseCtx))
+			}
+		})
+	})
+}
+
+type gatedDirectoryCatalog struct {
+	CatalogReader
+	gateDir catalog.DirectoryID
+	ready   <-chan struct{}
+}
+
+func (c gatedDirectoryCatalog) OpenDirectoryPages(
+	ctx context.Context,
+	directory catalog.DirectoryID,
+) (catalog.DirectoryPageCursor, error) {
+	if directory == c.gateDir {
+		select {
+		case <-c.ready:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return c.CatalogReader.OpenDirectoryPages(ctx, directory)
+}
+
+type blockingUntilCanceledRangeReader struct {
+	once    sync.Once
+	entered chan struct{}
+}
+
+func (r *blockingUntilCanceledRangeReader) ReadRange(
+	ctx context.Context,
+	_ RevisionHandle,
+	_ content.FileRevisionDescriptor,
+	_ content.Range,
+	_ RangeSink,
+) error {
+	r.once.Do(func() { close(r.entered) })
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestDiscoveryFailureReleasesActiveRevisionWithLiveCallerContext(t *testing.T) {
+	newDiscoveryFailureJob := func(
+		t *testing.T,
+		seed byte,
+		childFailure error,
+		admitFailure error,
+		onRelease func(context.Context, RevisionHandle) error,
+	) (*TransferJob, *jobRevisionClient, catalog.FileID, RevisionHandle) {
+		t.Helper()
+		share := transferID[catalog.ShareInstance](seed)
+		root := transferID[catalog.DirectoryID](seed + 1)
+		child := transferID[catalog.DirectoryID](seed + 2)
+		file := transferID[catalog.FileID](seed + 3)
+		handle := transferID[RevisionHandle](seed + 4)
+		descriptor := jobDescriptor(t, share, file, 1, uint64(catalog.MinChunkSize))
+		opened, err := NewOpenedRevision(handle, descriptor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rules, err := NewSelectionRules(true, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		snapshots := map[catalog.DirectoryID]catalog.DirectorySnapshot{
+			root: jobSnapshot(
+				t, share, root, 1,
+				jobEntry(t, file, "active.bin", uint64(catalog.MinChunkSize)),
+				jobDirectoryEntry(t, child, "child"),
+			),
+		}
+		failures := make(map[catalog.DirectoryID]error)
+		if childFailure != nil {
+			failures[child] = childFailure
+		} else {
+			snapshots[child] = jobSnapshot(t, share, child, 2)
+		}
+		output := newJobOutput(share)
+		if admitFailure != nil {
+			output.ensureFailures = map[string]error{"windshare/child": admitFailure}
+		}
+		revisions := &jobRevisionClient{
+			opened:   map[catalog.FileID]OpenedRevision{file: opened},
+			failures: make(map[catalog.FileID]error),
+		}
+		workerEntered := make(chan struct{})
+		job, err := newTestTransferJob(t, testTransferJobConfig{
+			ShareInstance: share, SyntheticRoot: root, Rules: rules,
+			Catalog: gatedDirectoryCatalog{
+				CatalogReader: failingCatalog{snapshots: snapshots, failures: failures},
+				gateDir:       child,
+				ready:         workerEntered,
+			},
+			Revisions: blockingReleaseRevisionClient{
+				jobRevisionClient: revisions,
+				onRelease:         onRelease,
+			},
+			Blocks:            &blockingUntilCanceledRangeReader{entered: workerEntered},
+			Materializer:      output,
+			SettlementTimeout: DefaultOutputSettlementTimeout,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return job, revisions, file, handle
+	}
+
+	t.Run("catalog integrity failure against live session sends release without caller interruption", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			var releaseCtxErr error
+			var releaseHasDeadline bool
+			job, revisions, file, handle := newDiscoveryFailureJob(
+				t, 0xa0,
+				catalogIntegrityFailure(ErrCatalogIdentity),
+				nil,
+				func(releaseCtx context.Context, _ RevisionHandle) error {
+					releaseCtxErr = releaseCtx.Err()
+					_, releaseHasDeadline = releaseCtx.Deadline()
+					return nil
+				},
+			)
+			stream := newTestDiagnosticsStream(t)
+			job.diagnostics = stream.Sink()
+
+			result := job.Run(context.Background())
+			if releaseCtxErr != nil || !releaseHasDeadline {
+				t.Fatalf("release ctx err=%v hasDeadline=%t, want live bounded context", releaseCtxErr, releaseHasDeadline)
+			}
+			wantFault := mustCatalogFault(fault.ScopeSessionTerminal, fault.CatalogInvalidGeneration)
+			if result.Outcome != DirectTreeOutcomePaused || result.TerminationFault != wantFault ||
+				result.TerminationInterruption != 0 || len(revisions.released) != 1 || revisions.released[0] != handle ||
+				len(result.RevisionCleanupFailures) != 0 {
+				t.Fatalf("result=%+v released=%v", result, revisions.released)
+			}
+			var cleanupRec diagnostics.Record
+			for _, rec := range drainTestDiagnostics(stream) {
+				if rec.Payload().Get("stage").Text() == TransferRevisionCleanupSettled.DiagnosticName() {
+					cleanupRec = rec
+				}
+			}
+			if !cleanupRec.Valid() || cleanupRec.Payload().Get("failed").Bool() ||
+				cleanupRec.Payload().Get("file_id").Text() != diagnostics.Identity(file.Bytes()).Text() {
+				t.Fatalf("cleanup trace=%+v", cleanupRec)
+			}
+		})
+	})
+
+	t.Run("output admission failure keeps release live until outer caller cancels", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			releaseEntered := make(chan struct{})
+			var initialReleaseErr error
+			admitErr := outputFailure(fault.ScopeOutputPause, fault.OutputStateIO, errors.New("disk full"))
+			job, revisions, file, handle := newDiscoveryFailureJob(
+				t, 0xb0,
+				nil,
+				admitErr,
+				func(releaseCtx context.Context, _ RevisionHandle) error {
+					initialReleaseErr = releaseCtx.Err()
+					close(releaseEntered)
+					<-releaseCtx.Done()
+					return releaseCtx.Err()
+				},
+			)
+
+			done := make(chan JobResult, 1)
+			go func() { done <- job.Run(ctx) }()
+			<-releaseEntered
+			started := time.Now()
+			cancel()
+			result := <-done
+			if elapsed := time.Since(started); elapsed >= time.Second {
+				t.Fatalf("caller cancel mid-release stalled for %v", elapsed)
+			}
+			if initialReleaseErr != nil {
+				t.Fatalf("release ctx started canceled before caller cancel: %v", initialReleaseErr)
+			}
+			if result.Outcome != DirectTreeOutcomePaused ||
+				result.TerminationFault != mustOutputFault(fault.ScopeOutputPause, fault.OutputStateIO) ||
+				len(revisions.released) != 1 || revisions.released[0] != handle ||
+				len(result.RevisionCleanupFailures) != 1 ||
+				result.RevisionCleanupFailures[0].FileID != file ||
+				result.RevisionCleanupFailures[0].Interruption != TransferInterruptionCanceled {
+				t.Fatalf("result=%+v released=%v", result, revisions.released)
+			}
+		})
+	})
+
+	t.Run("dead session reports transport cleanup fault instead of fabricated caller cancellation", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			var releaseCtxErr error
+			transportErr := sessionTransportFailure(errors.New("session closed"))
+			job, revisions, file, handle := newDiscoveryFailureJob(
+				t, 0xc0,
+				transportErr,
+				nil,
+				func(releaseCtx context.Context, _ RevisionHandle) error {
+					releaseCtxErr = releaseCtx.Err()
+					return sessionTransportFailure(errors.New("runtime closed"))
+				},
+			)
+
+			result := job.Run(context.Background())
+			if releaseCtxErr != nil {
+				t.Fatalf("release ctx err=%v, want nil (session failure should come from client)", releaseCtxErr)
+			}
+			wantFault := mustSessionFault(fault.ScopeSessionTerminal, fault.SessionTransport)
+			if result.Outcome != DirectTreeOutcomePaused || result.TerminationFault != wantFault ||
+				len(revisions.released) != 1 || revisions.released[0] != handle ||
+				len(result.RevisionCleanupFailures) != 1 ||
+				result.RevisionCleanupFailures[0].FileID != file ||
+				result.RevisionCleanupFailures[0].Fault != wantFault ||
+				result.RevisionCleanupFailures[0].Interruption != 0 {
+				t.Fatalf("result=%+v released=%v", result, revisions.released)
 			}
 		})
 	})

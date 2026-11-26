@@ -178,7 +178,11 @@ func (r *jobRun) rejectCommitSettlement(
 }
 
 func (r *jobRun) releaseRevision(ctx context.Context, plan plannedFile, lease RevisionHandle) {
-	releaseContext, cancel := r.job.newRevisionReleaseContext(ctx)
+	parent := r.callerCtx
+	if parent == nil {
+		parent = ctx
+	}
+	releaseContext, cancel := r.job.newRevisionReleaseContext(parent)
 	rawReleaseErr := r.job.revisions.ReleaseRevision(releaseContext, lease)
 	var err error
 	if rawReleaseErr != nil {
@@ -341,9 +345,11 @@ func (j *TransferJob) newSettlementContext(parent context.Context) (context.Cont
 }
 
 // Unlike local output settlement (which strips cancellation to protect durable
-// checkpoints), remote lease release must follow caller cancellation so a
-// canceled run relinquishes local ownership without stalling on remote RPCs.
-// Stripping parent cancel causes keeps sibling BoundaryError failures from
+// checkpoints), remote lease release follows the outer caller context so a
+// canceled run relinquishes local ownership without stalling on remote RPCs,
+// while internal discovery failures against a live session still send a bounded
+// RELEASE_LEASE without fabricating TransferInterruptionCanceled.
+// Stripping parent cancel causes keeps custom caller or sibling causes from
 // being misattributed to revision cleanup diagnostics without duplicating
 // parent's deadline timer.
 func (j *TransferJob) newRevisionReleaseContext(parent context.Context) (context.Context, context.CancelFunc) {

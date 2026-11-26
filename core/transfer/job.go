@@ -366,7 +366,7 @@ func (j *TransferJob) Run(ctx context.Context) JobResult {
 
 	runContext, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
-	state, err := newJobRun(j)
+	state, err := newJobRun(j, ctx)
 	if err != nil {
 		failure := fault.DependencyContract(err)
 		j.failUnstartedDiscovery()

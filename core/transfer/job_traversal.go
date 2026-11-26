@@ -242,7 +242,10 @@ func newNodeIdentityLedger(limit int) (nodeIdentityLedger, error) {
 }
 
 type jobRun struct {
-	job                            *TransferJob
+	job *TransferJob
+	// callerCtx retains the outer Run(ctx) authority so remote lease release
+	// follows caller cancellation/deadlines rather than internal runContext stops.
+	callerCtx                      context.Context
 	output                         DirectTreeSession
 	failureMu                      sync.Mutex
 	directories                    []DirectoryJobFailure
@@ -276,7 +279,7 @@ type jobRun struct {
 	opaqueSelectionEvidence map[catalog.DirectoryID]opaqueSelectionEvidence
 }
 
-func newJobRun(job *TransferJob) (*jobRun, error) {
+func newJobRun(job *TransferJob, callerCtx context.Context) (*jobRun, error) {
 	if job == nil || job.root.IsZero() {
 		return nil, ErrNodeLedgerState
 	}
@@ -286,6 +289,7 @@ func newJobRun(job *TransferJob) (*jobRun, error) {
 	}
 	run := &jobRun{
 		job:                    job,
+		callerCtx:              callerCtx,
 		matchedPaths:           make(map[string]struct{}),
 		matchedDirectories:     make(map[catalog.DirectoryID]struct{}),
 		matchedFiles:           make(map[catalog.FileID]struct{}),
