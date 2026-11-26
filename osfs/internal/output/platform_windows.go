@@ -38,8 +38,8 @@ const (
 	windowsTicksPerSecond           = int64(10_000_000)
 	windowsNanosPerTick             = int64(100)
 	windowsFiletimeEpochUnixSeconds = int64(-11_644_473_600) // 1601-01-01T00:00:00Z
-	windowsFiletimeMaxUnixSeconds   = int64(math.MaxInt64/windowsTicksPerSecond) + windowsFiletimeEpochUnixSeconds
-	windowsFiletimeMaxSubsecTicks   = int64(math.MaxInt64 % windowsTicksPerSecond)
+	windowsFiletimeMaxUnixSeconds   = math.MaxInt64/windowsTicksPerSecond + windowsFiletimeEpochUnixSeconds
+	windowsFiletimeMaxSubsecTicks   = math.MaxInt64 % windowsTicksPerSecond
 )
 
 type fileAttributeTagInfo struct {
@@ -468,8 +468,8 @@ func mkdirChild(parent *Dir, name string, _ fs.FileMode) error {
 		if isNativeNameRefusal(err) {
 			return errors.Join(ErrNameRejected, err)
 		}
-		if mapped := mapCollision(err); errors.Is(mapped, ErrNamespaceCollision) {
-			return mapped
+		if errors.Is(err, fs.ErrExist) {
+			return errors.Join(ErrNamespaceCollision, err)
 		}
 		return wrapAtError("mkdirat", parent, name, err, false)
 	}

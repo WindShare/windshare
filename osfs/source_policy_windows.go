@@ -281,8 +281,8 @@ func windowsExtendedPath(path string) string {
 	if strings.HasPrefix(clean, `\\?\`) || strings.HasPrefix(clean, `\??\`) || strings.HasPrefix(clean, `\\.\`) {
 		return clean
 	}
-	if strings.HasPrefix(clean, `\\`) {
-		return `\\?\UNC\` + strings.TrimPrefix(clean, `\\`)
+	if rest, ok := strings.CutPrefix(clean, `\\`); ok {
+		return `\\?\UNC\` + rest
 	}
 	if len(clean) >= 3 && clean[1] == ':' && clean[2] == '\\' {
 		return `\\?\` + clean

@@ -509,15 +509,6 @@ func v5TraceBoolField(t *testing.T, object map[string]json.RawMessage, field str
 	return value
 }
 
-func v5TraceIntegerField(t *testing.T, object map[string]json.RawMessage, field string) uint64 {
-	t.Helper()
-	raw, present := object[field]
-	if !present {
-		t.Fatalf("user trace is missing %q", field)
-	}
-	return v5TraceIntegerRaw(t, raw, field)
-}
-
 func v5TraceIntegerRaw(t *testing.T, raw json.RawMessage, context string) uint64 {
 	t.Helper()
 	var value json.Number

@@ -34,11 +34,11 @@ func TestReceiveTaskCompletionReportsDroppedObservationsInTraceSummary(t *testin
 	}
 	runtime.diagnosticSink().Lost("protocol", 5)
 	result := engine.TaskResult[engine.ReceiveResult]{
+		Outcome:      engine.OutcomeFailed,
+		FailureClass: engine.FailureLocal,
+		Err:          engine.ReceiveFailure{Code: engine.ReceiveFailureInvalidInput},
 		Observations: observationstream.Completion{CapacityDropped: 7},
 	}
-	result.Outcome = engine.OutcomeFailed
-	result.FailureClass = engine.FailureLocal
-	result.Err = engine.ReceiveFailure{Code: engine.ReceiveFailureInvalidInput}
 	if code := app.reportReceiveTask(result, receiveSelection{}, runtime, nil); code != ExitFailure {
 		t.Fatalf("exit=%d", code)
 	}

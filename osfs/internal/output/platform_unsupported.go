@@ -25,7 +25,6 @@ func mkdirChild(*Dir, string, fs.FileMode) error                 { return ErrUns
 func removeChild(*Dir, string, bool) error                       { return ErrUnsupportedOutput }
 func readDirNames(*Dir) ([]string, error)                        { return nil, ErrUnsupportedOutput }
 func validateNativeName(string) error                            { return ErrUnsupportedOutput }
-func isNativeNameRefusal(error) bool                             { return false }
 func entryMatchesSpelling(*Dir, string) (bool, error)            { return false, ErrUnsupportedOutput }
 func syncDir(*os.File) error                                     { return ErrUnsupportedOutput }
 func setFileModifiedTime(*os.File, time.Time) error              { return ErrUnsupportedOutput }

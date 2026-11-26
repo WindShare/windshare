@@ -455,8 +455,8 @@ func (runtime *Runtime) bindRevisionAccess() error {
 		return err
 	}
 	source := receiverLeaseDependencies{
-		receiverTransferDependencies: receiverTransferDependencies{runtime: runtime},
-		emitCapacitySignal:           true,
+		runtime:            runtime,
+		emitCapacitySignal: true,
 	}
 	runtime.access = revisionaccess.New(runtime.Lifetime(), source)
 	return runtime.core.AddFinalizer(runtime.releaseOwnedResources)

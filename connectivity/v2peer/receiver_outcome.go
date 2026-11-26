@@ -307,14 +307,12 @@ func newReceiverAttemptOutcome(
 	diagnosticsTruncated bool,
 ) ReceiverAttemptOutcome {
 	return ReceiverAttemptOutcome{
-		receiverTerminalMetadata: receiverTerminalMetadata{
-			operationID: operationID, localGeneration: localGeneration,
-			decision:             decision,
-			benignComponents:     append([]ReceiverBenignCause(nil), benign...),
-			retainedCauseClasses: append([]ReceiverCauseClass(nil), classes...),
-			diagnosticsTruncated: diagnosticsTruncated,
-		},
-		cause: cause, retainedCause: retainedCause,
+		operationID: operationID, localGeneration: localGeneration,
+		decision:             decision,
+		benignComponents:     append([]ReceiverBenignCause(nil), benign...),
+		retainedCauseClasses: append([]ReceiverCauseClass(nil), classes...),
+		diagnosticsTruncated: diagnosticsTruncated,
+		cause:                cause, retainedCause: retainedCause,
 	}
 }
 

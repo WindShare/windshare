@@ -15,7 +15,7 @@ type observationLog struct {
 	TaskID      string            `json:"task_id"`
 	Event       string            `json:"event"`
 	Payload     diagnostics.Value `json:"payload"`
-	Correlation diagnostics.Value `json:"correlation,omitempty"`
+	Correlation diagnostics.Value `json:"correlation,omitzero"`
 }
 
 func (a *Application) observe(operationID string, task shareTask) {
@@ -42,7 +42,7 @@ func (a *Application) observe(operationID string, task shareTask) {
 			}
 		}
 	}
-	if result != nil && a.deps.addDropped != nil {
+	if a.deps.addDropped != nil {
 		a.deps.addDropped(result.Observations.CapacityDropped)
 	}
 }

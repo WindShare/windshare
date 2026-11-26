@@ -116,11 +116,9 @@ func TestShareEngineCloseFailureAlignsExitCodeTraceAndSummary(t *testing.T) {
 
 		waitReadyEntered := make(chan struct{})
 		relays := &blockingReadyRelays{
-			cliShareRelays: cliShareRelays{
-				stopped:        make(chan struct{}),
-				cleanupStarted: make(chan context.Context, 1),
-				cleanupRelease: make(chan struct{}),
-			},
+			stopped:          make(chan struct{}),
+			cleanupStarted:   make(chan context.Context, 1),
+			cleanupRelease:   make(chan struct{}),
 			waitReadyEntered: waitReadyEntered,
 		}
 		close(relays.cleanupRelease)

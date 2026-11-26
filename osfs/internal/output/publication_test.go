@@ -109,7 +109,7 @@ func TestSmallFilesFastPathLeavesNoSidecarArtifacts(t *testing.T) {
 	const fileCount = 200
 	for i := range fileCount {
 		name := fmt.Sprintf("file-%03d.txt", i)
-		payload := []byte(fmt.Sprintf("payload-%03d", i))
+		payload := fmt.Appendf(nil, "payload-%03d", i)
 		f := testMaterializationFileSeq(t, session, intent, uint64(i+1), name, uint64(len(payload)), rootAdm)
 		start, err := session.BeginFile(ctx, f)
 		if err != nil {

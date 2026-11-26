@@ -11,7 +11,7 @@ import (
 )
 
 func testSource(id, role string) source {
-	return source{TURNService: relayconfig.TURNService{ID: id, Kind: relayconfig.TURNStatic, Role: role, URLs: []string{"turn:local"}, Username: "user", Password: "fixture"}}
+	return source{ID: id, Kind: relayconfig.TURNStatic, Role: role, URLs: []string{"turn:local"}, Username: "user", Password: "fixture"}
 }
 
 func sourceIDs(services []source) []string {

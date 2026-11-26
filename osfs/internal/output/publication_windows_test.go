@@ -468,8 +468,8 @@ func TestWindowsHandleOpsExceedMaxPathAndEnforceSafety(t *testing.T) {
 	if kind, size, err := lstatChild(cur, "final.txt"); err != nil || kind != EntryRegularFile || size != 4 {
 		t.Fatalf("lstatChild past MAX_PATH = (%v, %d, %v)", kind, size, err)
 	}
-	for i := len(opened) - 1; i >= 0; i-- {
-		_ = opened[i].Close()
+	for _, dir := range slices.Backward(opened) {
+		_ = dir.Close()
 	}
 	if err := removeChildTree(root, seg); err != nil {
 		t.Fatalf("removeChildTree past MAX_PATH: %v", err)

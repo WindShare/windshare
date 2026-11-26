@@ -154,13 +154,6 @@ func validName(name string) error {
 	return validateNativeName(name)
 }
 
-func mapCollision(err error) error {
-	if errors.Is(err, fs.ErrExist) {
-		return errors.Join(ErrNamespaceCollision, err)
-	}
-	return err
-}
-
 // ProbeDestination verifies that the destination filesystem supports atomic
 // no-replace file publication using a temporary scratch directory that is
 // removed before returning.

@@ -56,7 +56,7 @@ func SelectSources(manual []relayconfig.TURNService, selected []relayprofile.Reg
 			id += "-"
 		}
 		ids[id] = true
-		sources.ordered = append(sources.ordered, source{TURNService: relayconfig.TURNService{ID: id, Kind: "managed", Role: relayconfig.RoleFallback}, origin: origin, access: s.AccessKey, advertised: s.ManagedTurn})
+		sources.ordered = append(sources.ordered, source{ID: id, Kind: "managed", Role: relayconfig.RoleFallback, origin: origin, access: s.AccessKey, advertised: s.ManagedTurn})
 	}
 	return sources, nil
 }

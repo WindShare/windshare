@@ -323,8 +323,7 @@ func TestEngineCloseEmitsShutdownDiagnosticOnlyOnFailure(t *testing.T) {
 		defer reservation.Release()
 
 		closeErr := application.Close(context.Background())
-		var unreleased *UnreleasedResourcesError
-		if !errors.As(closeErr, &unreleased) {
+		if _, ok := errors.AsType[*UnreleasedResourcesError](closeErr); !ok {
 			t.Fatalf("close error = %v, want UnreleasedResourcesError", closeErr)
 		}
 		stream.Close()

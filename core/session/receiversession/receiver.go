@@ -416,11 +416,11 @@ func (runtime *Runtime) OpenRevision(
 	ctx context.Context,
 	file catalog.FileID,
 ) (revisionaccess.Lease, error) {
-	return (receiverLeaseDependencies{receiverTransferDependencies: receiverTransferDependencies{runtime: runtime}}).OpenLease(ctx, file)
+	return (receiverLeaseDependencies{runtime: runtime}).OpenLease(ctx, file)
 }
 
 func (runtime *Runtime) ReleaseRevision(ctx context.Context, lease content.LeaseID) error {
-	return (receiverLeaseDependencies{receiverTransferDependencies: receiverTransferDependencies{runtime: runtime}}).ReleaseLease(ctx, lease)
+	return (receiverLeaseDependencies{runtime: runtime}).ReleaseLease(ctx, lease)
 }
 
 // RejectShareIdentity ends authority after the application authenticates a

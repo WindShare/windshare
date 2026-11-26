@@ -12,6 +12,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/diagnostics"
 )
 
 func TestPOSIXStabilityBinderValidatesCandidateAndDetectsMutation(t *testing.T) {
@@ -103,7 +104,7 @@ func TestPOSIXStabilityPlatformConstructorsAndBinderEdgeCases(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer authority.Close()
-	revSource, err := newPlatformRootedRevisionSource([]*os.Root{authority})
+	revSource, err := newPlatformRootedRevisionSource([]*os.Root{authority}, diagnostics.Sink{})
 	if err != nil {
 		t.Fatalf("newPlatformRootedRevisionSource error = %v", err)
 	}

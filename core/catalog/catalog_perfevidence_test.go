@@ -236,11 +236,11 @@ func TestLongCumulativeCatalogScaleUnderDefaultShareBudget(t *testing.T) {
 		var dirID DirectoryID
 		dirID[0] = 0x55
 		binary.BigEndian.PutUint32(dirID[12:], uint32(index+1))
-		locator, err := NewSourceReference([]byte(fmt.Sprintf("sub-%03d", index)))
+		locator, err := NewSourceReference(fmt.Appendf(nil, "sub-%03d", index))
 		if err != nil {
 			t.Fatal(err)
 		}
-		identity, err := NewSourceIdentity([]byte(fmt.Sprintf("dir-id-%d", index)))
+		identity, err := NewSourceIdentity(fmt.Appendf(nil, "dir-id-%d", index))
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"slices"
 	"sync"
 	"time"
 
@@ -84,10 +85,8 @@ func stageRangeSampleWindows(ranges []content.Range) []content.Range {
 		if candidate.End <= candidate.Offset {
 			return
 		}
-		for _, existing := range windows {
-			if existing == candidate {
-				return
-			}
+		if slices.Contains(windows, candidate) {
+			return
 		}
 		windows = append(windows, candidate)
 	}

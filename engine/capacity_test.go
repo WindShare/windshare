@@ -193,15 +193,15 @@ func newEngineTestRevisionStore(
 	share := catalog.ShareInstance{identity}
 	parent := catalog.DirectoryID{identity, 1}
 	fileID := catalog.FileID{identity, 2}
-	ref, err := catalog.NewSourceReference([]byte(fmt.Sprintf("object:file-%d", identity)))
+	ref, err := catalog.NewSourceReference(fmt.Appendf(nil, "object:file-%d", identity))
 	if err != nil {
 		return nil, catalog.FileID{}, err
 	}
-	srcID, err := catalog.NewSourceIdentity([]byte(fmt.Sprintf("src-%d", identity)))
+	srcID, err := catalog.NewSourceIdentity(fmt.Appendf(nil, "src-%d", identity))
 	if err != nil {
 		return nil, catalog.FileID{}, err
 	}
-	ver, err := catalog.NewVersionCandidate([]byte(fmt.Sprintf("ver-%d", identity)))
+	ver, err := catalog.NewVersionCandidate(fmt.Appendf(nil, "ver-%d", identity))
 	if err != nil {
 		return nil, catalog.FileID{}, err
 	}
