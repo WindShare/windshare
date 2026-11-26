@@ -116,6 +116,96 @@ func TestDescribeFailureCoversDomainCategoriesAndContext(t *testing.T) {
 	}
 }
 
+func TestDescribeFailurePrecedenceAndFallthrough(t *testing.T) {
+	hint, _ := networkendpoint.WebSocketBaseHint("wss://relay.example/ws")
+
+	cases := []struct {
+		name           string
+		err            error
+		wantCode       FailureCode
+		wantRetryAfter time.Duration
+		wantHint       networkendpoint.RelayBaseHint
+	}{
+		{
+			name:     "receive failure beats wrapped source error",
+			err:      receive.Failure{Code: receive.FailureOutputNeedsAttention, Cause: &catalog.SourceError{Failure: catalog.SourceFailureMissing}},
+			wantCode: FailureOutputNeedsAttention,
+		},
+		{
+			name:     "unknown source failure falls through to sibling domain error",
+			err:      errors.Join(&catalog.SourceError{Failure: 0}, &catalog.SelectionNameCollisionError{FirstLabel: "a", SecondLabel: "A"}),
+			wantCode: FailureSelectionCollision,
+		},
+		{
+			name:     "unknown relay error code falls through to dial error",
+			err:      errors.Join(&relayv2.RelayError{Code: v2.ErrorCode(255)}, &relayv2.WebSocketDialError{}),
+			wantCode: FailureRelayUnavailable,
+		},
+		{
+			name:     "unknown authorization state falls through to socket error",
+			err:      errors.Join(&relayset.AuthorizationError{State: relayset.AuthorizationState(255)}, &relayv2.SocketError{}),
+			wantCode: FailureRelayUnavailable,
+		},
+		{
+			name:     "aggregate share stopped supersedes single relay stopped",
+			err:      errors.Join(relayset.ErrReceiverShareStopped, &relayv2.RelayError{Code: v2.ErrorStopped}),
+			wantCode: FailureShareStopped,
+		},
+		{
+			name:     "explicit receiver wait expiry supersedes dial failure",
+			err:      errors.Join(relayset.ErrReceiverWaitExpired, &relayv2.WebSocketDialError{}),
+			wantCode: FailureDeadline,
+		},
+		{
+			name:     "explicit receiver wait expiry supersedes relay not found",
+			err:      errors.Join(relayset.ErrReceiverWaitExpired, &relayv2.RelayError{Code: v2.ErrorNotFound}),
+			wantCode: FailureDeadline,
+		},
+		{
+			name:     "initial join timeout preserves dial unavailability",
+			err:      errors.Join(relayset.ErrReceiverUnavailable, &relayv2.WebSocketDialError{}),
+			wantCode: FailureRelayUnavailable,
+		},
+		{
+			name:           "initial join timeout preserves retry after",
+			err:            errors.Join(relayset.ErrReceiverUnavailable, &relayv2.RelayError{Code: v2.ErrorAdmission, RetryAfter: 3 * time.Second}),
+			wantCode:       FailureRelayUnavailable,
+			wantRetryAfter: 3 * time.Second,
+		},
+		{
+			name:     "initial join timeout preserves route hint",
+			err:      errors.Join(relayset.ErrReceiverUnavailable, &relayv2.WebSocketRouteError{BaseHint: hint}),
+			wantCode: FailureRelayRouteNotFound,
+			wantHint: hint,
+		},
+		{
+			name:     "initial join timeout maps relay not found",
+			err:      errors.Join(relayset.ErrReceiverUnavailable, &relayv2.RelayError{Code: v2.ErrorNotFound}),
+			wantCode: FailureRelayNotFound,
+		},
+		{
+			name:     "cancellation does not hide teardown transport failure",
+			err:      errors.Join(context.Canceled, &relayv2.SocketError{}),
+			wantCode: FailureRelayUnavailable,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := DescribeFailure(tc.err)
+			if !ok || got.Code != tc.wantCode {
+				t.Fatalf("DescribeFailure() = (%+v, %v), want code %q", got, ok, tc.wantCode)
+			}
+			if got.RetryAfter != tc.wantRetryAfter {
+				t.Fatalf("RetryAfter = %v, want %v", got.RetryAfter, tc.wantRetryAfter)
+			}
+			if got.RelayBaseHint != tc.wantHint {
+				t.Fatalf("RelayBaseHint = %+v, want %+v", got.RelayBaseHint, tc.wantHint)
+			}
+		})
+	}
+}
+
 func TestWorkflowEventTranslationAndDiagnosticRecords(t *testing.T) {
 	origin, err := NormalizeRelayOrigin("https://relay.example:8443/path?secret=1")
 	if err != nil || origin.Scheme != "wss" || origin.Host != "relay.example" || origin.Port != 8443 || origin.HostPort() != "relay.example:8443" {

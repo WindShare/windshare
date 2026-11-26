@@ -128,6 +128,9 @@ func classifyError(cause error) (Failure, bool) {
 	if f, ok := classifyDomainError(cause); ok {
 		return f, true
 	}
+	if f, ok := classifyRecoveryOutcome(cause); ok {
+		return f, true
+	}
 	if f, ok := classifyTransportError(cause); ok {
 		return f, true
 	}
@@ -141,18 +144,6 @@ func classifyError(cause error) (Failure, bool) {
 }
 
 func classifyDomainError(cause error) (Failure, bool) {
-	// Preserve source-selection context before generic I/O classification.
-	if selected, ok := errors.AsType[*catalog.SelectionError](cause); ok && selected != nil {
-		if inner, known := classifyError(selected.Cause); known {
-			if isSourcePathFailureCode(inner.Code) && selected.Label != "" {
-				inner.SourcePath = selected.Label
-			}
-			return inner, true
-		}
-	}
-	if source, ok := errors.AsType[*catalog.SourceError](cause); ok && source != nil {
-		return classifySourceFailure(source.Failure)
-	}
 	// Typed receive settlement failures own precedence over wrapped causes.
 	if reason, ok := errors.AsType[receive.Failure](cause); ok {
 		if f, known := classifyReceiveFailure(reason); known {
@@ -163,8 +154,24 @@ func classifyDomainError(cause error) (Failure, bool) {
 		}
 		return Failure{Code: FailureUnexpected}, true
 	}
+	// Preserve source-selection context before generic I/O classification.
+	if selected, ok := errors.AsType[*catalog.SelectionError](cause); ok && selected != nil {
+		if inner, known := classifyError(selected.Cause); known {
+			if isSourcePathFailureCode(inner.Code) && selected.Label != "" {
+				inner.SourcePath = selected.Label
+			}
+			return inner, true
+		}
+	}
+	if source, ok := errors.AsType[*catalog.SourceError](cause); ok && source != nil {
+		if f, known := classifySourceFailure(source.Failure); known {
+			return f, true
+		}
+	}
 	if diagnostic, ok := output.FindDiagnostic(cause); ok && diagnostic.Fault.Valid() {
-		return FailureFromFault(diagnostic.Fault)
+		if f, known := FailureFromFault(diagnostic.Fault); known {
+			return f, true
+		}
 	}
 	if collision, ok := errors.AsType[*catalog.SelectionNameCollisionError](cause); ok && collision != nil {
 		return Failure{
@@ -181,15 +188,35 @@ func classifyDomainError(cause error) (Failure, bool) {
 	return Failure{}, false
 }
 
+// classifyRecoveryOutcome promotes aggregate receiver-recovery decisions that
+// supersede the individual per-route transport failures joined underneath them.
+// ErrReceiverUnavailable intentionally stays below transport errors so initial
+// join outages keep specific relay diagnostics (unavailability, RetryAfter,
+// route hints) instead of collapsing every network failure into not-found.
+func classifyRecoveryOutcome(cause error) (Failure, bool) {
+	switch {
+	case errors.Is(cause, relayset.ErrReceiverShareStopped):
+		return Failure{Code: FailureShareStopped}, true
+	case errors.Is(cause, relayset.ErrReceiverWaitExpired):
+		return Failure{Code: FailureDeadline}, true
+	default:
+		return Failure{}, false
+	}
+}
+
 func classifyTransportError(cause error) (Failure, bool) {
 	if route, ok := errors.AsType[*relayv2.WebSocketRouteError](cause); ok && route != nil {
 		return Failure{Code: FailureRelayRouteNotFound, RelayBaseHint: route.BaseHint}, true
 	}
 	if relayErr, ok := errors.AsType[*relayv2.RelayError](cause); ok && relayErr != nil {
-		return classifyRelayError(relayErr)
+		if f, known := classifyRelayError(relayErr); known {
+			return f, true
+		}
 	}
 	if authErr, ok := errors.AsType[*relayset.AuthorizationError](cause); ok && authErr != nil {
-		return classifyAuthorizationState(authErr.State)
+		if f, known := classifyAuthorizationState(authErr.State); known {
+			return f, true
+		}
 	}
 	if blocked, ok := errors.AsType[*networkdirectory.UnavailableError](cause); ok && blocked != nil {
 		return Failure{Code: FailureNetworkUnavailable}, true
@@ -221,7 +248,7 @@ func classifySentinelError(cause error) (Failure, bool) {
 	case errors.Is(cause, context.Canceled), errors.Is(cause, task.ErrCancelled),
 		errors.Is(cause, task.ErrApplicationClosed), errors.Is(cause, task.ErrShareStopped):
 		return Failure{Code: FailureCanceled}, true
-	case errors.Is(cause, context.DeadlineExceeded), errors.Is(cause, relayset.ErrReceiverWaitExpired):
+	case errors.Is(cause, context.DeadlineExceeded):
 		return Failure{Code: FailureDeadline}, true
 	case errors.Is(cause, share.ErrInvalidChunkSize), errors.Is(cause, share.ErrConfiguration),
 		errors.Is(cause, relayprofile.ErrCandidatesRequired):
@@ -230,8 +257,6 @@ func classifySentinelError(cause error) (Failure, bool) {
 		return Failure{Code: FailureNetworkUnavailable}, true
 	case errors.Is(cause, relayset.ErrReceiverUnavailable):
 		return Failure{Code: FailureRelayNotFound}, true
-	case errors.Is(cause, relayset.ErrReceiverShareStopped):
-		return Failure{Code: FailureShareStopped}, true
 	case errors.Is(cause, relayset.ErrReceiverShareChanged), errors.Is(cause, relayset.ErrReceiverAuthentication):
 		return Failure{Code: FailureSessionFailed}, true
 	case errors.Is(cause, relayv2.ErrFrameBounds), errors.Is(cause, relayv2.ErrProtocol),
