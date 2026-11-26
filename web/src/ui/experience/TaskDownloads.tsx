@@ -6,19 +6,20 @@ import type { TaskPresentation } from '../tasks'
 import { safeNameRestoreActions, taskActions } from './task-actions'
 import { SourceRevisionFailuresPanel } from '../source-replacement/SourceRevisionFailuresPanel'
 
-export function TaskSourceDetails({ operationId, snapshot, controller }: {
+export function TaskSourceDetails({ operationId, snapshot, controller, onPrepared }: {
   readonly operationId: string
   readonly snapshot: Pick<ReceiverSnapshot, 'retained' | 'output'>
   readonly controller: ReceiverController
+  readonly onPrepared?: () => void
 }) {
   const task = snapshot.retained.tasks.find(candidate => candidate.taskId === operationId)
-  return task === undefined
-    ? null
-    : <SourceRevisionFailuresPanel
-        task={task}
-        busy={snapshot.retained.pending !== null}
-        prepareReplacement={failure => controller.prepareReplacementDownload(task, failure)}
-      />
+  if (task === undefined) return null
+  return <SourceRevisionFailuresPanel
+    task={task}
+    admission={controller.replacementAdmission(task)}
+    prepareReplacement={(failure, callbacks) => controller.prepareReplacementDownload(task, failure, callbacks)}
+    {...(onPrepared === undefined ? {} : { onPrepared })}
+  />
 }
 
 export function TaskDownloads({ tasks, snapshot, controller, entryLabel, entryDescription, open, onOpenChange }: {
@@ -64,6 +65,8 @@ export function TaskDownloads({ tasks, snapshot, controller, entryLabel, entryDe
     {...(entryLabel === undefined ? {} : { entryLabel })}
     {...(entryDescription === undefined ? {} : { entryDescription })}
     onIntent={action => controller.recordExperienceIntent(action)}
-    details={operationId => <TaskSourceDetails operationId={operationId} snapshot={snapshot} controller={controller} />}
+    details={(operationId, closeSheet) => (
+      <TaskSourceDetails operationId={operationId} snapshot={snapshot} controller={controller} onPrepared={closeSheet} />
+    )}
   />
 }

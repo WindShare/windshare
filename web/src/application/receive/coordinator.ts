@@ -38,7 +38,14 @@ import {
 } from '../../transfer/selection'
 import { initialReceiveState } from '../../transfer/state'
 import type { BrowseDirectory, JoinedBrowserShare } from '../browser-share/gateway'
-import { ALLOWED_ADMISSION, admitRetainedAction, blockedAdmission, canForgetState } from './admission'
+import {
+  ALLOWED_ADMISSION,
+  admitReplacementDownload,
+  admitRetainedAction,
+  blockedAdmission,
+  canForgetState,
+  type RetainedAdmissionContext,
+} from './admission'
 import { BrowserCapabilityCache } from './capability-cache'
 import type {
   ReceiveAction,
@@ -255,13 +262,20 @@ export class ReceiveCoordinator {
 
   retainedActionAdmission(task: RetainedTaskSnapshot, action: ReceiveAction): ReceiveAdmission {
     if (this.#execution.activeTransferTaskId === task.taskId) return blockedAdmission('busy')
-    const shareInstance = this.#options.currentJoinedShare()?.descriptor.shareInstanceId ?? null
-    return admitRetainedAction(task, action, {
-      currentShareInstance: shareInstance,
+    return admitRetainedAction(task, action, this.#retainedAdmissionContext())
+  }
+
+  replacementAdmission(task: RetainedTaskSnapshot): ReceiveAdmission {
+    return admitReplacementDownload(task, this.#retainedAdmissionContext())
+  }
+
+  #retainedAdmissionContext(): RetainedAdmissionContext {
+    return {
+      currentShareInstance: this.#options.currentJoinedShare()?.descriptor.shareInstanceId ?? null,
       hasActiveDownload: this.#execution.isTransferActive,
       hasPendingAction: this.#execution.pendingRetained !== null,
       connectionBlock: this.#connectionBlock,
-    })
+    }
   }
 
   refreshOffers(joined: JoinedBrowserShare): void {

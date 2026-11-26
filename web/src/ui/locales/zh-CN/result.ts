@@ -4,6 +4,7 @@ export const result: typeof English = {
   replacementFiles: '需要重新下载的文件',
   replacementHint: '可在下方选择文件作为独立任务下载，选中后再选择下载方式。',
   busyReplacementHint: '请让发送方关闭占用文件的程序，然后在下方选择文件单独重新下载。',
+  openOriginalShareForReplacement: '请打开原分享链接以下载受影响的文件。',
   staleSources: count => `有 ${count} 个文件因源文件已更改或被移除而停止接收。`,
   busySources: count => `有 ${count} 个文件因正被发送方的其他程序占用而停止接收。`,
   unavailableSources: count => `有 ${count} 个文件无法从发送方接收。`,

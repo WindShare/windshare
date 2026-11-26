@@ -216,6 +216,17 @@
   color: var(--receiver-error);
 }
 
+.share-status-notice {
+  margin: 0;
+  padding: 11px 16px;
+  background: var(--receiver-wash);
+  color: var(--receiver-ink);
+  border: 1px solid var(--receiver-rule);
+  border-radius: 12px;
+  font-size: .875rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
 .share-error {
   display: flex;
   align-items: center;

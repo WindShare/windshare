@@ -15,7 +15,7 @@ export function Downloads({ tasks, actions, safeNameRestore, inventory, busy, de
   readonly safeNameRestore?: SafeNameRestoreActions
   readonly inventory: RetainedInventorySnapshot['kind']
   readonly busy: boolean
-  readonly details?: (operationId: string) => ReactNode
+  readonly details?: (operationId: string, closeSheet: () => void) => ReactNode
   readonly entryLabel?: string
   readonly entryDescription?: string
   readonly onIntent: (action: string) => void
@@ -50,7 +50,8 @@ export function Downloads({ tasks, actions, safeNameRestore, inventory, busy, de
     }
     previousSelection.current = selectedId
   }, [open, selectedId])
-  const close = () => { onIntent('close-downloads'); onOpenChange(false); setExpanded(null); setListFailure(null) }
+  const dismissSheet = () => { onOpenChange(false); setExpanded(null); setListFailure(null) }
+  const close = () => { onIntent('close-downloads'); dismissSheet() }
   const listActions: TaskViewActions = {
     perform: (action, callbacks) => {
       setListFailure(null)
@@ -81,7 +82,7 @@ export function Downloads({ tasks, actions, safeNameRestore, inventory, busy, de
           {...restoreProp}
           initialSection={expanded?.section ?? 'overview'}
           busy={busy}
-        >{details?.(selected.operationId)}</TaskDetails>
+        >{details?.(selected.operationId, dismissSheet)}</TaskDetails>
         : <div ref={index} tabIndex={-1} className="downloads-index">
           {(inventory === 'unloaded' || inventory === 'loading') && <p role="status">{t.loading}</p>}
           {inventory === 'failed' && <div className="downloads-error" role="alert"><p>{failures.history}</p>

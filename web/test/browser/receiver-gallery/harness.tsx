@@ -212,6 +212,7 @@ class GalleryController {
   cancelPreparing = () => { this.intents.push('cancel-preparing') }
   performLifecycleAction = () => { this.intents.push('task-action') }
   retainedActionAdmission = () => ({ allowed: true, reason: null })
+  replacementAdmission = () => ({ allowed: true, reason: null })
   activeLifecycleActionAdmission = () => ({ allowed: true, reason: null })
   canRetainCurrentOperation = false
   retainCurrentOperation = async () => false

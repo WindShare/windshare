@@ -166,7 +166,12 @@ export function ReceiverActivity({ controller, openDownloads, dismissedTaskKeys,
         initialSection={detailsTarget?.section ?? 'overview'}
         busy={snapshot.retained.pending !== null}
       >
-        <TaskSourceDetails operationId={primaryTask.operationId} snapshot={snapshot} controller={controller} />
+        <TaskSourceDetails
+          operationId={primaryTask.operationId}
+          snapshot={snapshot}
+          controller={controller}
+          onPrepared={() => setDetailsTarget(null)}
+        />
         {current !== null && primaryTask.operationId === current.operationId && controller.canRetainCurrentOperation && <div className="retained-handoff">
           <p>{t.keepHint}</p>
           <button type="button" onClick={async () => {

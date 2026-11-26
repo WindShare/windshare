@@ -169,6 +169,33 @@ export function admitRetainedAction(
   return ALLOWED_ADMISSION
 }
 
+export function hasRetainedReplacementOutput(
+  task: Pick<RetainedTaskSnapshot, 'lifecycle'>,
+): boolean {
+  if (task.lifecycle.kind === 'partial') return true
+  return task.lifecycle.kind === 'paused' &&
+    (task.lifecycle.completedFiles > 0n || task.lifecycle.retainedBytes > 0n)
+}
+
+export function admitReplacementDownload(
+  task: Pick<RetainedTaskSnapshot, 'lifecycle' | 'sourceRevisionFailures'>,
+  context: RetainedAdmissionContext,
+): ReceiveAdmission {
+  const failures = task.sourceRevisionFailures
+  if (failures === undefined || failures.files.length === 0 || !hasRetainedReplacementOutput(task)) {
+    return blockedAdmission('actionUnavailable')
+  }
+  // Structural share/connection blockers take precedence over transient local-slot
+  // contention, matching `admitRetainedAction`.
+  if (context.currentShareInstance === null || failures.shareInstance !== context.currentShareInstance) {
+    return blockedAdmission('matchingShare')
+  }
+  if (context.connectionBlock !== null) return blockedAdmission(context.connectionBlock)
+  if (context.hasPendingAction) return blockedAdmission('busy')
+  if (context.hasActiveDownload) return blockedAdmission('downloading')
+  return ALLOWED_ADMISSION
+}
+
 export function canStartNewDownload(lifecycle: ReceiveLifecycleState | null): boolean {
   return lifecycle === null || !isActiveReceiveState(lifecycle)
 }

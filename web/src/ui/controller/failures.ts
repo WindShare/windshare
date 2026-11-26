@@ -1,4 +1,5 @@
 import type { SingleFileDownloadOutcome } from '../../application/receive/contracts'
+import { ReplacementFileNotFoundError } from '../../application/browser-share/source-replacement'
 import { ReceiveBlockedError, SaveUnavailableError } from '../../application/receive/single-file'
 import { CryptoError } from '../../crypto/errors'
 import { isRelayAccessDenied } from '../../receiver/recovery-failure'
@@ -22,6 +23,13 @@ export interface AsyncActionCallbacks {
   readonly onAsyncFailure?: (failure: ReceiverFailure) => boolean
 }
 
+export interface ReplacementActionCallbacks extends AsyncActionCallbacks {
+  /** Called once the replacement file has been located and selected in the share workspace. */
+  readonly onPrepared?: () => void
+  /** Called when the replacement lookup settles (prepared, cancelled, blocked, or failed). */
+  readonly onSettled?: () => void
+}
+
 export function previewDownloadResultFromOutcome(
   outcome: SingleFileDownloadOutcome,
   publicError: (error: unknown) => string,
@@ -43,6 +51,9 @@ export function mapReceiverFailure(
   }
   if (error instanceof FSARestoreTargetMissingError) {
     return Object.freeze({ kind: 'restore-target-missing', directoryLabel: error.directoryLabel })
+  }
+  if (error instanceof ReplacementFileNotFoundError) {
+    return Object.freeze({ kind: 'replacement-not-found', path: error.path })
   }
   if (isRelayAccessDenied(error)) return { kind: 'relayAccessDenied', detail: publicError(error) }
   if (isSourceInvalidatedError(error)) {

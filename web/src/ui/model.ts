@@ -99,6 +99,7 @@ export type ReceiverFailure =
   | Readonly<{ kind: 'blocked'; reason: ReceiveBlockReason }>
   | Readonly<{ kind: 'save-unavailable'; reason: SaveUnavailableReason }>
   | Readonly<{ kind: 'source-changed' }>
+  | Readonly<{ kind: 'replacement-not-found'; path: string }>
   | Readonly<{ kind: 'restore-target-missing'; directoryLabel: string }>
   | Readonly<{
       kind: 'open' | 'invalidLink' | 'secureContext' | 'permissionDenied' | 'relayAccessDenied' | 'browserCatalogLimit' | 'shareCatalogLimit'

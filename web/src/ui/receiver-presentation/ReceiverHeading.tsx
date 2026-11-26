@@ -37,6 +37,12 @@ export function ReceiverHeading({ controller, actions }: {
   const join = snapshot.connection.kind === 'idle' ? snapshot.connection.join : undefined
   const joinRetryAt = join?.kind === 'paused' || join?.kind === 'waiting' ? join.retryAt : undefined
   const title = share?.name ?? (snapshot.phase === 'awaiting-key' ? shell.openYourShare : shell.sharedFiles)
+  const replacementNotice = share !== null && (
+    snapshot.status === 'replacement-selected' ||
+    (typeof snapshot.status === 'object' && snapshot.status !== null)
+  )
+    ? receiverStatus(snapshot.status, t)
+    : null
   return <>
     <div className="share-hero">
       <div className="share-heading">
@@ -54,6 +60,7 @@ export function ReceiverHeading({ controller, actions }: {
       </div>
       {actions}
     </div>
+    {replacementNotice !== null && <p className="share-status-notice" role="status">{replacementNotice}</p>}
     {snapshot.error !== null && <div className="share-error" role="alert"><FailureNotice failure={snapshot.error} context="action" /><DiagnosticsEntry label={t.exportDiagnostics} /></div>}
     {snapshot.phase === 'awaiting-key' && <KeyForm controller={controller} />}
     {share === null && snapshot.phase === 'joining' &&

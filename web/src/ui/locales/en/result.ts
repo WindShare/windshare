@@ -4,6 +4,7 @@ export const result = {
   replacementFiles: 'Files requiring a new download',
   replacementHint: 'Select a file below to download it as a separate task, then choose how to save it.',
   busyReplacementHint: 'Ask the sender to close the app using these files, then select a file below to download it separately.',
+  openOriginalShareForReplacement: 'Open the original share link to download affected files.',
   staleSources: (count: bigint) => `${count} ${count === 1n ? 'file stopped' : 'files stopped'} because the original source version changed or was removed.`,
   busySources: (count: bigint) => `${count} ${count === 1n ? 'file stopped because it is' : 'files stopped because they are'} in use by another app on the sender.`,
   unavailableSources: (count: bigint) => `${count} ${count === 1n ? 'file' : 'files'} could not be received from the sender.`,

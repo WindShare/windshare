@@ -1,4 +1,4 @@
-import { terminalConnectionBlock } from '../application/receive/admission'
+import { blockedAdmission, terminalConnectionBlock } from '../application/receive/admission'
 import { SelectionPolicy } from '../catalog/selection'
 import { BrowserReceiverGateway, type BrowsePage, type JoinedBrowserShare } from '../application/browser-share/gateway'
 import { CapabilityInputLifecycle } from '../application/browser-share/capability-lifecycle'
@@ -24,6 +24,7 @@ import {
   type AsyncActionCallbacks,
   type ChooseArtifactIntent,
   type PreviewDownloadResult,
+  type ReplacementActionCallbacks,
 } from './controller/failures'
 import { ShareJoinCoordinator } from './controller/join-coordinator'
 import { BrowserNavigationCoordinator } from './controller/navigation'
@@ -48,7 +49,7 @@ export type { DiagnosticFormatter, SecurityMilestone } from '../application/brow
 export { captureLocation } from './capability/location'
 export type { CapturedLocation, LocationCaptureOptions } from './capability/location'
 export type { ReceiverControllerOptions } from './controller/contracts'
-export type { AsyncActionCallbacks, ChooseArtifactIntent, PreviewDownloadResult } from './controller/failures'
+export type { AsyncActionCallbacks, ChooseArtifactIntent, PreviewDownloadResult, ReplacementActionCallbacks } from './controller/failures'
 export type { ReceiverTraceEvent } from '../application/receive/contracts'
 
 export class ReceiverController {
@@ -321,6 +322,8 @@ export class ReceiverController {
     this.recordExperienceIntent('choose-saving-outcome')
     if (intent === 'default' && this.#tryCompleteSinglePhotoBlob(choiceId)) return
     if (this.#receive.startBlockedReason() !== null) return
+    this.#operationTransitions.cancelPendingReplacement()
+    this.#clearReplacementSelectedStatus()
     if (this.#snapshot.error !== null) this.#publish({ ...this.#snapshot, error: null })
     const display = Object.freeze({
       objectLabel: this.#snapshot.draft.label,
@@ -338,7 +341,11 @@ export class ReceiverController {
     if (this.#disposed || page === undefined || entry?.kind !== 'file') {
       return Object.freeze({ kind: 'blocked', reason: 'actionUnavailable' })
     }
-    if (this.#receive.startBlockedReason() === null) this.#previews.yieldToReceiving()
+    if (this.#receive.startBlockedReason() === null) {
+      this.#operationTransitions.cancelPendingReplacement()
+      this.#clearReplacementSelectedStatus()
+      this.#previews.yieldToReceiving()
+    }
     const outcome = this.#receive.startSingleFileDownload(entry, page.directory, {
       display: Object.freeze({ objectLabel: entry.name, createdAtMilliseconds: Date.now() }),
     })
@@ -364,6 +371,10 @@ export class ReceiverController {
       })
     }
     this.recordExperienceIntent('download-preview-file')
+    if (this.#receive.startBlockedReason() === null) {
+      this.#operationTransitions.cancelPendingReplacement()
+      this.#clearReplacementSelectedStatus()
+    }
     const fileId = target.entry.idText
     const closeOnActivate = previewState === 'loading' || previewState === 'error'
     const outcome = this.#receive.startSingleFileDownload(target.entry, target.directory, {
@@ -419,8 +430,20 @@ export class ReceiverController {
     this.#operationTransitions.performRetainedAction(task, action, callbacks)
   }
 
-  prepareReplacementDownload(task: RetainedTaskSnapshot, failure: SourceRevisionFailure): void {
-    this.#operationTransitions.prepareReplacementDownload(task, failure)
+  replacementAdmission(task: RetainedTaskSnapshot) {
+    const admission = this.#receive.replacementAdmission(task)
+    if (admission.allowed && this.#snapshot.share === null) {
+      return blockedAdmission('matchingShare')
+    }
+    return admission
+  }
+
+  prepareReplacementDownload(
+    task: RetainedTaskSnapshot,
+    failure: SourceRevisionFailure,
+    callbacks?: ReplacementActionCallbacks,
+  ): void {
+    this.#operationTransitions.prepareReplacementDownload(task, failure, callbacks)
   }
 
   startNewReceiveOperation(): void { this.#operationTransitions.startNewReceiveOperation() }
@@ -498,10 +521,17 @@ export class ReceiverController {
     if (directory === undefined) return
     this.#snapshot = Object.freeze({
       ...this.#snapshot,
+      ...(this.#snapshot.status === 'replacement-selected' ? { status: null } : {}),
       draft: projectDraft(this.#snapshot.draft.mode, directory, joined.selection, this.#snapshot.share),
     })
     this.#browse.publishPage(page)
     this.#beginSelectionProjection(joined)
+  }
+
+  #clearReplacementSelectedStatus(): void {
+    if (this.#snapshot.status === 'replacement-selected') {
+      this.#publish({ ...this.#snapshot, status: null })
+    }
   }
 
   #singlePhotoLocalChoiceId(snapshot: ReceiverSnapshot): string | null {
