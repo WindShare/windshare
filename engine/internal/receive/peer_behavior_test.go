@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/windshare/windshare/core/session"
@@ -200,6 +201,62 @@ func TestStartReceiverPeerIsolatesTaskCancelCause(t *testing.T) {
 		<-observedCtx.Done()
 		if observedCtx.Err() != context.Canceled || context.Cause(observedCtx) != context.Canceled {
 			t.Fatalf("peer ctx err=%v cause=%v, want context.Canceled", observedCtx.Err(), context.Cause(observedCtx))
+		}
+	})
+
+	t.Run("mid-run parent deadline preserves DeadlineExceeded without leaking custom cause", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			observation, _ := newTestObservation(t)
+			type ctxKey struct{}
+			customDeadlineCause := errors.New("parent timeout cause")
+			parent, cancel := context.WithTimeoutCause(
+				context.WithValue(context.Background(), ctxKey{}, "peer-trace"),
+				50*time.Millisecond,
+				customDeadlineCause,
+			)
+			defer cancel()
+
+			var observedCtx context.Context
+			var attemptCtx context.Context
+			var cancelAttempt context.CancelCauseFunc
+			attempt := newCLIReceiverPeerAttempt()
+			worker := &runner{receiverPeerFactory: func() (receiverPeerStarter, error) {
+				return capturingPeerStarter{started: func(ctx context.Context) (receiverPeerAttempt, error) {
+					observedCtx = ctx
+					attemptCtx, cancelAttempt = context.WithCancelCause(ctx)
+					return attempt, nil
+				}}, nil
+			}}
+			peer := worker.startReceiverPeer(parent, nil, observation, nil, &receiverLocalStop{}, receiverPeerPreferred)
+			if peer == nil {
+				t.Fatal("expected active peer")
+			}
+			defer peer.Close()
+			defer cancelAttempt(nil)
+
+			if got := observedCtx.Value(ctxKey{}); got != "peer-trace" {
+				t.Fatalf("peer ctx value = %v, want peer-trace", got)
+			}
+			<-observedCtx.Done()
+			<-attemptCtx.Done()
+			if observedCtx.Err() != context.DeadlineExceeded || context.Cause(observedCtx) != context.DeadlineExceeded {
+				t.Fatalf("peer ctx err=%v cause=%v, want context.DeadlineExceeded", observedCtx.Err(), context.Cause(observedCtx))
+			}
+			if attemptCtx.Err() != context.DeadlineExceeded || context.Cause(attemptCtx) != context.DeadlineExceeded {
+				t.Fatalf("derived attempt ctx err=%v cause=%v, want context.DeadlineExceeded", attemptCtx.Err(), context.Cause(attemptCtx))
+			}
+		})
+	})
+
+	t.Run("child WithCancelCause preserves its own local cause", func(t *testing.T) {
+		parent, cancelParent := context.WithCancelCause(context.Background())
+		defer cancelParent(nil)
+		peerCtx := standardCancellationContext(parent)
+		child, cancelChild := context.WithCancelCause(peerCtx)
+		localErr := errors.New("peer negotiation timeout")
+		cancelChild(localErr)
+		if child.Err() != context.Canceled || context.Cause(child) != localErr {
+			t.Fatalf("child ctx err=%v cause=%v, want local cause %v", child.Err(), context.Cause(child), localErr)
 		}
 	})
 }

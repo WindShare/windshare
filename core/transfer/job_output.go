@@ -343,30 +343,36 @@ func (j *TransferJob) newSettlementContext(parent context.Context) (context.Cont
 // Unlike local output settlement (which strips cancellation to protect durable
 // checkpoints), remote lease release must follow caller cancellation so a
 // canceled run relinquishes local ownership without stalling on remote RPCs.
-// Forwarding via a fresh child also keeps sibling BoundaryError cancel causes
-// from being misattributed to revision cleanup diagnostics.
+// Stripping parent cancel causes keeps sibling BoundaryError failures from
+// being misattributed to revision cleanup diagnostics without duplicating
+// parent's deadline timer.
 func (j *TransferJob) newRevisionReleaseContext(parent context.Context) (context.Context, context.CancelFunc) {
-	deadline := time.Now().Add(j.settlementTimeout)
-	if parentDeadline, ok := parent.Deadline(); ok && parentDeadline.Before(deadline) {
-		deadline = parentDeadline
+	return context.WithTimeout(withoutCancelCause(parent), j.settlementTimeout)
+}
+
+// standardCauseContext forwards parent's lifetime, deadline, and values while
+// shielding context.Cause from parent's custom CancelCauseFunc error via
+// context.WithoutCancel's Value filtering.
+type standardCauseContext struct {
+	parent context.Context
+	values context.Context
+}
+
+func withoutCancelCause(parent context.Context) context.Context {
+	if parent == nil {
+		return context.Background()
 	}
-	ctx, cancel := context.WithDeadline(context.WithoutCancel(parent), deadline)
-	if parent.Err() != nil {
-		if ctx.Err() == nil {
-			cancel()
-		}
-		return ctx, cancel
-	}
-	stop := context.AfterFunc(parent, func() {
-		if ctx.Err() == nil {
-			cancel()
-		}
-	})
-	return ctx, func() {
-		stop()
-		cancel()
+	return standardCauseContext{
+		parent: parent,
+		values: context.WithoutCancel(parent),
 	}
 }
+
+func (c standardCauseContext) Deadline() (time.Time, bool)    { return c.parent.Deadline() }
+func (c standardCauseContext) Done() <-chan struct{}          { return c.parent.Done() }
+func (c standardCauseContext) Err() error                     { return c.parent.Err() }
+func (c standardCauseContext) Value(key any) any              { return c.values.Value(key) }
+func (c standardCauseContext) AfterFunc(f func()) func() bool { return context.AfterFunc(c.parent, f) }
 
 func lifecyclePolicyFor(err error) lifecyclePolicy {
 	if err == nil {

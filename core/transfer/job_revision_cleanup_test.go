@@ -183,4 +183,84 @@ func TestCanceledTransferRelinquishesRevisionWithoutWaitingForSettlementTimeout(
 			}
 		})
 	})
+
+	t.Run("mid-release parent deadline preserves DeadlineExceeded", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			output := newJobOutput(transferID[catalog.ShareInstance](95))
+			revisions := &jobRevisionClient{}
+			job, file := branchJob(t, output, revisions, scriptedRangeReader{})
+			job.settlementTimeout = DefaultOutputSettlementTimeout
+			stream := newTestDiagnosticsStream(t)
+			job.diagnostics = stream.Sink()
+
+			type ctxKey struct{}
+			customDeadlineCause := errors.New("caller timeout cause")
+			parent, cancel := context.WithTimeoutCause(
+				context.WithValue(context.Background(), ctxKey{}, "trace-value"),
+				200*time.Millisecond,
+				customDeadlineCause,
+			)
+			defer cancel()
+
+			var observedValue any
+			var observedErr, observedCause error
+			job.revisions = blockingReleaseRevisionClient{
+				jobRevisionClient: revisions,
+				onRelease: func(releaseCtx context.Context, _ RevisionHandle) error {
+					observedValue = releaseCtx.Value(ctxKey{})
+					<-releaseCtx.Done()
+					observedErr = releaseCtx.Err()
+					observedCause = context.Cause(releaseCtx)
+					return releaseCtx.Err()
+				},
+			}
+
+			result := job.Run(parent)
+			if observedValue != "trace-value" {
+				t.Fatalf("release ctx value = %v, want trace-value", observedValue)
+			}
+			if observedErr != context.DeadlineExceeded || observedCause != context.DeadlineExceeded {
+				t.Fatalf("release ctx err=%v cause=%v, want context.DeadlineExceeded", observedErr, observedCause)
+			}
+			if len(revisions.released) != 1 || len(result.RevisionCleanupFailures) != 1 {
+				t.Fatalf("result=%+v released=%v", result, revisions.released)
+			}
+			cleanup := result.RevisionCleanupFailures[0]
+			if cleanup.FileID != file || cleanup.Interruption != TransferInterruptionDeadline ||
+				!errors.Is(cleanup.Cause, context.DeadlineExceeded) {
+				t.Fatalf("cleanup diagnostic=%+v", cleanup)
+			}
+			var cleanupRec diagnostics.Record
+			for _, rec := range drainTestDiagnostics(stream) {
+				if rec.Payload().Get("stage").Text() == TransferRevisionCleanupSettled.DiagnosticName() {
+					cleanupRec = rec
+				}
+			}
+			if !cleanupRec.Valid() || cleanupRec.Payload().Get("interruption").Text() != "2" {
+				t.Fatalf("cleanup trace=%+v", cleanupRec)
+			}
+		})
+	})
+
+	t.Run("sibling BoundaryError cancel cause is stripped from release context", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			output := newJobOutput(transferID[catalog.ShareInstance](96))
+			revisions := &jobRevisionClient{}
+			job, _ := branchJob(t, output, revisions, scriptedRangeReader{})
+			job.settlementTimeout = DefaultOutputSettlementTimeout
+
+			siblingFault := sourceUnavailableFailure(errors.New("sibling failed"))
+			parent, cancel := context.WithCancelCause(context.Background())
+			cancel(siblingFault)
+
+			releaseCtx, stop := job.newRevisionReleaseContext(parent)
+			defer stop()
+			if releaseCtx.Err() != context.Canceled || context.Cause(releaseCtx) != context.Canceled {
+				t.Fatalf("release ctx err=%v cause=%v, want standard context.Canceled", releaseCtx.Err(), context.Cause(releaseCtx))
+			}
+			if fault.ContextCause(releaseCtx) != nil {
+				t.Fatalf("leaked sibling boundary error: %v", fault.ContextCause(releaseCtx))
+			}
+		})
+	})
 }
