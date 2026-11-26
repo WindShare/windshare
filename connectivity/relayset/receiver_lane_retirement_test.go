@@ -17,7 +17,9 @@ import (
 	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
+	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	sendersession "github.com/windshare/windshare/core/session/sendersession"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
 )
@@ -383,6 +385,112 @@ func TestReceiverWaitForDemandStopsWhenRuntimeStoppingWithZeroLanes(t *testing.T
 		}
 		if err := set.waitForDemand(context.Background()); !errors.Is(err, session.ErrRuntimeClosed) {
 			t.Fatalf("waitForDemand on stopped zero-lane runtime = %v, want %v", err, session.ErrRuntimeClosed)
+		}
+	})
+}
+
+func TestReceiverPublishInitialRejectsRetiredCandidateAndPreservesCompetingRelay(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const relayURL = "http://127.0.0.1:18082"
+		sender, factory := newInMemoryLiveSender(t, relayURL)
+		endpoint, err := v2.NormalizeRelayEndpoint(relayURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		recovery, err := NewReceiverRecovery(ReceiverRecoveryOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		lifetime, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		receiver := &Receiver{
+			ctx:       lifetime,
+			cancel:    cancel,
+			config:    ReceiverConfig{recovery: recovery},
+			remaining: 2,
+			ready:     make(chan struct{}),
+		}
+		var senderDone sync.WaitGroup
+		defer func() {
+			receiver.Close()
+			senderDone.Wait()
+		}()
+		connectCandidate := func() (*receiversession.Runtime, *liveshare.PreparedReceiver, *stagedCloseReceiverConnection) {
+			senderEnd, receiverEnd := newMemoryPipe()
+			senderDone.Go(func() {
+				admission, admitErr := factory.AdmitChannel(context.Background(), senderEnd)
+				if admitErr != nil {
+					_ = senderEnd.Close()
+					return
+				}
+				if admission.Session != nil {
+					<-admission.Session.Done()
+					admission.Session.Close()
+				}
+			})
+			prepared, prepErr := liveshare.PrepareReceiver(liveshare.ReceiverConfig{
+				Capacity:         testReceiveCapacity(t),
+				Capability:       sender.Capability(),
+				DescriptorObject: sender.Registration().Descriptor,
+			})
+			if prepErr != nil {
+				t.Fatal(prepErr)
+			}
+			conn := &stagedCloseReceiverConnection{
+				descriptor: sender.Registration().Descriptor,
+				channel:    receiverEnd,
+				endpoint:   endpoint,
+				done:       make(chan struct{}),
+			}
+			candidate, connErr := prepared.Connect(context.Background(), receiverEnd, transferlanes.RouteRelay)
+			if connErr != nil {
+				prepared.Close()
+				t.Fatal(connErr)
+			}
+			return candidate, prepared, conn
+		}
+
+		deadCandidate, deadPrepared, deadConn := connectCandidate()
+		defer func() {
+			deadCandidate.Close()
+			deadPrepared.Close()
+			_ = deadConn.Close()
+		}()
+		if err := deadConn.channel.Close(); err != nil {
+			t.Fatal(err)
+		}
+		<-deadCandidate.Done()
+
+		var deadLane admittedLane
+		if err := receiver.publishInitial(context.Background(), deadCandidate, deadPrepared, deadConn, &deadLane); !errors.Is(err, session.ErrRuntimeClosed) {
+			t.Fatalf("publishInitial on retired candidate = %v, want %v", err, session.ErrRuntimeClosed)
+		}
+		if receiver.current() != nil || receiver.stopRuntimeWatch != nil || receiver.ctx.Err() != nil {
+			t.Fatalf("retired candidate mutated receiver: runtime=%v watch=%v ctxErr=%v", receiver.current(), receiver.stopRuntimeWatch != nil, receiver.ctx.Err())
+		}
+		if deadLane.done != nil || deadLane.identity != (session.LaneIdentity{}) {
+			t.Fatalf("retired candidate mutated lane state: %+v", deadLane)
+		}
+		select {
+		case <-receiver.ready:
+			t.Fatal("retired candidate closed ready channel")
+		default:
+		}
+
+		liveCandidate, livePrepared, liveConn := connectCandidate()
+		defer func() { _ = liveConn.Close() }()
+		var liveLane admittedLane
+		if err := receiver.publishInitial(context.Background(), liveCandidate, livePrepared, liveConn, &liveLane); err != nil {
+			liveCandidate.Close()
+			livePrepared.Close()
+			t.Fatalf("competing live candidate failed to publish: %v", err)
+		}
+		if liveLane.done == nil || liveLane.done == closedReceiverLane {
+			t.Fatalf("published live candidate did not bind live lane done channel: %+v", liveLane)
+		}
+		gotRuntime, gotConn, err := receiver.WaitReady(context.Background())
+		if err != nil || gotRuntime != liveCandidate || gotConn != liveConn {
+			t.Fatalf("WaitReady = (%v, %v, %v), want live candidate", gotRuntime, gotConn, err)
 		}
 	})
 }

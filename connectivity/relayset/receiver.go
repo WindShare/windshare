@@ -459,7 +459,10 @@ func (receiver *Receiver) publishInitial(ctx context.Context, candidate *receive
 		// reassigned to the winner, so the endpoint redials before attachment.
 		return errors.New("initial relay handshake superseded")
 	}
-	if runtimeEnding(candidate) {
+	var identity session.LaneIdentity
+	identity.ID, identity.Epoch = candidate.LaneIdentity()
+	done, live := candidate.LaneDone(identity)
+	if !live || runtimeEnding(candidate) {
 		return errors.Join(session.ErrRuntimeClosed, candidate.Err())
 	}
 	// Relay waits and dials belong to this session's live authority. Done is a
@@ -468,12 +471,8 @@ func (receiver *Receiver) publishInitial(ctx context.Context, candidate *receive
 	receiver.runtime = candidate
 	receiver.prepared = prepared
 	receiver.first = connection
-	lane.identity.ID, lane.identity.Epoch = candidate.LaneIdentity()
-	if done, live := candidate.LaneDone(lane.identity); live {
-		lane.done = done
-	} else {
-		lane.done = closedReceiverLane
-	}
+	lane.identity = identity
+	lane.done = done
 	receiver.failure = nil
 	close(receiver.ready)
 	return nil
