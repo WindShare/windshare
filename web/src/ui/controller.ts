@@ -1,12 +1,7 @@
 import { terminalConnectionBlock } from '../application/receive/admission'
 import { SelectionPolicy } from '../catalog/selection'
 import { BrowserReceiverGateway, type BrowsePage, type JoinedBrowserShare } from '../application/browser-share/gateway'
-import {
-  CapabilityInputLifecycle,
-  type CapabilityJoinLease,
-} from '../application/browser-share/capability-lifecycle'
-import { capabilityInputFingerprint } from '../application/browser-share/capability-input'
-import { CapabilityNavigation } from '../application/browser-share/capability-navigation'
+import { CapabilityInputLifecycle } from '../application/browser-share/capability-lifecycle'
 import type {
   ReceiveAction,
   RetainedTaskSnapshot,
@@ -19,12 +14,10 @@ import type {
   SafeNameRestorePlan,
   SafeNameRestorePrepared,
 } from '../output/model'
-import { InitialJoinControl } from '../receiver/initial-join'
 import type { SourceRevisionFailure } from '../transfer/state'
 import type { CapturedLocation } from './capability/location'
 import type { ReceiverControllerOptions } from './controller/contracts'
 import {
-  joinFailure,
   mapReceiverFailure,
   outcomeFailure,
   previewDownloadResultFromOutcome,
@@ -33,15 +26,20 @@ import {
   type PreviewDownloadResult,
   type TaskActionCallbacks,
 } from './controller/failures'
+import { ShareJoinCoordinator } from './controller/join-coordinator'
 import { BrowserNavigationCoordinator } from './controller/navigation'
 import { JoinedShareObservation } from './controller/joined-observation'
 import { ReceiverProjections } from './controller/projections'
 import { ShareReportScope } from './controller/share-report'
-import { initialReceiverSnapshot, joiningReceiverSnapshot, receiverProgressSnapshot } from './controller-state'
+import {
+  initialReceiverSnapshot,
+  receiverProgressSnapshot,
+  resolveStartAdmission,
+} from './controller-state'
 import { projectDraft, scopeSelection } from './draft/model'
 import { SelectionDraftScope } from './draft/scope'
 import { ReceiverExperienceObservability } from './experience/observability'
-import type { ReceiverSnapshot } from './model'
+import type { ReceiverSnapshot, ShareIdentity } from './model'
 import { ReceiveOperationTransitions } from './operation-ownership/transitions'
 import { presentReceiveOutput } from './output'
 import { PreviewController } from './preview-controller'
@@ -56,22 +54,17 @@ export type { ReceiverTraceEvent } from '../application/receive/contracts'
 
 export class ReceiverController {
   readonly presentation: ReceiverProjections
-  readonly #gateway: BrowserReceiverGateway
   readonly #receive: ReceiveCoordinator
   readonly #capabilityLifecycle: CapabilityInputLifecycle
   readonly #capabilityIntake: ReceiverControllerOptions['capabilityIntake']
   readonly #preferences: ReceiverControllerOptions['preferences']
-  readonly #trace: ReceiverControllerOptions['trace']
-  readonly #recordFailure: ReceiverControllerOptions['recordFailure']
-  readonly #capabilityNavigation = new CapabilityNavigation(() =>
-    this.#joinNavigation !== undefined || this.#snapshot.connection.kind === 'connected' ||
-    this.#snapshot.connection.kind === 'reconnecting')
   readonly #listeners = new Set<() => void>()
   readonly #experienceTrace: ReceiverExperienceObservability
   readonly #previews: PreviewController
   readonly #browse: BrowserNavigationCoordinator
   readonly #joinedObservation: JoinedShareObservation
   readonly #shareReport: ShareReportScope
+  readonly #joins: ShareJoinCoordinator
   readonly #unsubscribeReceive: () => void
   readonly #unsubscribePreferences: (() => void) | undefined
   readonly #operationTransitions: ReceiveOperationTransitions
@@ -79,18 +72,13 @@ export class ReceiverController {
   #snapshot: ReceiverSnapshot
   #pageUrl = ''
   #joined: JoinedBrowserShare | undefined
-  #joinNavigation: AbortController | undefined
-  #joinRecovery: InitialJoinControl | undefined
   #disposed = false
 
   constructor(
     gateway: BrowserReceiverGateway,
     options: ReceiverControllerOptions = {},
   ) {
-    this.#gateway = gateway
     this.#preferences = options.preferences
-    this.#trace = options.trace
-    this.#recordFailure = options.recordFailure
     this.#experienceTrace = new ReceiverExperienceObservability(options.trace)
     this.#capabilityLifecycle = new CapabilityInputLifecycle(options)
     this.#capabilityIntake = options.capabilityIntake
@@ -113,7 +101,7 @@ export class ReceiverController {
     })
     this.#joinedObservation = new JoinedShareObservation({
       ownsJoinedShare: joined => !this.#disposed && this.#joined === joined,
-      isJoining: () => this.#joinNavigation !== undefined,
+      isJoining: () => this.#joins.isJoining,
       onConnection: connection => {
         this.#receive.observeConnection(terminalConnectionBlock(connection))
         this.#publish({ ...this.#snapshot, connection })
@@ -158,6 +146,31 @@ export class ReceiverController {
       previews: this.#previews,
       experienceTrace: this.#experienceTrace,
     })
+    this.#joins = new ShareJoinCoordinator({
+      gateway,
+      capabilityLifecycle: this.#capabilityLifecycle,
+      receive: this.#receive,
+      browse: this.#browse,
+      draftScope: this.#draftScope,
+      joinedObservation: this.#joinedObservation,
+      shareReport: this.#shareReport,
+      previews: this.#previews,
+      cancelPendingReplacement: () => this.#operationTransitions.cancelPendingReplacement(),
+      currentJoinedShare: () => this.#joined,
+      setJoinedShare: joined => { this.#joined = joined },
+      isDisposed: () => this.#disposed,
+      snapshot: () => this.#snapshot,
+      setSnapshot: snapshot => { this.#snapshot = snapshot },
+      publish: snapshot => this.#publish(snapshot),
+      publicError: error => this.#publicError(error),
+      onPageUrl: pageUrl => { this.#pageUrl = pageUrl },
+      recordIntent: action => this.recordExperienceIntent(action),
+      requestReconnect: () => this.requestReconnect(),
+      beginSelectionProjection: joined => this.#beginSelectionProjection(joined),
+      openAutomaticPhotoPreview: (joined, share, page) => this.#openAutomaticPhotoPreview(joined, share, page),
+      ...(options.recordFailure === undefined ? {} : { recordFailure: options.recordFailure }),
+      ...(options.trace === undefined ? {} : { trace: options.trace }),
+    })
   }
 
   readonly subscribe = (listener: () => void): (() => void) => {
@@ -187,7 +200,7 @@ export class ReceiverController {
     try { this.#capabilityIntake?.accept(captured) } catch {
       // Optional presentation intent must not prevent a capability from joining.
     }
-    if (captured.capabilityInput !== null) this.#join(captured.capabilityInput, captured.pageUrl).catch(() => undefined)
+    if (captured.capabilityInput !== null) this.#joins.open(captured.capabilityInput, captured.pageUrl).catch(() => undefined)
   }
 
   submitKey(input: string): void {
@@ -200,39 +213,17 @@ export class ReceiverController {
   requestReconnect(): void {
     if (this.#disposed) return
     this.recordExperienceIntent('reconnect-now')
-    if (this.#joinRecovery !== undefined) this.#joinRecovery.request('retry')
-    else this.#joined?.requestReconnect()
+    if (!this.#joins.requestReconnect()) this.#joined?.requestReconnect()
   }
 
   continueJoinWaiting(): void {
     if (this.#disposed) return
     this.recordExperienceIntent('continue-connection-wait')
-    this.#joinRecovery?.request('continue')
+    this.#joins.continueWaiting()
   }
 
   cancelJoin(): void {
-    if (this.#disposed || this.#joinNavigation === undefined) return
-    const reason = new DOMException('Connection waiting cancelled', 'AbortError')
-    this.#capabilityNavigation.clear()
-    this.#joinNavigation.abort(reason)
-    this.#browse.cancel(reason)
-    if (this.#snapshot.share === null && this.#joined !== undefined) {
-      const joined = this.#joined
-      this.#joined = undefined
-      this.#joinedObservation.close()
-      this.#shareReport.clear()
-      joined.close().catch(() => undefined)
-    } else {
-      this.#shareReport.clearPending()
-    }
-    this.#receive.observeConnection(null)
-    this.#publish({
-      ...this.#snapshot,
-      phase: 'awaiting-key',
-      connection: { kind: 'idle' },
-      status: 'cancelled',
-      error: null,
-    })
+    this.#joins.cancel()
   }
 
   recordExperienceIntent(action: string): void {
@@ -453,10 +444,9 @@ export class ReceiverController {
   async dispose(): Promise<void> {
     if (this.#disposed) return
     this.#disposed = true
-    this.#capabilityNavigation.clear()
+    this.#joins.dispose()
     this.#capabilityLifecycle.clear()
     this.#operationTransitions.cancelPendingReplacement()
-    this.#joinNavigation?.abort(new DOMException('Receiver disposed', 'AbortError'))
     this.#browse.cancel(new DOMException('Receiver disposed', 'AbortError'))
     this.#joinedObservation.close()
     this.#shareReport.close()
@@ -471,131 +461,11 @@ export class ReceiverController {
     this.presentation.close()
   }
 
-  #join(input: string, pageUrl = this.#pageUrl): Promise<void> {
-    const lease = this.#capabilityLifecycle.beginJoin(input, pageUrl)
-    return this.#capabilityNavigation.open(capabilityInputFingerprint(input, pageUrl), async () => {
-      if (this.#disposed) return 'blocked'
-      const reason = this.#receive.shareNavigationBlockedReason()
-      if (reason !== null) {
-        this.#publish({ ...this.#snapshot, error: { kind: 'blocked', reason } })
-        return 'blocked'
-      }
-      this.#pageUrl = pageUrl
-      return await this.#joinOwned(lease, pageUrl) ? 'joined' : 'failed'
-    }).then(decision => {
-      if (this.#disposed) return
-      this.recordExperienceIntent(`share-navigation-${decision}`)
-      if (decision === 'reused' && this.#snapshot.connection.kind === 'reconnecting') this.requestReconnect()
-    }).finally(() => lease.release())
-  }
-
-  async #joinOwned(
-    lease: CapabilityJoinLease,
-    pageUrl: string,
-  ): Promise<boolean> {
-    let navigation: AbortController | undefined
-    let previous: JoinedBrowserShare | undefined
-    let candidate: JoinedBrowserShare | undefined
-    let joinedReplacementInstalled = false
-    this.#traceJoin('started')
-    try {
-      this.#joinNavigation?.abort(new DOMException('A newer join replaced this one', 'AbortError'))
-      this.#browse.cancel(new DOMException('A newer join replaced this one', 'AbortError'))
-      this.#operationTransitions.cancelPendingReplacement()
-      this.#shareReport.clearPending()
-      navigation = new AbortController()
-      this.#joinNavigation = navigation
-      previous = this.#joined
-      lease.activate()
-      if (previous === undefined) this.#receive.observeConnection(null)
-      this.#receive.suspendForNewShare()
-      await this.#previews.close()
-      navigation.signal.throwIfAborted()
-      this.#publish(joiningReceiverSnapshot(this.#snapshot))
-      this.#joinedObservation.suspendForJoin()
-      const activeNavigation = navigation
-      const recovery = new InitialJoinControl()
-      this.#joinRecovery = recovery
-      const joined = await lease.handoff(ownedInput =>
-        this.#gateway.join(ownedInput, pageUrl, activeNavigation.signal, {
-          control: recovery,
-          onReport: report => this.#joinReplacementIsCurrent(activeNavigation) && this.#shareReport.adoptPending(report),
-          onState: join => {
-            if (!this.#joinReplacementIsCurrent(activeNavigation)) return
-            this.#publish({ ...this.#snapshot, connection: { kind: 'idle', join } })
-          },
-        }))
-      candidate = joined
-      if (!this.#joinReplacementIsCurrent(navigation)) {
-        this.#traceJoin('stale_replacement')
-        return false
-      }
-      this.#joined = joined
-      this.#shareReport.commit(joined.report)
-      this.#draftScope.reset()
-      this.#joinRecovery = undefined
-      joinedReplacementInstalled = true
-      await previous?.close().catch(() => undefined)
-      if (!this.#joinReplacementIsCurrent(navigation)) return false
-      this.#traceJoin('joined')
-      this.#joinedObservation.observe(joined)
-      this.#receive.warmCapabilities()
-      await this.#openInitialBrowsePage(joined)
-      return this.#joinReplacementIsCurrent(navigation)
-    } catch (error) {
-      this.#handleJoinFailure(error, lease, navigation, previous, joinedReplacementInstalled)
-      return false
-    } finally {
-      this.#finishJoinAttempt(navigation, lease, candidate, joinedReplacementInstalled)
+  #openAutomaticPhotoPreview(joined: JoinedBrowserShare, share: ShareIdentity | null, page: BrowsePage): void {
+    if (share?.kind === 'photo' && page.directory.idText === joined.descriptor.syntheticRootId && !this.#receive.active) {
+      const entry = page.entries[0]
+      if (entry?.kind === 'file') this.#previews.openAutomaticPhoto(joined, entry, page.directory)
     }
-  }
-
-  async #openInitialBrowsePage(joined: JoinedBrowserShare): Promise<void> {
-    const root = joined.rootDirectory()
-    this.#browse.clearCatalog()
-    await this.#browse.loadPage(root, 0, Object.freeze([root]))
-    if (this.#joined === joined && this.#browse.pageMatches(root)) {
-      const share = this.#snapshot.share
-      if (share?.kind === 'browser' && share.singleFolder) {
-        this.#browse.openDirectory(share.homeDirectoryId)
-      }
-    }
-  }
-
-  #finishJoinAttempt(
-    navigation: AbortController | undefined,
-    lease: CapabilityJoinLease,
-    candidate: JoinedBrowserShare | undefined,
-    installed: boolean,
-  ): void {
-    if (this.#joinNavigation === navigation) {
-      this.#joinNavigation = undefined
-      this.#joinRecovery = undefined
-    }
-    lease.release()
-    if (candidate !== undefined && !installed) void candidate.close().catch(() => undefined)
-  }
-
-  #joinReplacementIsCurrent(navigation: AbortController): boolean {
-    return this.#joinNavigation === navigation && !navigation.signal.aborted && !this.#disposed
-  }
-
-  #handleJoinFailure(
-    error: unknown,
-    lease: CapabilityJoinLease,
-    navigation: AbortController | undefined,
-    previous: JoinedBrowserShare | undefined,
-    joinedReplacementInstalled: boolean,
-  ): void {
-    if (navigation === undefined || this.#joinNavigation !== navigation || navigation.signal.aborted) {
-      return
-    }
-    if (!joinedReplacementInstalled && previous !== undefined && this.#joined === previous) {
-      this.#joinedObservation.observe(previous)
-    }
-    this.#reportJoinFailure(lease.diagnosticError(error))
-    this.#traceJoin('failed')
-    this.#fail(error, lease)
   }
 
   #beginSelectionProjection(joined: JoinedBrowserShare): void {
@@ -614,10 +484,7 @@ export class ReceiverController {
     )
     this.#snapshot = Object.freeze({ ...this.#snapshot, share, draft, status: null })
     if (transition !== 'page-updated') this.#beginSelectionProjection(joined)
-    if (share?.kind === 'photo' && page.directory.idText === joined.descriptor.syntheticRootId && !this.#receive.active) {
-      const entry = page.entries[0]
-      if (entry?.kind === 'file') this.#previews.openAutomaticPhoto(joined, entry, page.directory)
-    }
+    this.#openAutomaticPhotoPreview(joined, share, page)
     if (!(share?.kind === 'browser' && share.singleFolder && page.directory.idText === joined.descriptor.syntheticRootId)) {
       // The synthetic wrapper is not the directory the recipient came to browse.
       queueMicrotask(() => { if (this.#joined === joined && !this.#disposed) void this.ensureDownloads() })
@@ -667,24 +534,6 @@ export class ReceiverController {
     })
   }
 
-  #fail(error: unknown, lease?: CapabilityJoinLease): void {
-    const detail = lease?.publicError(error) ?? this.#publicError(error)
-    const failure = joinFailure(error, detail)
-    let connection = this.#snapshot.connection
-    // A failed replacement must not block downloads on the previously joined share.
-    if (this.#joined === undefined && typeof failure !== 'string' && failure.kind === 'relayAccessDenied') {
-      connection = { kind: 'unavailable', reason: 'access-denied' }
-      this.#receive.observeConnection(terminalConnectionBlock(connection))
-    }
-    this.#publish({
-      ...this.#snapshot,
-      phase: 'failed',
-      status: 'stopped',
-      connection,
-      error: failure,
-    })
-  }
-
   #publicError(error: unknown): string { return this.#capabilityLifecycle.publicError(error) }
 
   #language() { return this.#preferences?.getSnapshot().language ?? 'en' }
@@ -702,28 +551,14 @@ export class ReceiverController {
   }
 
   #publish(snapshot: ReceiverSnapshot): void {
-    const reason = this.#receive.startBlockedReason()
-    const canReleaseCurrent = this.#receive.canReleaseCurrent
     const localChoiceId = this.#singlePhotoLocalChoiceId(snapshot)
-    const localReason = localChoiceId === null ? null : this.#receive.localStartBlockedReason()
-    const previousAdmission = this.#snapshot.startAdmission
-    const sameLocalChoice = localChoiceId === null
-      ? previousAdmission.localChoice === null
-      : previousAdmission.localChoice?.choiceId === localChoiceId &&
-        previousAdmission.localChoice.reason === localReason
-    const startAdmission =
-      previousAdmission.reason === reason &&
-      previousAdmission.canReleaseCurrent === canReleaseCurrent &&
-      sameLocalChoice
-        ? previousAdmission
-        : Object.freeze({
-            allowed: reason === null,
-            reason,
-            canReleaseCurrent,
-            localChoice: localChoiceId === null
-              ? null
-              : Object.freeze({ choiceId: localChoiceId, allowed: localReason === null, reason: localReason }),
-          })
+    const startAdmission = resolveStartAdmission(
+      this.#snapshot.startAdmission,
+      this.#receive.startBlockedReason(),
+      this.#receive.canReleaseCurrent,
+      localChoiceId,
+      localChoiceId === null ? null : this.#receive.localStartBlockedReason(),
+    )
     this.#snapshot = Object.freeze({
       ...snapshot,
       reportUrl: this.#shareReport.url,
@@ -735,21 +570,5 @@ export class ReceiverController {
     this.#experienceTrace.publish(this.#snapshot, composition)
     this.presentation.publish()
     for (const listener of this.#listeners) listener()
-  }
-
-  #reportJoinFailure(error: unknown): void {
-    try {
-      this.#recordFailure?.({ stage: 'join', error })
-    } catch {
-      // Diagnostic sinks cannot affect join control flow.
-    }
-  }
-
-  #traceJoin(transition: 'started' | 'joined' | 'failed' | 'stale_replacement'): void {
-    try {
-      this.#trace?.current?.(Object.freeze({ name: 'join_transition', transition }))
-    } catch {
-      // Diagnostic sinks cannot affect join control flow.
-    }
   }
 }

@@ -135,7 +135,7 @@ export function ReceiverBrowsing({ controller }: { readonly controller: Receiver
   }
 
   const share = snapshot.share
-  if (share === null && snapshot.breadcrumbs.length === 0) return null
+  if (share === null) return null
 
   const downloadReadiness: SingleFileDownloadReadiness = {
     startAdmission: snapshot.startAdmission,
@@ -175,9 +175,9 @@ export function ReceiverBrowsing({ controller }: { readonly controller: Receiver
           retry: () => controller.retryDirectory(),
         },
       }} />
-    {(share === null || share.kind === 'browser') && preview.state !== 'idle' &&
+    {share.kind === 'browser' && preview.state !== 'idle' &&
       <PreviewModal
-        key={share?.shareInstance ?? 'none'}
+        key={share.shareInstance}
         controller={controller}
         preview={preview}
         rows={snapshot.rows}

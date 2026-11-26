@@ -24,7 +24,7 @@ export function ReceiverHeading({ controller, actions }: {
   const source = controller.presentation.connection
   const browsing = controller.presentation.browsing
   const snapshot = useSyncExternalStore(source.subscribe, source.getSnapshot, source.getSnapshot)
-  const { share, breadcrumbs } = useSyncExternalStore(browsing.subscribe, browsing.getSnapshot, browsing.getSnapshot)
+  const { share } = useSyncExternalStore(browsing.subscribe, browsing.getSnapshot, browsing.getSnapshot)
   const [details, setDetails] = useState(false)
   const invoker = useRef<HTMLButtonElement>(null)
   const label = shareConnectionLabel(snapshot.connection, snapshot.phase, snapshot.status, t)
@@ -54,9 +54,9 @@ export function ReceiverHeading({ controller, actions }: {
       </div>
       {actions}
     </div>
-    {snapshot.error !== null && <div className="share-error" role="alert"><FailureNotice failure={snapshot.error} context={snapshot.phase === 'failed' ? 'open' : 'action'} /><DiagnosticsEntry label={t.exportDiagnostics} /></div>}
+    {snapshot.error !== null && <div className="share-error" role="alert"><FailureNotice failure={snapshot.error} context="action" /><DiagnosticsEntry label={t.exportDiagnostics} /></div>}
     {snapshot.phase === 'awaiting-key' && <KeyForm controller={controller} />}
-    {share === null && breadcrumbs.length === 0 && snapshot.phase === 'joining' &&
+    {share === null && snapshot.phase === 'joining' &&
       <InitialJoinLoading key={joinRetryAt ?? 'none'} status={join ? initialJoinStatus(join, t) : receiverStatus(snapshot.status, t)} join={join} controller={controller} />}
     {snapshot.connection.kind === 'reconnecting' && <ConnectionRecovery activity={snapshot.connection.activity} retry={() => controller.requestReconnect()} />}
     {details && <DetailSheet title={t.encryptionAndConnection} onClose={closeDetails} returnFocus={invoker}>

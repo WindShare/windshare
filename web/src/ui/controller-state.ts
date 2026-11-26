@@ -2,13 +2,35 @@ import type { TransferProgress } from '../transfer/progress'
 import { EMPTY_SELECTION_DRAFT } from './draft/model'
 import { EMPTY_OUTPUT_PRESENTATION } from './output'
 import { EMPTY_PROGRESS, EMPTY_PREVIEW, type ReceiverProgress } from './model'
-import { EMPTY_RETAINED_INVENTORY } from '../application/receive/contracts'
+import { EMPTY_RETAINED_INVENTORY, type ReceiveBlockReason } from '../application/receive/contracts'
 import type { CatalogEntry } from '../catalog/records'
 import type { SelectionPolicy } from '../catalog/selection'
 import type { ConnectivityActivation } from '../connectivity/receiver-policy'
 import type { FilePreview, PreviewPresentation } from '../preview/preview'
-import type { BrowseDirectory, BrowsePage } from '../application/browser-share/gateway'
-import type { BrowseRow, ReceiverSnapshot } from './model'
+import type { BrowseDirectory, BrowsePage, JoinedBrowserShare } from '../application/browser-share/gateway'
+import type { BrowseRow, ReceiverSnapshot, SelectionDraft, ShareIdentity, StartAdmission } from './model'
+
+export interface SuspendedShareBrowse {
+  readonly joined: JoinedBrowserShare
+  readonly share: ShareIdentity
+  readonly draftMode: SelectionDraft['mode']
+}
+
+const EMPTY_BROWSE_SNAPSHOT = Object.freeze({
+  share: null,
+  browse: Object.freeze({ kind: 'idle' as const, error: null }),
+  draft: EMPTY_SELECTION_DRAFT,
+  rows: Object.freeze([]),
+  breadcrumbs: Object.freeze([]),
+  pageIndex: 0,
+  pageCount: 0,
+  entryCount: 0,
+  omittedCount: 0n,
+  selectedVisibleFiles: 0,
+  selectedVisibleBytes: 0n,
+  directoryRetryable: false,
+  preview: EMPTY_PREVIEW,
+})
 
 export interface ActivePreview {
   readonly id: number
@@ -128,18 +150,56 @@ export function previewSnapshot(
 export function joiningReceiverSnapshot(snapshot: ReceiverSnapshot): ReceiverSnapshot {
   return Object.freeze({
     ...snapshot,
+    ...EMPTY_BROWSE_SNAPSHOT,
     phase: 'joining',
     status: 'connecting',
     pathActivity: { lanes: [] },
     error: null,
-    rows: Object.freeze([]),
     connection: { kind: 'idle' as const },
-    share: null,
-    draft: EMPTY_SELECTION_DRAFT,
-    browse: { kind: 'idle' as const, error: null },
     taskDisplay: null,
-    preview: EMPTY_PREVIEW,
     progress: EMPTY_PROGRESS,
+  })
+}
+
+export function cancelledReceiverSnapshot(snapshot: ReceiverSnapshot): ReceiverSnapshot {
+  return Object.freeze({
+    ...snapshot,
+    ...EMPTY_BROWSE_SNAPSHOT,
+    phase: 'awaiting-key',
+    connection: { kind: 'idle' as const },
+    pathActivity: { lanes: [] },
+    status: 'cancelled',
+    error: null,
+    taskDisplay: null,
+    progress: EMPTY_PROGRESS,
+  })
+}
+
+export function resolveStartAdmission(
+  previous: StartAdmission,
+  reason: ReceiveBlockReason | null,
+  canReleaseCurrent: boolean,
+  localChoiceId: string | null,
+  localReason: ReceiveBlockReason | null,
+): StartAdmission {
+  const sameLocalChoice = localChoiceId === null
+    ? previous.localChoice === null
+    : previous.localChoice?.choiceId === localChoiceId &&
+      previous.localChoice.reason === localReason
+  if (
+    previous.reason === reason &&
+    previous.canReleaseCurrent === canReleaseCurrent &&
+    sameLocalChoice
+  ) {
+    return previous
+  }
+  return Object.freeze({
+    allowed: reason === null,
+    reason,
+    canReleaseCurrent,
+    localChoice: localChoiceId === null
+      ? null
+      : Object.freeze({ choiceId: localChoiceId, allowed: localReason === null, reason: localReason }),
   })
 }
 
@@ -149,11 +209,9 @@ export function isAbortError(error: unknown): boolean {
 
 export function initialReceiverSnapshot(): ReceiverSnapshot {
   return Object.freeze({
+    ...EMPTY_BROWSE_SNAPSHOT,
     connection: { kind: 'idle' as const },
-    share: null,
     reportUrl: null,
-    browse: { kind: 'idle' as const, error: null },
-    draft: EMPTY_SELECTION_DRAFT,
     startAdmission: { allowed: false, reason: 'connectFirst' as const, canReleaseCurrent: false, localChoice: null },
     activeReceiveOperationId: null,
     taskDisplay: null,
@@ -161,17 +219,7 @@ export function initialReceiverSnapshot(): ReceiverSnapshot {
     status: 'enter-key',
     pathActivity: { lanes: [] },
     error: null,
-    rows: Object.freeze([]),
-    breadcrumbs: Object.freeze([]),
-    pageIndex: 0,
-    pageCount: 0,
-    entryCount: 0,
-    omittedCount: 0n,
-    selectedVisibleFiles: 0,
-    selectedVisibleBytes: 0n,
-    directoryRetryable: false,
     progress: EMPTY_PROGRESS,
-    preview: EMPTY_PREVIEW,
     output: EMPTY_OUTPUT_PRESENTATION,
     retained: EMPTY_RETAINED_INVENTORY,
   })

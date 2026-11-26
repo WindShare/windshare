@@ -74,12 +74,12 @@ function SingleFile({ share, preview, actions, openPreview }: {
 }
 
 export function ShareContent({ share, preview, previewActions, explorer }: {
-  readonly share: ShareIdentity | null
+  readonly share: ShareIdentity
   readonly preview: ReceiverSnapshot['preview']
   readonly previewActions: PreviewActions
   readonly explorer: ComponentProps<typeof Explorer>
 }) {
-  if (share !== null && share.kind !== 'browser') {
+  if (share.kind !== 'browser') {
     return <SingleFile share={share} preview={preview} actions={previewActions} openPreview={explorer.actions.preview} />
   }
   return <Explorer {...explorer} />

@@ -405,8 +405,11 @@ describe('v2 receiver capability lifecycle', () => {
     const failure = controller.getSnapshot()
     expect(gatewayInputs).toEqual([key])
     expect(failure.phase).toBe('failed')
-    expect(failure.error).toContain('[separate-key redacted]')
-    expect(failure.error).not.toContain(key)
+    expect(failure.error).toEqual({
+      kind: 'open',
+      detail: expect.stringContaining('[separate-key redacted]'),
+    })
+    expect(JSON.stringify(failure.error)).not.toContain(key)
     await controller.dispose()
   })
 })

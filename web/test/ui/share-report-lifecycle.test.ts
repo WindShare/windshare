@@ -16,7 +16,7 @@ import { RelayProtocolError } from '../../src/transport/relay/protocol'
 import * as relayReceiver from '../../src/transport/relay/receiver'
 import { ReceiverController } from '../../src/ui/controller'
 import { createMockDownloadWindow } from '../output/opfs-fixture'
-import { entry, identity, identityText, rootDirectory, waitForController } from './v2-preview-fixture'
+import { diagnosticImageJoined, entry, identity, identityText, waitForController } from './v2-preview-fixture'
 
 const PAGE_URL = 'https://windshare.example/'
 
@@ -61,10 +61,18 @@ class FakeShareReport implements ShareReport {
 
 function makeJoinedShare(seed: number, report?: ShareReport, onClose?: () => void): JoinedBrowserShare {
   const closeReport = () => report?.close()
+  const rootId = identityText(seed + 100)
+  const root: BrowseDirectory = Object.freeze({
+    id: identity(seed + 100),
+    idText: rootId,
+    path: Object.freeze([]),
+    ancestry: Object.freeze([rootId]),
+  })
+  const preview = diagnosticImageJoined()
   return {
     descriptor: {
       shareInstance: identity(seed), shareInstanceId: identityText(seed),
-      syntheticRoot: identity(seed + 100), syntheticRootId: identityText(seed + 100),
+      syntheticRoot: identity(seed + 100), syntheticRootId: rootId,
     },
     recoveryIdentity: `share.${seed}`,
     report,
@@ -72,7 +80,7 @@ function makeJoinedShare(seed: number, report?: ShareReport, onClose?: () => voi
     protocolSessionIdentity: identityText(seed + 50),
     selection: new SelectionPolicy(true),
     replaceSelection(this: { selection: SelectionPolicy }, next: SelectionPolicy) { this.selection = next },
-    rootDirectory: () => rootDirectory,
+    rootDirectory: () => root,
     page: async (directory: BrowseDirectory) => ({
       directory, pageIndex: 0, pageCount: 1, entryCount: 1, omittedCount: 0n, entries: [entry],
     }),
@@ -86,7 +94,9 @@ function makeJoinedShare(seed: number, report?: ShareReport, onClose?: () => voi
       return () => undefined
     },
     subscribeProtocolGeneration: () => () => undefined,
-    beginPreviewConnectivity: () => ({ routes: [], close: vi.fn() }),
+    beginPreviewConnectivity: preview.beginPreviewConnectivity,
+    automaticPhotoPreview: preview.preview,
+    preview: preview.preview,
     beginDownloadConnectivity: () => ({ routes: [], close: vi.fn() }),
     createTransferJob: () => {
       let resolveRun!: (result: {
@@ -187,14 +197,18 @@ describe('ReceiverController share report lifecycle', () => {
 
     // Failed replacement to another official share must keep share A's report URL and close candidate B.
     controller.openLocation({ capabilityInput: linkB, pageUrl: PAGE_URL })
-    await waitForController(controller, s => s.phase === 'failed')
+    await waitForController(controller, s =>
+      s.phase === 'browsing' && typeof s.error === 'object' && s.error !== null &&
+      'kind' in s.error && s.error.kind === 'open' && s.error.detail === 'sender offline')
     expect(controller.getSnapshot().reportUrl).toBe('https://authority.example/report#share=SHARE_A')
     expect(reportA.closed).toBe(false)
     expect(reportB.closed).toBe(true)
 
     // Failed replacement with an unparseable link must also keep share A's report URL.
     controller.openLocation({ capabilityInput: 'not-a-valid-link', pageUrl: PAGE_URL })
-    await waitForController(controller, s => s.phase === 'failed' && s.error === 'invalid link')
+    await waitForController(controller, s =>
+      s.phase === 'browsing' && typeof s.error === 'object' && s.error !== null &&
+      'kind' in s.error && s.error.kind === 'open' && s.error.detail === 'invalid link')
     expect(controller.getSnapshot().reportUrl).toBe('https://authority.example/report#share=SHARE_A')
 
     await controller.dispose()
@@ -222,7 +236,7 @@ describe('ReceiverController share report lifecycle', () => {
     expect(controller.getSnapshot().reportUrl).toBeNull()
 
     controller.openLocation({ capabilityInput: officialLink, pageUrl: PAGE_URL })
-    await waitForController(controller, s => s.phase === 'failed')
+    await waitForController(controller, s => s.phase === 'browsing' && s.error !== null)
     expect(controller.getSnapshot().reportUrl).toBeNull()
     expect(officialCandidate.closed).toBe(true)
 
@@ -292,7 +306,7 @@ describe('ReceiverController share report lifecycle', () => {
     await controller.dispose()
   })
 
-  it('preserves late report discovery after commit, swaps cleanly on replacement, and closes report on replacement cancel', async () => {
+  it('preserves late report discovery after commit, swaps cleanly on replacement, and restores committed share report on replacement cancel', async () => {
     const windowPort = stubPortableOutput()
     const linkA = await makeShareLink(10)
     const linkB = await makeShareLink(11)
@@ -340,17 +354,19 @@ describe('ReceiverController share report lifecycle', () => {
     await waitForController(controller, s => s.phase === 'browsing' && s.reportUrl === 'https://authority.example/report#share=SHARE_B')
     expect(hybridReport.closed).toBe(true)
 
-    // Cancelling while replacing B with C drops both shares and clears reportUrl.
+    // Cancelling while replacing B with C closes candidate C's report and restores committed share B.
     controller.openLocation({ capabilityInput: linkC, pageUrl: PAGE_URL })
     await enteredPendingC
     expect(controller.getSnapshot().reportUrl).toBe('https://authority.example/report#share=SHARE_B')
     controller.cancelJoin()
-    expect(controller.getSnapshot().phase).toBe('awaiting-key')
-    expect(controller.getSnapshot().reportUrl).toBeNull()
-    expect(reportB.closed).toBe(true)
+    expect(controller.getSnapshot().phase).toBe('browsing')
+    expect(controller.getSnapshot().share?.shareInstance).toBe(shareB.descriptor.shareInstanceId)
+    expect(controller.getSnapshot().reportUrl).toBe('https://authority.example/report#share=SHARE_B')
+    expect(reportB.closed).toBe(false)
     expect(reportC.closed).toBe(true)
 
     await controller.dispose()
+    expect(reportB.closed).toBe(true)
   })
 
   it('closes resolved report handles in BrowserReceiverGateway when unadopted join fails or aborts', async () => {

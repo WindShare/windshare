@@ -49,7 +49,7 @@ function connection(snapshot: ReceiverSnapshot) {
 function task(snapshot: ReceiverSnapshot) {
   const { output, progress, taskDisplay, connection, share, retained, activeReceiveOperationId, startAdmission, draft } = snapshot
   return Object.freeze({ output, progress, taskDisplay, connection, share, retained, activeReceiveOperationId, startAdmission, draft,
-    hasContent: share !== null || snapshot.breadcrumbs.length > 0 })
+    hasContent: share !== null })
 }
 function downloads(snapshot: ReceiverSnapshot, composition: TaskComposition) {
   return Object.freeze({ retained: snapshot.retained, history: composition.history,
@@ -127,7 +127,7 @@ export class ReceiverProjections {
     this.browsing.clear(); this.connection.clear(); this.task.clear(); this.surface.clear(); this.shareScope.clear(); this.downloads.clear(); this.report.clear()
   }
   #receiving(snapshot: ReceiverSnapshot): boolean {
-    return snapshot.share !== null || snapshot.breadcrumbs.length > 0 ||
+    return snapshot.share !== null ||
       snapshot.phase === 'joining' || snapshot.phase === 'browsing' || (snapshot.phase === 'failed' && snapshot.error !== null)
   }
 }

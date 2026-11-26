@@ -81,18 +81,18 @@ export function outcomeFailure(
 }
 
 export function joinFailure(error: unknown, detail: string): ReceiverFailure {
-  if (isRelayAccessDenied(error)) return { kind: 'relayAccessDenied', detail }
-  if (!(error instanceof CryptoError)) return detail
+  if (isRelayAccessDenied(error)) return Object.freeze({ kind: 'relayAccessDenied', detail })
+  if (!(error instanceof CryptoError)) return Object.freeze({ kind: 'open', detail })
   switch (error.code) {
     case 'malformed-key':
     case 'malformed-link':
     case 'malformed-share-id':
     case 'missing-key':
     case 'key-conflict':
-      return { kind: 'invalidLink', detail }
+      return Object.freeze({ kind: 'invalidLink', detail })
     case 'webcrypto-unavailable':
-      return { kind: 'secureContext', detail }
+      return Object.freeze({ kind: 'secureContext', detail })
     default:
-      return detail
+      return Object.freeze({ kind: 'open', detail })
   }
 }

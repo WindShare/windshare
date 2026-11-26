@@ -101,7 +101,7 @@ export type ReceiverFailure =
   | Readonly<{ kind: 'source-changed' }>
   | Readonly<{ kind: 'restore-target-missing'; directoryLabel: string }>
   | Readonly<{
-      kind: 'invalidLink' | 'secureContext' | 'permissionDenied' | 'relayAccessDenied' | 'browserCatalogLimit' | 'shareCatalogLimit'
+      kind: 'open' | 'invalidLink' | 'secureContext' | 'permissionDenied' | 'relayAccessDenied' | 'browserCatalogLimit' | 'shareCatalogLimit'
       detail: string
     }>
 

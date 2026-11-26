@@ -204,7 +204,10 @@ describe('diagnostic redaction boundaries', () => {
         capabilityInput: `https://windshare.top/share0123456789b?r=${encodedRelay}#${readSecret}`,
       })
       await new Promise(resolve => setTimeout(resolve, 0))
-      expect(controller.getSnapshot().error).toBe('Relay endpoint wss://relay.example/base/v2/ws failed')
+      expect(controller.getSnapshot().error).toEqual({
+        kind: 'open',
+        detail: 'Relay endpoint wss://relay.example/base/v2/ws failed',
+      })
 
       // 3. Malformed URL with embedded whitespace still redacts its #fragment via the join lease.
       const malformedWithSpace = `https://bad host/share#${readSecret}`
