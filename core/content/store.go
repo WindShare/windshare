@@ -1,7 +1,6 @@
 package content
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"runtime/debug"
@@ -38,8 +37,6 @@ type RevisionStore struct {
 	handleLedger   *capacityledger.Ledger
 	leaseLedger    *capacityledger.Ledger
 	capacityTracer CapacityTracer
-	closeContext   context.Context
-	closeCancel    context.CancelFunc
 	clock          Clock
 	revisionIDs    RevisionIDGenerator
 	leaseIDs       LeaseIDGenerator
@@ -184,7 +181,6 @@ func NewRevisionStore(config RevisionStoreConfig) (*RevisionStore, error) {
 	if config.LeaseIDs == nil {
 		config.LeaseIDs = randomLeaseIDs{}
 	}
-	closeContext, closeCancel := context.WithCancel(context.Background())
 	store := &RevisionStore{
 		shareInstance:    config.ShareInstance,
 		chunkSize:        config.ChunkSize,
@@ -197,8 +193,6 @@ func NewRevisionStore(config RevisionStoreConfig) (*RevisionStore, error) {
 		leaseIDs:         config.LeaseIDs,
 		cache:            config.Cache,
 		tracer:           config.Tracer,
-		closeContext:     closeContext,
-		closeCancel:      closeCancel,
 		revisions:        make(map[catalog.FileID]*revisionState),
 		readingRevisions: make(map[*revisionState]struct{}),
 		leases:           make(map[LeaseID]*leaseState),
@@ -208,7 +202,6 @@ func NewRevisionStore(config RevisionStoreConfig) (*RevisionStore, error) {
 		leaseTombstones:  make(map[LeaseID]leaseStatus),
 	}
 	if err := config.HandlePool.registerStore(store, limits); err != nil {
-		closeCancel()
 		return nil, fmt.Errorf("register revision store handle pool: %w", err)
 	}
 	return store, nil
@@ -280,7 +273,6 @@ func (s *RevisionStore) Close() error {
 func (s *RevisionStore) closeStore() error {
 	s.pool.mu.Lock()
 	s.closed = true
-	s.closeCancel()
 	attempts := make([]*openAttempt, 0, len(s.opening))
 	for _, attempt := range s.opening {
 		attempts = append(attempts, attempt)
@@ -307,11 +299,11 @@ func (s *RevisionStore) closeStore() error {
 	s.leases = make(map[LeaseID]*leaseState)
 	s.pool.mu.Unlock()
 
-	for _, identity := range retiredIdentities {
-		s.retireRevisionCache(identity)
-	}
 	for _, attempt := range attempts {
 		attempt.cancel()
+	}
+	for _, identity := range retiredIdentities {
+		s.retireRevisionCache(identity)
 	}
 	s.openWG.Wait()
 	s.readWG.Wait()

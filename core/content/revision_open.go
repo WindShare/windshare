@@ -74,7 +74,9 @@ func (s *RevisionStore) OpenRevision(
 			}
 			return lease, err
 		}
-		attemptContext, cancel := context.WithCancel(s.closeContext)
+		// Detach from caller and store contexts: closeStore cancels in-flight opens
+		// via s.opening, avoiding per-open registration on a share-lifetime parent.
+		attemptContext, cancel := context.WithCancel(context.Background())
 		attempt := &openAttempt{
 			file: file, done: make(chan struct{}), cancel: cancel, waiters: 1, ownerSession: session,
 		}
@@ -235,6 +237,9 @@ func (s *RevisionStore) runOpen(ctx context.Context, attempt *openAttempt) {
 			result.cause = RevisionTraceCausePanic
 			result.err = fmt.Errorf("revision source panicked: %v\n%s", recovered, debug.Stack())
 		}
+		// Cancel before completeOpen closes attempt.done so callers never observe
+		// a live attempt context after OpenRevision returns.
+		attempt.cancel()
 		s.completeOpen(attempt, result)
 	}()
 	record, ready := s.resolveOpenIdentity(ctx, attempt, &result)

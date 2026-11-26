@@ -547,3 +547,75 @@ func TestLeaseIdentityTombstoneRingRemainsBounded(t *testing.T) {
 		t.Fatalf("lease identity tombstones are unbounded: leases=%d", len(store.leaseTombstones))
 	}
 }
+
+func TestOpenRevisionCancelsAttemptContextBeforeReturn(t *testing.T) {
+	file, record := fileRecord(t, 1)
+	tests := []struct {
+		name    string
+		open    func(context.Context, catalog.NodeRecord) (StableFile, error)
+		wantErr bool
+	}{
+		{
+			name: "success",
+			open: func(context.Context, catalog.NodeRecord) (StableFile, error) {
+				return &testStableFile{data: []byte{42}}, nil
+			},
+		},
+		{
+			name: "source error",
+			open: func(context.Context, catalog.NodeRecord) (StableFile, error) {
+				return nil, ErrRevisionStale
+			},
+			wantErr: true,
+		},
+		{
+			name: "source panic",
+			open: func(context.Context, catalog.NodeRecord) (StableFile, error) {
+				panic("open boom")
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var nodeCtx, openCtx context.Context
+			store := customRevisionStore(t,
+				catalogNodeFunc(func(ctx context.Context, id catalog.NodeID) (catalog.NodeRecord, bool, error) {
+					nodeCtx = ctx
+					if id == file.NodeID() {
+						return record, true, nil
+					}
+					return catalog.NodeRecord{}, false, nil
+				}),
+				revisionSourceFunc(func(ctx context.Context, r catalog.NodeRecord) (StableFile, error) {
+					openCtx = ctx
+					return test.open(ctx, r)
+				}),
+				nil, &sequenceIDs{},
+			)
+			session := generousSession(t, store, "session")
+
+			lease, err := store.OpenRevision(context.Background(), file, session)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("OpenRevision err = %v, wantErr=%v", err, test.wantErr)
+			}
+			if nodeCtx == nil || openCtx == nil || nodeCtx != openCtx {
+				t.Fatalf("attempt contexts mismatch: node=%v open=%v", nodeCtx, openCtx)
+			}
+			if !errors.Is(openCtx.Err(), context.Canceled) {
+				t.Fatalf("attempt context remained live after OpenRevision returned: %v", openCtx.Err())
+			}
+			if !test.wantErr {
+				ref, refErr := NewBlockRef(file, lease.Descriptor().FileRevision(), 0, lease.Descriptor().Geometry())
+				if refErr != nil {
+					t.Fatal(refErr)
+				}
+				block, readErr := store.ReadBlock(context.Background(), lease.ID(), ref)
+				if readErr != nil || len(block) != 1 || block[0] != 42 {
+					t.Fatalf("ReadBlock after attempt cancel = (%v, %v), want ([42], nil)", block, readErr)
+				}
+			}
+		})
+	}
+}
