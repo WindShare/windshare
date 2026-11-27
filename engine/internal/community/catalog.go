@@ -26,12 +26,15 @@ import (
 )
 
 const (
-	maximumPeers    = 64
-	sampleSize      = 8
-	fanout          = 2
-	RefreshInterval = 2 * time.Minute
-	requestTimeout  = 4 * time.Second
-	exchangePath    = "/discovery/v1/peers"
+	maximumPeers          = 64
+	sampleSize            = 8
+	fanout                = 2
+	maxTierAttempts       = 4
+	maxSeedAttempts       = 8
+	defaultSeedPullBudget = 6 * time.Second
+	RefreshInterval       = 2 * time.Minute
+	requestTimeout        = 4 * time.Second
+	exchangePath          = "/discovery/v1/peers"
 )
 
 type Scope struct {
@@ -51,35 +54,37 @@ type peer struct {
 	live observation
 }
 type Pool struct {
-	policy   publicdial.Policy
-	http     *http.Client
-	path     string
-	now      func() time.Time
-	sink     diagnostics.Sink
-	ctx      context.Context
-	cancel   context.CancelFunc
-	workers  sync.WaitGroup
-	mu       sync.Mutex
-	closed   bool
-	peers    map[string]peer
-	cycle    *refreshCycle
-	cursor   int
-	probes   chan struct{}
-	inflight map[probeKey]*probe
+	policy         publicdial.Policy
+	http           *http.Client
+	path           string
+	now            func() time.Time
+	sink           diagnostics.Sink
+	seedPullBudget time.Duration
+	ctx            context.Context
+	cancel         context.CancelFunc
+	workers        sync.WaitGroup
+	mu             sync.Mutex
+	closed         bool
+	peers          map[string]peer
+	cycle          *refreshCycle
+	cursor         int
+	probes         chan struct{}
+	inflight       map[probeKey]*probe
 }
 
 func New(path string, policy publicdial.Policy, now func() time.Time, sink diagnostics.Sink) *Pool {
 	ctx, cancel := context.WithCancel(context.Background())
 	p := &Pool{
-		policy:   policy,
-		http:     policy.Client(),
-		now:      now,
-		sink:     sink,
-		ctx:      ctx,
-		cancel:   cancel,
-		peers:    make(map[string]peer),
-		probes:   make(chan struct{}, fanout),
-		inflight: make(map[probeKey]*probe),
+		policy:         policy,
+		http:           policy.Client(),
+		now:            now,
+		sink:           sink,
+		seedPullBudget: defaultSeedPullBudget,
+		ctx:            ctx,
+		cancel:         cancel,
+		peers:          make(map[string]peer),
+		probes:         make(chan struct{}, fanout),
+		inflight:       make(map[probeKey]*probe),
 	}
 	if path != "" {
 		p.path = filepath.Join(statefile.StateDirectory(path), "community-peers.json")

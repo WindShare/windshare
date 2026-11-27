@@ -9,12 +9,29 @@ import (
 	"net/url"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/windshare/windshare/connectivity/icepolicy"
 	"github.com/windshare/windshare/core/serviceauthority"
 	"github.com/windshare/windshare/engine/internal/statefile"
 )
+
+// Seeds groups untrusted bootstrap origins into ordered fallback tiers.
+// Local cached peers are always consulted before any bootstrap tier.
+type Seeds struct {
+	Configured []string
+	Active     []string
+	Fallback   []string
+}
+
+func (s Seeds) clone() Seeds {
+	return Seeds{
+		Configured: slices.Clone(s.Configured),
+		Active:     slices.Clone(s.Active),
+		Fallback:   slices.Clone(s.Fallback),
+	}
+}
 
 type refreshCycle struct {
 	done  chan struct{}
@@ -35,7 +52,7 @@ func (c *refreshCycle) advanceScope(next Scope) {
 // Refresh coalesces startup bootstrapping and periodic pool maintenance.
 // Shared I/O runs on the pool lifetime context so caller cancellation only
 // unblocks that caller's wait without poisoning coalesced refreshers or probes.
-func (p *Pool) Refresh(ctx context.Context, scope Scope, seeds []string) {
+func (p *Pool) Refresh(ctx context.Context, scope Scope, seeds Seeds) {
 	if p == nil {
 		return
 	}
@@ -67,7 +84,7 @@ func (p *Pool) Refresh(ctx context.Context, scope Scope, seeds []string) {
 	p.cursor += fanout
 	p.workers.Add(1)
 	p.mu.Unlock()
-	clonedSeeds := slices.Clone(seeds)
+	clonedSeeds := seeds.clone()
 	go func() {
 		defer p.workers.Done()
 		defer func() {
@@ -85,38 +102,22 @@ func (p *Pool) Refresh(ctx context.Context, scope Scope, seeds []string) {
 	}
 }
 
-func (p *Pool) runRefresh(cycle *refreshCycle, cursor int, seeds []string) {
+func (p *Pool) runRefresh(cycle *refreshCycle, cursor int, seeds Seeds) {
 	records := p.records()
 	cached := make([]string, 0, len(records))
 	for _, entry := range records {
 		cached = append(cached, entry.d.RelayBaseURL())
 	}
 	var initial sync.WaitGroup
+	var initialAttempted []string
 	var warmedScope Scope
 	if len(records) > 0 {
 		p.mu.Lock()
 		warmedScope = cycle.scope
 		p.mu.Unlock()
-		initial.Go(func() { p.warm(p.ctx, warmedScope, cursor) })
+		initial.Go(func() { initialAttempted = p.warm(p.ctx, warmedScope, cursor, fanout, nil) })
 	}
-	pull := func(targets []string) bool {
-		ready := false
-		for i := 0; i < min(fanout, len(targets)); i++ {
-			if p.ctx.Err() != nil {
-				return ready
-			}
-			target := targets[(cursor+i)%len(targets)]
-			if err := p.sample(p.ctx, target); err == nil {
-				ready = true
-			} else if p.ctx.Err() == nil {
-				p.trace("community_pull_failed", target, err.Error())
-			}
-		}
-		return ready
-	}
-	if !pull(cached) && p.ctx.Err() == nil {
-		pull(seeds)
-	}
+	pulled := p.pull(cursor, cached, seeds)
 	records = p.records()
 	if p.path != "" && len(records) > 0 && p.ctx.Err() == nil {
 		raw := make([]json.RawMessage, 0, len(records))
@@ -128,13 +129,31 @@ func (p *Pool) runRefresh(cycle *refreshCycle, cursor int, seeds []string) {
 			p.trace("community_cache_failed", p.path, err.Error())
 		}
 	}
-	if len(cached) == 0 && p.ctx.Err() == nil {
-		p.mu.Lock()
-		warmedScope = cycle.scope
-		p.mu.Unlock()
-		p.warm(p.ctx, warmedScope, cursor)
-	}
 	initial.Wait()
+	if p.ctx.Err() != nil {
+		return
+	}
+	p.mu.Lock()
+	currentScope := cycle.scope
+	p.mu.Unlock()
+	if warmedScope.Origin == "" {
+		warmedScope = currentScope
+		if warmedScope.Origin != "" {
+			p.warm(p.ctx, warmedScope, cursor, fanout, nil)
+		}
+	} else if warmedScope == currentScope {
+		// Stale caches may fail initial warming before pull discovers healthy
+		// peers from seeds; fill remaining fanout slots once without re-probing
+		// peers already attempted in this cycle or amplifying offline probes.
+		verified := p.verifiedCount(warmedScope)
+		if verified < fanout && (pulled || verified > 0) {
+			exclude := make(map[string]struct{}, len(initialAttempted))
+			for _, id := range initialAttempted {
+				exclude[id] = struct{}{}
+			}
+			p.warm(p.ctx, warmedScope, cursor, fanout-verified, exclude)
+		}
+	}
 	// A coalesced caller may arrive mid-cycle with a newer frontend origin or
 	// network generation. Re-warm once for that latest scope so callers do not
 	// sleep for RefreshInterval with observations bound only to the old scope.
@@ -142,23 +161,159 @@ func (p *Pool) runRefresh(cycle *refreshCycle, cursor int, seeds []string) {
 	latestScope := cycle.scope
 	p.mu.Unlock()
 	if latestScope.Origin != "" && latestScope != warmedScope && p.ctx.Err() == nil {
-		p.warm(p.ctx, latestScope, cursor)
+		p.warm(p.ctx, latestScope, cursor, fanout, nil)
 	}
 }
 
-func (p *Pool) warm(ctx context.Context, scope Scope, cursor int) {
+func (p *Pool) pull(cursor int, cached []string, seeds Seeds) bool {
+	tried := make(map[string]struct{}, fanout+maxSeedAttempts)
+	if len(cached) > 0 && p.ctx.Err() == nil {
+		if p.pullBatch(p.ctx, p.nextTargets(cached, cursor, fanout, tried)) {
+			return true
+		}
+	}
+	if p.ctx.Err() != nil {
+		return false
+	}
+	return p.pullSeeds(cursor, seeds, tried)
+}
+
+// pullSeeds walks bootstrap tiers in strict preference order and advances past
+// unreachable seeds within per-tier, total-attempt, and wall-clock caps so a
+// dead tier or offline network cannot stall recovery indefinitely.
+func (p *Pool) pullSeeds(cursor int, seeds Seeds, tried map[string]struct{}) bool {
+	tiers := [][]string{seeds.Configured, seeds.Active, seeds.Fallback}
+	if !slices.ContainsFunc(tiers, func(t []string) bool { return len(t) > 0 }) {
+		return false
+	}
+	budget := p.seedPullBudget
+	if budget <= 0 {
+		budget = defaultSeedPullBudget
+	}
+	seedCtx, cancel := context.WithTimeout(p.ctx, budget)
+	defer cancel()
+	attempts := 0
+	for _, tier := range tiers {
+		tierAttempts := 0
+		for len(tier) > 0 && attempts < maxSeedAttempts && tierAttempts < maxTierAttempts && seedCtx.Err() == nil {
+			limit := min(fanout, maxSeedAttempts-attempts, maxTierAttempts-tierAttempts)
+			batch := p.nextTargets(tier, cursor, limit, tried)
+			if len(batch) == 0 {
+				break
+			}
+			attempts += len(batch)
+			tierAttempts += len(batch)
+			if p.pullBatch(seedCtx, batch) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (p *Pool) targetKey(raw string) string {
+	if origin, err := p.policy.RelayOrigin(raw); err == nil {
+		return origin.String()
+	}
+	return raw
+}
+
+func (p *Pool) nextTargets(targets []string, start, limit int, tried map[string]struct{}) []string {
+	if len(targets) == 0 || limit <= 0 {
+		return nil
+	}
+	out := make([]string, 0, min(limit, len(targets)))
+	n := len(targets)
+	offset := ((start % n) + n) % n
+	for i := 0; i < n && len(out) < limit; i++ {
+		target := targets[(offset+i)%n]
+		key := p.targetKey(target)
+		if _, seen := tried[key]; seen {
+			continue
+		}
+		tried[key] = struct{}{}
+		out = append(out, target)
+	}
+	return out
+}
+
+func (p *Pool) pullBatch(ctx context.Context, targets []string) bool {
+	if len(targets) == 0 || ctx.Err() != nil {
+		return false
+	}
+	if len(targets) == 1 {
+		if err := p.sample(ctx, targets[0]); err == nil {
+			return true
+		} else if p.ctx.Err() == nil {
+			p.trace("community_pull_failed", targets[0], err.Error())
+		}
+		return false
+	}
+	var ready atomic.Bool
+	var workers sync.WaitGroup
+	for _, target := range targets {
+		workers.Go(func() {
+			if err := p.sample(ctx, target); err == nil {
+				ready.Store(true)
+			} else if p.ctx.Err() == nil {
+				p.trace("community_pull_failed", target, err.Error())
+			}
+		})
+	}
+	workers.Wait()
+	return ready.Load()
+}
+
+func warmEligible(entry peer) bool {
+	return entry.d.Authority == nil &&
+		entry.d.PublicRelay != serviceauthority.RelayDisabled &&
+		(entry.d.Services.STUN || entry.d.PublicRelay == serviceauthority.RelayAnonymous)
+}
+
+func warmVerified(entry peer, scope Scope, now time.Time) bool {
+	if !warmEligible(entry) || entry.live.scope != scope || !entry.live.until.After(now) {
+		return false
+	}
+	return entry.d.PublicRelay != serviceauthority.RelayAnonymous || entry.live.relay
+}
+
+func (p *Pool) verifiedCount(scope Scope) int {
 	if scope.Origin == "" {
-		return
+		return 0
+	}
+	now := p.now()
+	count := 0
+	for _, entry := range p.records() {
+		if warmVerified(entry, scope, now) {
+			count++
+		}
+	}
+	return count
+}
+
+func (p *Pool) warm(ctx context.Context, scope Scope, cursor, limit int, exclude map[string]struct{}) []string {
+	if scope.Origin == "" || limit <= 0 {
+		return nil
 	}
 	records := p.records()
+	now := p.now()
 	// Prefer names for the supplemental slot. Rotate within each tier so a
 	// stale peer cannot monopolize the bounded startup probes.
 	var candidates []peer
 	for i := range records {
 		entry := records[(cursor+i)%len(records)]
-		if entry.d.Authority == nil && entry.d.PublicRelay != serviceauthority.RelayDisabled && (entry.d.Services.STUN || entry.d.PublicRelay == serviceauthority.RelayAnonymous) {
-			candidates = append(candidates, entry)
+		if !warmEligible(entry) {
+			continue
 		}
+		if exclude != nil {
+			if _, skip := exclude[entry.d.RelayEndpoint]; skip || warmVerified(entry, scope, now) {
+				continue
+			}
+		}
+		candidates = append(candidates, entry)
+	}
+	if len(candidates) == 0 {
+		return nil
 	}
 	isLiteral := func(x peer) bool {
 		u, _ := url.Parse(x.d.RelayEndpoint)
@@ -181,8 +336,11 @@ func (p *Pool) warm(ctx context.Context, scope Scope, cursor int) {
 		}
 		return -1
 	})
+	selected := candidates[:min(limit, len(candidates))]
+	attempted := make([]string, 0, len(selected))
 	var workers sync.WaitGroup
-	for _, entry := range candidates[:min(fanout, len(candidates))] {
+	for _, entry := range selected {
+		attempted = append(attempted, entry.d.RelayEndpoint)
 		workers.Go(func() {
 			if err := p.check(ctx, scope, entry.d.RelayEndpoint, RefreshInterval); err != nil && ctx.Err() == nil {
 				p.trace("community_probe_failed", entry.d.RelayEndpoint, err.Error())
@@ -190,6 +348,7 @@ func (p *Pool) warm(ctx context.Context, scope Scope, cursor int) {
 		})
 	}
 	workers.Wait()
+	return attempted
 }
 
 type probeKey struct {

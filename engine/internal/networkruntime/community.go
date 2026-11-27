@@ -5,7 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"slices"
+	"strings"
 	"time"
 
 	"github.com/windshare/windshare/connectivity/publicdial"
@@ -177,23 +177,67 @@ func (r *Runtime) observeOwner(profile relayprofile.Candidate) (serviceauthority
 	return d.PublicRelay, err == nil && ep.IdentityURL == d.RelayEndpoint && d.Authority == nil
 }
 
-func (r *Runtime) seeds(settings relayconfig.Config) []string {
-	targets := slices.Clone(settings.BootstrapNodes)
-	for _, seed := range r.config.BootstrapNodes {
-		if !slices.Contains(targets, seed) {
-			targets = append(targets, seed)
+func (r *Runtime) seeds(settings relayconfig.Config) community.Seeds {
+	seen := make(map[string]struct{})
+	appendUnique := func(dst *[]string, raw string) {
+		key := seedOriginKey(raw)
+		if _, dup := seen[key]; dup {
+			return
 		}
+		seen[key] = struct{}{}
+		*dst = append(*dst, raw)
 	}
+	var out community.Seeds
+	// Explicit user-configured seeds outrank built-in defaults so manual
+	// overrides take effect without waiting on stale official fleets.
+	for _, seed := range settings.BootstrapNodes {
+		appendUnique(&out.Configured, seed)
+	}
+	var snapshot nodedirectory.Snapshot
+	usable := false
 	if r.directory != nil {
-		// Even after trust expires, an address remains a permissible untrusted seed.
-		snapshot, _ := r.directory.Snapshot()
+		snapshot, usable = r.directory.Snapshot()
+	}
+	if usable {
 		for _, n := range snapshot.Payload().Nodes {
-			if n.Status == nodedirectory.Active && !slices.Contains(targets, n.Relay) {
-				targets = append(targets, n.Relay)
+			if n.Status == nodedirectory.Active {
+				appendUnique(&out.Active, n.Relay)
 			}
 		}
 	}
-	return targets
+	for _, seed := range r.config.BootstrapNodes {
+		appendUnique(&out.Fallback, seed)
+	}
+	if !usable && r.directory != nil {
+		// Even after trust expires, historical directory addresses remain
+		// permissible lowest-priority untrusted seeds.
+		for _, n := range snapshot.Payload().Nodes {
+			if n.Status == nodedirectory.Active {
+				appendUnique(&out.Fallback, n.Relay)
+			}
+		}
+	}
+	return out
+}
+
+func seedOriginKey(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return raw
+	}
+	scheme := strings.ToLower(u.Scheme)
+	host := strings.ToLower(u.Hostname())
+	port := u.Port()
+	if scheme == "https" && port == "443" {
+		port = ""
+	}
+	if strings.ContainsRune(host, ':') {
+		host = "[" + host + "]"
+	}
+	if port != "" {
+		return scheme + "://" + host + ":" + port
+	}
+	return scheme + "://" + host
 }
 
 // Empty-cache startup races the two independent discovery paths. Once a plan

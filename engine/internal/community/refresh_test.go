@@ -1,6 +1,7 @@
 package community
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
@@ -34,7 +35,12 @@ func envelope(t *testing.T, endpoint, domain string, now time.Time, lifetime tim
 
 func envelopeWithRelay(t *testing.T, endpoint, domain string, now time.Time, lifetime time.Duration, state serviceauthority.PublicRelay) json.RawMessage {
 	t.Helper()
-	key := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
+	return envelopeWithSeed(t, 0, endpoint, domain, now, lifetime, state)
+}
+
+func envelopeWithSeed(t *testing.T, seedByte byte, endpoint, domain string, now time.Time, lifetime time.Duration, state serviceauthority.PublicRelay) json.RawMessage {
+	t.Helper()
+	key := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{seedByte}, ed25519.SeedSize))
 	public := key.Public().(ed25519.PublicKey)
 	digest := sha256.Sum256(append([]byte("windshare/node-identity/v1\x00"), public...))
 	encode := base64.RawURLEncoding.EncodeToString
@@ -128,7 +134,7 @@ func TestPullWarmRestartAndOriginPolicy(t *testing.T) {
 	}
 	scope := Scope{Origin: front, Generation: 1}
 	pool := open()
-	pool.Refresh(t.Context(), scope, []string{base})
+	pool.Refresh(t.Context(), scope, Seeds{Active: []string{base}})
 	peers := pool.Candidates(scope)
 	if len(peers) != 1 || !peers[0].Verified || pulls.Load() != 1 || upgrades.Load() != 1 {
 		t.Fatalf("peers=%v pulls=%d upgrades=%d", peers, pulls.Load(), upgrades.Load())
@@ -148,7 +154,7 @@ func TestPullWarmRestartAndOriginPolicy(t *testing.T) {
 	if len(peers) != 1 || peers[0].Verified {
 		t.Fatal("restart must retain the signed record and recheck reachability", peers)
 	}
-	restored.Refresh(t.Context(), scope, nil)
+	restored.Refresh(t.Context(), scope, Seeds{})
 	if !restored.Candidates(scope)[0].Verified || pulls.Load() != 2 {
 		t.Fatal("failed to recover from cache without seeds")
 	}
@@ -245,7 +251,7 @@ func TestSubpathMountedCommunityRelayVerifiesAtOriginRootAndMountWebSocket(t *te
 	defer pool.Close()
 
 	scope := Scope{Origin: front, Generation: 1}
-	pool.Refresh(t.Context(), scope, []string{seed})
+	pool.Refresh(t.Context(), scope, Seeds{Active: []string{seed}})
 	peers := pool.Candidates(scope)
 	if len(peers) != 1 || !peers[0].Verified || peers[0].URL != seed+"/mount" || upgrades.Load() != 1 {
 		t.Fatalf("subpath relay failed discovery/verification: peers=%v upgrades=%d", peers, upgrades.Load())
@@ -308,7 +314,7 @@ func TestCancelledCallerDoesNotAbortSharedRefresh(t *testing.T) {
 	ctx1, cancel1 := context.WithCancel(t.Context())
 	done1 := make(chan struct{})
 	go func() {
-		pool.Refresh(ctx1, scope, []string{seed})
+		pool.Refresh(ctx1, scope, Seeds{Active: []string{seed}})
 		close(done1)
 	}()
 	<-pullEntered
@@ -316,7 +322,7 @@ func TestCancelledCallerDoesNotAbortSharedRefresh(t *testing.T) {
 	// Coalesce a second caller before cancelling the first caller.
 	done2 := make(chan struct{})
 	go func() {
-		pool.Refresh(t.Context(), scope, []string{seed})
+		pool.Refresh(t.Context(), scope, Seeds{Active: []string{seed}})
 		close(done2)
 	}()
 	cancel1()
@@ -548,14 +554,14 @@ func TestRefreshRewarmsWhenNewerScopeArrivesMidCycle(t *testing.T) {
 	ctx1, cancel1 := context.WithCancel(t.Context())
 	done1 := make(chan struct{})
 	go func() {
-		pool.Refresh(ctx1, scope1, []string{seed})
+		pool.Refresh(ctx1, scope1, Seeds{Active: []string{seed}})
 		close(done1)
 	}()
 	<-warmEntered
 
 	done2 := make(chan struct{})
 	go func() {
-		pool.Refresh(t.Context(), scope2, []string{seed})
+		pool.Refresh(t.Context(), scope2, Seeds{Active: []string{seed}})
 		close(done2)
 	}()
 	for {
@@ -572,7 +578,7 @@ func TestRefreshRewarmsWhenNewerScopeArrivesMidCycle(t *testing.T) {
 	staleCtx, cancelStale := context.WithCancel(t.Context())
 	doneStale := make(chan struct{})
 	go func() {
-		pool.Refresh(staleCtx, staleScope, []string{seed})
+		pool.Refresh(staleCtx, staleScope, Seeds{Active: []string{seed}})
 		close(doneStale)
 	}()
 	cancelStale()
@@ -614,7 +620,7 @@ func TestPreCancelledContextAndPoolCloseJoinDetachedWork(t *testing.T) {
 	scope := Scope{Origin: front, Generation: 1}
 	cancelled, cancel := context.WithCancel(t.Context())
 	cancel()
-	pool.Refresh(cancelled, scope, []string{seed})
+	pool.Refresh(cancelled, scope, Seeds{Active: []string{seed}})
 	if err := pool.Verify(cancelled, scope, identity); !errors.Is(err, context.Canceled) {
 		t.Fatalf("pre-cancelled Verify error = %v, want context.Canceled", err)
 	}
@@ -625,7 +631,7 @@ func TestPreCancelledContextAndPoolCloseJoinDetachedWork(t *testing.T) {
 	callerCtx, callerCancel := context.WithCancel(t.Context())
 	callerDone := make(chan struct{})
 	go func() {
-		pool.Refresh(callerCtx, scope, []string{seed})
+		pool.Refresh(callerCtx, scope, Seeds{Active: []string{seed}})
 		close(callerDone)
 	}()
 	<-pullEntered
@@ -637,5 +643,255 @@ func TestPreCancelledContextAndPoolCloseJoinDetachedWork(t *testing.T) {
 	<-serverCancelled
 	if err := pool.Verify(t.Context(), scope, identity); !errors.Is(err, context.Canceled) {
 		t.Fatalf("post-Close Verify error = %v, want context.Canceled", err)
+	}
+}
+
+type fakeCommunityNode struct {
+	server   *httptest.Server
+	base     string
+	identity string
+	gossip   json.RawMessage
+	live     json.RawMessage
+	pulls    atomic.Int32
+	probes   atomic.Int32
+	alive    atomic.Bool
+	sample   func() []json.RawMessage
+}
+
+func newFakeCommunityNode(t *testing.T, host string, seedByte byte, front string, now time.Time, alive bool) *fakeCommunityNode {
+	t.Helper()
+	node := &fakeCommunityNode{}
+	node.alive.Store(alive)
+	originHost := strings.TrimPrefix(strings.TrimPrefix(front, "https://"), "http://")
+	node.server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case exchangePath:
+			node.pulls.Add(1)
+			if !node.alive.Load() {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			var entries []json.RawMessage
+			if node.sample != nil {
+				entries = node.sample()
+			} else {
+				entries = []json.RawMessage{node.gossip}
+			}
+			_ = json.NewEncoder(w).Encode(entries)
+		case "/.well-known/windshare":
+			node.probes.Add(1)
+			if !node.alive.Load() {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			_, _ = w.Write(node.live)
+		case "/v2/ws":
+			if !node.alive.Load() || r.Header.Get("Origin") != front {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: []string{originHost}})
+			if err != nil {
+				return
+			}
+			_ = ws.CloseNow()
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(node.server.Close)
+	_, port, _ := net.SplitHostPort(strings.TrimPrefix(node.server.URL, "https://"))
+	node.base = "https://" + host + ":" + port
+	node.identity = "wss://" + host + ":" + port + "/v2/ws"
+	node.gossip = envelopeWithSeed(t, seedByte, node.identity, serviceauthority.GossipDomain, now, 24*time.Hour, serviceauthority.RelayAnonymous)
+	node.live = envelopeWithSeed(t, seedByte, node.identity, serviceauthority.DescriptorDomain, now, 5*time.Minute, serviceauthority.RelayAnonymous)
+	return node
+}
+
+func insecureLocalPolicy(sampleServer *httptest.Server) publicdial.Policy {
+	local := netip.MustParseAddr("127.0.0.1")
+	tlsConfig := sampleServer.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+	tlsConfig.InsecureSkipVerify = true
+	return publicdial.Policy{
+		Permit:          func(a netip.Addr) bool { return a == local },
+		Lookup:          func(context.Context, string, string) ([]netip.Addr, error) { return []netip.Addr{local}, nil },
+		TLSClientConfig: tlsConfig,
+	}
+}
+
+func TestRefreshSeedTierOrderDeduplicationAndBoundedAdvancement(t *testing.T) {
+	now := time.Now()
+	const front = "https://share.example"
+	scope := Scope{Origin: front, Generation: 1}
+
+	configured := newFakeCommunityNode(t, "cfg.example", 1, front, now, true)
+	active1 := newFakeCommunityNode(t, "act1.example", 2, front, now, true)
+	fallback := newFakeCommunityNode(t, "fb.example", 3, front, now, true)
+
+	// 1. Explicit configured seed wins before active and fallback tiers.
+	pool := New("", insecureLocalPolicy(configured.server), func() time.Time { return now }, diagnostics.Sink{})
+	defer pool.Close()
+	pool.Refresh(t.Context(), scope, Seeds{
+		Configured: []string{configured.base},
+		Active:     []string{active1.base},
+		Fallback:   []string{fallback.base},
+	})
+	if configured.pulls.Load() != 1 || active1.pulls.Load() != 0 || fallback.pulls.Load() != 0 {
+		t.Fatalf("configured tier did not short-circuit: cfg=%d active=%d fb=%d",
+			configured.pulls.Load(), active1.pulls.Load(), fallback.pulls.Load())
+	}
+
+	// 2. Healthy local cache short-circuits before touching any seed tier.
+	pool.Refresh(t.Context(), scope, Seeds{
+		Configured: []string{fallback.base},
+		Active:     []string{active1.base},
+		Fallback:   []string{fallback.base},
+	})
+	if configured.pulls.Load() != 2 || active1.pulls.Load() != 0 || fallback.pulls.Load() != 0 {
+		t.Fatalf("healthy cache touched bootstrap tiers: cfg=%d active=%d fb=%d",
+			configured.pulls.Load(), active1.pulls.Load(), fallback.pulls.Load())
+	}
+
+	// 3. Active tier advances past >=fanout dead seeds within one cycle and stays ahead of Fallback even with non-zero cursor.
+	dead1 := newFakeCommunityNode(t, "d1.example", 11, front, now, false)
+	dead2 := newFakeCommunityNode(t, "d2.example", 12, front, now, false)
+	alive3 := newFakeCommunityNode(t, "a3.example", 13, front, now, true)
+	fbUnused := newFakeCommunityNode(t, "fbu.example", 14, front, now, true)
+
+	advPool := New("", insecureLocalPolicy(alive3.server), func() time.Time { return now }, diagnostics.Sink{})
+	defer advPool.Close()
+	advPool.cursor = 6 // Even after prior cycles moved cursor, Active still runs before Fallback.
+	advPool.Refresh(t.Context(), scope, Seeds{
+		Active:   []string{dead1.base, dead2.base, alive3.base},
+		Fallback: []string{fbUnused.base},
+	})
+	if dead1.pulls.Load() != 1 || dead2.pulls.Load() != 1 || alive3.pulls.Load() != 1 || fbUnused.pulls.Load() != 0 {
+		t.Fatalf("active tier advancement unexpected: d1=%d d2=%d a3=%d fb=%d",
+			dead1.pulls.Load(), dead2.pulls.Load(), alive3.pulls.Load(), fbUnused.pulls.Load())
+	}
+	if peers := advPool.Candidates(scope); len(peers) != 1 || !peers[0].Verified {
+		t.Fatalf("expected alive3 peer to be discovered and verified, got %+v", peers)
+	}
+
+	// 4. Large dead Active tier caps at maxTierAttempts so Fallback is still reached, and duplicate origins are not re-dialed.
+	deadTier := make([]*fakeCommunityNode, maxTierAttempts+2)
+	deadURLs := make([]string, len(deadTier))
+	for i := range deadTier {
+		deadTier[i] = newFakeCommunityNode(t, "dead-tier.example", byte(20+i), front, now, false)
+		deadURLs[i] = deadTier[i].base
+	}
+	fbAlive := newFakeCommunityNode(t, "fb-alive.example", 40, front, now, true)
+	capPool := New("", insecureLocalPolicy(fbAlive.server), func() time.Time { return now }, diagnostics.Sink{})
+	defer capPool.Close()
+	capPool.Refresh(t.Context(), scope, Seeds{
+		Active:   deadURLs,
+		Fallback: []string{deadURLs[0] + "/", fbAlive.base},
+	})
+	totalDeadPulls := int32(0)
+	for _, n := range deadTier {
+		totalDeadPulls += n.pulls.Load()
+	}
+	if totalDeadPulls != maxTierAttempts || deadTier[0].pulls.Load() != 1 || fbAlive.pulls.Load() != 1 {
+		t.Fatalf("tier cap/dedup failed: totalDead=%d firstDead=%d fbAlive=%d",
+			totalDeadPulls, deadTier[0].pulls.Load(), fbAlive.pulls.Load())
+	}
+
+	// 5. Wall-clock seedPullBudget bounds blackholed seed recovery.
+	blackhole := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer blackhole.Close()
+	_, bhPort, _ := net.SplitHostPort(strings.TrimPrefix(blackhole.URL, "https://"))
+	bhSeed := "https://blackhole.example:" + bhPort
+	budgetPool := New("", insecureLocalPolicy(blackhole), func() time.Time { return now }, diagnostics.Sink{})
+	defer budgetPool.Close()
+	budgetPool.seedPullBudget = 60 * time.Millisecond
+	started := time.Now()
+	budgetPool.Refresh(t.Context(), scope, Seeds{Active: []string{bhSeed}})
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("blackholed seed pull ignored seedPullBudget: elapsed=%v", elapsed)
+	}
+}
+
+func TestStaleCacheRecoveryWarmsNewlyDiscoveredPeersWithoutReprobingDeadOnes(t *testing.T) {
+	now := time.Now()
+	const front = "https://share.example"
+	scope := Scope{Origin: front, Generation: 1}
+
+	// Dead cached peers sort alphabetically ahead of newly discovered healthy peers.
+	deadA := newFakeCommunityNode(t, "a-dead.example", 51, front, now, false)
+	deadB := newFakeCommunityNode(t, "b-dead.example", 52, front, now, false)
+	okC := newFakeCommunityNode(t, "c-ok.example", 53, front, now, true)
+	okD := newFakeCommunityNode(t, "d-ok.example", 54, front, now, true)
+	seed := newFakeCommunityNode(t, "seed.example", 55, front, now, true)
+	seed.sample = func() []json.RawMessage { return []json.RawMessage{okC.gossip, okD.gossip} }
+
+	pool := New("", insecureLocalPolicy(seed.server), func() time.Time { return now }, diagnostics.Sink{})
+	defer pool.Close()
+	if !pool.accept(deadA.gossip, "cache") || !pool.accept(deadB.gossip, "cache") {
+		t.Fatal("failed to seed stale cached peers")
+	}
+
+	pool.Refresh(t.Context(), scope, Seeds{Active: []string{seed.base}})
+	verified := 0
+	for _, c := range pool.Candidates(scope) {
+		if c.Verified {
+			verified++
+		}
+	}
+	if verified != fanout {
+		t.Fatalf("expected %d newly discovered peers verified immediately, got %d (%+v)", fanout, verified, pool.Candidates(scope))
+	}
+	if len(pool.STUN(scope)) != fanout {
+		t.Fatalf("expected %d verified community STUN endpoints, got %+v", fanout, pool.STUN(scope))
+	}
+	if deadA.probes.Load() != 1 || deadB.probes.Load() != 1 {
+		t.Fatalf("dead cached peers were re-probed during follow-up warm: a=%d b=%d", deadA.probes.Load(), deadB.probes.Load())
+	}
+	if okC.probes.Load() != 1 || okD.probes.Load() != 1 {
+		t.Fatalf("newly discovered peers were not warmed exactly once: c=%d d=%d", okC.probes.Load(), okD.probes.Load())
+	}
+
+	// Partial healthy cache (1 healthy peer) fills only the remaining fanout-1 slot
+	// when pull discovers additional peers, without re-probing the already-verified peer.
+	p1 := newFakeCommunityNode(t, "p1.example", 61, front, now, true)
+	p2 := newFakeCommunityNode(t, "p2.example", 62, front, now, true)
+	p3 := newFakeCommunityNode(t, "p3.example", 63, front, now, true)
+	p1.sample = func() []json.RawMessage { return []json.RawMessage{p1.gossip, p2.gossip, p3.gossip} }
+
+	partialPool := New("", insecureLocalPolicy(p1.server), func() time.Time { return now }, diagnostics.Sink{})
+	defer partialPool.Close()
+	if !partialPool.accept(p1.gossip, "cache") {
+		t.Fatal("failed to seed partial cache")
+	}
+	partialPool.Refresh(t.Context(), scope, Seeds{})
+	partialVerified := 0
+	for _, c := range partialPool.Candidates(scope) {
+		if c.Verified {
+			partialVerified++
+		}
+	}
+	if partialVerified != fanout || p1.probes.Load() != 1 || p2.probes.Load()+p3.probes.Load() != 1 {
+		t.Fatalf("partial cache follow-up warm mismatch: verified=%d probes=(%d,%d,%d)",
+			partialVerified, p1.probes.Load(), p2.probes.Load(), p3.probes.Load())
+	}
+
+	// Offline stale cache (initial warm fails AND pull fails) must not run a second warm pass.
+	offPeers := make([]*fakeCommunityNode, 4)
+	offlinePool := New("", insecureLocalPolicy(p1.server), func() time.Time { return now }, diagnostics.Sink{})
+	defer offlinePool.Close()
+	for i := range offPeers {
+		offPeers[i] = newFakeCommunityNode(t, string(rune('a'+i))+"-off.example", byte(70+i), front, now, false)
+		if !offlinePool.accept(offPeers[i].gossip, "cache") {
+			t.Fatalf("failed to seed offline peer %d", i)
+		}
+	}
+	offlinePool.Refresh(t.Context(), scope, Seeds{Active: []string{offPeers[0].base}})
+	totalProbes := int32(0)
+	for _, n := range offPeers {
+		totalProbes += n.probes.Load()
+	}
+	if totalProbes != fanout {
+		t.Fatalf("offline stale cache amplified warm probes: got %d, want %d", totalProbes, fanout)
 	}
 }

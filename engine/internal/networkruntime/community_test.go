@@ -32,6 +32,7 @@ import (
 	"github.com/windshare/windshare/engine/internal/community"
 	"github.com/windshare/windshare/engine/internal/statefile"
 	"github.com/windshare/windshare/engine/networkdirectory"
+	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relayprofile"
 )
 
@@ -394,7 +395,7 @@ func TestBootstrapDirectoryWinDoesNotPoisonCommunityRefreshOrVerify(t *testing.T
 	scope := r.scope(front)
 	refreshDone := make(chan struct{})
 	go func() {
-		r.community.Refresh(r.ctx, scope, []string{seed})
+		r.community.Refresh(r.ctx, scope, r.seeds(relayconfig.Config{}))
 		close(refreshDone)
 	}()
 	verifyErr := make(chan error, 1)
@@ -423,5 +424,162 @@ func TestBootstrapDirectoryWinDoesNotPoisonCommunityRefreshOrVerify(t *testing.T
 	}
 	if peers := r.community.Candidates(scope); len(peers) != 1 || !peers[0].Verified {
 		t.Fatalf("coalesced community refresh failed to complete: %+v", peers)
+	}
+}
+
+func TestSeedsOrderUsableDirectoryAheadOfEmbeddedAndRetainExpiredFallback(t *testing.T) {
+	data, err := os.ReadFile("../../../testdata/network/directory.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Now     time.Time
+		Roots   []struct{ ID, Key string }
+		Entries []struct{ Envelope json.RawMessage }
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	rootKey, err := base64.RawURLEncoding.DecodeString(fixture.Roots[0].Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var clock atomic.Int64
+	clock.Store(fixture.Now.UnixNano())
+	now := func() time.Time { return time.Unix(0, clock.Load()) }
+
+	r, err := New(nil, now, "", diagnostics.Sink{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(r.Close)
+	r.config.LinkHost = "https://front.example"
+	r.config.BootstrapNodes = []string{
+		"https://retired1.example",
+		"https://retired2.example",
+		"https://JP1.example:443/", // canonical duplicate of usable directory node
+	}
+	r.directory, err = networkdirectory.New(networkdirectory.Config{
+		Network:  "test",
+		Roots:    []nodedirectory.Root{{ID: fixture.Roots[0].ID, Key: ed25519.PublicKey(rootKey)}},
+		Embedded: fixture.Entries[0].Envelope, // active node: https://jp1.example
+		Now:      now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Usable directory: Active contains directory node; Fallback drops duplicate jp1 and retains retired embedded seeds.
+	got := r.seeds(relayconfig.Config{})
+	if len(got.Configured) != 0 ||
+		!slices.Equal(got.Active, []string{"https://jp1.example"}) ||
+		!slices.Equal(got.Fallback, []string{"https://retired1.example", "https://retired2.example"}) {
+		t.Fatalf("usable directory seeds = %+v", got)
+	}
+
+	// Explicit user-configured seeds take precedence and deduplicate against lower tiers.
+	gotConfigured := r.seeds(relayconfig.Config{
+		BootstrapNodes: []string{"https://custom.example", "https://jp1.example/"},
+	})
+	if !slices.Equal(gotConfigured.Configured, []string{"https://custom.example", "https://jp1.example/"}) ||
+		len(gotConfigured.Active) != 0 ||
+		!slices.Equal(gotConfigured.Fallback, []string{"https://retired1.example", "https://retired2.example"}) {
+		t.Fatalf("configured seeds = %+v", gotConfigured)
+	}
+
+	// End-to-end: 2 dead embedded seeds must NOT starve the active directory node on cold refresh.
+	const front = "https://front.example"
+	var deadHits, dirHits atomic.Int32
+	deadServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		deadHits.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer deadServer.Close()
+
+	var gossip, live json.RawMessage
+	dirServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		switch req.URL.Path {
+		case "/discovery/v1/peers":
+			dirHits.Add(1)
+			_ = json.NewEncoder(w).Encode([]json.RawMessage{gossip})
+		case "/.well-known/windshare":
+			_, _ = w.Write(live)
+		case "/v2/ws":
+			ws, err := websocket.Accept(w, req, &websocket.AcceptOptions{OriginPatterns: []string{"front.example"}})
+			if err != nil {
+				return
+			}
+			_ = ws.CloseNow()
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer dirServer.Close()
+
+	_, dirPort, _ := net.SplitHostPort(strings.TrimPrefix(dirServer.URL, "https://"))
+	_, deadPort, _ := net.SplitHostPort(strings.TrimPrefix(deadServer.URL, "https://"))
+	r.config.BootstrapNodes = []string{
+		"https://retired1.example:" + deadPort,
+		"https://retired2.example:" + deadPort,
+	}
+	peerIdentity := "wss://peer.example:" + dirPort + "/v2/ws"
+	makeEnvelope := func(domain string, lifetime time.Duration) json.RawMessage {
+		key := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{91}, ed25519.SeedSize))
+		pub := key.Public().(ed25519.PublicKey)
+		digest := sha256.Sum256(append([]byte("windshare/node-identity/v1\x00"), pub...))
+		enc := base64.RawURLEncoding.EncodeToString
+		payload, err := json.Marshal(map[string]any{
+			"version": 2, "platform": "native", "node_id": enc(digest[:]), "node_key": enc(pub),
+			"relay_endpoint": peerIdentity, "services": map[string]bool{"relay": true, "stun": false},
+			"public_relay": serviceauthority.RelayAnonymous,
+			"issued_at":    now().Unix(), "expires_at": now().Add(lifetime).Unix(),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sig := ed25519.Sign(key, append([]byte(domain), payload...))
+		raw, err := json.Marshal(map[string]any{"version": 2, "descriptor": enc(payload), "signature": enc(sig)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	gossip = makeEnvelope(serviceauthority.GossipDomain, 24*time.Hour)
+	live = makeEnvelope(serviceauthority.DescriptorDomain, 5*time.Minute)
+
+	local := netip.MustParseAddr("127.0.0.1")
+	tlsConfig := dirServer.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+	tlsConfig.InsecureSkipVerify = true
+	r.community = community.New("", publicdial.Policy{
+		Permit:          func(a netip.Addr) bool { return a == local },
+		Lookup:          func(context.Context, string, string) ([]netip.Addr, error) { return []netip.Addr{local}, nil },
+		TLSClientConfig: tlsConfig,
+		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if addr == "127.0.0.1:443" {
+				addr = "127.0.0.1:" + dirPort
+			}
+			return (&net.Dialer{}).DialContext(ctx, network, addr)
+		},
+	}, now, diagnostics.Sink{})
+
+	scope := r.scope(front)
+	r.community.Refresh(t.Context(), scope, r.seeds(relayconfig.Config{}))
+	if dirHits.Load() != 1 || deadHits.Load() != 0 {
+		t.Fatalf("active directory seed was not prioritized ahead of dead embedded seeds: dirHits=%d deadHits=%d", dirHits.Load(), deadHits.Load())
+	}
+	if peers := r.community.Candidates(scope); len(peers) != 1 || !peers[0].Verified {
+		t.Fatalf("expected peer discovered via active directory seed to be verified, got %+v", peers)
+	}
+
+	// Expired directory (past payload expiry + grace): Active becomes empty, and
+	// historical snapshot URLs remain in Fallback behind embedded seeds.
+	clock.Store(fixture.Now.Add(30 * 24 * time.Hour).UnixNano())
+	r.config.BootstrapNodes = []string{"https://community-seed.example"}
+	gotExpired := r.seeds(relayconfig.Config{})
+	if len(gotExpired.Configured) != 0 ||
+		len(gotExpired.Active) != 0 ||
+		!slices.Equal(gotExpired.Fallback, []string{"https://community-seed.example", "https://jp1.example"}) {
+		t.Fatalf("expired directory seeds = %+v", gotExpired)
 	}
 }
