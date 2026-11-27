@@ -856,3 +856,54 @@ async fn registration_authorized_traces_record_class_and_specific_refusal_reason
         "public_daily_budget_exhausted"
     );
 }
+
+#[tokio::test]
+async fn disabling_self_hosted_contribution_keeps_local_service_keys_and_drops_public_shares() {
+    use crate::node::{Settings, contribution::Policy as ContributionPolicy};
+    let fixture = Fixture::new();
+    let (_, account, policy) = access_fixture(fixture.now(false).0 / 1000);
+    let settings = Settings {
+        access: policy,
+        ..Settings::default()
+    };
+    let wall_now = crate::node::now();
+    let disabled = ContributionPolicy {
+        enabled: false,
+        daily_bytes: 0,
+        ..ContributionPolicy::default()
+    };
+    for (bearer, kept) in [
+        (None, false),
+        (Some(account.as_str()), false),
+        (Some(OWNER_KEY), true),
+        (Some(SERVICE_KEY), true),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let store =
+            Database::open(&dir.path().join("node.sqlite"), fixture.identity().relay).unwrap();
+        let node = Runtime::default();
+        node.configure(settings.clone(), store).unwrap();
+        with_sender(&node, &fixture, bearer, async |sender| {
+            sender.finish_registration(&fixture).await;
+            node.set_contribution(disabled, wall_now).unwrap();
+            if kept {
+                assert!(
+                    timeout(Duration::from_millis(50), sender.writer.recv())
+                        .await
+                        .is_err()
+                );
+            } else {
+                assert_closed(&mut sender.writer).await;
+            }
+        })
+        .await;
+        with_sender(&node, &fixture, bearer, async |sender| {
+            if kept {
+                sender.finish_registration(&fixture).await;
+            } else {
+                assert_refused(&mut sender.writer, ErrorFrame::AccessDenied).await;
+            }
+        })
+        .await;
+    }
+}

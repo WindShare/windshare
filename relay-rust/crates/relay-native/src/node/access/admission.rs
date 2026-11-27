@@ -249,7 +249,7 @@ impl Service {
             .as_ref()
             .map(|result| result.as_deref().map_err(|error| *error));
         let mut state = self.write();
-        if state.admission() == super::Admission::Draining {
+        if state.admission() == super::NodeAdmission::Draining {
             return Authorization::Refused(Refusal::unavailable(RefusalReason::NodeDraining));
         }
         let identity = match state.authorized_identity(share, bearer, proof, now) {
@@ -361,7 +361,10 @@ impl State {
         if !self.active_issuers.contains(&issuer) {
             return Refusal::denied(RefusalReason::IssuerInactive);
         }
-        if self.admission() == super::Admission::Disabled {
+        if matches!(
+            self.admission(),
+            super::NodeAdmission::AuthorityDisabled | super::NodeAdmission::ContributionDisabled
+        ) {
             return Refusal::denied(RefusalReason::NodePublicDisabled);
         }
         if self.share_restricted(share) {

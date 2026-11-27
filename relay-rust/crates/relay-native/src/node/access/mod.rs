@@ -31,6 +31,14 @@ use windshare_relay_access::{
 };
 use windshare_relay_core::identifiers::ShareId;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum NodeAdmission {
+    Accepting,
+    Draining,
+    AuthorityDisabled,
+    ContributionDisabled,
+}
+
 #[derive(Clone)]
 pub(crate) struct Service {
     // Read-mostly access checks (including concurrent frame submission) share
@@ -88,7 +96,7 @@ impl Service {
     }
 
     pub fn public_enabled(&self) -> bool {
-        self.read().admission() == Admission::Accepting
+        self.read().admission() == NodeAdmission::Accepting
     }
 
     pub fn reported_policy(
@@ -252,18 +260,22 @@ impl State {
             .and_then(|i| self.authorities.policies.get(&i))
     }
 
-    fn admission(&self) -> Admission {
+    fn admission(&self) -> NodeAdmission {
         match (self.controller, self.controller_policy()) {
-            (_, Some(policy)) => policy.admission,
+            (_, Some(policy)) => match policy.admission {
+                Admission::Accepting => NodeAdmission::Accepting,
+                Admission::Draining => NodeAdmission::Draining,
+                Admission::Disabled => NodeAdmission::AuthorityDisabled,
+            },
             // An official install needs its first signed approval before admitting users.
-            (Some(_), None) => Admission::Draining,
-            (None, None) if self.policy.contributing => Admission::Accepting,
-            (None, None) => Admission::Disabled,
+            (Some(_), None) => NodeAdmission::Draining,
+            (None, None) if self.policy.contributing => NodeAdmission::Accepting,
+            (None, None) => NodeAdmission::ContributionDisabled,
         }
     }
 
     fn anonymous(&self) -> bool {
-        self.admission() == Admission::Accepting
+        self.admission() == NodeAdmission::Accepting
             && self
                 .controller_policy()
                 .map_or(self.policy.anonymous, |p| p.anonymous)
@@ -288,10 +300,20 @@ impl State {
         share: ShareId,
         attribution: Attribution,
     ) -> Option<RefusalReason> {
-        if self.admission() == Admission::Disabled
-            && (self.controller.is_some() || !self.owner(attribution))
-        {
-            return Some(RefusalReason::NodePublicDisabled);
+        match self.admission() {
+            NodeAdmission::AuthorityDisabled => {
+                return Some(RefusalReason::NodePublicDisabled);
+            }
+            // Self-hosted contribution opt-out stops public callers (anonymous and
+            // external account tickets) without disconnecting local owner or service keys.
+            NodeAdmission::ContributionDisabled
+                if !matches!(attribution, Attribution::Credential { .. }) =>
+            {
+                return Some(RefusalReason::NodePublicDisabled);
+            }
+            NodeAdmission::Accepting
+            | NodeAdmission::Draining
+            | NodeAdmission::ContributionDisabled => {}
         }
         let local_key = match attribution {
             Attribution::Credential { credential, .. } => Some(credential),

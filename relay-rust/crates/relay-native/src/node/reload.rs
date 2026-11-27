@@ -214,6 +214,7 @@ impl Runtime {
                 monthly_relay_bytes = state.settings.relay_budget.map(|budget| budget.bytes),
                 public_daily_bytes = state.settings.contribution.daily_bytes,
                 public_bytes_per_second = state.settings.contribution.bytes_per_second,
+                contributing = state.settings.access.contributing,
                 relay_enabled = state.settings.services.relay,
                 stun_enabled = state.settings.services.stun,
                 access_changed = publication.changed,

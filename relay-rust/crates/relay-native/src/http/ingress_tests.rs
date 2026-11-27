@@ -591,7 +591,7 @@ async fn console_contribution_post_updates_discovery_synchronously_without_retai
         .unwrap();
     let descriptor: serde_json::Value = serde_json::from_slice(&payload).unwrap();
     assert_eq!(descriptor["public_relay"]["state"], "disabled");
-    assert_eq!(descriptor["public_capacity_bytes_per_second"], 2_000_000);
+    assert_eq!(descriptor["public_capacity_bytes_per_second"], 4_000_000);
     assert_eq!(ingress.node.access.public_connections(), 12);
 
     // Dropping Ingress must release Runtime and Console cleanly with no Arc cycle leaking the DB lease.

@@ -377,11 +377,14 @@ fn headless_contribution_is_durable_and_independent_of_the_host_uplink() {
         describe(&node, &endpoint)["public_relay"]["state"],
         "disabled"
     );
-    assert_eq!(
-        describe(&node, &endpoint)["public_capacity_bytes_per_second"],
-        2_000_000
-    );
+    assert!(describe(&node, &endpoint)["public_capacity_bytes_per_second"].is_null());
     assert_eq!(node.access.public_connections(), 3);
+    {
+        let state = node.state.lock().unwrap();
+        assert_eq!(state.settings.contribution.daily_bytes, None);
+        assert_eq!(state.settings.contribution.bytes_per_second, None);
+        assert_eq!(state.settings.host_uplink, None);
+    }
     assert!(
         !node
             .set_contribution(
@@ -393,6 +396,10 @@ fn headless_contribution_is_durable_and_independent_of_the_host_uplink() {
                 now(),
             )
             .unwrap()
+    );
+    assert_eq!(
+        describe(&node, &endpoint)["public_capacity_bytes_per_second"],
+        2_000_000
     );
     assert_eq!(
         describe(&node, &endpoint)["public_relay"]["state"],
@@ -489,4 +496,35 @@ fn contribution_updates_apply_synchronously_even_when_config_file_is_broken() {
         node.contribution_view().unwrap()["ceiling"]["connections"],
         4
     );
+}
+
+#[test]
+fn disabling_contribution_clears_community_caps_when_no_static_ceiling_is_configured() {
+    use crate::node::contribution::Policy;
+    let dir = tempfile::tempdir().unwrap();
+    let endpoint = Endpoint::parse("wss://node.example/v2/ws").unwrap();
+    let store = Database::open(&dir.path().join("node.sqlite"), endpoint.identity).unwrap();
+    let node = Runtime::default();
+    node.configure(Settings::default(), store).unwrap();
+    assert!(node.access.public_connections() < usize::MAX);
+    assert!(
+        node.set_contribution(
+            Policy {
+                enabled: false,
+                daily_bytes: 0,
+                bytes_per_second: 1_000_000,
+                connections: 4,
+                host_uplink: Some(10_000_000),
+            },
+            now(),
+        )
+        .unwrap()
+    );
+    assert_eq!(node.access.public_connections(), usize::MAX);
+    let state = node.state.lock().unwrap();
+    assert_eq!(state.settings.contribution.daily_bytes, None);
+    assert_eq!(state.settings.contribution.bytes_per_second, None);
+    assert_eq!(state.settings.host_uplink, None);
+    assert!(!state.settings.access.contributing);
+    drop(state);
 }

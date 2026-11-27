@@ -53,7 +53,7 @@ impl Service {
         attribution: Attribution,
     ) -> Result<Residency, Refusal> {
         let mut state = self.write();
-        if state.admission() == super::Admission::Draining {
+        if state.admission() == super::NodeAdmission::Draining {
             return Err(Refusal::unavailable(RefusalReason::NodeDraining));
         }
         if let Some(reason) = state.denial_reason(share, attribution) {

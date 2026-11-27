@@ -42,21 +42,32 @@ impl Policy {
 
     pub(super) fn apply_to(self, settings: &mut Settings) {
         let limit = settings.ceiling;
-        settings.contribution = ContributionLimits {
-            daily_bytes: Some(limit.daily_bytes.unwrap_or(u64::MAX).min(self.daily_bytes)),
-            bytes_per_second: Some(
-                limit
-                    .bytes_per_second
-                    .unwrap_or(u64::MAX)
-                    .min(self.bytes_per_second),
-            ),
-        };
-        settings.host_uplink = self.host_uplink;
         settings.access.contributing = self.enabled;
-        settings.access.public_connections = limit
-            .connections
-            .unwrap_or(usize::MAX)
-            .min(self.connections);
+        if self.enabled {
+            settings.contribution = ContributionLimits {
+                daily_bytes: Some(limit.daily_bytes.unwrap_or(u64::MAX).min(self.daily_bytes)),
+                bytes_per_second: Some(
+                    limit
+                        .bytes_per_second
+                        .unwrap_or(u64::MAX)
+                        .min(self.bytes_per_second),
+                ),
+            };
+            settings.host_uplink = self.host_uplink;
+            settings.access.public_connections = limit
+                .connections
+                .unwrap_or(usize::MAX)
+                .min(self.connections);
+        } else {
+            // Community caps stop applying once contribution is disabled so local
+            // service keys follow only any explicit static ceiling in node.json.
+            settings.contribution = ContributionLimits {
+                daily_bytes: limit.daily_bytes,
+                bytes_per_second: None,
+            };
+            settings.host_uplink = None;
+            settings.access.public_connections = limit.connections.unwrap_or(usize::MAX);
+        }
     }
 }
 

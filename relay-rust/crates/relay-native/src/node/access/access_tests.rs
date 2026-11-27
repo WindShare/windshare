@@ -567,3 +567,119 @@ fn expire_quotas_skips_write_lock_until_a_deadline_is_due() {
         Some(Allowance::Stale)
     );
 }
+
+#[test]
+fn self_hosted_contribution_opt_out_keeps_local_service_keys_and_rejects_public_callers() {
+    let (service, ticket, key, generation, mut policy) = identity();
+    let owner_key = Credential {
+        principal: [10; 16],
+        id: [11; 16],
+        name: "owner".into(),
+        digest: Digest::of(b"owner-secret"),
+        created_at: NOW,
+        last_used_at: None,
+        state: CredentialState::Active,
+    };
+    let service_key = Credential {
+        principal: [20; 16],
+        id: [21; 16],
+        name: "automation".into(),
+        digest: Digest::of(b"service-secret"),
+        created_at: NOW,
+        last_used_at: None,
+        state: CredentialState::Active,
+    };
+    policy.anonymous = true;
+    policy.contributing = false;
+    policy.owner_principals = vec![owner_key.principal];
+    policy.credentials = vec![owner_key, service_key];
+    service.configure(policy.clone()).unwrap();
+
+    assert!(!service.public_enabled());
+    assert!(!service.anonymous());
+
+    let mut owner_bearer = Bearer::new("owner-secret");
+    assert_eq!(
+        service.admission_priority(share(1), Some(&mut owner_bearer), NOW),
+        AdmissionPriority::Owner
+    );
+    assert!(matches!(
+        service.authorize(share(1), Some(&owner_bearer), NOW),
+        Authorization::Granted {
+            class: Class::Owner,
+            allowance: None,
+            ..
+        }
+    ));
+
+    let mut service_bearer = Bearer::new("service-secret");
+    assert_eq!(
+        service.admission_priority(share(2), Some(&mut service_bearer), NOW),
+        AdmissionPriority::Authenticated
+    );
+    let Authorization::Granted {
+        attribution: local_service,
+        class: Class::Standard,
+        allowance: None,
+    } = service.authorize(share(2), Some(&service_bearer), NOW)
+    else {
+        panic!("local service key should stay authorized when contribution is disabled");
+    };
+    assert!(service.allowed(share(2), local_service));
+
+    assert!(matches!(
+        service.authorize(share(3), None, NOW),
+        Authorization::Refused(Refusal {
+            decision: RegistrationDecision::Denied,
+            reason: RefusalReason::AnonymousDisabled,
+        })
+    ));
+    assert!(!service.allowed(share(3), Attribution::Anonymous));
+
+    let mut account_bearer =
+        Bearer::new(&URL_SAFE_NO_PAD.encode(ticket.issue(generation, &key).unwrap()));
+    assert_eq!(
+        service.admission_priority(share(4), Some(&mut account_bearer), NOW),
+        AdmissionPriority::Anonymous
+    );
+    assert!(matches!(
+        service.authorize(share(4), Some(&account_bearer), NOW),
+        Authorization::Refused(Refusal {
+            decision: RegistrationDecision::Denied,
+            reason: RefusalReason::NodePublicDisabled,
+        })
+    ));
+    assert!(!service.allowed(share(4), ticket.attribution()));
+
+    let next_key = SigningKey::from_bytes(&[9; 32]);
+    let next_generation = Generation {
+        number: generation.number + 1,
+        key: next_key.verifying_key().to_bytes(),
+        ..generation
+    };
+    let ahead_ticket = Ticket {
+        key_id: next_generation.number,
+        ..ticket
+    };
+    let ahead_bearer = Bearer::new(
+        &URL_SAFE_NO_PAD.encode(ahead_ticket.issue(next_generation, &next_key).unwrap()),
+    );
+    assert!(matches!(
+        service.authorize(share(5), Some(&ahead_bearer), NOW),
+        Authorization::Refused(Refusal {
+            decision: RegistrationDecision::Denied,
+            reason: RefusalReason::NodePublicDisabled,
+        })
+    ));
+
+    policy.credentials[1].state = CredentialState::Revoked { at: NOW };
+    service.configure(policy).unwrap();
+    assert!(!service.allowed(share(2), local_service));
+    assert!(matches!(
+        service.authorize(share(2), Some(&service_bearer), NOW),
+        Authorization::Refused(Refusal {
+            decision: RegistrationDecision::Denied,
+            reason: RefusalReason::CredentialInactive,
+        })
+    ));
+}
