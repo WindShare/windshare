@@ -77,36 +77,50 @@ func NewPlannedSender(ctx context.Context, plan relayplan.Plan, dial SenderFacto
 	return newSender(ctx, urls, fallback, dial)
 }
 
-func (s *Sender) initialFailureLocked(url string) func() {
+func (s *Sender) advanceStartupLocked(url string, registration routeRegistration) func() {
 	f := s.startup
 	if f == nil || s.everReady || s.firstReady != "" || s.stopping || s.ctx.Err() != nil {
 		return nil
 	}
+	if registration.failed() {
+		if notify, advanced := s.initialFailureLocked(url); advanced {
+			return notify
+		}
+		// A route failure can leave every remaining official route blocked on shared
+		// authorization, or exhaust an active community probe while official routes wait.
+		return s.communityDuringAuthorizationLocked()
+	}
+	if registration.waitingAuthorization() {
+		return s.communityDuringAuthorizationLocked()
+	}
+	return nil
+}
+
+func (s *Sender) initialFailureLocked(url string) (func(), bool) {
+	f := s.startup
+	if f == nil {
+		return nil, false
+	}
 	if _, watched := f.untried[url]; !watched {
-		return nil
+		return nil, false
 	}
 	delete(f.untried, url)
 	if replacement := f.substitute(url); replacement != "" {
-		delete(s.routes, url)
-		s.cancelRoute[url]()
-		f.active[slices.Index(f.active, url)] = replacement
-		f.untried[replacement] = struct{}{}
-		s.startLocked(replacement, f.dial)
-		return f.notification([]string{url}, []string{replacement})
+		s.replaceActiveLocked(f, url, replacement)
+		return f.notification([]string{url}, []string{replacement}), true
 	}
 	if len(f.untried) != 0 {
-		return nil
+		return nil, false
 	}
 	s.startup = nil
 	if len(f.canaries) == 0 {
-		return nil
+		return nil, true
 	}
 	// Free terminal routes first, then the lowest-ranked failed routes when the
 	// link is full. Only the surviving candidates may reconnect after publication.
 	drop := len(f.active) + len(f.canaries) - f.limit
 	retire := func(url string) {
-		delete(s.routes, url)
-		s.cancelRoute[url]()
+		s.retireRouteLocked(url)
 		drop--
 	}
 	for _, previous := range f.active {
@@ -138,18 +152,20 @@ func (s *Sender) initialFailureLocked(url string) func() {
 		f.canaries, f.later = f.later[0], f.later[1:]
 		s.startup = f
 	}
-	return f.notification(active, added)
+	return f.notification(active, added), true
 }
 
 // Replace a failed official zone while another route is still starting. The
 // replacement is frozen into the link only if it was selected before admission.
+// Official canaries stay reserved for whole-wave fallback after every active
+// route has failed.
 func (f *startupFallback) substitute(failed string) string {
 	c := f.routes[failed]
 	if c.Source != relayplan.Official || c.Zone == "" {
 		return ""
 	}
 	return f.takeStandby(func(other relayplan.Candidate) bool {
-		return other.Source == relayplan.Official && other.Zone == c.Zone
+		return other.Source == relayplan.Official && !other.Canary && other.Zone == c.Zone
 	})
 }
 
@@ -176,27 +192,88 @@ func (f *startupFallback) takeStandby(match func(relayplan.Candidate) bool) stri
 }
 
 // Waiting on the shared official account cannot prevent a separately authorized
-// community route from publishing. Keep the official pair alive for recovery.
-func (s *Sender) communityDuringAuthorizationLocked() (func(), bool) {
+// community route from publishing. Keep waiting official routes alive for
+// recovery while rotating through community standbys whenever a community probe
+// fails and every active official route is already blocked or failed.
+func (s *Sender) communityDuringAuthorizationLocked() func() {
 	f := s.startup
-	if f == nil || s.everReady || s.stopping || s.firstReady != "" || len(f.active) >= f.limit {
-		return nil, false
+	if f == nil {
+		return nil
 	}
+	var hasOfficialAuthWait bool
+	var replace string
 	for _, url := range f.active {
 		route := s.routes[url]
-		if f.routes[url].Source == relayplan.Community || (!route.terminal && route.state != RegistrationRetrying && route.state != RegistrationWaitingAuthorization && route.state != RegistrationNeedsUserAuthorization) {
-			return nil, false
+		if f.routes[url].Source == relayplan.Community {
+			if !route.failed() {
+				return nil
+			}
+			// Prefer retiring a terminal probe if multiple community routes are active.
+			if replace == "" || route.terminal {
+				replace = url
+			}
+			continue
+		}
+		if route.waitingAuthorization() {
+			hasOfficialAuthWait = true
+			continue
+		}
+		if !route.failed() {
+			return nil
 		}
 	}
-	url := f.takeStandby(func(c relayplan.Candidate) bool { return c.Source == relayplan.Community })
-	if url == "" {
-		return nil, false
+	if !hasOfficialAuthWait {
+		return nil
 	}
-	notify := f.notification(f.active, []string{url})
-	f.active = append(f.active, url)
-	f.untried[url] = struct{}{}
-	s.startLocked(url, f.dial)
-	return notify, true
+	if replace == "" && len(f.active) >= f.limit {
+		replace = s.failedOfficialToRetireLocked(f)
+		if replace == "" {
+			return nil
+		}
+	}
+	next := f.takeStandby(func(c relayplan.Candidate) bool { return c.Source == relayplan.Community })
+	if next == "" {
+		return nil
+	}
+	before := slices.Clone(f.active)
+	if replace != "" {
+		s.replaceActiveLocked(f, replace, next)
+	} else {
+		f.active = append(f.active, next)
+		f.untried[next] = struct{}{}
+		s.startLocked(next, f.dial)
+	}
+	return f.notification(before, []string{next})
+}
+
+func (s *Sender) failedOfficialToRetireLocked(f *startupFallback) string {
+	for _, url := range f.active {
+		if s.routes[url].terminal {
+			return url
+		}
+	}
+	for _, url := range slices.Backward(f.active) {
+		if s.routes[url].failed() {
+			return url
+		}
+	}
+	return ""
+}
+
+func (s *Sender) replaceActiveLocked(f *startupFallback, old, next string) {
+	s.retireRouteLocked(old)
+	delete(f.untried, old)
+	f.active[slices.Index(f.active, old)] = next
+	f.untried[next] = struct{}{}
+	s.startLocked(next, f.dial)
+}
+
+func (s *Sender) retireRouteLocked(url string) {
+	delete(s.routes, url)
+	if cancel := s.cancelRoute[url]; cancel != nil {
+		cancel()
+		delete(s.cancelRoute, url)
+	}
 }
 
 func (f *startupFallback) notification(active, added []string) func() {
