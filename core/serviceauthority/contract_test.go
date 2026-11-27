@@ -249,3 +249,41 @@ func TestInspectGossipDomainSeparationLifetimeAndStructuralInvariants(t *testing
 		t.Fatalf("oversized envelope err = %v, want ErrFormat", err)
 	}
 }
+
+func TestDescriptorOffersCommunityService(t *testing.T) {
+	auth := &struct {
+		URL    string `json:"url"`
+		Issuer string `json:"issuer"`
+	}{URL: "https://api.example", Issuer: "issuer"}
+	cases := []struct {
+		name  string
+		relay bool
+		stun  bool
+		state PublicRelay
+		auth  bool
+		want  bool
+	}{
+		{name: "anonymous relay only", relay: true, state: RelayAnonymous, want: true},
+		{name: "dual service", relay: true, stun: true, state: RelayAnonymous, want: true},
+		{name: "stun only with unavailable relay", stun: true, state: RelayUnavailable, want: true},
+		{name: "stun with budget exhausted relay", relay: true, stun: true, state: RelayBudgetExhausted, want: true},
+		{name: "stun with authenticated relay", relay: true, stun: true, state: RelayAuthenticated, want: true},
+		{name: "opted out disables stun too", relay: true, stun: true, state: RelayDisabled, want: false},
+		{name: "authority managed never joins community", relay: true, stun: true, state: RelayAnonymous, auth: true, want: false},
+		{name: "authenticated relay without stun", relay: true, state: RelayAuthenticated, want: false},
+		{name: "budget exhausted relay without stun", relay: true, state: RelayBudgetExhausted, want: false},
+		{name: "unavailable relay without stun", relay: true, state: RelayUnavailable, want: false},
+		{name: "anonymous state without relay service", relay: false, stun: false, state: RelayAnonymous, want: false},
+	}
+	for _, tc := range cases {
+		var d Descriptor
+		d.Services.Relay, d.Services.STUN = tc.relay, tc.stun
+		d.PublicRelay = tc.state
+		if tc.auth {
+			d.Authority = auth
+		}
+		if got := d.OffersCommunityService(); got != tc.want {
+			t.Errorf("%s: OffersCommunityService() = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

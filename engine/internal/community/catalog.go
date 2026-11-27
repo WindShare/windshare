@@ -43,17 +43,28 @@ type Scope struct {
 	Origin     string
 	Generation uint64
 }
-type observation struct {
-	scope Scope
-	relay bool
-	until time.Time
-	ip    netip.Addr
-	stun  []string
+
+// hostObservation tracks origin-independent liveness proved by a signed live
+// descriptor and dial policy (IP binding and verified STUN endpoints).
+type hostObservation struct {
+	generation uint64
+	until      time.Time
+	ip         netip.Addr
+	stun       []string
 }
+
+// relayObservation tracks anonymous WebSocket relay admission for one frontend
+// Origin in a network generation.
+type relayObservation struct {
+	scope Scope
+	until time.Time
+}
+
 type peer struct {
 	raw                     json.RawMessage
 	d                       serviceauthority.GossipDescriptor
-	live                    observation
+	host                    hostObservation
+	relay                   relayObservation
 	relaySuppressedUntil    time.Time
 	relaySuppressedIssuedAt uint64
 	failures                map[Scope]probeBackoff
@@ -147,20 +158,15 @@ func (p *Pool) accept(raw json.RawMessage, source string) bool {
 		p.trace("community_descriptor_rejected", source, err.Error())
 		return false
 	}
-	if d.PublicRelay == serviceauthority.RelayDisabled {
-		p.mu.Lock()
-		if old, ok := p.peers[d.RelayEndpoint]; ok && old.d.NodeKey == d.NodeKey && d.IssuedAt >= old.d.IssuedAt {
-			delete(p.peers, d.RelayEndpoint)
-		}
-		p.mu.Unlock()
-		p.trace("community_descriptor_rejected", source, "contribution_disabled")
+	if !d.OffersCommunityService() {
+		p.rejectNonCommunity(d, source)
 		return false
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	key := d.RelayEndpoint
 	old, ok := p.peers[key]
-	if ok && old.d.NodeKey != d.NodeKey && old.live.until.After(p.now()) {
+	if ok && old.d.NodeKey != d.NodeKey && old.host.until.After(p.now()) {
 		p.trace("community_descriptor_rejected", source, "endpoint_bound_to_live_key")
 		return false
 	}
@@ -170,7 +176,7 @@ func (p *Pool) accept(raw json.RawMessage, source string) bool {
 	if !ok && len(p.peers) >= maximumPeers {
 		var oldest string
 		for k, entry := range p.peers {
-			if !entry.live.until.After(p.now()) && (oldest == "" || entry.d.ExpiresAt < p.peers[oldest].d.ExpiresAt) {
+			if !entry.host.until.After(p.now()) && (oldest == "" || entry.d.ExpiresAt < p.peers[oldest].d.ExpiresAt) {
 				oldest = k
 			}
 		}
@@ -181,7 +187,8 @@ func (p *Pool) accept(raw json.RawMessage, source string) bool {
 		p.trace("community_descriptor_evicted", oldest, "capacity")
 	}
 	if old.d.NodeKey != d.NodeKey || old.d.PublicRelay != d.PublicRelay || old.d.Services != d.Services {
-		old.live = observation{}
+		old.host = hostObservation{}
+		old.relay = relayObservation{}
 		old.relaySuppressedUntil = time.Time{}
 		old.relaySuppressedIssuedAt = 0
 		old.failures = nil
@@ -191,13 +198,32 @@ func (p *Pool) accept(raw json.RawMessage, source string) bool {
 	p.peers[key] = peer{
 		raw:                     bytes.Clone(raw),
 		d:                       d,
-		live:                    old.live,
+		host:                    old.host,
+		relay:                   old.relay,
 		relaySuppressedUntil:    old.relaySuppressedUntil,
 		relaySuppressedIssuedAt: old.relaySuppressedIssuedAt,
 		failures:                old.failures,
 	}
 	p.trace("community_descriptor_accepted", source, key)
 	return true
+}
+
+func (p *Pool) rejectNonCommunity(d serviceauthority.GossipDescriptor, source string) {
+	reason := "no_community_service"
+	switch {
+	case d.Authority != nil:
+		reason = "authority_managed"
+	case d.PublicRelay == serviceauthority.RelayDisabled:
+		reason = "contribution_disabled"
+	}
+	if d.Authority != nil || d.PublicRelay == serviceauthority.RelayDisabled {
+		p.mu.Lock()
+		if old, ok := p.peers[d.RelayEndpoint]; ok && old.d.NodeKey == d.NodeKey && d.IssuedAt >= old.d.IssuedAt {
+			delete(p.peers, d.RelayEndpoint)
+		}
+		p.mu.Unlock()
+	}
+	p.trace("community_descriptor_rejected", source, reason)
 }
 
 func (p *Pool) records() []peer {
@@ -248,7 +274,7 @@ func (p *Pool) Candidates(scope Scope) []relayplan.Candidate {
 			Source:        relayplan.Community,
 			URL:           d.RelayBaseURL(),
 			Identity:      d.RelayEndpoint,
-			Verified:      entry.live.relay && scope == entry.live.scope && entry.live.until.After(now),
+			Verified:      entry.relay.scope == scope && entry.relay.until.After(now),
 			IPLiteral:     err == nil,
 			CapacityMbps:  cap,
 			CooldownUntil: cooldownUntil,

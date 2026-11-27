@@ -76,23 +76,36 @@ func (p *Pool) verify(ctx context.Context, scope Scope, entry peer) error {
 		}
 		return &probeError{kind: probeFailureEvict, reason: reason, issuedAt: live.IssuedAt, cause: serviceauthority.ErrFormat}
 	}
+	until := time.Unix(int64(live.ExpiresAt), 0)
+	host := hostObservation{
+		generation: scope.Generation,
+		until:      until,
+		ip:         ip,
+		stun:       p.stunAddresses(live, ip, base.Hostname()),
+	}
 	if d.Services.Relay && d.PublicRelay == serviceauthority.RelayAnonymous {
 		if !live.Services.Relay || live.PublicRelay != serviceauthority.RelayAnonymous {
+			// Admit origin-independent STUN from the freshly signed live descriptor
+			// even while anonymous relaying is temporarily exhausted or unavailable.
+			p.rememberHost(d, host, true)
 			return &probeError{
-				kind:     probeFailureRelayUnavailable,
-				reason:   liveRelayReason(live),
-				until:    time.Unix(int64(live.ExpiresAt), 0),
-				issuedAt: live.IssuedAt,
-				cause:    errors.New("anonymous relay unavailable"),
+				kind:         probeFailureRelayUnavailable,
+				reason:       liveRelayReason(live),
+				until:        until,
+				issuedAt:     live.IssuedAt,
+				hostVerified: true,
+				cause:        errors.New("anonymous relay unavailable"),
 			}
 		}
 		if err := p.verifyRelayOrigin(ctx, live.RelayBaseURL(), scope.Origin); err != nil {
-			return err
+			p.rememberHost(d, host, false)
+			pe := classifyProbeError(err)
+			pe.hostVerified = true
+			return pe
 		}
+		return p.remember(d, scope, host, relayObservation{scope: scope, until: until})
 	}
-	reach := observation{scope: scope, relay: d.PublicRelay == serviceauthority.RelayAnonymous && d.Services.Relay,
-		until: time.Unix(int64(live.ExpiresAt), 0), ip: ip, stun: p.stunAddresses(live, ip, base.Hostname())}
-	return p.remember(d, reach)
+	return p.remember(d, scope, host, relayObservation{})
 }
 
 func (p *Pool) verifyRelayOrigin(ctx context.Context, endpoint, origin string) error {
@@ -142,31 +155,60 @@ func (p *Pool) stunAddresses(live serviceauthority.Descriptor, ip netip.Addr, re
 	return stun
 }
 
-func (p *Pool) remember(d serviceauthority.GossipDescriptor, reach observation) error {
+func (p *Pool) withinAddressQuotaLocked(endpoint string, ip netip.Addr) bool {
+	prefix := publicPrefix(ip)
+	sameIP, samePrefix := 0, 0
+	for identity, other := range p.peers {
+		if identity == endpoint || !other.host.until.After(p.now()) {
+			continue
+		}
+		if other.host.ip == ip {
+			sameIP++
+		}
+		if prefix.Contains(other.host.ip) {
+			samePrefix++
+		}
+	}
+	return sameIP < maxPeersPerIP && samePrefix < maxPeersPerPrefix
+}
+
+func (p *Pool) rememberHost(d serviceauthority.GossipDescriptor, host hostObservation, clearRelay bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	latest, ok := p.peers[d.RelayEndpoint]
+	if !ok || latest.d.NodeKey != d.NodeKey || latest.d.PublicRelay != d.PublicRelay || latest.d.Services != d.Services {
+		return
+	}
+	if len(host.stun) == 0 {
+		latest.host.stun = nil
+		if clearRelay || !latest.relay.until.After(p.now()) {
+			latest.host = hostObservation{}
+		}
+		p.peers[d.RelayEndpoint] = latest
+		return
+	}
+	if !p.withinAddressQuotaLocked(d.RelayEndpoint, host.ip) {
+		return
+	}
+	latest.host = host
+	p.peers[d.RelayEndpoint] = latest
+}
+
+func (p *Pool) remember(d serviceauthority.GossipDescriptor, scope Scope, host hostObservation, relay relayObservation) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	latest, ok := p.peers[d.RelayEndpoint]
 	if !ok || latest.d.NodeKey != d.NodeKey || latest.d.PublicRelay != d.PublicRelay || latest.d.Services != d.Services {
 		return serviceauthority.ErrExpired
 	}
-	prefix := publicPrefix(reach.ip)
-	sameIP, samePrefix := 0, 0
-	for identity, other := range p.peers {
-		if identity == d.RelayEndpoint || !other.live.until.After(p.now()) {
-			continue
-		}
-		if other.live.ip == reach.ip {
-			sameIP++
-		}
-		if prefix.Contains(other.live.ip) {
-			samePrefix++
-		}
-	}
-	if sameIP >= maxPeersPerIP || samePrefix >= maxPeersPerPrefix {
+	if !p.withinAddressQuotaLocked(d.RelayEndpoint, host.ip) {
 		return &probeError{kind: probeFailureRejected, reason: "address_quota", cause: errors.New("verified community address quota")}
 	}
-	latest.live = reach
-	latest.clearFailure(reach.scope)
+	latest.host = host
+	if relay.scope.Origin != "" {
+		latest.relay = relay
+	}
+	latest.clearFailure(scope)
 	p.peers[d.RelayEndpoint] = latest
 	return nil
 }

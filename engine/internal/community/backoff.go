@@ -56,11 +56,12 @@ func (k probeFailureKind) diagnosticName() string {
 }
 
 type probeError struct {
-	kind     probeFailureKind
-	reason   string
-	until    time.Time
-	issuedAt uint64
-	cause    error
+	kind         probeFailureKind
+	reason       string
+	until        time.Time
+	issuedAt     uint64
+	hostVerified bool
+	cause        error
 }
 
 func (e *probeError) Error() string {
@@ -224,15 +225,19 @@ func (p *Pool) recordProbeFailureLocked(identity string, scope Scope, probed ser
 			return
 		}
 		// Keep a fresher gossip entry, but avoid re-probing it immediately in this scope.
-		if latest.live.scope == scope {
-			latest.live = observation{}
+		if latest.relay.scope == scope {
+			latest.relay = relayObservation{}
+		}
+		if latest.host.generation == scope.Generation {
+			latest.host = hostObservation{}
 		}
 		backoff := latest.recordFailure(scope, probeFailureRejected, now)
 		p.peers[identity] = latest
 		p.traceProbeFailure(identity, pe.reason, probeFailureRejected, backoff)
 	case probeFailureRelayUnavailable:
-		// Live signed unavailability applies to relay service across every frontend origin.
-		latest.live = observation{}
+		// Live signed unavailability applies to relay service across every frontend
+		// origin without discarding independently verified STUN host observations.
+		latest.relay = relayObservation{}
 		var backoff time.Duration
 		kind := probeFailureRelayUnavailable
 		if pe.issuedAt >= latest.d.IssuedAt {
@@ -244,13 +249,37 @@ func (p *Pool) recordProbeFailureLocked(identity string, scope Scope, probed ser
 		p.peers[identity] = latest
 		p.traceProbeFailure(identity, pe.reason, kind, backoff)
 	default:
-		if latest.live.scope == scope {
-			latest.live = observation{}
+		if latest.relay.scope == scope {
+			latest.relay = relayObservation{}
+		}
+		if !pe.hostVerified && latest.host.generation == scope.Generation && (latest.relay.scope == (Scope{}) || latest.relay.scope == scope) {
+			latest.host = hostObservation{}
 		}
 		backoff := latest.recordFailure(scope, pe.kind, now)
 		p.peers[identity] = latest
 		p.traceProbeFailure(identity, pe.reason, pe.kind, backoff)
 	}
+}
+
+// RecordOriginForbidden invalidates cached relay verification for scope and
+// applies origin-scoped rejected backoff when a real relay dial receives HTTP
+// 403 after background warming. Other frontend origins and origin-independent
+// STUN observations remain unaffected.
+func (p *Pool) RecordOriginForbidden(scope Scope, identity string) {
+	if p == nil || scope.Origin == "" || identity == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	latest, ok := p.peers[identity]
+	if !ok {
+		return
+	}
+	p.recordProbeFailureLocked(identity, scope, latest.d, &probeError{
+		kind:         probeFailureRejected,
+		reason:       "dial_origin_forbidden",
+		hostVerified: true,
+	}, p.now())
 }
 
 func (p *Pool) traceProbeFailure(identity, reason string, kind probeFailureKind, backoff time.Duration) {

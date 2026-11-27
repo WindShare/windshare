@@ -112,6 +112,15 @@ func (descriptor Descriptor) RelayBaseURL() string {
 	return base.String()
 }
 
+// OffersCommunityService reports whether this descriptor qualifies for community
+// peer discovery: self-hosted (no accounting authority), not opted out, and
+// offering either anonymous public relaying or STUN.
+func (descriptor Descriptor) OffersCommunityService() bool {
+	return descriptor.Authority == nil &&
+		descriptor.PublicRelay != RelayDisabled &&
+		((descriptor.PublicRelay == RelayAnonymous && descriptor.Services.Relay) || descriptor.Services.STUN)
+}
+
 func VerifyDescriptor(data []byte, key [32]byte, now time.Time) (Descriptor, error) {
 	return verify(data, key, now, DescriptorDomain, descriptorLifetime)
 }

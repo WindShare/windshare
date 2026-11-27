@@ -265,16 +265,17 @@ func (p *Pool) pullBatch(ctx context.Context, targets []string) bool {
 }
 
 func warmEligible(entry peer) bool {
-	return entry.d.Authority == nil &&
-		entry.d.PublicRelay != serviceauthority.RelayDisabled &&
-		(entry.d.Services.STUN || entry.d.PublicRelay == serviceauthority.RelayAnonymous)
+	return entry.d.OffersCommunityService()
 }
 
 func warmVerified(entry peer, scope Scope, now time.Time) bool {
-	if !warmEligible(entry) || entry.live.scope != scope || !entry.live.until.After(now) {
+	if !warmEligible(entry) {
 		return false
 	}
-	return entry.d.PublicRelay != serviceauthority.RelayAnonymous || entry.live.relay
+	if entry.d.PublicRelay == serviceauthority.RelayAnonymous && entry.d.Services.Relay {
+		return entry.relay.scope == scope && entry.relay.until.After(now)
+	}
+	return entry.host.generation == scope.Generation && entry.host.until.After(now)
 }
 
 func (p *Pool) verifiedCount(scope Scope) int {
@@ -375,7 +376,7 @@ func (p *Pool) Verify(ctx context.Context, scope Scope, identity string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	entry := p.peers[identity]
-	if entry.d.Authority != nil || entry.d.PublicRelay != serviceauthority.RelayAnonymous || !entry.live.relay || entry.live.scope != scope || !entry.live.until.After(p.now()) {
+	if entry.d.Authority != nil || entry.d.PublicRelay != serviceauthority.RelayAnonymous || !entry.d.Services.Relay || entry.relay.scope != scope || !entry.relay.until.After(p.now()) {
 		return errors.New("anonymous relay unavailable")
 	}
 	return nil
@@ -403,7 +404,12 @@ func (p *Pool) check(ctx context.Context, scope Scope, identity string, minValid
 		p.mu.Unlock()
 		return serviceauthority.ErrExpired
 	}
-	if entry.live.scope == scope && entry.live.until.After(now.Add(minValidity)) && (entry.d.PublicRelay != serviceauthority.RelayAnonymous || entry.live.relay) {
+	relayTarget := entry.d.PublicRelay == serviceauthority.RelayAnonymous && entry.d.Services.Relay
+	fresh := entry.host.generation == scope.Generation && entry.host.until.After(now.Add(minValidity))
+	if relayTarget {
+		fresh = entry.relay.scope == scope && entry.relay.until.After(now.Add(minValidity))
+	}
+	if fresh {
 		p.mu.Unlock()
 		return nil
 	}
@@ -485,8 +491,8 @@ func (p *Pool) STUN(generation uint64) []icepolicy.Endpoint {
 	now := p.now()
 	var out []icepolicy.Endpoint
 	for _, r := range p.records() {
-		v := r.live
-		if v.scope.Generation != generation || !v.until.After(now) || !p.policy.Permits(v.ip) {
+		v := r.host
+		if v.generation != generation || !v.until.After(now) || !p.policy.Permits(v.ip) {
 			continue
 		}
 		family := "ipv6"

@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"errors"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -558,4 +559,79 @@ func TestAttemptStateDiagnosticNames(t *testing.T) {
 			t.Fatalf("AttemptState(%d).DiagnosticName() = %q, want %q", tc.state, got, tc.want)
 		}
 	}
+}
+
+func TestSenderLifecycleOriginForbiddenTerminalOnlyForInitialOriginRoute(t *testing.T) {
+	forbidden := &relayv2.RegistrationNotSentError{Cause: &relayv2.WebSocketDialError{StatusCode: http.StatusForbidden}}
+
+	t.Run("initial community route with Origin terminates immediately on 403", func(t *testing.T) {
+		var dials atomic.Int32
+		dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (SenderConnection, error) {
+			dials.Add(1)
+			return SenderConnection{}, forbidden
+		}}
+		cfg := newSenderRelayTestConfig(t, nil, dialer, newSenderRelayTestClock())
+		cfg.Origin = "https://share.example"
+		var sawTerminal bool
+		cfg.ObserveAttempt = func(a Attempt) {
+			if a.State == AttemptFailed && a.Terminal {
+				sawTerminal = true
+			}
+		}
+		lifecycle, err := NewSenderLifecycle(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := lifecycle.WaitReady(t.Context()); !errors.Is(err, forbidden) {
+			t.Fatalf("WaitReady = %v, want forbidden error", err)
+		}
+		if dials.Load() != 1 || !sawTerminal {
+			t.Fatalf("dials=%d sawTerminal=%v, want 1 and true", dials.Load(), sawTerminal)
+		}
+	})
+
+	t.Run("route without Origin retries transient 403", func(t *testing.T) {
+		var dials atomic.Int32
+		recovered := &senderRelayTestEndpoint{accept: func(context.Context) (*relayv2.Channel, error) { return new(relayv2.Channel), nil }}
+		dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (SenderConnection, error) {
+			if dials.Add(1) == 1 {
+				return SenderConnection{}, forbidden
+			}
+			return NewSenderConnection(recovered), nil
+		}}
+		cfg := newSenderRelayTestConfig(t, nil, dialer, newSenderRelayTestClock())
+		lifecycle, err := NewSenderLifecycle(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := lifecycle.WaitReady(t.Context()); err != nil {
+			t.Fatalf("WaitReady = %v, want recovery on retry", err)
+		}
+		if dials.Load() != 2 {
+			t.Fatalf("dials = %d, want 2", dials.Load())
+		}
+	})
+
+	t.Run("already-admitted route with Origin retries transient 403 during resume", func(t *testing.T) {
+		var dials atomic.Int32
+		initial := &senderRelayTestEndpoint{accept: func(context.Context) (*relayv2.Channel, error) { return nil, relayv2.ErrClosed }}
+		accepted := new(relayv2.Channel)
+		recovered := &senderRelayTestEndpoint{accept: func(context.Context) (*relayv2.Channel, error) { return accepted, nil }}
+		dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (SenderConnection, error) {
+			if dials.Add(1) == 1 {
+				return SenderConnection{}, forbidden
+			}
+			return NewSenderConnection(recovered), nil
+		}}
+		cfg := newSenderRelayTestConfig(t, initial, dialer, newSenderRelayTestClock())
+		cfg.Origin = "https://share.example"
+		lifecycle, err := NewSenderLifecycle(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ch, err := lifecycle.Accept(t.Context())
+		if err != nil || ch != accepted || dials.Load() != 2 {
+			t.Fatalf("Accept = (%v, %v) dials=%d, want recovered channel after 2 dials", ch, err, dials.Load())
+		}
+	})
 }

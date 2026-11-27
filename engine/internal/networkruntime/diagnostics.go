@@ -3,6 +3,7 @@ package networkruntime
 import (
 	"context"
 	"errors"
+	"net/http"
 	"sync"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/networkendpoint"
 	"github.com/windshare/windshare/core/nodedirectory"
+	"github.com/windshare/windshare/engine/internal/community"
 	"github.com/windshare/windshare/engine/networkdirectory"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
@@ -128,6 +130,7 @@ func (r *Runtime) Observer(selection Selection, sink diagnostics.Sink) func(stri
 	for _, candidate := range candidates {
 		identities[candidate.URL] = candidate
 	}
+	origin := frontendOrigin(selection.Frontend)
 	var mu sync.Mutex
 	generations := make(map[string]uint64, len(identities))
 	return func(url string, attempt relayset.Attempt) {
@@ -145,10 +148,12 @@ func (r *Runtime) Observer(selection Selection, sink diagnostics.Sink) func(stri
 			mu.Unlock()
 			switch attempt.State {
 			case relayset.AttemptSucceeded, relayset.AttemptParked, relayset.AttemptFailed:
+				currentGen := r.generation()
+				r.recordCommunityDialForbidden(candidate, origin, started, currentGen, attempt)
 				if candidate.Source != relayplan.Community && r.shouldRefreshDirectoryOnRefusal(identity, attempt) {
 					r.directory.TriggerRefresh()
 				}
-				entry, change = r.health.RecordAttempt(identity, started, r.generation(), now, attempt)
+				entry, change = r.health.RecordAttempt(identity, started, currentGen, now, attempt)
 			}
 		}
 		if !sink.Enabled() {
@@ -175,6 +180,18 @@ func (r *Runtime) Observer(selection Selection, sink diagnostics.Sink) func(stri
 			deadlineField(fields, "server_retry_at", entry.ServerRetryAt)
 		}
 		sink.Emit(diagnostics.New("relay_registration_attempt", fields).Correlate(diagnostics.Fields{"share_instance_id": diagnostics.Identity(attempt.ShareInstance[:])}))
+	}
+}
+
+func (r *Runtime) recordCommunityDialForbidden(candidate relayplan.Candidate, origin string, started, generation uint64, attempt relayset.Attempt) {
+	if attempt.State != relayset.AttemptFailed || candidate.Source != relayplan.Community || origin == "" {
+		return
+	}
+	if started != 0 && started != generation {
+		return
+	}
+	if upgrade, ok := errors.AsType[*relayv2.WebSocketDialError](attempt.Failure); ok && upgrade.StatusCode == http.StatusForbidden {
+		r.community.RecordOriginForbidden(community.Scope{Origin: origin, Generation: generation}, candidate.Identity)
 	}
 }
 

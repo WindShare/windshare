@@ -457,3 +457,278 @@ func TestLiveDescriptorSuppressionAndEviction(t *testing.T) {
 		}
 	}
 }
+
+func signedCustomEnvelope(t *testing.T, seedByte byte, endpoint, domain string, now time.Time, lifetime time.Duration, state serviceauthority.PublicRelay, relaySvc, stunSvc bool, withAuthority bool) json.RawMessage {
+	t.Helper()
+	key := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{seedByte}, ed25519.SeedSize))
+	public := key.Public().(ed25519.PublicKey)
+	digest := sha256.Sum256(append([]byte("windshare/node-identity/v1\x00"), public...))
+	encode := base64.RawURLEncoding.EncodeToString
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stun := []string{}
+	if stunSvc {
+		stun = []string{"stun:" + u.Hostname() + ":3478"}
+	}
+	doc := map[string]any{
+		"version":        2,
+		"platform":       "native",
+		"node_id":        encode(digest[:]),
+		"node_key":       encode(public),
+		"relay_endpoint": endpoint,
+		"services":       map[string]bool{"relay": relaySvc, "stun": stunSvc},
+		"stun":           stun,
+		"public_relay":   state,
+		"issued_at":      now.Unix(),
+		"expires_at":     now.Add(lifetime).Unix(),
+	}
+	if withAuthority {
+		issuerKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x7f}, ed25519.SeedSize)).Public().(ed25519.PublicKey)
+		doc["authority"] = map[string]any{"url": "https://authority.example", "issuer": encode(issuerKey)}
+	}
+	payload, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature := ed25519.Sign(key, append([]byte(domain), payload...))
+	raw, err := json.Marshal(map[string]any{"version": 2, "descriptor": encode(payload), "signature": encode(signature)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func TestAcceptRejectsNonCommunityGossipAndAllowsSeedFallback(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	const front = "https://share.example"
+	scope := Scope{Origin: front, Generation: 1}
+
+	good := newFakeCommunityNode(t, "good.example.com", 31, front, now, true)
+	polluted := newFakeCommunityNode(t, "polluted.example.com", 32, front, now, true)
+	polluted.sample = func() []json.RawMessage {
+		return []json.RawMessage{
+			signedCustomEnvelope(t, 41, "wss://official.example.com/v2/ws", serviceauthority.GossipDomain, now, 24*time.Hour, serviceauthority.RelayAnonymous, true, true, true),
+			signedCustomEnvelope(t, 42, "wss://auth-only.example.com/v2/ws", serviceauthority.GossipDomain, now, 24*time.Hour, serviceauthority.RelayAuthenticated, true, false, false),
+			signedCustomEnvelope(t, 43, "wss://exhausted-no-stun.example.com/v2/ws", serviceauthority.GossipDomain, now, 24*time.Hour, serviceauthority.RelayBudgetExhausted, true, false, false),
+			signedCustomEnvelope(t, 44, "wss://unavail-no-stun.example.com/v2/ws", serviceauthority.GossipDomain, now, 24*time.Hour, serviceauthority.RelayUnavailable, false, false, false),
+		}
+	}
+
+	pool := New("", insecureLocalPolicy(good.server), func() time.Time { return now }, diagnostics.Sink{})
+	defer pool.Close()
+
+	// A seed returning only authority-managed or non-offering records must NOT
+	// enter the cache or short-circuit fallback to the next seed tier.
+	pool.Refresh(t.Context(), scope, Seeds{
+		Configured: []string{polluted.base},
+		Active:     []string{good.base},
+	})
+	if polluted.pulls.Load() != 1 || good.pulls.Load() != 1 {
+		t.Fatalf("polluted seed short-circuited fallback: polluted=%d good=%d", polluted.pulls.Load(), good.pulls.Load())
+	}
+	if records := pool.records(); len(records) != 1 || records[0].d.RelayEndpoint != good.identity {
+		t.Fatalf("unexpected cached records after polluted seed: %+v", records)
+	}
+
+	// Self-hosted STUN peer with BudgetExhausted relay is still accepted.
+	stunPeer := signedCustomEnvelope(t, 45, "wss://stun-only.example.com/v2/ws", serviceauthority.GossipDomain, now, 24*time.Hour, serviceauthority.RelayBudgetExhausted, true, true, false)
+	if !pool.accept(stunPeer, "seed") || len(pool.records()) != 2 {
+		t.Fatalf("expected STUN-offering peer to be accepted, records=%d", len(pool.records()))
+	}
+
+	// A newer same-key gossip declaring an accounting authority evicts the prior cached peer.
+	authorityGossip := signedCustomEnvelope(t, 45, "wss://stun-only.example.com/v2/ws", serviceauthority.GossipDomain, now.Add(time.Minute), 24*time.Hour, serviceauthority.RelayAnonymous, true, true, true)
+	if pool.accept(authorityGossip, "seed") || len(pool.records()) != 1 {
+		t.Fatalf("newer authority-managed gossip did not evict cached peer: records=%d", len(pool.records()))
+	}
+}
+
+func TestDualServicePeerAdmitsSTUNWhenRelayBudgetExhaustedOrOriginForbidden(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	const originA, originB = "https://a.example", "https://b.example"
+	scopeA := Scope{Origin: originA, Generation: 1}
+	scopeB := Scope{Origin: originB, Generation: 1}
+
+	var liveDoc atomic.Value
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/windshare":
+			_, _ = w.Write(liveDoc.Load().(json.RawMessage))
+		case "/v2/ws":
+			if r.Header.Get("Origin") != originA {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+			if err != nil {
+				return
+			}
+			_ = ws.CloseNow()
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	_, port, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "https://"))
+	identity := "wss://dual.example.com:" + port + "/v2/ws"
+	liveDoc.Store(signedCustomEnvelope(t, 61, identity, serviceauthority.DescriptorDomain, now, 5*time.Minute, serviceauthority.RelayAnonymous, true, true, false))
+
+	local := netip.MustParseAddr("127.0.0.1")
+	pool := New("", publicdial.Policy{
+		Permit:          func(a netip.Addr) bool { return a == local },
+		Lookup:          func(context.Context, string, string) ([]netip.Addr, error) { return []netip.Addr{local}, nil },
+		TLSClientConfig: srv.Client().Transport.(*http.Transport).TLSClientConfig,
+	}, func() time.Time { return now }, diagnostics.Sink{})
+	defer pool.Close()
+
+	if !pool.accept(signedCustomEnvelope(t, 61, identity, serviceauthority.GossipDomain, now, 24*time.Hour, serviceauthority.RelayAnonymous, true, true, false), "seed") {
+		t.Fatal("failed to accept dual-service peer")
+	}
+
+	// 1. Cold 403 on disallowed originB still admits origin-independent STUN while
+	//    keeping originB backed off and originA clean.
+	if err := pool.Verify(t.Context(), scopeB, identity); err == nil {
+		t.Fatal("expected 403 Verify failure for originB")
+	}
+	if len(pool.Candidates(scopeB)) != 0 {
+		t.Fatalf("originB candidate should be backed off: %+v", pool.Candidates(scopeB))
+	}
+	if stun := pool.STUN(scopeB.Generation); len(stun) != 1 || stun[0].URL != "stun:127.0.0.1:3478" {
+		t.Fatalf("cold 403 failed to admit independent STUN: %+v", stun)
+	}
+	if got := pool.Candidates(scopeA); len(got) != 1 || got[0].ProbeFailed || got[0].Verified {
+		t.Fatalf("originA polluted by originB 403: %+v", got)
+	}
+
+	// 2. Second 403 after 1m backoff still escalates to 2m (rememberHost must not reset failure count).
+	now = now.Add(time.Minute)
+	liveDoc.Store(signedCustomEnvelope(t, 61, identity, serviceauthority.DescriptorDomain, now, 5*time.Minute, serviceauthority.RelayAnonymous, true, true, false))
+	if err := pool.Verify(t.Context(), scopeB, identity); err == nil {
+		t.Fatal("expected second 403 for originB")
+	}
+	now = now.Add(90 * time.Second)
+	if len(pool.Candidates(scopeB)) != 0 {
+		t.Fatalf("second 403 did not escalate to 2m backoff: %+v", pool.Candidates(scopeB))
+	}
+
+	// 3. Verifying originA succeeds; a later 403 on originB must NOT clobber originA's verified relay state.
+	liveDoc.Store(signedCustomEnvelope(t, 61, identity, serviceauthority.DescriptorDomain, now, 5*time.Minute, serviceauthority.RelayAnonymous, true, true, false))
+	if err := pool.Verify(t.Context(), scopeA, identity); err != nil {
+		t.Fatalf("originA Verify failed: %v", err)
+	}
+	now = now.Add(2 * time.Minute)
+	liveDoc.Store(signedCustomEnvelope(t, 61, identity, serviceauthority.DescriptorDomain, now, 5*time.Minute, serviceauthority.RelayAnonymous, true, true, false))
+	if err := pool.Verify(t.Context(), scopeB, identity); err == nil {
+		t.Fatal("expected third 403 for originB")
+	}
+	if got := pool.Candidates(scopeA); len(got) != 1 || !got[0].Verified {
+		t.Fatalf("originB 403 clobbered originA verified relay: %+v", got)
+	}
+
+	// 4. Live BudgetExhausted with STUN enabled suppresses relay across origins while keeping STUN alive.
+	now = now.Add(6 * time.Minute)
+	liveDoc.Store(signedCustomEnvelope(t, 61, identity, serviceauthority.DescriptorDomain, now, 5*time.Minute, serviceauthority.RelayBudgetExhausted, true, true, false))
+	if err := pool.Verify(t.Context(), scopeA, identity); err == nil {
+		t.Fatal("expected Verify failure for live BudgetExhausted")
+	}
+	if len(pool.Candidates(scopeA)) != 0 || len(pool.Candidates(scopeB)) != 0 {
+		t.Fatalf("BudgetExhausted did not suppress relay across origins: A=%+v B=%+v", pool.Candidates(scopeA), pool.Candidates(scopeB))
+	}
+	if stun := pool.STUN(scopeA.Generation); len(stun) != 1 || stun[0].URL != "stun:127.0.0.1:3478" {
+		t.Fatalf("BudgetExhausted hid independent STUN: %+v", stun)
+	}
+
+	// 5. If live descriptor later disables STUN too, stale STUN is cleared.
+	now = now.Add(6 * time.Minute)
+	liveDoc.Store(signedCustomEnvelope(t, 61, identity, serviceauthority.DescriptorDomain, now, 5*time.Minute, serviceauthority.RelayBudgetExhausted, true, false, false))
+	if err := pool.Verify(t.Context(), scopeA, identity); err == nil {
+		t.Fatal("expected Verify failure for live BudgetExhausted without STUN")
+	}
+	if stun := pool.STUN(scopeA.Generation); len(stun) != 0 {
+		t.Fatalf("stale STUN survived after live descriptor disabled STUN: %+v", stun)
+	}
+
+	// 6. Address quota (maxPeersPerIP) still bounds STUN-only admission on 403.
+	quotaPool := New("", publicdial.Policy{
+		Permit:          func(a netip.Addr) bool { return a == local },
+		Lookup:          func(context.Context, string, string) ([]netip.Addr, error) { return []netip.Addr{local}, nil },
+		TLSClientConfig: srv.Client().Transport.(*http.Transport).TLSClientConfig,
+	}, func() time.Time { return now }, diagnostics.Sink{})
+	defer quotaPool.Close()
+	for i := range maxPeersPerIP {
+		id := "wss://q" + string(rune('a'+i)) + ".example.com:" + port + "/v2/ws"
+		quotaPool.accept(signedCustomEnvelope(t, byte(70+i), id, serviceauthority.GossipDomain, now, 24*time.Hour, serviceauthority.RelayAnonymous, true, true, false), "seed")
+		liveDoc.Store(signedCustomEnvelope(t, byte(70+i), id, serviceauthority.DescriptorDomain, now, 5*time.Minute, serviceauthority.RelayAnonymous, true, true, false))
+		if err := quotaPool.Verify(t.Context(), scopeA, id); err != nil {
+			t.Fatalf("quota seed %d failed: %v", i, err)
+		}
+	}
+	thirdID := "wss://q-over.example.com:" + port + "/v2/ws"
+	quotaPool.accept(signedCustomEnvelope(t, 75, thirdID, serviceauthority.GossipDomain, now, 24*time.Hour, serviceauthority.RelayAnonymous, true, true, false), "seed")
+	liveDoc.Store(signedCustomEnvelope(t, 75, thirdID, serviceauthority.DescriptorDomain, now, 5*time.Minute, serviceauthority.RelayAnonymous, true, true, false))
+	if err := quotaPool.Verify(t.Context(), scopeB, thirdID); err == nil {
+		t.Fatal("expected 403 on third peer")
+	}
+	if stun := quotaPool.STUN(scopeB.Generation); len(stun) != maxPeersPerIP {
+		t.Fatalf("STUN admission bypassed maxPeersPerIP quota: got %d, want %d", len(stun), maxPeersPerIP)
+	}
+}
+
+func TestRecordOriginForbiddenInvalidatesScopePreservesSTUNAndOtherOrigins(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	const originA, originB = "https://a.example", "https://b.example"
+	scopeA := Scope{Origin: originA, Generation: 1}
+	scopeB := Scope{Origin: originB, Generation: 1}
+
+	var probes atomic.Int32
+	var liveDoc atomic.Value
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/windshare":
+			probes.Add(1)
+			_, _ = w.Write(liveDoc.Load().(json.RawMessage))
+		case "/v2/ws":
+			ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+			if err != nil {
+				return
+			}
+			_ = ws.CloseNow()
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	_, port, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "https://"))
+	identity := "wss://dial403.example.com:" + port + "/v2/ws"
+	liveDoc.Store(signedCustomEnvelope(t, 88, identity, serviceauthority.DescriptorDomain, now, 5*time.Minute, serviceauthority.RelayAnonymous, true, true, false))
+
+	local := netip.MustParseAddr("127.0.0.1")
+	pool := New("", publicdial.Policy{
+		Permit:          func(a netip.Addr) bool { return a == local },
+		Lookup:          func(context.Context, string, string) ([]netip.Addr, error) { return []netip.Addr{local}, nil },
+		TLSClientConfig: srv.Client().Transport.(*http.Transport).TLSClientConfig,
+	}, func() time.Time { return now }, diagnostics.Sink{})
+	defer pool.Close()
+
+	pool.accept(signedCustomEnvelope(t, 88, identity, serviceauthority.GossipDomain, now, 24*time.Hour, serviceauthority.RelayAnonymous, true, true, false), "seed")
+	if err := pool.Verify(t.Context(), scopeA, identity); err != nil {
+		t.Fatalf("warm Verify failed: %v", err)
+	}
+
+	pool.RecordOriginForbidden(scopeA, identity)
+	if len(pool.Candidates(scopeA)) != 0 {
+		t.Fatalf("originA candidate remained offered after dial 403: %+v", pool.Candidates(scopeA))
+	}
+	before := probes.Load()
+	if err := pool.Verify(t.Context(), scopeA, identity); err == nil || probes.Load() != before {
+		t.Fatalf("originA Verify did not fast-fail during dial 403 backoff: err=%v probes=%d->%d", err, before, probes.Load())
+	}
+	if got := pool.Candidates(scopeB); len(got) != 1 || got[0].ProbeFailed {
+		t.Fatalf("originB poisoned by originA dial 403: %+v", got)
+	}
+	if stun := pool.STUN(scopeA.Generation); len(stun) != 1 {
+		t.Fatalf("dial 403 hid origin-independent STUN: %+v", stun)
+	}
+}
