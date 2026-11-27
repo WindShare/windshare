@@ -153,8 +153,11 @@ func TestShareEmitsCanaryFallbackDiagnosticWithoutSlog(t *testing.T) {
 				t.Fatal(err)
 			}
 			slices.Sort(active)
-			if !slices.Equal(active, activeURLs) || !slices.Equal(canaries, []string{canaryURL}) {
-				t.Fatalf("unexpected fallback payload: active=%v canaries=%v", active, canaries)
+			if record.Payload().Get("reason").Text() != string(relayset.FallbackReasonWaveFallback) ||
+				record.Payload().Get("next_tier").Text() != string(relayplan.TierOfficialCanary) ||
+				!slices.Equal(active, activeURLs) || !slices.Equal(canaries, []string{canaryURL}) {
+				t.Fatalf("unexpected fallback payload: reason=%q tier=%q active=%v canaries=%v",
+					record.Payload().Get("reason").Text(), record.Payload().Get("next_tier").Text(), active, canaries)
 			}
 			sawFallback = true
 		}

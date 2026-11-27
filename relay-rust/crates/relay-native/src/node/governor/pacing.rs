@@ -23,9 +23,14 @@ pub(super) struct Credit {
 }
 
 impl Bandwidth {
-    pub(super) fn observe_wire(&mut self, wire: &super::preemption::Egress, now: Instant) {
-        let rate = self.preemption.sample(wire, now);
-        self.public.configure(rate, now);
+    pub(super) fn observe_wire(
+        &mut self,
+        wire: &super::preemption::Egress,
+        now: Instant,
+    ) -> Option<super::preemption::Transition> {
+        let outcome = self.preemption.sample(wire, now);
+        self.public.configure(outcome.public_limit, now);
+        outcome.transition
     }
     pub(super) fn replenish(&mut self, now: Instant) -> Credit {
         Credit {

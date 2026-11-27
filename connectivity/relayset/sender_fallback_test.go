@@ -64,7 +64,8 @@ func TestCanaryStartsAfterEveryActiveFailsAndKeepsPendingRoutes(t *testing.T) {
 	close(reject)
 	waitValue(t, standby)
 	event := waitValue(t, fallbacks)
-	if !slices.Equal(event.Active, []string{"retrying", "rejected"}) || !slices.Equal(event.Next, []string{"standby"}) {
+	if event.Reason != FallbackReasonWaveFallback || event.Tier != relayplan.TierOfficialCanary ||
+		!slices.Equal(event.Active, []string{"retrying", "rejected"}) || !slices.Equal(event.Next, []string{"standby"}) {
 		t.Fatalf("unexpected fallback event: %+v", event)
 	}
 	if err := set.WaitReady(t.Context()); err != nil {
@@ -339,7 +340,8 @@ func TestSubstituteUsesActiveAlternateAndNeverPromotesCanaryOrDeferred(t *testin
 	cn1.publish(RegistrationRetrying)
 	waitValue(t, cn2.observed)
 	event := waitValue(t, fallbacks)
-	if !slices.Equal(event.Active, []string{"cn1"}) || !slices.Equal(event.Next, []string{"cn2"}) {
+	if event.Reason != FallbackReasonZoneSubstitute || event.Tier != relayplan.TierOfficialActive ||
+		!slices.Equal(event.Active, []string{"cn1"}) || !slices.Equal(event.Next, []string{"cn2"}) {
 		t.Fatalf("unexpected active substitution event: %+v", event)
 	}
 	if got := set.Registrations().Candidates; !slices.Equal(got, []string{"cn2", "global1"}) {
@@ -365,7 +367,8 @@ func TestSubstituteUsesActiveAlternateAndNeverPromotesCanaryOrDeferred(t *testin
 		t.Fatalf("expected deferred wave before canary, got %s", got)
 	}
 	event = waitValue(t, fallbacks)
-	if !slices.Equal(event.Active, []string{"cn2", "global1"}) || !slices.Equal(event.Next, []string{"cn-deferred"}) {
+	if event.Reason != FallbackReasonWaveFallback || event.Tier != relayplan.TierOfficialDeferred ||
+		!slices.Equal(event.Active, []string{"cn2", "global1"}) || !slices.Equal(event.Next, []string{"cn-deferred"}) {
 		t.Fatalf("unexpected wave fallback event: %+v", event)
 	}
 }
@@ -465,7 +468,8 @@ func TestCooledCommunityStandbySplitsDialableFromServerRetryWave(t *testing.T) {
 	softNamed.publish(RegistrationRetrying)
 	waitValue(t, softIP.observed)
 	event := waitValue(t, fallbacks)
-	if !slices.Equal(event.Next, []string{"soft-ip"}) {
+	if event.Reason != FallbackReasonWaveFallback || event.Tier != relayplan.TierCommunityIPLiteral ||
+		!slices.Equal(event.Next, []string{"soft-ip"}) {
 		t.Fatalf("soft IP wave merged with ServerRetryAt peer: %+v", event)
 	}
 	select {
@@ -477,7 +481,8 @@ func TestCooledCommunityStandbySplitsDialableFromServerRetryWave(t *testing.T) {
 	softIP.publish(RegistrationRetrying)
 	waitValue(t, deferredDialed)
 	event = waitValue(t, fallbacks)
-	if !slices.Equal(event.Next, []string{"deferred-ip"}) {
+	if event.Reason != FallbackReasonWaveFallback || event.Tier != relayplan.TierCommunityIPLiteralDeferred ||
+		!slices.Equal(event.Next, []string{"deferred-ip"}) {
 		t.Fatalf("unexpected deferred fallback event: %+v", event)
 	}
 	if err := set.WaitReady(t.Context()); err != nil {

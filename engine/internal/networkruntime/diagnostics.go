@@ -27,10 +27,7 @@ func (s Selection) DiagnosticRecord() diagnostics.Record {
 		fields := diagnostics.Fields{"endpoint": diagnostics.Text(candidate.URL), "alias": diagnostics.Text(candidate.Alias), "source": diagnostics.Text(candidate.Source), "configured": diagnostics.Bool(candidate.Configured)}
 		if !candidate.Configured {
 			if planned, ok := plannedNetwork[candidate.URL]; ok {
-				fields["observation"] = diagnostics.Text(planned.HistoryState())
-				if duration, observed := planned.ObservedHandshake(); observed {
-					fields["observed_handshake_ms"] = diagnostics.Millis(duration)
-				}
+				applyPlannedCandidateFields(fields, planned)
 			}
 		}
 		deadlineField(fields, "cooldown_until", candidate.CooldownUntil)
@@ -42,12 +39,45 @@ func (s Selection) DiagnosticRecord() diagnostics.Record {
 	}
 	standby := make([]diagnostics.Value, 0, len(s.Plan.Standby))
 	for _, candidate := range s.Plan.Standby {
-		standby = append(standby, diagnostics.Text(candidate.URL))
+		standby = append(standby, diagnostics.Object(standbyCandidateFields(candidate)))
 	}
 	return diagnostics.New("share_network_plan", diagnostics.Fields{"generation": diagnostics.Uint(s.Decision.DirectoryGeneration), "serial": diagnostics.Uint(s.Decision.DirectorySerial),
 		"network_generation": diagnostics.Text(s.Decision.NetworkGeneration), "configured_only": diagnostics.Bool(s.Decision.ConfiguredOnly),
 		"cooldown_fallback": diagnostics.Bool(s.Decision.CooldownFallback), "initial_candidates": diagnostics.Array(candidates...), "standby_relays": diagnostics.Array(standby...), "filters": diagnostics.Array(filters...), "frontend": diagnostics.Text(s.Frontend),
 		"alternate_frontend": diagnostics.Text(s.AlternateFrontend), "frontend_reason": diagnostics.Text(s.Decision.FrontendReason)})
+}
+
+func standbyCandidateFields(candidate relayplan.Candidate) diagnostics.Fields {
+	fields := diagnostics.Fields{
+		"endpoint": diagnostics.Text(candidate.URL),
+		"source":   diagnostics.Text(string(candidate.Source)),
+	}
+	if candidate.Alias != "" {
+		fields["alias"] = diagnostics.Text(candidate.Alias)
+	}
+	applyPlannedCandidateFields(fields, candidate)
+	deadlineField(fields, "cooldown_until", candidate.CooldownUntil)
+	deadlineField(fields, "server_retry_at", candidate.ServerRetryAt)
+	return fields
+}
+
+func applyPlannedCandidateFields(fields diagnostics.Fields, planned relayplan.Candidate) {
+	fields["tier"] = diagnostics.Text(string(planned.Tier()))
+	fields["observation"] = diagnostics.Text(planned.HistoryState())
+	if duration, observed := planned.ObservedHandshake(); observed {
+		fields["observed_handshake_ms"] = diagnostics.Millis(duration)
+	}
+	switch planned.Source {
+	case relayplan.Official:
+		if planned.Zone != "" {
+			fields["zone"] = diagnostics.Text(planned.Zone)
+		}
+	case relayplan.Community:
+		// Verified and IPLiteral are community-only classification signals;
+		// omitting them on official/configured routes avoids misleading false values.
+		fields["verified"] = diagnostics.Bool(planned.Verified)
+		fields["ip_literal"] = diagnostics.Bool(planned.IPLiteral)
+	}
 }
 
 func AdmissionRecord(value relayset.Admission) diagnostics.Record {
@@ -57,6 +87,8 @@ func AdmissionRecord(value relayset.Admission) diagnostics.Record {
 
 func FallbackRecord(value relayset.Fallback) diagnostics.Record {
 	return diagnostics.New("network_relay_fallback", diagnostics.Fields{
+		"reason":        diagnostics.Text(string(value.Reason)),
+		"next_tier":     diagnostics.Text(string(value.Tier)),
 		"active_relays": textArray(value.Active),
 		"next_relays":   textArray(value.Next),
 	})

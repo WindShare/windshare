@@ -28,6 +28,20 @@ const (
 	Community  Source = "community"
 )
 
+type Tier string
+
+const (
+	TierConfigured                 Tier = "configured"
+	TierOfficialActive             Tier = "official_active"
+	TierOfficialCanary             Tier = "official_canary"
+	TierOfficialDeferred           Tier = "official_deferred"
+	TierOfficialCanaryDeferred     Tier = "official_canary_deferred"
+	TierCommunityNamed             Tier = "community_named"
+	TierCommunityIPLiteral         Tier = "community_ip_literal"
+	TierCommunityNamedDeferred     Tier = "community_named_deferred"
+	TierCommunityIPLiteralDeferred Tier = "community_ip_literal_deferred"
+)
+
 type Candidate struct {
 	URL              string
 	Identity         string
@@ -67,6 +81,38 @@ func (c Candidate) HistoryState() string {
 		return "failed"
 	default:
 		return "unmeasured"
+	}
+}
+
+// Tier classifies a candidate's scheduling and startup-wave tier from its
+// source, canary or IP-literal class, and server-requested backoff state.
+func (c Candidate) Tier() Tier {
+	deferred := !c.ServerRetryAt.IsZero()
+	switch c.Source {
+	case Configured:
+		return TierConfigured
+	case Community:
+		switch {
+		case c.IPLiteral && deferred:
+			return TierCommunityIPLiteralDeferred
+		case c.IPLiteral:
+			return TierCommunityIPLiteral
+		case deferred:
+			return TierCommunityNamedDeferred
+		default:
+			return TierCommunityNamed
+		}
+	default:
+		switch {
+		case c.Canary && deferred:
+			return TierOfficialCanaryDeferred
+		case c.Canary:
+			return TierOfficialCanary
+		case deferred:
+			return TierOfficialDeferred
+		default:
+			return TierOfficialActive
+		}
 	}
 }
 

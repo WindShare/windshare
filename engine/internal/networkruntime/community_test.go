@@ -136,6 +136,9 @@ func TestCommunityObservationDiagnosticsAndFirstFailureDemotion(t *testing.T) {
 
 	type diagnosticCandidate struct {
 		Endpoint            string `json:"endpoint"`
+		Tier                string `json:"tier"`
+		Verified            *bool  `json:"verified"`
+		IPLiteral           *bool  `json:"ip_literal"`
 		Observation         string `json:"observation"`
 		ObservedHandshakeMS string `json:"observed_handshake_ms"`
 	}
@@ -167,7 +170,9 @@ func TestCommunityObservationDiagnosticsAndFirstFailureDemotion(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := readDiagnostics(afterAdmit)
-	if len(got) != 2 || got[0].Endpoint != highURL || got[0].Observation != "admitted" || got[0].ObservedHandshakeMS != "145" {
+	if len(got) != 2 || got[0].Endpoint != highURL || got[0].Tier != string(relayplan.TierCommunityNamed) ||
+		got[0].Verified == nil || *got[0].Verified || got[0].IPLiteral == nil || *got[0].IPLiteral ||
+		got[0].Observation != "admitted" || got[0].ObservedHandshakeMS != "145" {
 		t.Fatalf("admitted community diagnostics = %+v", got)
 	}
 

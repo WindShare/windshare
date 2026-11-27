@@ -114,7 +114,7 @@ async fn tcp_contention_reclaims_capacity_only_while_owner_benefits() {
             let mut control = Preemption::default();
             control.configure(Some(LINK), hint);
             loop {
-                let rate = control.sample(&wire, Instant::now()).unwrap();
+                let rate = control.sample(&wire, Instant::now()).public_limit.unwrap();
                 cap.store(rate, Ordering::Relaxed);
                 time::sleep(SAMPLE).await;
             }
@@ -136,6 +136,19 @@ async fn tcp_contention_reclaims_capacity_only_while_owner_benefits() {
     }
 }
 
+fn step_outcome(
+    control: &mut Preemption,
+    wire: &Egress,
+    now: &mut Instant,
+    owner_rate: u64,
+    public_rate: u64,
+) -> SampleOutcome {
+    wire.record(true, owner_rate / 4);
+    wire.record(false, public_rate / 4);
+    *now += SAMPLE;
+    control.sample(wire, *now)
+}
+
 fn step(
     control: &mut Preemption,
     wire: &Egress,
@@ -143,10 +156,9 @@ fn step(
     owner_rate: u64,
     public_rate: u64,
 ) -> u64 {
-    wire.record(true, owner_rate / 4);
-    wire.record(false, public_rate / 4);
-    *now += SAMPLE;
-    control.sample(wire, *now).expect("preemption enabled")
+    step_outcome(control, wire, now, owner_rate, public_rate)
+        .public_limit
+        .expect("preemption enabled")
 }
 
 fn enter_protected_hold(
@@ -157,7 +169,7 @@ fn enter_protected_hold(
     initial_owner: u64,
     peak_owner: u64,
 ) -> u64 {
-    assert_eq!(control.sample(wire, *now), Some(cap));
+    assert_eq!(control.sample(wire, *now).public_limit, Some(cap));
     // Initial probe cuts public to half of cap.
     let probed = step(control, wire, now, initial_owner, cap);
     assert_eq!(probed, cap / 2);
@@ -317,14 +329,14 @@ fn first_sample_and_reconfigure_drain_stale_egress_counters() {
     // Pre-sample bytes recorded before the first window opens must not create a phantom spike.
     wire.record(true, 10_000_000);
     wire.record(false, 10_000_000);
-    assert_eq!(control.sample(&wire, now), Some(cap));
+    assert_eq!(control.sample(&wire, now).public_limit, Some(cap));
     assert_eq!(step(&mut control, &wire, &mut now, 0, cap), cap);
 
     // Mid-window bytes recorded before reconfigure must not leak into the next window either.
     wire.record(true, 5_000_000);
     wire.record(false, 5_000_000);
     assert!(control.configure(Some(cap / 2), None));
-    assert_eq!(control.sample(&wire, now), Some(cap / 2));
+    assert_eq!(control.sample(&wire, now).public_limit, Some(cap / 2));
     assert_eq!(step(&mut control, &wire, &mut now, 0, cap / 2), cap / 2);
 }
 
@@ -336,7 +348,7 @@ fn hinted_ramp_clamps_backoff_to_uplink_when_uplink_is_below_cap() {
     // Small uplink below the default public cap must still back off to uplink / 4.
     let mut clamped = Preemption::default();
     clamped.configure(Some(3_125_000), Some(500_000));
-    assert_eq!(clamped.sample(&wire, now), Some(3_125_000));
+    assert_eq!(clamped.sample(&wire, now).public_limit, Some(3_125_000));
     assert_eq!(
         step(&mut clamped, &wire, &mut now, 100_000, 500_000),
         125_000
@@ -350,7 +362,7 @@ fn hinted_ramp_clamps_backoff_to_uplink_when_uplink_is_below_cap() {
     // When uplink exceeds cap, Ramp preserves cap / 4.
     let mut uncapped = Preemption::default();
     uncapped.configure(Some(1_000_000), Some(4_000_000));
-    assert_eq!(uncapped.sample(&wire, now), Some(1_000_000));
+    assert_eq!(uncapped.sample(&wire, now).public_limit, Some(1_000_000));
     assert_eq!(
         step(&mut uncapped, &wire, &mut now, 200_000, 1_000_000),
         250_000
@@ -364,7 +376,7 @@ fn saturated_owner_rate_does_not_overflow_release_threshold() {
     let wire = Egress::default();
     let mut now = Instant::now();
     control.configure(Some(cap), None);
-    assert_eq!(control.sample(&wire, now), Some(cap));
+    assert_eq!(control.sample(&wire, now).public_limit, Some(cap));
 
     let probed = step(&mut control, &wire, &mut now, 256_000, cap);
     assert_eq!(probed, cap / 2);
@@ -373,17 +385,196 @@ fn saturated_owner_rate_does_not_overflow_release_threshold() {
     wire.record(true, u64::MAX);
     wire.record(false, SIGNAL_FLOOR / 4);
     now += SAMPLE;
-    assert_eq!(control.sample(&wire, now), Some(probed));
+    assert_eq!(control.sample(&wire, now).public_limit, Some(probed));
 
     // Evaluating the 2/3 release threshold against u64::MAX must neither overflow nor release.
     wire.record(true, u64::MAX);
     wire.record(false, SIGNAL_FLOOR / 4);
     now += SAMPLE;
-    assert_eq!(control.sample(&wire, now), Some(probed));
+    assert_eq!(control.sample(&wire, now).public_limit, Some(probed));
 
     // A genuinely lower rate cleanly triggers release without overflowing.
     assert_eq!(
         step(&mut control, &wire, &mut now, 1_000_000, SIGNAL_FLOOR),
         cap
+    );
+}
+
+#[test]
+fn adaptive_transitions_include_mode_and_rate_preserving_phases_without_idle_churn() {
+    let cap = 512_000;
+    let mut control = Preemption::default();
+    let wire = Egress::default();
+    let mut now = Instant::now();
+    assert_eq!(control.mode_name(), "disabled");
+    assert!(control.configure(Some(cap), None));
+    assert_eq!(control.mode_name(), "adaptive");
+    assert_eq!(control.sample(&wire, now).transition, None);
+
+    // Owner-only traffic with no competing public egress stays silent across idle <-> cooldown.
+    let no_public = step_outcome(&mut control, &wire, &mut now, 256_000, 0);
+    assert_eq!(no_public.public_limit, Some(cap));
+    assert_eq!(no_public.transition, None);
+    let back_idle = step_outcome(&mut control, &wire, &mut now, 0, 0);
+    assert_eq!(back_idle.public_limit, Some(cap));
+    assert_eq!(back_idle.transition, None);
+
+    // Probe -> Tracking -> Hold -> Restore -> Recover -> Hold -> Restore -> Cooldown.
+    let probe = step_outcome(&mut control, &wire, &mut now, 256_000, cap);
+    let probed = probe.public_limit.unwrap();
+    assert_eq!(
+        probe.transition,
+        Some(Transition {
+            mode: "adaptive",
+            previous_phase: "idle",
+            phase: "probe",
+            owner_bytes_per_second: 256_000,
+            public_bytes_per_second: cap,
+            previous_limit: cap,
+            public_limit: probed,
+        })
+    );
+
+    let tracking = step_outcome(&mut control, &wire, &mut now, 500_000, probed);
+    assert_eq!(
+        tracking.transition,
+        Some(Transition {
+            mode: "adaptive",
+            previous_phase: "probe",
+            phase: "tracking",
+            owner_bytes_per_second: 500_000,
+            public_bytes_per_second: probed,
+            previous_limit: probed,
+            public_limit: probed,
+        })
+    );
+
+    let hold = step_outcome(&mut control, &wire, &mut now, 500_000, SIGNAL_FLOOR);
+    assert_eq!(
+        hold.transition,
+        Some(Transition {
+            mode: "adaptive",
+            previous_phase: "tracking",
+            phase: "hold",
+            owner_bytes_per_second: 500_000,
+            public_bytes_per_second: SIGNAL_FLOOR,
+            previous_limit: probed,
+            public_limit: probed,
+        })
+    );
+
+    // Steady hold ticks stay silent.
+    for _ in 0..7 {
+        assert_eq!(
+            step_outcome(&mut control, &wire, &mut now, 500_000, probed).transition,
+            None
+        );
+    }
+
+    let restore = step_outcome(&mut control, &wire, &mut now, 500_000, probed);
+    assert_eq!(
+        restore.transition.map(|t| (t.previous_phase, t.phase)),
+        Some(("hold", "restore"))
+    );
+
+    let recover = step_outcome(&mut control, &wire, &mut now, 300_000, cap);
+    assert_eq!(
+        recover.transition.map(|t| (t.previous_phase, t.phase)),
+        Some(("restore", "recover"))
+    );
+
+    let recovered_hold = step_outcome(&mut control, &wire, &mut now, 480_000, probed);
+    assert_eq!(
+        recovered_hold.transition,
+        Some(Transition {
+            mode: "adaptive",
+            previous_phase: "recover",
+            phase: "hold",
+            owner_bytes_per_second: 480_000,
+            public_bytes_per_second: probed,
+            previous_limit: probed,
+            public_limit: probed,
+        })
+    );
+
+    // Expire Hold -> Restore -> no drop -> Cooldown must emit even though limit stays cap.
+    for _ in 0..6 {
+        assert_eq!(
+            step_outcome(&mut control, &wire, &mut now, 480_000, probed).transition,
+            None
+        );
+    }
+    let restore2 = step_outcome(&mut control, &wire, &mut now, 480_000, probed);
+    assert_eq!(
+        restore2.transition.map(|t| (t.previous_phase, t.phase)),
+        Some(("hold", "restore"))
+    );
+
+    let released = step_outcome(&mut control, &wire, &mut now, 480_000, cap);
+    assert_eq!(
+        released.transition,
+        Some(Transition {
+            mode: "adaptive",
+            previous_phase: "restore",
+            phase: "cooldown",
+            owner_bytes_per_second: 480_000,
+            public_bytes_per_second: cap,
+            previous_limit: cap,
+            public_limit: cap,
+        })
+    );
+}
+
+#[test]
+fn hinted_transitions_report_mode_and_same_rate_ramp_to_tracking() {
+    let mut control = Preemption::default();
+    let wire = Egress::default();
+    let mut now = Instant::now();
+    // uplink=1_000_000, cap=1_000_000 => Ramp limit=250_000.
+    // Tracking limit = 1_000_000 - 700_000 - 50_000 = 250_000 (unchanged limit, phase changes).
+    assert!(control.configure(Some(1_000_000), Some(1_000_000)));
+    assert_eq!(control.mode_name(), "hinted");
+    assert_eq!(control.sample(&wire, now).transition, None);
+
+    let ramp = step_outcome(&mut control, &wire, &mut now, 200_000, 1_000_000);
+    assert_eq!(
+        ramp.transition,
+        Some(Transition {
+            mode: "hinted",
+            previous_phase: "idle",
+            phase: "ramp",
+            owner_bytes_per_second: 200_000,
+            public_bytes_per_second: 1_000_000,
+            previous_limit: 1_000_000,
+            public_limit: 250_000,
+        })
+    );
+
+    let tracking = step_outcome(&mut control, &wire, &mut now, 700_000, 250_000);
+    assert_eq!(
+        tracking.transition,
+        Some(Transition {
+            mode: "hinted",
+            previous_phase: "ramp",
+            phase: "tracking",
+            owner_bytes_per_second: 700_000,
+            public_bytes_per_second: 250_000,
+            previous_limit: 250_000,
+            public_limit: 250_000,
+        })
+    );
+
+    // Unchanged rate within tracking stays silent.
+    assert_eq!(
+        step_outcome(&mut control, &wire, &mut now, 700_000, 250_000).transition,
+        None
+    );
+
+    // Stopping owner traffic returns to idle at full cap.
+    let idle = step_outcome(&mut control, &wire, &mut now, 0, 250_000);
+    assert_eq!(
+        idle.transition
+            .map(|t| (t.mode, t.previous_phase, t.phase, t.public_limit)),
+        Some(("hinted", "tracking", "idle", 1_000_000))
     );
 }

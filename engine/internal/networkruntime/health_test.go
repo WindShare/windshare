@@ -314,17 +314,61 @@ func TestDiagnosticRecordsIncludeReadableAttemptStatesPlanTimingsAndAdmissionRea
 	var candidates []struct {
 		Endpoint            string `json:"endpoint"`
 		Configured          bool   `json:"configured"`
+		Tier                string `json:"tier"`
+		Zone                string `json:"zone"`
+		Verified            *bool  `json:"verified"`
+		IPLiteral           *bool  `json:"ip_literal"`
 		Observation         string `json:"observation"`
 		ObservedHandshakeMS string `json:"observed_handshake_ms"`
 	}
 	if err := json.Unmarshal(raw, &candidates); err != nil {
 		t.Fatal(err)
 	}
-	if len(candidates) != 2 || !candidates[0].Configured || candidates[0].Observation != "" || candidates[0].ObservedHandshakeMS != "" {
-		t.Fatalf("configured candidate carried directory observation: %+v", candidates)
+	if len(candidates) != 2 || !candidates[0].Configured || candidates[0].Tier != "" || candidates[0].Observation != "" ||
+		candidates[0].ObservedHandshakeMS != "" || candidates[0].Verified != nil || candidates[0].IPLiteral != nil {
+		t.Fatalf("configured candidate carried network diagnostics: %+v", candidates)
 	}
-	if candidates[1].Endpoint != node.URL || candidates[1].Observation != "admitted" || candidates[1].ObservedHandshakeMS != "145" {
-		t.Fatalf("directory candidate missing observed handshake timing: %+v", candidates[1])
+	if candidates[1].Endpoint != node.URL || candidates[1].Tier != string(relayplan.TierOfficialActive) ||
+		candidates[1].Observation != "admitted" || candidates[1].ObservedHandshakeMS != "145" ||
+		candidates[1].Verified != nil || candidates[1].IPLiteral != nil {
+		t.Fatalf("directory candidate diagnostics mismatch: %+v", candidates[1])
+	}
+
+	retryAt := r.now().Add(time.Minute)
+	standbyPlan := Selection{
+		Plan: relayplan.Plan{
+			Standby: []relayplan.Candidate{
+				{URL: "https://cn2.example", Alias: "cn2", Source: relayplan.Official, Zone: "cn"},
+				{URL: "https://canary.example", Alias: "c1", Source: relayplan.Official, Zone: "global", Canary: true},
+				{URL: "https://peer.example", Source: relayplan.Community, Verified: true},
+				{URL: "https://198.51.100.10", Source: relayplan.Community, IPLiteral: true, ServerRetryAt: retryAt},
+			},
+		},
+	}
+	rawStandby, err := standbyPlan.DiagnosticRecord().Payload().Get("standby_relays").MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var standby []struct {
+		Endpoint      string `json:"endpoint"`
+		Alias         string `json:"alias"`
+		Source        string `json:"source"`
+		Tier          string `json:"tier"`
+		Zone          string `json:"zone"`
+		Verified      *bool  `json:"verified"`
+		IPLiteral     *bool  `json:"ip_literal"`
+		Observation   string `json:"observation"`
+		ServerRetryAt string `json:"server_retry_at"`
+	}
+	if err := json.Unmarshal(rawStandby, &standby); err != nil {
+		t.Fatal(err)
+	}
+	if len(standby) != 4 ||
+		standby[0].Endpoint != "https://cn2.example" || standby[0].Tier != string(relayplan.TierOfficialActive) || standby[0].Zone != "cn" || standby[0].Verified != nil || standby[0].IPLiteral != nil ||
+		standby[1].Endpoint != "https://canary.example" || standby[1].Tier != string(relayplan.TierOfficialCanary) || standby[1].Alias != "c1" ||
+		standby[2].Endpoint != "https://peer.example" || standby[2].Tier != string(relayplan.TierCommunityNamed) || standby[2].Verified == nil || !*standby[2].Verified || standby[2].IPLiteral == nil || *standby[2].IPLiteral ||
+		standby[3].Endpoint != "https://198.51.100.10" || standby[3].Tier != string(relayplan.TierCommunityIPLiteralDeferred) || standby[3].Verified == nil || *standby[3].Verified || standby[3].IPLiteral == nil || !*standby[3].IPLiteral || standby[3].ServerRetryAt == "" {
+		t.Fatalf("unexpected standby_relays diagnostics: %s", rawStandby)
 	}
 
 	admission := AdmissionRecord(relayset.Admission{
@@ -336,11 +380,17 @@ func TestDiagnosticRecordsIncludeReadableAttemptStatesPlanTimingsAndAdmissionRea
 	}
 
 	fallback := FallbackRecord(relayset.Fallback{
+		Reason: relayset.FallbackReasonWaveFallback,
+		Tier:   relayplan.TierOfficialCanary,
 		Active: []string{"https://active.example"},
 		Next:   []string{"https://canary.example"},
 	})
 	if fallback.Name() != "network_relay_fallback" {
 		t.Fatalf("fallback record name = %q", fallback.Name())
+	}
+	if fallback.Payload().Get("reason").Text() != string(relayset.FallbackReasonWaveFallback) ||
+		fallback.Payload().Get("next_tier").Text() != string(relayplan.TierOfficialCanary) {
+		t.Fatalf("fallback record lost reason or tier: %+v", fallback.Payload())
 	}
 	rawActive, err := fallback.Payload().Get("active_relays").MarshalJSON()
 	if err != nil {

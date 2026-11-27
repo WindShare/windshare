@@ -40,6 +40,23 @@ impl Egress {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct Transition {
+    pub mode: &'static str,
+    pub previous_phase: &'static str,
+    pub phase: &'static str,
+    pub owner_bytes_per_second: u64,
+    pub public_bytes_per_second: u64,
+    pub previous_limit: u64,
+    pub public_limit: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct SampleOutcome {
+    pub public_limit: Option<u64>,
+    pub transition: Option<Transition>,
+}
+
 #[derive(Clone, Copy)]
 struct Sample {
     owner: u64,
@@ -350,6 +367,14 @@ impl Mode {
         }
     }
 
+    const fn mode_name(&self) -> &'static str {
+        match *self {
+            Self::Disabled => "disabled",
+            Self::Hinted { .. } => "hinted",
+            Self::Adaptive { .. } => "adaptive",
+        }
+    }
+
     const fn phase_name(&self) -> &'static str {
         match *self {
             Self::Disabled => "disabled",
@@ -411,9 +436,16 @@ impl Preemption {
         true
     }
 
-    pub fn sample(&mut self, wire: &Egress, now: Instant) -> Option<u64> {
+    pub const fn mode_name(&self) -> &'static str {
+        self.mode.mode_name()
+    }
+
+    pub fn sample(&mut self, wire: &Egress, now: Instant) -> SampleOutcome {
         if matches!(self.mode, Mode::Disabled) {
-            return None;
+            return SampleOutcome {
+                public_limit: None,
+                transition: None,
+            };
         }
         let Some(last) = self.measured else {
             // Discard bytes recorded before this sampling window opened
@@ -421,11 +453,17 @@ impl Preemption {
             // cannot inflate into a phantom spike.
             let _ = wire.drain();
             self.measured = Some(now);
-            return self.mode.current();
+            return SampleOutcome {
+                public_limit: self.mode.current(),
+                transition: None,
+            };
         };
         let elapsed = now.duration_since(last);
         if elapsed < SAMPLE {
-            return self.mode.current();
+            return SampleOutcome {
+                public_limit: self.mode.current(),
+                transition: None,
+            };
         }
         self.measured = Some(now);
         let (owner_bytes, public_bytes) = wire.drain();
@@ -434,8 +472,15 @@ impl Preemption {
             public: rate_per_second(public_bytes, elapsed),
             now,
         };
+        let mode = self.mode.mode_name();
+        let previous_phase = self.mode.phase_name();
         let (previous, next) = match &mut self.mode {
-            Mode::Disabled => return None,
+            Mode::Disabled => {
+                return SampleOutcome {
+                    public_limit: None,
+                    transition: None,
+                };
+            }
             Mode::Hinted {
                 cap,
                 uplink,
@@ -458,17 +503,30 @@ impl Preemption {
                 (previous, next)
             }
         };
-        if previous != next {
-            tracing::debug!(
-                event = "owner_preemption",
-                phase = self.mode.phase_name(),
-                owner_bytes_per_second = sample.owner,
-                public_bytes_per_second = sample.public,
-                previous,
-                public_limit = next
+        let next_phase = self.mode.phase_name();
+        // Owner-only transfers with no competing public traffic cycle between
+        // idle and cooldown at full cap; suppress that no-op churn so debug
+        // traces stay focused on contention and release outcomes.
+        let idle_cooldown_churn = previous == next
+            && matches!(
+                (previous_phase, next_phase),
+                ("idle", "cooldown") | ("cooldown", "idle")
             );
+        let transition = (previous != next
+            || (previous_phase != next_phase && !idle_cooldown_churn))
+            .then_some(Transition {
+                mode,
+                previous_phase,
+                phase: next_phase,
+                owner_bytes_per_second: sample.owner,
+                public_bytes_per_second: sample.public,
+                previous_limit: previous,
+                public_limit: next,
+            });
+        SampleOutcome {
+            public_limit: Some(next),
+            transition,
         }
-        Some(next)
     }
 }
 

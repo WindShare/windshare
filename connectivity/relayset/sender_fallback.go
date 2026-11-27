@@ -7,8 +7,18 @@ import (
 	"github.com/windshare/windshare/connectivity/relayplan"
 )
 
+type FallbackReason string
+
+const (
+	FallbackReasonZoneSubstitute   FallbackReason = "zone_substitute"
+	FallbackReasonWaveFallback     FallbackReason = "wave_fallback"
+	FallbackReasonOfficialAuthWait FallbackReason = "official_auth_wait"
+)
+
 // Fallback records a pre-publication transition to the next eligible routes.
 type Fallback struct {
+	Reason FallbackReason
+	Tier   relayplan.Tier
 	Active []string
 	Next   []string
 }
@@ -60,7 +70,7 @@ func NewPlannedSender(ctx context.Context, plan relayplan.Plan, dial SenderFacto
 	var wave []string
 	var previous relayplan.Candidate
 	for _, c := range plan.Standby {
-		if len(wave) > 0 && (c.Source != previous.Source || c.Canary != previous.Canary || c.IPLiteral != previous.IPLiteral || c.ServerRetryAt.IsZero() != previous.ServerRetryAt.IsZero()) {
+		if len(wave) > 0 && c.Tier() != previous.Tier() {
 			fallback.later = append(fallback.later, wave)
 			wave = nil
 		}
@@ -107,7 +117,7 @@ func (s *Sender) initialFailureLocked(url string) (func(), bool) {
 	delete(f.untried, url)
 	if replacement := f.substitute(url); replacement != "" {
 		s.replaceActiveLocked(f, url, replacement)
-		return f.notification([]string{url}, []string{replacement}), true
+		return f.notification(FallbackReasonZoneSubstitute, []string{url}, []string{replacement}), true
 	}
 	if len(f.untried) != 0 {
 		return nil, false
@@ -152,7 +162,7 @@ func (s *Sender) initialFailureLocked(url string) (func(), bool) {
 		f.canaries, f.later = f.later[0], f.later[1:]
 		s.startup = f
 	}
-	return f.notification(active, added), true
+	return f.notification(FallbackReasonWaveFallback, active, added), true
 }
 
 // Replace a failed active official zone while another route is still starting.
@@ -243,7 +253,7 @@ func (s *Sender) communityDuringAuthorizationLocked() func() {
 		f.untried[next] = struct{}{}
 		s.startLocked(next, f.dial)
 	}
-	return f.notification(before, []string{next})
+	return f.notification(FallbackReasonOfficialAuthWait, before, []string{next})
 }
 
 func (s *Sender) failedOfficialToRetireLocked(f *startupFallback) string {
@@ -276,10 +286,14 @@ func (s *Sender) retireRouteLocked(url string) {
 	}
 }
 
-func (f *startupFallback) notification(active, added []string) func() {
+func (f *startupFallback) notification(reason FallbackReason, active, added []string) func() {
 	if f.observe == nil {
 		return nil
 	}
-	event := Fallback{Active: slices.Clone(active), Next: slices.Clone(added)}
+	var tier relayplan.Tier
+	if len(added) > 0 {
+		tier = f.routes[added[0]].Tier()
+	}
+	event := Fallback{Reason: reason, Tier: tier, Active: slices.Clone(active), Next: slices.Clone(added)}
 	return func() { f.observe(event) }
 }

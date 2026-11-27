@@ -336,6 +336,7 @@ func TestCommunityAuthBypassRotatesAcrossFailedStandbys(t *testing.T) {
 	}
 	comm1Canceled := make(chan struct{})
 	comm2Dialed := make(chan struct{})
+	fallbacks := make(chan Fallback, 4)
 	set, err := NewPlannedSender(t.Context(), plan, func(ctx context.Context, url string) (SenderEndpoint, error) {
 		switch url {
 		case "cn", "global":
@@ -351,7 +352,7 @@ func TestCommunityAuthBypassRotatesAcrossFailedStandbys(t *testing.T) {
 		default:
 			return nil, fmt.Errorf("unexpected relay %s", url)
 		}
-	}, nil)
+	}, func(event Fallback) { fallbacks <- event })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -371,6 +372,20 @@ func TestCommunityAuthBypassRotatesAcrossFailedStandbys(t *testing.T) {
 		!slices.Equal(set.Registrations().Candidates, []string{"cn", "comm-ip", "global"}) ||
 		!slices.Equal(set.Registrations().Rejected, []string{"comm2"}) {
 		t.Fatal(set.Status(), set.Registrations())
+	}
+	wantFallbacks := []struct {
+		next string
+		tier relayplan.Tier
+	}{
+		{"comm1", relayplan.TierCommunityNamed},
+		{"comm2", relayplan.TierCommunityNamed},
+		{"comm-ip", relayplan.TierCommunityIPLiteral},
+	}
+	for _, want := range wantFallbacks {
+		event := waitValue(t, fallbacks)
+		if event.Reason != FallbackReasonOfficialAuthWait || event.Tier != want.tier || !slices.Equal(event.Next, []string{want.next}) {
+			t.Fatalf("unexpected auth-wait fallback event: %+v (want next=%s tier=%s)", event, want.next, want.tier)
+		}
 	}
 }
 
