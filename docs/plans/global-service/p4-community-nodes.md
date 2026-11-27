@@ -2,33 +2,55 @@
 
 Part of the [Global Network Plan](global-network.md#6-phases).
 
-Volunteers join by running a node, and discovery works without the official operator.
+Volunteers join by running a native node, and discovery keeps working without the official operator.
 
-- Inclusion needs no approval: a node publishes its self-signed descriptor and announces itself to a
-  few bootstrap nodes, official ones by default. Nodes and clients exchange bounded descriptor
-  samples and cache signature-verified descriptors. Self-signatures establish identity, not service
-  trust; apply local endpoint policy before enabling advertised STUN. Operator and capacity fields
-  remain unverified hints.
-- Recommendation affects ranking, not admission. Use P1's bounded registration attempts for community
-  candidates too; without reachable recommended nodes, community nodes can serve alone or together.
-  Prefer distinct operators and providers without requiring them. Explicit self-hosted relays work
-  independently, and users can turn community nodes off.
-- Native owner onboarding: initialize admin credentials through a one-time link and sign in.
-  Address-only setup uses browser authorization to claim and save the owner key; reuse `relay-access`
-  and `engine/relaysetup`. Public admission and owner authorization are independent; manual keys still work.
-- Community template: contribution on by default with conservative automatic budgets (daily public
-  traffic, share of peak bandwidth, relay connections), editable by the owner. Owner traffic comes
-  first and may push community traffic to zero. Reaching the daily public traffic cap stops public
-  forwarding. The anonymous class is on; nothing depends on the official authority.
-- Cloudflare Workers relays contribute only when their owner enables it, with budgets that count
-  platform request limits, not just bytes.
-- Eligibility stays soft (中转服务.md): community nodes are offered when the user owns no native
-  relay, owns at least one contributing native relay, or owns only Cloudflare relays. Configuring
-  access to another person's relay does not establish ownership. Turning off contribution on the
-  last contributing native relay shows a one-time notice and pauses new community requests;
-  owner saturation, maintenance, or a spent budget does not count as refusal. Nothing else mentions contribution.
-- Every node mirrors the signed directory and its descriptor cache.
-- Domainless community hosts: evaluate direct TLS in `wsrelay` (built-in ACME with Let's Encrypt
-  160-hour IP certificates, ARI renewal, and zero-downtime reload) versus a scripted Caddy proxy.
-- Traces: descriptor exchange (source, accepted or rejected, reason) and community picks in planner
-  decisions.
+## Discovery, descriptors, and STUN
+
+- **Permissionless joining and bootstrap**: a node publishes its Ed25519 self-signed descriptor and announces itself to a small configurable `bootstrap_nodes` seed list (defaulting in the deployment template to a few stable official node URLs as untrusted gossip seeds—no root keys or directory parsing in `wsrelay`—so new nodes can still join after the official operator exits). Clients likewise seed gossip from active directory nodes and configured/embedded bootstrap seeds (including expired snapshot node URLs).
+- **Descriptor contract** (`relay-native/src/node/descriptor.rs`, `core/serviceauthority/descriptor.go`, and live consumers `network-authority/src/fleet/descriptor.rs`, `engine/account/nodes.go`, `engine/relaysetup/native.go`):
+  - Separate live `/.well-known/windshare` verification (300 s TTL) from cacheable gossip descriptors (bounded longer validity, e.g., 24 h) using distinct signing domains/types so cached gossip records survive sleep and offline gaps without replaying into live enrollment or authority checks; live probes and registration attempts establish current reachability.
+  - Replace overlapping public-relay flags with an explicit public-relay state (`enabled` with `anonymous: bool`, `budget_exhausted`, `unavailable` for draining/maintenance/storage/STUN-only, `disabled` for explicit owner opt-out) so illegal combinations are unrepresentable and non-refusal unavailability cannot be confused with disabled contribution, plus optional unverified hints (`operator`, `provider`, `zone`) and `public_capacity_bytes_per_second` (distinct from host uplink).
+- **Bounded exchange, persistence, and anti-abuse**:
+  - Isolate node-side discovery routes (outside console-owned `/api/*`) and announcement handling in a dedicated `wsrelay` discovery module outside share actors. Self-signatures prove key identity, not endpoint ownership or service trust: validate syntax, signature, and per-source/global rate limits quickly on ingress and run outbound live probes asynchronously in a bounded worker pool (never holding inbound `MAX_HTTP_REQUESTS` slots open during outbound fetches). Enforce anti-SSRF rules adapted from P3 (HTTPS only, no redirects, non-private global-unicast IPs with DNS-rebinding-safe dialing, allowing public DNS hostnames and public IP literals for domainless hosts), cap entries per IP and prefix (`/24`, `/48`), and favor long-lived reachable peers over unverified churn on eviction.
+  - Native clients are pull-only (never acting as gossip servers or scanning the network in the background): they periodically pull bounded descriptor samples from 1–2 known nodes, persist signature-verified descriptors locally so discovery survives restarts and official-operator exit, and warm/verify 1–2 ready community candidates asynchronously in the background (on startup, network change, and periodic refresh) so sharing never pays synchronous verification latency. Apply the same injectable public global-unicast anti-SSRF policy to gossip-discovered descriptor fetches, WebSocket dials, and STUN probes while keeping explicit user-configured relays unrestricted (for LAN/localhost and tests).
+- **STUN policy**: accept community STUN only when bound to the same public host as `relay_endpoint` and permitted by local endpoint policy. Add a dedicated `community` trust tier below `reviewed` (official directory and reviewed fallbacks) and `local` in `connectivity/icepolicy`: enforce total-order trust ranking in both primary sorting and `diverseEndpointIndex` so lower-trust community STUN never displaces higher-trust STUN for the second slot, and derive community `FailureDomain` from verified host/IP prefix rather than unverified self-reported hints. Browser receivers keep trusted built-in and official STUN pools without link-driven descriptor fetches (falling back to `?r=` relaying when P2P fails).
+
+## Planning, authorization, and opt-out
+
+- **Strict ticket isolation and directory independence**: tag `relayplan.Candidate` with explicit source (`Configured`, `Official`, `Community`) so official and community candidates stay separate across `connectivity/relayplan`, `engine/internal/networkruntime`, and `engine/share_authorization.go`. Never present official bearer tickets to community nodes (`engine/account` applies only to current official directory nodes) and never classify community `AccessDenied` rejections as `ShareOfficialAuthorization`; community candidates register anonymously without waiting on official account setup or refresh. If a share becomes ready through a community relay while official account setup or verification is still pending or requires user action, do not interrupt the ready share with a blocking official-account error. When the official directory is expired or unreachable, `networkruntime.Plan` and `Unavailability` must not fail or synchronously stall on dead mirrors while usable community candidates are available.
+- **Official pair preserved, community as supplemental concurrency**: recommendation affects ranking, not admission. Cold-start selection favors official nodes, unverified self-reported capacity only breaks ties among community candidates, and unverified community `zone` hints never satisfy official `cn` cross-zone pairing. When official relays are healthy, keep the two official registration slots (preserving `cn` + `global` cross-zone reachability) and add at most one **background-verified DNS-named** community node as a supplemental third slot for extra relay concurrency and diversity (still publishing on first admission so link latency is unchanged). Arbitrate official and community slot budgets separately in `connectivity/relayset`'s `NetworkAdmissions` (keeping room within `MaximumNetworkCandidates`) so a faster community admission never steals official `primary` or disrupts `cn` + `global` pairing. Never freeze unverified community candidates into `?r=` link hints: on cold start before background verification finishes, omit unverified community candidates while official relays are healthy and verify on demand only during fallback. Reserve IP-literal community nodes for fallback when healthy official and DNS-named community nodes are unavailable, and generalize P3's standby wave across official active, official canary, DNS-named community, and IP-literal community fallback tiers.
+- **Independent controls**: explicit self-hosted relays work independently. Add a dedicated `community_nodes` toggle in `engine/relayconfig`, CLI, and desktop settings (scoped under Automatic mode in desktop UI) so users can turn community nodes off while keeping official relays on.
+
+## Native owner onboarding
+
+- **Admin setup**: reuse the existing native console (`relay-native/src/console`, `windshare-relay-console`)—open the one-time initialization link, set the admin password (password-only, matching the Cloudflare relay console), and land signed in. Expose an `uninitialized` state in console session/login responses so visiting a pairing URL (`/?code=...`) before setup prompts the owner to open the printed initialization link instead of showing an unusable password form; keep HTTPS startup/installer output centered on the initialization link rather than raw `owner_access_key` (retaining `owner_access_key` for headless/non-HTTPS setups).
+- **Address-only setup**: decouple public admission from owner authorization in `engine/relaysetup`. Keep the initial Add Relay form unchanged; when adding a native node by address (`AddProfile`) that advertises both `anonymous: true` and `console_url`, default to browser owner enrollment to claim and save the owner key, and offer an unobtrusive guest opt-in directly on the approval waiting view (cancelling the pending enrollment cleanly on the node) and CLI (`--anonymous`) for connecting to someone else's open relay without pairing. Manual keys (`--access-key`) still work.
+- **Explicit credential roles**: return credential role (`owner`, `service`, `account`) and node platform/authority metadata during enrollment and discovery so clients distinguish owner keys from third-party service keys and official-account device bindings (`device_login`). Update `relayconfig.MergeRelay` to update or clear saved role/platform metadata whenever an existing profile is re-enrolled or switched.
+
+## Community template and budgets
+
+- **Default template**: native community deployment enables contribution by default, sets `origins: public` so any valid browser frontend can receive through the node, enables anonymous public admission, configures loopback proxy trust (`X-Windshare-Source-Ip`) for reverse-proxy ingress, populates (or auto-derives from `endpoint` + STUN port) `stun_urls` whenever `services.stun` is enabled so descriptors stay valid, and depends on nothing from the official authority (update `deploy/wsrelay/node.example.json` and container defaults accordingly).
+- **Clear config ownership and conservative editable budgets**: keep startup infrastructure (`listen`, paths, `endpoint`, `origins`, `proxy`, `authority`) and hot-reloadable operational/billing configuration (`trusted_issuers`, `services`, monthly `relay_budget`, plus an optional explicit `ceiling` block surfaced in the console UI instead of overloading ordinary fields) in `node.json`. Persist self-hosted contribution policy in SQLite—loaded directly by `Runtime`/`Database` (so headless/non-HTTPS nodes still honor it) and editable in the Web Console when `authority` is unset (authority-managed official nodes remain governed by `NodePolicy` and hide self-hosted contribution controls)—starting from conservative built-in defaults (e.g., 10 GiB/day public traffic, ~20–25 Mbps public rate cap, 64 public relay connections).
+- **Owner-first preemption without capping the owner**:
+  - Track non-owner (`public`) business connections separately in `relay-native/src/connection/admission.rs` with a hot-reloadable cap (gating new admissions only, without tearing down existing connections when lowered) alongside the existing UTC-day `public_relay_day` ledger and governor pacing.
+  - Never apply a static rate cap to `Class::Owner` (`pacing.node` applies only to non-owner traffic). Govern public egress dynamically while ignoring idle owner shares (reacting only to active owner payload forwarding or write backpressure): when an optional `host_uplink` hint is configured in the console, give newly active owner flows a brief ramp-up backoff window before tracking `min(public_cap, max(floor, host_uplink - owner_throughput - margin))` (preventing TCP congestion starvation against saturated public flows without wasting bandwidth when the owner's receiver is slow); when unset, smoothly throttle public egress down toward the signaling floor whenever owner flows sustain heavy egress or write backpressure, and recover rapidly once owner flows go idle. Size the signaling floor above the 5 s delivery settlement threshold (e.g., ≥ 64–128 KiB/s) so active public control/signaling does not trigger spurious settlement disconnects.
+- **Exhaustion behavior**: reaching the daily public traffic cap stops public forwarding while leaving owner shares unaffected.
+
+## Cloudflare Workers relays
+
+- Cloudflare Workers relays stay personal self-hosted deployments and do **not** join the public community pool (account-wide DO request, SQLite write, and GB-s limits plus the lack of cross-DO preemption or STUN make public relaying unsafe for the owner's own shares). They remain exempt from contribution eligibility.
+
+## Soft eligibility
+
+- Community nodes are offered when the user owns no non-official native relay, owns at least one contributing native relay, or owns only Cloudflare relays (`中转服务.md`).
+- Only an admin-approved `owner` enrollment on a non-authority native node establishes ownership in saved relay profiles; guest access, third-party service keys, or official-account bindings do not.
+- Clients observe owned native relays' public-relay state on initial enrollment and via bounded background `/.well-known/windshare` refreshes (since `/v2/ws` does not carry descriptors)—never synchronously blocking share creation. Persist observed eligibility and the one-time notice latch under `config.json.state/` (resetting the latch if contribution is re-enabled later). Disabling contribution on the last contributing native relay—or enrolling a sole owned native relay whose contribution is already `disabled`—shows a one-time notice (in the node console on toggle, and once in shared client state when observed) and pauses new community requests; owner saturation, unreachability/maintenance, `unavailable` (draining/STUN-only), or daily/monthly `budget_exhausted` never counts as refusal. Nothing else mentions contribution.
+
+## Domainless community hosts
+
+- Official frontends and GitHub remain the signed directory mirrors; `wsrelay` does not embed official root keys or mirror the official directory.
+- Ship a scripted **Caddy** deployment (one-command installer and `docker compose` bundle, pinning a Caddy version with IP-certificate support) rather than embedding TLS/ACME in `wsrelay`. Recommend a domain name as the primary path; for overseas domainless VPS hosts, support Caddy/CertMagic's Let's Encrypt 160-hour `shortlived` IP certificates, ARI renewal, HTTP-01 and TLS-ALPN-01 (works on TCP 443 even if port 80 is blocked), and zero-downtime reload while keeping `wsrelay` a small loopback service and documenting the 160-hour renewal and port 443/80 expectations.
+
+## Traces
+
+- Descriptor exchange (source, accepted or rejected, reason, eviction), STUN policy admission, community eligibility transitions, owner-preemption throttling, and community picks/fallbacks in planner decisions.

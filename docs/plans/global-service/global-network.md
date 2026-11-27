@@ -79,7 +79,7 @@ Deployment templates and procedures live in
    keeps its own hostname. Replacing a machine keeps the hostname, certificate, and node key, so
    ordinary replacement needs no ContactID or per-share lookup service.
 4. **"Official" is a signed directory with an offline root.** Clients embed a snapshot and pinned
-   root keys and refresh from any mirror: frontends, GitHub, and later every node. Signatures make
+   root keys and refresh from any mirror: frontends and GitHub. Signatures make
    mirrors untrusted, which provides the emergency update path and survives GitHub being
    unreachable from mainland China. An offline root authorizes time-limited online signing
    generations; P1 bounds cached trust and permits recovery after a key leak. Directory-sourced
@@ -298,7 +298,7 @@ Directory payload, signed as exact bytes with Ed25519 so no JSON canonicalizatio
   and publishes to the mirrors; the repository keeps the signed export as history. P3 moves
   signing into the console.
 - Mirrors: `/.well-known/windshare-network` on `ws.ourworld.top` and `windshare.cc`, plus a
-  GitHub release asset; from P4, every node.
+  GitHub release asset.
 - `engine/builtinnetwork` (new, imported only by applications such as `cmd/wind` and the desktop
   app): embedded snapshot, pinned root keys, mirrors, and the built-in frontends (link host and
   backup entry), injected through `engine.Config`. The web build uses the same snapshot and
