@@ -228,5 +228,5 @@ func formatShareResult(result ShareResult, symbols Symbols) terminalcanvas.Line 
 	if result.Failure != nil {
 		failure = *result.Failure
 	}
-	return failureLine("Sharing failed", failure, symbols.Failure, terminalcanvas.StyleError)
+	return statusLine(symbols.Failure, "Sharing failed: "+failureMessage(failure), terminalcanvas.StyleError)
 }

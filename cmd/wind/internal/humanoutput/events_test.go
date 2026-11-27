@@ -3,6 +3,7 @@ package humanoutput
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/terminalcanvas"
 	"github.com/windshare/windshare/core/diagnostics"
@@ -53,6 +54,78 @@ func TestFailedRelayRecoveryRemainsAWarningWhenRedirected(t *testing.T) {
 	harness.renderer.RenderRelayRecovery(event)
 	if output := harness.buffer.String(); !strings.Contains(output, "Relay recovery attempt 2 failed") {
 		t.Fatalf("redirected recovery warning = %q", output)
+	}
+}
+
+func TestRelayRecoverySeparatesNonTerminalReasonsFromTerminalAdvice(t *testing.T) {
+	t.Parallel()
+	origin := engine.RelayOrigin{Scheme: "wss", Host: "relay.example", Port: 443}
+	for _, tc := range []struct {
+		name      string
+		failure   engine.Failure
+		want      string
+		forbidden []string
+	}{
+		{
+			name:      "not found omits link retry advice during auto recovery",
+			failure:   engine.Failure{Code: engine.FailureRelayNotFound},
+			want:      "The share is not currently available.",
+			forbidden: []string{"Retry the original link", "Retry after"},
+		},
+		{
+			name:      "share not ready omits polling retry after during auto recovery",
+			failure:   engine.Failure{Code: engine.FailureShareNotReady, RetryAfter: 250 * time.Millisecond},
+			want:      "The share is not ready yet.",
+			forbidden: []string{"Retry after"},
+		},
+		{
+			name:      "relay unavailable omits server cooldown during auto recovery",
+			failure:   engine.Failure{Code: engine.FailureRelayUnavailable, RetryAfter: 30 * time.Second},
+			want:      "The relay is unavailable.",
+			forbidden: []string{"Retry after"},
+		},
+		{
+			name:      "network unavailable omits manual retry advice during auto recovery",
+			failure:   engine.Failure{Code: engine.FailureNetworkUnavailable},
+			want:      "The WindShare network is unavailable.",
+			forbidden: []string{"Check your connection and retry"},
+		},
+	} {
+		failure := tc.failure
+		line := lineText(formatRelayRecovery(engine.RelayRecovery{
+			Origin:  origin,
+			Attempt: 2,
+			State:   engine.RelayRecoveryFailed,
+			Failure: &failure,
+		}, SelectSymbols(false)))
+		if !strings.Contains(line, tc.want) {
+			t.Errorf("%s: recovery line = %q, want substring %q", tc.name, line, tc.want)
+		}
+		for _, bad := range tc.forbidden {
+			if strings.Contains(line, bad) {
+				t.Errorf("%s: non-terminal recovery line leaked %q: %q", tc.name, bad, line)
+			}
+		}
+	}
+
+	denied := engine.Failure{Code: engine.FailureRelayAccessDenied}
+	terminal := lineText(formatRelayRecovery(engine.RelayRecovery{
+		Origin:   origin,
+		Attempt:  1,
+		State:    engine.RelayRecoveryFailed,
+		Terminal: true,
+		Failure:  &denied,
+	}, SelectSymbols(false)))
+	if !strings.Contains(terminal, "Check your account or relay authorization.") {
+		t.Fatalf("terminal recovery line omitted actionable advice: %q", terminal)
+	}
+
+	harness := newRenderHarness(t, terminalcanvas.Capabilities{}, false)
+	harness.renderer.RenderWarning(engine.Failure{Code: engine.FailureRelayNotFound, RetryAfter: 5 * time.Second})
+	warning := harness.buffer.String()
+	if !strings.Contains(warning, "Warning: The share is not currently available.") ||
+		strings.Contains(warning, "Retry the original link") || strings.Contains(warning, "Retry after") {
+		t.Fatalf("non-terminal warning leaked retry advice: %q", warning)
 	}
 }
 

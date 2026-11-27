@@ -80,17 +80,91 @@ func TestFailureMessagesCoverClosedVocabulary(t *testing.T) {
 		engine.FailureOwnedObjectUnknown,
 	}
 	for _, code := range codes {
-		message := failureMessage(engine.Failure{Code: code})
-		if message == "" || strings.Contains(message, "unexpected") && code != engine.FailureUnexpected {
-			t.Errorf("failureMessage(%v) = %q", code, message)
+		for _, pair := range []struct {
+			name string
+			got  string
+		}{
+			{"failureMessage", failureMessage(engine.Failure{Code: code})},
+			{"failureReason", failureReason(engine.Failure{Code: code})},
+		} {
+			if pair.got == "" || strings.Contains(pair.got, "unexpected") && code != engine.FailureUnexpected {
+				t.Errorf("%s(%v) = %q", pair.name, code, pair.got)
+			}
 		}
 	}
-	retryable := engine.Failure{Code: engine.FailureRelayUnavailable, RetryAfter: 1001 * time.Millisecond}
-	if got := failureMessage(retryable); !strings.Contains(got, "Retry after 2s") {
-		t.Fatalf("retryable message = %q", got)
+	for _, tc := range []struct {
+		name    string
+		failure engine.Failure
+		want    string
+	}{
+		{
+			name:    "sub-second share not ready polling hint is omitted",
+			failure: engine.Failure{Code: engine.FailureShareNotReady, RetryAfter: 250 * time.Millisecond},
+			want:    "The share is not ready yet.",
+		},
+		{
+			name:    "sub-second relay admission polling hint is omitted",
+			failure: engine.Failure{Code: engine.FailureRelayUnavailable, RetryAfter: 250 * time.Millisecond},
+			want:    "The relay is unavailable.",
+		},
+		{
+			name:    "999ms stays below human cooldown threshold",
+			failure: engine.Failure{Code: engine.FailureRelayUnavailable, RetryAfter: 999 * time.Millisecond},
+			want:    "The relay is unavailable.",
+		},
+		{
+			name:    "exact one-second cooldown renders",
+			failure: engine.Failure{Code: engine.FailureRelayUnavailable, RetryAfter: time.Second},
+			want:    "The relay is unavailable. Retry after 1s.",
+		},
+		{
+			name:    "fractional multi-second cooldown rounds up",
+			failure: engine.Failure{Code: engine.FailureRelayUnavailable, RetryAfter: 1001 * time.Millisecond},
+			want:    "The relay is unavailable. Retry after 2s.",
+		},
+		{
+			name:    "multi-second share not ready cooldown renders",
+			failure: engine.Failure{Code: engine.FailureShareNotReady, RetryAfter: 5 * time.Second},
+			want:    "The share is not ready yet. Retry after 5s.",
+		},
+		{
+			name:    "relay not found keeps terminal recovery advice",
+			failure: engine.Failure{Code: engine.FailureRelayNotFound},
+			want:    "The share is not currently available. Retry the original link.",
+		},
+	} {
+		if got := failureMessage(tc.failure); got != tc.want {
+			t.Errorf("%s: failureMessage = %q, want %q", tc.name, got, tc.want)
+		}
 	}
-	notReady := engine.Failure{Code: engine.FailureShareNotReady, RetryAfter: 250 * time.Millisecond}
-	if got := failureMessage(notReady); got != "The share is not ready yet. Retry after 1s." {
-		t.Fatalf("share not ready message = %q", got)
+	for _, tc := range []struct {
+		name    string
+		failure engine.Failure
+		want    string
+	}{
+		{
+			name:    "relay not found reason omits manual retry advice",
+			failure: engine.Failure{Code: engine.FailureRelayNotFound},
+			want:    "The share is not currently available.",
+		},
+		{
+			name:    "relay unavailable reason omits retry after",
+			failure: engine.Failure{Code: engine.FailureRelayUnavailable, RetryAfter: 30 * time.Second},
+			want:    "The relay is unavailable.",
+		},
+		{
+			name:    "network unavailable reason omits manual retry advice",
+			failure: engine.Failure{Code: engine.FailureNetworkUnavailable},
+			want:    "The WindShare network is unavailable.",
+		},
+		{
+			name:    "source path survives reason formatting",
+			failure: engine.Failure{Code: engine.FailureSourceUnavailable, SourcePath: "notes.txt"},
+			want:    "The source content is unavailable. Path: notes.txt",
+		},
+	} {
+		if got := failureReason(tc.failure); got != tc.want {
+			t.Errorf("%s: failureReason = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }

@@ -226,7 +226,7 @@ func (renderer *Renderer) RenderWarning(failure engine.Failure) {
 	renderer.mu.Lock()
 	defer renderer.mu.Unlock()
 	caps := renderer.capabilities.Snapshot()
-	renderer.insert(failureLine("Warning", failure, SelectSymbols(caps.Unicode).Warning, terminalcanvas.StyleWarning))
+	renderer.insert(statusLine(SelectSymbols(caps.Unicode).Warning, "Warning: "+failureReason(failure), terminalcanvas.StyleWarning))
 }
 
 func (renderer *Renderer) RenderSourceOmissions(summary catalog.SourceOmissions) {

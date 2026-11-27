@@ -130,82 +130,132 @@ func statusLine(symbol, text string, style terminalcanvas.Style) terminalcanvas.
 
 const ConfigureRelaysGuidance = "configure relay candidates with wind config import <file|->, or pass --relay for this share"
 
+// Sub-second RetryAfter values (such as relay-core's 250ms lifecycle and
+// admission polling hints) pace automatic client retries rather than human
+// action; rounding them up to "Retry after 1s." distorts the delay and misleads
+// CLI users after a terminal wait has already elapsed.
+const minHumanRetryAfter = time.Second
+
+// failureReason describes what failed without appending manual retry advice.
+// Non-terminal recovery attempts and live warnings use it because the command
+// is still retrying on the user's behalf.
+func failureReason(failure engine.Failure) string {
+	return appendFailureSourcePath(failureCause(failure), failure.SourcePath)
+}
+
+// failureMessage describes a terminal failure together with actionable user
+// recovery advice and any human-scale RetryAfter cooldown.
 func failureMessage(failure engine.Failure) string {
-	var message string
+	message := failureCause(failure)
+	if advice := failureRecoveryAdvice(failure.Code); advice != "" {
+		message += " " + advice
+	}
+	if retry := formatHumanRetryAfter(failure.RetryAfter); retry != "" {
+		message += " " + retry
+	}
+	return appendFailureSourcePath(message, failure.SourcePath)
+}
+
+func failureCause(failure engine.Failure) string {
 	switch failure.Code {
 	case engine.FailureCanceled:
-		message = "The operation was interrupted."
+		return "The operation was interrupted."
 	case engine.FailureDeadline:
-		message = "The operation timed out."
+		return "The operation timed out."
 	case engine.FailureInvalidInput:
-		message = "The request is invalid."
+		return "The request is invalid."
 	case engine.FailureNetworkUnavailable:
-		message = "The WindShare network is unavailable. Check your connection and retry."
+		return "The WindShare network is unavailable."
 	case engine.FailureCapabilityInvalid:
-		message = "The share link or key is invalid."
+		return "The share link or key is invalid."
 	case engine.FailureSelectionMissing:
-		message = "The selected content was not found."
+		return "The selected content was not found."
 	case engine.FailureRetainedOutputMissing:
-		message = "No saved download matches this resume request."
+		return "No saved download matches this resume request."
 	case engine.FailureSelectionCollision:
-		message = "Selected names must differ even ignoring case. Rename one item or remove a duplicate selection."
+		message := "Selected names must differ even ignoring case. Rename one item or remove a duplicate selection."
 		if failure.SelectionCollision != nil {
-			message = "Selected names collide: " + escapedDisplay(failure.SelectionCollision.FirstPath) + " and " +
+			return "Selected names collide: " + escapedDisplay(failure.SelectionCollision.FirstPath) + " and " +
 				escapedDisplay(failure.SelectionCollision.SecondPath) + ". " + message
 		}
+		return message
 	case engine.FailureRelayRouteNotFound:
-		message = relayconfig.RelayRouteGuidance(failure.RelayBaseHint)
+		return relayconfig.RelayRouteGuidance(failure.RelayBaseHint)
 	case engine.FailureRelayAccessDenied:
-		message = "Relay access was denied. Check your account or relay authorization."
+		return "Relay access was denied."
 	case engine.FailureAccountStorageError:
-		message = "The local account file cannot be read or is invalid. Repair or remove it, then retry."
+		return "The local account file cannot be read or is invalid."
 	case engine.FailureRelayRejected:
-		message = "The relay rejected the request."
+		return "The relay rejected the request."
 	case engine.FailureRelayUnavailable:
-		message = "The relay is unavailable."
+		return "The relay is unavailable."
 	case engine.FailureRelayNotFound:
-		message = "The share is not currently available. Retry the original link."
+		return "The share is not currently available."
 	case engine.FailureRelayStopped:
-		message = "A relay reported that its route for this share was stopped."
+		return "A relay reported that its route for this share was stopped."
 	case engine.FailureShareNotReady:
-		message = "The share is not ready yet."
+		return "The share is not ready yet."
 	case engine.FailureShareStopped:
-		message = "This share has stopped. Ask the sender for a new link."
+		return "This share has stopped. Ask the sender for a new link."
 	case engine.FailureDirectUnavailable:
-		message = "The direct connection is unavailable."
+		return "The direct connection is unavailable."
 	case engine.FailureDirectPolicy:
-		message = "The direct path was rejected by connection policy."
+		return "The direct path was rejected by connection policy."
 	case engine.FailureDirectBusy:
-		message = "A previous direct connection attempt is still finishing."
+		return "A previous direct connection attempt is still finishing."
 	case engine.FailureDirectAdmission:
-		message = "The direct channel could not be admitted."
+		return "The direct channel could not be admitted."
 	case engine.FailureSourceUnavailable, engine.FailureSourceMissing, engine.FailureSourceAccessDenied,
 		engine.FailureSourceUnsupported, engine.FailureSourceCloudPlaceholder,
 		engine.FailureSourceOmitted, engine.FailureSourceChanged:
-		message = sourceFailureMessage(failure)
+		return sourceFailureMessage(failure)
 	case engine.FailureCatalogUnavailable:
-		message = "The content catalog is unavailable."
+		return "The content catalog is unavailable."
 	case engine.FailureSessionFailed:
-		message = "The transfer session failed."
+		return "The transfer session failed."
 	case engine.FailureOutputFailed, engine.FailureOutputBusy, engine.FailureOutputOperationAlreadyRunning,
 		engine.FailureCheckpointFailed,
 		engine.FailureOutputNeedsAttention, engine.FailureDestinationCollision,
 		engine.FailureCheckpointRevisionConflict, engine.FailureCheckpointInvalid, engine.FailureOwnedObjectUnknown:
-		message = outputFailureMessage(failure.Code)
+		return outputFailureMessage(failure.Code)
 	case engine.FailurePublication:
-		message = "The share link could not be published."
+		return "The share link could not be published."
 	default:
-		message = "An unexpected error occurred."
+		return "An unexpected error occurred."
 	}
-	if failure.RetryAfter > 0 {
-		retryMillis := uint64((failure.RetryAfter + time.Millisecond - 1) / time.Millisecond)
-		seconds := (retryMillis + 999) / 1000
-		message += " Retry after " + formatClockDuration(seconds) + "."
+}
+
+func failureRecoveryAdvice(code engine.FailureCode) string {
+	switch code {
+	case engine.FailureNetworkUnavailable:
+		return "Check your connection and retry."
+	case engine.FailureRelayAccessDenied:
+		return "Check your account or relay authorization."
+	case engine.FailureAccountStorageError:
+		return "Repair or remove it, then retry."
+	case engine.FailureRelayNotFound:
+		return "Retry the original link."
+	default:
+		return ""
 	}
-	if failure.SourcePath != "" {
-		message += " Path: " + escapedDisplay(failure.SourcePath)
+}
+
+func formatHumanRetryAfter(retryAfter time.Duration) string {
+	if retryAfter < minHumanRetryAfter {
+		return ""
 	}
-	return message
+	seconds := uint64(retryAfter / time.Second)
+	if retryAfter%time.Second != 0 {
+		seconds++
+	}
+	return "Retry after " + formatClockDuration(seconds) + "."
+}
+
+func appendFailureSourcePath(message, sourcePath string) string {
+	if sourcePath == "" {
+		return message
+	}
+	return message + " Path: " + escapedDisplay(sourcePath)
 }
 
 func outputFailureMessage(code engine.FailureCode) string {
@@ -251,8 +301,4 @@ func sourceFailureMessage(failure engine.Failure) string {
 	default:
 		return "The source content is unavailable."
 	}
-}
-
-func failureLine(label string, failure engine.Failure, symbol string, style terminalcanvas.Style) terminalcanvas.Line {
-	return statusLine(symbol, label+": "+failureMessage(failure), style)
 }

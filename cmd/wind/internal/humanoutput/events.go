@@ -72,7 +72,7 @@ func formatFallback(event engine.Fallback, symbols Symbols) terminalcanvas.Line 
 
 func formatRelayRecovery(event engine.RelayRecovery, symbols Symbols) terminalcanvas.Line {
 	if event.Failure != nil && event.Failure.Code == engine.FailureRelayStopped {
-		return statusLine(symbols.Warning, failureMessage(*event.Failure), terminalcanvas.StyleWarning)
+		return statusLine(symbols.Warning, failureReason(*event.Failure), terminalcanvas.StyleWarning)
 	}
 	if event.WaitReason == engine.RelayWaitBandwidth {
 		return statusLine(symbols.Relay, "Relay bandwidth is busy; your download will resume automatically.", terminalcanvas.StyleDefault)
@@ -109,7 +109,11 @@ func formatRelayRecovery(event engine.RelayRecovery, symbols Symbols) terminalca
 	}
 	style, symbol := terminalcanvas.StyleDefault, symbols.Relay
 	if event.Failure != nil && event.Failure.Valid() {
-		message += " " + failureMessage(*event.Failure)
+		detail := failureReason(*event.Failure)
+		if event.Terminal {
+			detail = failureMessage(*event.Failure)
+		}
+		message += " " + detail
 		style, symbol = terminalcanvas.StyleWarning, symbols.Warning
 	}
 	return statusLine(symbol, message, style)
