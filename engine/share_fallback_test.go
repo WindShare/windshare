@@ -144,7 +144,7 @@ func TestShareEmitsCanaryFallbackDiagnosticWithoutSlog(t *testing.T) {
 				t.Fatal(err)
 			}
 			slices.Sort(active)
-			if len(active) != 1 || !slices.Contains(activeURLs, active[0]) || !slices.Equal(canaries, []string{canaryURL}) {
+			if !slices.Equal(active, activeURLs) || !slices.Equal(canaries, []string{canaryURL}) {
 				t.Fatalf("unexpected fallback payload: active=%v canaries=%v", active, canaries)
 			}
 			sawFallback = true

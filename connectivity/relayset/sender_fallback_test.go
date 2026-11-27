@@ -293,3 +293,136 @@ func TestCanaryRetirementClosesActiveConnectionRacingRegistrationCallback(t *tes
 		t.Fatalf("unexpected surviving candidates: %v", got)
 	}
 }
+
+func TestSubstituteUsesActiveAlternateAndNeverPromotesCanaryOrDeferred(t *testing.T) {
+	cn1 := &waitingRegistration{endpoint: newEndpoint(), ready: make(chan struct{}), observed: make(chan struct{})}
+	cn2 := &waitingRegistration{endpoint: newEndpoint(), ready: make(chan struct{}), observed: make(chan struct{})}
+	global1 := &waitingRegistration{endpoint: newEndpoint(), ready: make(chan struct{}), observed: make(chan struct{})}
+	plan := relayplan.Plan{
+		Network: []relayplan.Candidate{
+			{URL: "cn1", Source: relayplan.Official, Zone: "cn"},
+			{URL: "global1", Source: relayplan.Official, Zone: "global"},
+		},
+		Standby: []relayplan.Candidate{
+			{URL: "cn2", Source: relayplan.Official, Zone: "cn"},
+			{URL: "cn-deferred", Source: relayplan.Official, Zone: "cn", ServerRetryAt: time.Now().Add(time.Minute)},
+			{URL: "cn-canary", Source: relayplan.Official, Zone: "cn", Canary: true},
+		},
+	}
+	standbyDialed := make(chan string, 2)
+	fallbacks := make(chan Fallback, 4)
+	set, err := NewPlannedSender(t.Context(), plan, func(_ context.Context, url string) (SenderEndpoint, error) {
+		switch url {
+		case "cn1":
+			return cn1, nil
+		case "cn2":
+			return cn2, nil
+		case "global1":
+			return global1, nil
+		case "cn-deferred":
+			standbyDialed <- url
+			return &waitingRegistration{endpoint: newEndpoint(), ready: make(chan struct{}), observed: make(chan struct{})}, nil
+		case "cn-canary":
+			standbyDialed <- url
+			return newEndpoint(), nil
+		default:
+			return nil, fmt.Errorf("unexpected relay %s", url)
+		}
+	}, func(event Fallback) { fallbacks <- event })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanupSet(t, set)
+	waitValue(t, cn1.observed)
+	waitValue(t, global1.observed)
+
+	cn1.publish(RegistrationRetrying)
+	waitValue(t, cn2.observed)
+	event := waitValue(t, fallbacks)
+	if !slices.Equal(event.Active, []string{"cn1"}) || !slices.Equal(event.Next, []string{"cn2"}) {
+		t.Fatalf("unexpected active substitution event: %+v", event)
+	}
+	if got := set.Registrations().Candidates; !slices.Equal(got, []string{"cn2", "global1"}) {
+		t.Fatalf("unexpected candidates after active substitution: %v", got)
+	}
+
+	// Failing the last active cn route must skip both server-backoff deferred
+	// routes and canaries while active global1 is still pending.
+	cn2.publish(RegistrationRetrying)
+	if got := set.Registrations().Candidates; !slices.Equal(got, []string{"cn2", "global1"}) {
+		t.Fatalf("standby promoted prematurely: %v", got)
+	}
+	select {
+	case url := <-standbyDialed:
+		t.Fatalf("standby %s dialed while active global1 was still pending", url)
+	default:
+	}
+
+	// Once every active route has failed, standby waves start in order while
+	// keeping retrying active routes alive.
+	global1.publish(RegistrationRetrying)
+	if got := waitValue(t, standbyDialed); got != "cn-deferred" {
+		t.Fatalf("expected deferred wave before canary, got %s", got)
+	}
+	event = waitValue(t, fallbacks)
+	if !slices.Equal(event.Active, []string{"cn2", "global1"}) || !slices.Equal(event.Next, []string{"cn-deferred"}) {
+		t.Fatalf("unexpected wave fallback event: %+v", event)
+	}
+}
+
+func TestAuthorizationWaitPreservesActiveOfficialRoutesWithoutChurn(t *testing.T) {
+	cn1 := &waitingRegistration{endpoint: newEndpoint(), ready: make(chan struct{}), observed: make(chan struct{})}
+	global1 := &waitingRegistration{endpoint: newEndpoint(), ready: make(chan struct{}), observed: make(chan struct{})}
+	plan := relayplan.Plan{
+		Network: []relayplan.Candidate{
+			{URL: "cn1", Source: relayplan.Official, Zone: "cn"},
+			{URL: "global1", Source: relayplan.Official, Zone: "global"},
+		},
+		Standby: []relayplan.Candidate{
+			{URL: "cn2", Source: relayplan.Official, Zone: "cn"},
+			{URL: "global2", Source: relayplan.Official, Zone: "global"},
+			{URL: "cn-canary", Source: relayplan.Official, Zone: "cn", Canary: true},
+			{URL: "global-canary", Source: relayplan.Official, Zone: "global", Canary: true},
+		},
+	}
+	set, err := NewPlannedSender(t.Context(), plan, func(_ context.Context, url string) (SenderEndpoint, error) {
+		switch url {
+		case "cn1":
+			return cn1, nil
+		case "global1":
+			return global1, nil
+		default:
+			t.Errorf("unexpected standby dial during authorization wait: %s", url)
+			return nil, fmt.Errorf("unexpected standby %s", url)
+		}
+	}, func(event Fallback) {
+		t.Errorf("unexpected fallback during authorization wait: %+v", event)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanupSet(t, set)
+	waitValue(t, cn1.observed)
+	waitValue(t, global1.observed)
+
+	cn1.publish(RegistrationNeedsUserAuthorization)
+	if set.Status().AuthorizationRequired {
+		t.Fatal("authorization required while global1 is still pending")
+	}
+	global1.publish(RegistrationNeedsUserAuthorization)
+	if status := set.Status(); !status.AuthorizationRequired {
+		t.Fatalf("expected authorization required, got %+v", status)
+	}
+	if got := set.Registrations().Candidates; !slices.Equal(got, []string{"cn1", "global1"}) {
+		t.Fatalf("official active pair churned during authorization wait: %v", got)
+	}
+
+	global1.publish(RegistrationAvailable)
+	close(global1.ready)
+	if err := set.WaitReady(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if set.ReadyRelayURL() != "global1" || !slices.Equal(set.Registrations().Candidates, []string{"cn1", "global1"}) {
+		t.Fatalf("unexpected ready state: ready=%s regs=%+v", set.ReadyRelayURL(), set.Registrations())
+	}
+}

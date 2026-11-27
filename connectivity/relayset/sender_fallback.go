@@ -155,17 +155,17 @@ func (s *Sender) initialFailureLocked(url string) (func(), bool) {
 	return f.notification(active, added), true
 }
 
-// Replace a failed official zone while another route is still starting. The
-// replacement is frozen into the link only if it was selected before admission.
-// Official canaries stay reserved for whole-wave fallback after every active
-// route has failed.
+// Replace a failed active official zone while another route is still starting.
+// The replacement is frozen into the link only if it was selected before
+// admission. Official canaries and server-backoff routes stay reserved for
+// standby waves until active routes fail.
 func (f *startupFallback) substitute(failed string) string {
 	c := f.routes[failed]
-	if c.Source != relayplan.Official || c.Zone == "" {
+	if c.Source != relayplan.Official || c.Canary || c.Zone == "" {
 		return ""
 	}
 	return f.takeStandby(func(other relayplan.Candidate) bool {
-		return other.Source == relayplan.Official && !other.Canary && other.Zone == c.Zone
+		return other.Source == relayplan.Official && !other.Canary && other.ServerRetryAt.IsZero() && other.Zone == c.Zone
 	})
 }
 
