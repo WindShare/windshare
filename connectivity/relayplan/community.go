@@ -53,7 +53,7 @@ func (p *Plan) addCommunity(peers []Candidate, limit int, seen map[string]bool, 
 		p.Network = append(p.Network, named[0])
 		named = named[1:]
 	}
-	p.appendCommunityWaves(named, literal, limit)
+	p.appendCommunityWaves(limit, named, literal)
 	p.Standby = append(p.Standby, deferred...)
 }
 
@@ -105,17 +105,23 @@ func (p *Plan) addCooledCommunityFallback(cooled []Candidate, limit int, order s
 		return
 	}
 	p.Decision.CooldownFallback = true
-	var cooledNamed, cooledLiteral []Candidate
+	var softNamed, softLiteral, deferred []Candidate
 	for _, c := range cooled {
-		if c.IPLiteral {
-			cooledLiteral = append(cooledLiteral, c)
-		} else {
-			cooledNamed = append(cooledNamed, c)
+		switch {
+		case !c.ServerRetryAt.IsZero():
+			deferred = append(deferred, c)
+		case c.IPLiteral:
+			softLiteral = append(softLiteral, c)
+		default:
+			softNamed = append(softNamed, c)
 		}
 	}
-	order.rankCooledCommunity(cooledNamed)
-	order.rankCooledCommunity(cooledLiteral)
-	p.appendCommunityWaves(cooledNamed, cooledLiteral, limit)
+	order.rankCooledCommunity(softNamed)
+	order.rankCooledCommunity(softLiteral)
+	order.rankCooledCommunity(deferred)
+	// Keep server-requested backoffs behind immediately dialable soft-cooled
+	// waves so a sleeping Retry-After cannot stall an active fallback wave.
+	p.appendCommunityWaves(limit, softNamed, softLiteral, deferred)
 }
 
 func (p *Plan) filterCooledCommunity(cooled []Candidate) {
@@ -124,8 +130,8 @@ func (p *Plan) filterCooledCommunity(cooled []Candidate) {
 	}
 }
 
-func (p *Plan) appendCommunityWaves(named, literal []Candidate, limit int) {
-	for _, group := range [][]Candidate{named, literal} {
+func (p *Plan) appendCommunityWaves(limit int, waves ...[]Candidate) {
+	for _, group := range waves {
 		if len(group) == 0 {
 			continue
 		}
@@ -166,6 +172,9 @@ func (order selectionOrder) rankCooledCommunity(group []Candidate) {
 	sort.SliceStable(group, func(i, j int) bool {
 		if cmp := order.retryPriority(group[i], group[j]); cmp != 0 {
 			return cmp < 0
+		}
+		if group[i].IPLiteral != group[j].IPLiteral {
+			return !group[i].IPLiteral
 		}
 		return order.communityLess(group[i], group[j])
 	})

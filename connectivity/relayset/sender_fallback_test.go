@@ -426,3 +426,64 @@ func TestAuthorizationWaitPreservesActiveOfficialRoutesWithoutChurn(t *testing.T
 		t.Fatalf("unexpected ready state: ready=%s regs=%+v", set.ReadyRelayURL(), set.Registrations())
 	}
 }
+
+func TestCooledCommunityStandbySplitsDialableFromServerRetryWave(t *testing.T) {
+	now := time.Now()
+	softNamed := &waitingRegistration{endpoint: newEndpoint(), ready: make(chan struct{}), observed: make(chan struct{})}
+	softIP := &waitingRegistration{endpoint: newEndpoint(), ready: make(chan struct{}), observed: make(chan struct{})}
+	plan := relayplan.Plan{
+		Decision: relayplan.Decision{CooldownFallback: true},
+		Network: []relayplan.Candidate{
+			{URL: "soft-named", Source: relayplan.Community, CooldownUntil: now.Add(15 * time.Second)},
+		},
+		Standby: []relayplan.Candidate{
+			{URL: "soft-ip", Source: relayplan.Community, IPLiteral: true, CooldownUntil: now.Add(20 * time.Second)},
+			{URL: "deferred-ip", Source: relayplan.Community, IPLiteral: true, ServerRetryAt: now.Add(time.Minute)},
+		},
+	}
+	deferredDialed := make(chan struct{})
+	fallbacks := make(chan Fallback, 4)
+	set, err := NewPlannedSender(t.Context(), plan, func(_ context.Context, url string) (SenderEndpoint, error) {
+		switch url {
+		case "soft-named":
+			return softNamed, nil
+		case "soft-ip":
+			return softIP, nil
+		case "deferred-ip":
+			close(deferredDialed)
+			return newEndpoint(), nil
+		default:
+			return nil, fmt.Errorf("unexpected relay %s", url)
+		}
+	}, func(event Fallback) { fallbacks <- event })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanupSet(t, set)
+	waitValue(t, softNamed.observed)
+
+	softNamed.publish(RegistrationRetrying)
+	waitValue(t, softIP.observed)
+	event := waitValue(t, fallbacks)
+	if !slices.Equal(event.Next, []string{"soft-ip"}) {
+		t.Fatalf("soft IP wave merged with ServerRetryAt peer: %+v", event)
+	}
+	select {
+	case <-deferredDialed:
+		t.Fatal("server-deferred IP peer dialed alongside dialable soft-cooled IP wave")
+	default:
+	}
+
+	softIP.publish(RegistrationRetrying)
+	waitValue(t, deferredDialed)
+	event = waitValue(t, fallbacks)
+	if !slices.Equal(event.Next, []string{"deferred-ip"}) {
+		t.Fatalf("unexpected deferred fallback event: %+v", event)
+	}
+	if err := set.WaitReady(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if set.ReadyRelayURL() != "deferred-ip" {
+		t.Fatalf("ready relay = %q, want deferred-ip", set.ReadyRelayURL())
+	}
+}

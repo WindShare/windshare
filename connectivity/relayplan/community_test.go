@@ -249,3 +249,110 @@ func TestCommunityProbeCooldownDemotionAndSingleNodeFallback(t *testing.T) {
 		t.Fatalf("configured plan unexpectedly fell back to cooled community peer: %+v", plan)
 	}
 }
+
+func TestCommunityObservationCooldownFallbackPrioritizesDialableAndServerDeadlines(t *testing.T) {
+	now := time.Now()
+	peer := func(host string) Candidate {
+		return Candidate{URL: "https://" + host, Source: Community, CapacityMbps: 25}
+	}
+	obs := func(in Input, rawURL string, reason CooldownReason, local, server time.Duration) Observation {
+		fact := communityObservation(t, in, rawURL)
+		fact.CooldownReason = reason
+		if local > 0 {
+			fact.CooldownUntil = now.Add(local)
+		}
+		if server > 0 {
+			fact.ServerRetryAt = now.Add(server)
+		}
+		return fact
+	}
+
+	// Soft-cooled observations activate CooldownFallback when official relays are
+	// absent, ranking transport failures ahead of node rejections and keeping
+	// DNS names ahead of IP literals within the immediately dialable tier.
+	rejectedNamed := peer("a-rejected.example")
+	laterNamed := peer("b-later.example")
+	earlierNamed := peer("c-earlier.example")
+	softIP := peer("1.1.1.1")
+	in := Input{Now: now, NetworkGeneration: "1", Community: []Candidate{rejectedNamed, laterNamed, earlierNamed, softIP}}
+	in.Observations = []Observation{
+		obs(in, rejectedNamed.URL, CooldownNodeRejected, 5*time.Second, 0),
+		obs(in, laterNamed.URL, CooldownTransportFailure, 30*time.Second, 0),
+		obs(in, earlierNamed.URL, CooldownTransportFailure, 15*time.Second, 0),
+		obs(in, softIP.URL, CooldownTransportFailure, 5*time.Second, 0),
+	}
+	plan := selected(t, in)
+	if !plan.Decision.CooldownFallback || len(plan.Decision.Filters) != 0 ||
+		len(plan.Network) != 2 || plan.Network[0].URL != earlierNamed.URL || plan.Network[1].URL != laterNamed.URL ||
+		len(plan.Standby) != 1 || plan.Standby[0].URL != softIP.URL {
+		t.Fatalf("soft-cooled observation fallback = %+v", plan)
+	}
+
+	// A server-backed-off named peer must not stall an immediately dialable
+	// soft-cooled IP-literal peer in Standby.
+	hardNamed := peer("hard.example")
+	in = Input{Now: now, NetworkGeneration: "1", Community: []Candidate{hardNamed, softIP}}
+	in.Observations = []Observation{
+		obs(in, hardNamed.URL, CooldownServerBackoff, 15*time.Second, time.Minute),
+		obs(in, softIP.URL, CooldownTransportFailure, 20*time.Second, 0),
+	}
+	plan = selected(t, in)
+	if !plan.Decision.CooldownFallback || len(plan.Decision.Filters) != 0 ||
+		len(plan.Network) != 1 || plan.Network[0].URL != softIP.URL || !plan.Network[0].ServerRetryAt.IsZero() ||
+		len(plan.Standby) != 1 || plan.Standby[0].URL != hardNamed.URL || !plan.Standby[0].ServerRetryAt.Equal(now.Add(time.Minute)) {
+		t.Fatalf("hard named displaced dialable soft IP = %+v", plan)
+	}
+
+	// Mixed soft named, hard named, and soft IP must keep the hard named peer out
+	// of the initial dialable wave so soft IP is not blocked by a sleeping peer.
+	in = Input{Now: now, NetworkGeneration: "1", Community: []Candidate{earlierNamed, hardNamed, softIP}}
+	in.Observations = []Observation{
+		obs(in, earlierNamed.URL, CooldownTransportFailure, 15*time.Second, 0),
+		obs(in, hardNamed.URL, CooldownServerBackoff, 15*time.Second, time.Minute),
+		obs(in, softIP.URL, CooldownTransportFailure, 20*time.Second, 0),
+	}
+	plan = selected(t, in)
+	if !plan.Decision.CooldownFallback ||
+		len(plan.Network) != 1 || plan.Network[0].URL != earlierNamed.URL ||
+		len(plan.Standby) != 2 || plan.Standby[0].URL != softIP.URL || plan.Standby[1].URL != hardNamed.URL {
+		t.Fatalf("mixed soft/hard community waves = %+v", plan)
+	}
+
+	// When every community peer carries ServerRetryAt, pick earliest-expiring
+	// deadlines first and break equal deadlines in favor of DNS names.
+	hardIPSoon := peer("8.8.8.8")
+	hardNamedSame := peer("same.example")
+	in = Input{Now: now, NetworkGeneration: "1", Community: []Candidate{hardNamed, hardIPSoon}}
+	in.Observations = []Observation{
+		obs(in, hardNamed.URL, CooldownServerBackoff, 15*time.Second, time.Minute),
+		obs(in, hardIPSoon.URL, CooldownServerBackoff, 15*time.Second, 10*time.Second),
+	}
+	plan = selected(t, in)
+	if !plan.Decision.CooldownFallback || len(plan.Standby) != 0 ||
+		len(plan.Network) != 2 || plan.Network[0].URL != hardIPSoon.URL || plan.Network[1].URL != hardNamed.URL ||
+		!plan.Network[0].ServerRetryAt.Equal(now.Add(10*time.Second)) {
+		t.Fatalf("all-hard server deadline order = %+v", plan)
+	}
+
+	in.Community = []Candidate{hardIPSoon, hardNamedSame, hardNamed}
+	in.Observations = append(in.Observations, obs(in, hardNamedSame.URL, CooldownServerBackoff, 15*time.Second, 10*time.Second))
+	plan = selected(t, in)
+	if !plan.Decision.CooldownFallback || len(plan.Standby) != 0 ||
+		len(plan.Network) != 2 || plan.Network[0].URL != hardNamedSame.URL || plan.Network[1].URL != hardIPSoon.URL {
+		t.Fatalf("equal server deadline DNS tie-break = %+v", plan)
+	}
+
+	// Presence of any official relay still keeps cooled community peers filtered.
+	in = Input{
+		Now:               now,
+		NetworkGeneration: "1",
+		Directory:         nodedirectory.Payload{Nodes: []nodedirectory.Node{planNode(0, "global")}},
+		Community:         []Candidate{earlierNamed},
+	}
+	in.Observations = []Observation{obs(in, earlierNamed.URL, CooldownTransportFailure, 15*time.Second, 0)}
+	plan = selected(t, in)
+	if plan.Decision.CooldownFallback || len(plan.Network) != 1 || plan.Network[0].Source != Official ||
+		len(plan.Decision.Filters) != 1 || plan.Decision.Filters[0].Reason != "community_cooldown" {
+		t.Fatalf("official plan unexpectedly included cooled community peer = %+v", plan)
+	}
+}

@@ -60,7 +60,7 @@ func NewPlannedSender(ctx context.Context, plan relayplan.Plan, dial SenderFacto
 	var wave []string
 	var previous relayplan.Candidate
 	for _, c := range plan.Standby {
-		if len(wave) > 0 && (c.Source != previous.Source || c.Canary != previous.Canary || c.IPLiteral != previous.IPLiteral) {
+		if len(wave) > 0 && (c.Source != previous.Source || c.Canary != previous.Canary || c.IPLiteral != previous.IPLiteral || c.ServerRetryAt.IsZero() != previous.ServerRetryAt.IsZero()) {
 			fallback.later = append(fallback.later, wave)
 			wave = nil
 		}
