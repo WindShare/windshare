@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/content"
 )
 
 func TestSelectionFailureIdentifiesFailedRootAndReleasesEarlierRoots(t *testing.T) {
@@ -37,26 +36,22 @@ func TestSelectionFailureIdentifiesFailedRootAndReleasesEarlierRoots(t *testing.
 	}
 }
 
-func TestSelectedSymbolicLinkIsAnUnsupportedSource(t *testing.T) {
+func TestSelectedDanglingLinkIsAMissingSource(t *testing.T) {
 	root := t.TempDir()
-	target := filepath.Join(root, "target")
-	if err := os.WriteFile(target, []byte("content"), 0600); err != nil {
-		t.Fatal(err)
-	}
 	selected := filepath.Join(root, "link")
-	if err := os.Symlink(target, selected); err != nil {
+	if err := os.Symlink(filepath.Join(root, "target"), selected); err != nil {
 		t.Skipf("symbolic links unavailable: %v", err)
 	}
 	source, err := NewSelectedFileSource(context.Background(), SelectedCatalogSourceConfig{
 		Paths: []string{selected}, SyntheticRoot: catalog.DirectoryID{1},
 	})
-	if source != nil || !errors.Is(err, content.ErrUnsupportedStability) {
-		t.Fatalf("selected symbolic link = %v, %v", source, err)
+	if source != nil || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("selected dangling link = %v, %v", source, err)
 	}
 	path, pathOK := errors.AsType[*catalog.SelectionError](err)
 	failure, failureOK := errors.AsType[*catalog.SourceError](err)
-	if !pathOK || path.Label != selected || !failureOK || failure.Failure != catalog.SourceFailureUnsupported {
-		t.Fatalf("unsupported selection lost its identity: %+v, %+v", path, failure)
+	if !pathOK || path.Label != selected || !failureOK || failure.Failure != catalog.SourceFailureMissing {
+		t.Fatalf("missing link target lost its identity: %+v, %+v", path, failure)
 	}
 }
 

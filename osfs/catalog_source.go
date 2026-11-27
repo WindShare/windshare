@@ -119,11 +119,12 @@ func (source *SelectedCatalogSource) openSelectedRoot(
 		// missing root.
 		return catalog.NodeRecord{}, nil, pathfailure.Filesystem("resolve selected root", selectedPath, fs.ErrNotExist)
 	}
-	absolute, name, err := resolveSelectedRootPath(selectedPath)
+	selection, err := resolveSelectedRoot(selectedPath, os.Stat)
 	if err != nil {
-		return catalog.NodeRecord{}, nil, pathfailure.Filesystem("resolve selected root", selectedPath, err)
+		return catalog.NodeRecord{}, nil, err
 	}
-	before, kind, beforeAudit, err := inspectSelectedRootKind(absolute)
+	absolute := selection.absolute
+	before, kind, beforeAudit, err := inspectSelectedRootKind(selection.inspect)
 	if err != nil {
 		return catalog.NodeRecord{}, nil, pathfailure.Filesystem("inspect selected root", absolute, err)
 	}
@@ -138,8 +139,14 @@ func (source *SelectedCatalogSource) openSelectedRoot(
 		}
 		return catalog.NodeRecord{}, nil, fmt.Errorf("osfs: selected root %q is not a stable file or directory: %w", absolute, content.ErrUnsupportedStability)
 	}
-	rootPath, relative := filepath.Dir(absolute), filepath.Base(absolute)
+	if selection.followed != nil {
+		source.traceSelectedRootLink(slot, kind)
+	}
+	rootPath, relative := filepath.Dir(selection.inspect), filepath.Base(selection.inspect)
 	if kind == sourceEntryDirectory {
+		// The typed path keeps later omission paths in the user's spelling. When it
+		// ends in a link, the identity checks below pin what the kernel opened to the
+		// inspected target.
 		rootPath, relative = absolute, ""
 	}
 	root, err := os.OpenRoot(rootPath)
@@ -152,11 +159,11 @@ func (source *SelectedCatalogSource) openSelectedRoot(
 			_ = root.Close()
 		}
 	}()
-	opened, identity, candidate, err := source.openSelectedRootBaseline(root, absolute, relative, slot, before, kind)
+	opened, identity, candidate, err := source.openSelectedRootBaseline(root, selection, relative, slot, before, kind)
 	if err != nil {
 		return catalog.NodeRecord{}, nil, err
 	}
-	record, err := source.buildSelectedRootRecord(name, relative, slot, parent, kind, opened, identity, candidate)
+	record, err := source.buildSelectedRootRecord(filepath.Base(absolute), relative, slot, parent, kind, opened, identity, candidate)
 	if err != nil {
 		return catalog.NodeRecord{}, nil, err
 	}
@@ -164,52 +171,15 @@ func (source *SelectedCatalogSource) openSelectedRoot(
 	return record, root, nil
 }
 
-// resolveSelectedRootPath returns the path to inspect and the root's published
-// name. filepath.Abs folds "." into Getwd, which reports a shell's logical $PWD,
-// so `wind share .` in a directory entered through a symlink would inspect the
-// link. A selection whose final element is ".", ".." or a trailing separator
-// names the directory the kernel reaches, so such a final link is followed only
-// when the kernel's own resolution agrees. Naming the link entry stays refused.
-func resolveSelectedRootPath(selectedPath string) (string, string, error) {
-	absolute, err := filepath.Abs(selectedPath)
-	if err != nil {
-		return "", "", err
-	}
-	name := filepath.Base(absolute)
-	if !namesDirectoryItself(selectedPath) {
-		return absolute, name, nil
-	}
-	if link, err := os.Lstat(absolute); err != nil || link.Mode()&fs.ModeSymlink == 0 {
-		return absolute, name, nil
-	}
-	followed, followErr := os.Stat(selectedPath)
-	resolved, resolveErr := filepath.EvalSymlinks(absolute)
-	if followErr != nil || resolveErr != nil || !followed.IsDir() {
-		return absolute, name, nil
-	}
-	if target, err := os.Lstat(resolved); err != nil || !target.IsDir() || !os.SameFile(followed, target) {
-		return absolute, name, nil
-	}
-	return resolved, name, nil
-}
-
-func namesDirectoryItself(selectedPath string) bool {
-	last := len(selectedPath)
-	for last > 0 && !os.IsPathSeparator(selectedPath[last-1]) {
-		last--
-	}
-	final := selectedPath[last:]
-	return final == "" || final == "." || final == ".."
-}
-
 func (source *SelectedCatalogSource) openSelectedRootBaseline(
 	root *os.Root,
-	absolute string,
+	selection selectedRoot,
 	relative string,
 	slot RootSlot,
 	before sourceObjectIdentity,
 	kind sourceEntryKind,
 ) (openedSourceHandle, catalog.SourceIdentity, catalog.VersionCandidate, error) {
+	absolute := selection.absolute
 	openName := relative
 	if openName == "" {
 		openName = "."
@@ -222,7 +192,7 @@ func (source *SelectedCatalogSource) openSelectedRootBaseline(
 	if inspectErr != nil {
 		return openedSourceHandle{}, catalog.SourceIdentity{}, catalog.VersionCandidate{}, errors.Join(fmt.Errorf("inspect selected root object: %w", inspectErr), handle.Close())
 	}
-	sameObject := before.sameObject(opened.identity)
+	sameObject := before.sameObject(opened.identity) && selection.openedFollowedTarget(handle)
 	if sameObject && opened.kind == sourceEntryCloudPlaceholder {
 		source.traceSelectedRootPolicy(slot, "cloud_placeholder", opened.audit)
 		return openedSourceHandle{}, catalog.SourceIdentity{}, catalog.VersionCandidate{}, errors.Join(
