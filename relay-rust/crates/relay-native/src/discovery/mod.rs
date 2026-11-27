@@ -55,6 +55,25 @@ impl Discovery {
         Ok(())
     }
 
+    fn sample_peers(
+        &self,
+        now: u64,
+        node: &crate::node::Runtime,
+        endpoint: &crate::Endpoint,
+    ) -> Vec<Envelope> {
+        // Reserve one slot for the local descriptor before sampling so the book cursor matches emitted peers.
+        let own = node
+            .sign_descriptor(endpoint, Purpose::Gossip)
+            .and_then(|v| Ok(serde_json::from_value(v)?))
+            .ok();
+        let limit = SAMPLE - usize::from(own.is_some());
+        let mut sample = self.book.lock().expect("peer book").sample(now, limit);
+        if let Some(own) = own {
+            sample.push(own);
+        }
+        sample
+    }
+
     pub async fn handle(
         &self,
         request: Request<Incoming>,
@@ -65,14 +84,7 @@ impl Discovery {
         let now = crate::node::now().unsigned_abs();
         let (status, body) = match *request.method() {
             Method::GET => {
-                let mut sample = self.book.lock().expect("peer book").sample(now);
-                sample.truncate(SAMPLE - 1);
-                if let Ok(own) = node
-                    .sign_descriptor(endpoint, Purpose::Gossip)
-                    .and_then(|v| Ok(serde_json::from_value(v)?))
-                {
-                    sample.push(own);
-                }
+                let sample = self.sample_peers(now, node, endpoint);
                 (
                     StatusCode::OK,
                     serde_json::to_vec(&sample).expect("signed records"),

@@ -82,21 +82,23 @@ impl Book {
         Ok(())
     }
 
-    pub fn sample(&mut self, now: u64) -> Vec<Envelope> {
+    pub fn sample(&mut self, now: u64, limit: usize) -> Vec<Envelope> {
         self.peers.retain(|_, p| p.record.expires > now);
         let n = self.peers.len();
-        if n == 0 {
+        if n == 0 || limit == 0 {
             return Vec::new();
         }
-        let result = self
+        let start = self.cursor % n;
+        let result: Vec<_> = self
             .peers
             .values()
             .cycle()
-            .skip(self.cursor % n)
-            .take(n.min(SAMPLE))
+            .skip(start)
+            .take(n.min(limit))
             .map(|p| p.record.envelope.clone())
             .collect();
-        self.cursor = (self.cursor + SAMPLE) % n;
+        // Advance by the returned slice so the caller's slot budget cannot skip peers across turns.
+        self.cursor = (start + result.len()) % n;
         result
     }
 
