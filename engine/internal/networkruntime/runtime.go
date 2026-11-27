@@ -24,27 +24,29 @@ import (
 )
 
 type Runtime struct {
-	community        *community.Pool
-	communityKick    chan struct{}
-	ownerKick        chan struct{}
-	communityOrigin  string // Explicit per-share origin override; empty follows settings or built-in frontend.
-	communityWorkers sync.WaitGroup
-	accounts         *account.Service
-	config           networkconfig.Config
-	directory        *networkdirectory.Directory
-	directoryError   error
-	diagnostics      diagnostics.Sink
-	now              func() time.Time
-	watcher          *networkstate.Watcher
-	ownWatcher       bool
-	health           nodeHealth
-	selectionSeed    string
-	mu               sync.Mutex
-	linkUnreachable  bool
-	backupReachable  bool
-	ctx              context.Context
-	cancel           context.CancelFunc
-	done             chan struct{}
+	community         *community.Pool
+	communityKick     chan struct{}
+	ownerKick         chan struct{}
+	communityOrigin   string // Explicit per-share origin override; empty follows settings or built-in frontend.
+	communityWorkers  sync.WaitGroup
+	accounts          *account.Service
+	config            networkconfig.Config
+	directory         *networkdirectory.Directory
+	directoryError    error
+	diagnostics       diagnostics.Sink
+	now               func() time.Time
+	watcher           *networkstate.Watcher
+	ownWatcher        bool
+	health            nodeHealth
+	selectionSeed     string
+	mu                sync.Mutex
+	eligibilityKnown  bool
+	eligibilityPaused bool
+	linkUnreachable   bool
+	backupReachable   bool
+	ctx               context.Context
+	cancel            context.CancelFunc
+	done              chan struct{}
 }
 
 func New(config *networkconfig.Config, now func() time.Time, selectionSeed string, sink diagnostics.Sink, watcher *networkstate.Watcher) (*Runtime, error) {

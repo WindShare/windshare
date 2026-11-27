@@ -34,6 +34,12 @@ func (r *Runtime) startCommunity() {
 	if r.community == nil {
 		r.community = community.New(r.config.CommunitySettingsPath, publicdial.Policy{}, r.now, r.diagnostics)
 	}
+	// Seed the runtime's observed eligibility baseline before background loops
+	// start so cold startup stays silent while subsequent in-process writes
+	// (initial enrollment, relay removal, or external edits) emit transitions.
+	if r.config.CommunitySettingsPath != "" {
+		_, _ = r.communitySettings(r.ctx)
+	}
 	r.communityKick = make(chan struct{}, 1)
 	r.communityWorkers.Go(func() {
 		tick := time.NewTicker(community.RefreshInterval)
@@ -204,6 +210,7 @@ func (r *Runtime) RelaySettingsChanged(ctx context.Context) {
 	r.mu.Lock()
 	r.communityOrigin = ""
 	r.mu.Unlock()
+	_, _ = r.communitySettings(ctx)
 	r.deliverCommunityNotice(ctx)
 	r.kickCommunity()
 	r.kickOwnerObserve()
@@ -224,11 +231,29 @@ func (r *Runtime) communitySettings(ctx context.Context) (relayconfig.Config, bo
 	if err != nil {
 		return relayconfig.Config{}, false
 	}
+	r.recordEligibilityPaused(false, e.Paused, false)
 	return c, c.CommunityEnabled() && !c.ConfiguredOnly && !e.Paused
+}
+
+func (r *Runtime) recordEligibilityPaused(previous, current, hasPrevious bool) {
+	r.mu.Lock()
+	changed := false
+	if r.eligibilityKnown {
+		changed = r.eligibilityPaused != current
+	} else if hasPrevious {
+		changed = previous != current
+	}
+	r.eligibilityKnown = true
+	r.eligibilityPaused = current
+	r.mu.Unlock()
+	if changed && r.diagnostics.Enabled() {
+		r.diagnostics.Emit(diagnostics.New("community_eligibility_changed", diagnostics.Fields{"paused": diagnostics.Bool(current)}).At(r.now()))
+	}
 }
 
 func (r *Runtime) updateEligibility(observed map[string]serviceauthority.PublicRelay) bool {
 	resumed := false
+	var prevPaused, nextPaused bool
 	err := statefile.Transact(r.ctx, r.config.CommunitySettingsPath, func(tx *statefile.Transaction) error {
 		c, err := relayconfig.ReadSettings(tx)
 		if err != nil {
@@ -243,13 +268,15 @@ func (r *Runtime) updateEligibility(observed map[string]serviceauthority.PublicR
 		if err != nil {
 			return err
 		}
+		prevPaused, nextPaused = old.Paused, e.Paused
 		resumed = wasPaused && c.CommunityEnabled() && !c.ConfiguredOnly && !e.Paused
-		if old.Paused != e.Paused && r.diagnostics.Enabled() {
-			r.diagnostics.Emit(diagnostics.New("community_eligibility_changed", diagnostics.Fields{"paused": diagnostics.Bool(e.Paused)}))
-		}
 		return nil
 	})
-	return resumed && err == nil
+	if err != nil {
+		return false
+	}
+	r.recordEligibilityPaused(prevPaused, nextPaused, true)
+	return resumed
 }
 
 func (r *Runtime) observeOwner(profile relayprofile.Candidate) (serviceauthority.PublicRelay, bool) {

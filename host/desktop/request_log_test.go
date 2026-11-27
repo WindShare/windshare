@@ -31,6 +31,8 @@ func TestPreferenceRequestLogsUseOnlyDiagnosticFields(t *testing.T) {
 		{"invalid address", relayconfig.PreferenceEdit{Action: "frontend", Value: "private text"}, "frontend", "", ""},
 		{"restore default", relayconfig.PreferenceEdit{Action: "frontend"}, "frontend", "", ""},
 		{"mode", relayconfig.PreferenceEdit{Action: "mode", Value: "selected"}, "mode", "", ""},
+		{"community nodes", relayconfig.PreferenceEdit{Action: "community_nodes", Value: "off"}, "community_nodes", "", ""},
+		{"community alias", relayconfig.PreferenceEdit{Action: "community", Value: "on"}, "community", "", ""},
 		{"unknown action", relayconfig.PreferenceEdit{Action: "private text", Value: relay}, "", "", ""},
 	}
 	for _, tt := range tests {

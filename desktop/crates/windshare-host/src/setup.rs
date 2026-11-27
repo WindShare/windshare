@@ -234,11 +234,21 @@ pub enum RelayMode {
 #[serde(tag = "action", content = "value", rename_all = "snake_case")]
 pub enum PreferenceEdit {
     Mode(RelayMode),
-    CommunityNodes(String),
+    #[serde(serialize_with = "serialize_on_off")]
+    CommunityNodes(bool),
     Enable(String),
     Disable(String),
     Remove(String),
     Frontend(String),
+}
+
+// serde's `serialize_with` contract always passes the field by reference.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn serialize_on_off<S: serde::Serializer>(
+    enabled: &bool,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(if *enabled { "on" } else { "off" })
 }
 
 impl PreferenceEdit {

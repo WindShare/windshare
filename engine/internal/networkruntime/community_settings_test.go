@@ -598,3 +598,94 @@ func TestCheckFrontendsFailoverRewarmsCommunityEvenAfterDefaultShare(t *testing.
 		t.Fatalf("built-in failover clobbered explicit communityOrigin = %q, want %q", explicitStillSet, explicitFront)
 	}
 }
+
+func TestCommunityEligibilityChangedEmitsAcrossEnrollmentAndRemoval(t *testing.T) {
+	current := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
+	var nowUnix atomic.Int64
+	nowUnix.Store(current.Unix())
+	nowFn := func() time.Time { return time.Unix(nowUnix.Load(), 0).UTC() }
+
+	settingsPath := filepath.Join(t.TempDir(), "config.json")
+	store := relayconfig.FileStore{Path: settingsPath}
+	stream, err := diagnostics.NewStream(16, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+
+	r, err := New(nil, nowFn, "", stream.Sink(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(r.Close)
+	r.config = networkconfig.Config{CommunitySettingsPath: settingsPath}
+	r.startCommunity()
+
+	drainEligibility := func() []diagnostics.Record {
+		var out []diagnostics.Record
+		for {
+			select {
+			case rec := <-stream.Records():
+				if rec.Name() == "community_eligibility_changed" {
+					out = append(out, rec)
+				}
+			default:
+				return out
+			}
+		}
+	}
+
+	// Cold start establishes baseline without emitting a spurious transition.
+	if got := drainEligibility(); len(got) != 0 {
+		t.Fatalf("unexpected startup community_eligibility_changed events: %v", got)
+	}
+
+	// Initial owner enrollment with RelayDisabled transitions eligibility false -> true.
+	enrollAt := current.Add(10 * time.Second)
+	nowUnix.Store(enrollAt.Unix())
+	const ownerKey = "enrolled-disabled-owner-key"
+	if err := statefile.Transact(t.Context(), settingsPath, func(tx *statefile.Transaction) error {
+		cfg := relayconfig.Config{
+			Profiles: []relayprofile.Candidate{
+				{PublicURL: "https://owned.example", Role: relayprofile.Owner, AccessKey: "k", Node: relayprofile.NodeIdentity{Platform: "native", NodeKey: ownerKey}},
+			},
+			ActiveRelays: []string{"https://owned.example"},
+		}
+		data, err := relayconfig.Encode(cfg)
+		if err != nil {
+			return err
+		}
+		if err := tx.Put(statefile.Settings, data); err != nil {
+			return err
+		}
+		_, err = relayconfig.ReconcileEligibility(tx, cfg, map[string]serviceauthority.PublicRelay{ownerKey: serviceauthority.RelayDisabled})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.RelaySettingsChanged(t.Context())
+	events := drainEligibility()
+	if len(events) != 1 || !events[0].Payload().Get("paused").Bool() || !events[0].ObservedAt().Equal(enrollAt) {
+		t.Fatalf("enrollment events = %+v, want 1 paused=true at %v", events, enrollAt)
+	}
+
+	// Unchanged settings notifications must not emit duplicates.
+	r.RelaySettingsChanged(t.Context())
+	if got := drainEligibility(); len(got) != 0 {
+		t.Fatalf("unchanged RelaySettingsChanged emitted duplicate events: %v", got)
+	}
+
+	// Removing the disabled owned relay transitions eligibility true -> false.
+	removeAt := current.Add(20 * time.Second)
+	nowUnix.Store(removeAt.Unix())
+	if _, err := store.Update(t.Context(), func(c *relayconfig.Config) error {
+		return c.RemoveRelay("https://owned.example")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.RelaySettingsChanged(t.Context())
+	events = drainEligibility()
+	if len(events) != 1 || events[0].Payload().Get("paused").Bool() || !events[0].ObservedAt().Equal(removeAt) {
+		t.Fatalf("removal events = %+v, want 1 paused=false at %v", events, removeAt)
+	}
+}

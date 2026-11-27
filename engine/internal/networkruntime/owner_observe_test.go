@@ -321,6 +321,9 @@ func TestPausedEligibilityWaitsForConcurrentOwnerObservationBeforeRefreshing(t *
 		select {
 		case rec := <-stream.Records():
 			if rec.Name() == "community_eligibility_changed" && !rec.Payload().Get("paused").Bool() {
+				if !rec.ObservedAt().Equal(now) {
+					t.Fatalf("community_eligibility_changed timestamp = %v, want %v", rec.ObservedAt(), now)
+				}
 				resumedEvent = true
 			}
 		default:

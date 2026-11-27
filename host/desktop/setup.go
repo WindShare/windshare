@@ -132,7 +132,7 @@ func (a *Application) configure(request Request) error {
 }
 
 func (input SetupInput) validate() error {
-	if input.Preference != nil && (input.RelayURL != "" || input.FrontURL != "") {
+	if input.Preference != nil && (input.RelayURL != "" || input.FrontURL != "" || input.Anonymous) {
 		return errors.New("invalid sharing settings request")
 	}
 	if input.RelayURL == "" {
@@ -141,6 +141,9 @@ func (input SetupInput) validate() error {
 		}
 	} else if input.RelayOperation != relaysetup.AddProfile && input.RelayOperation != relaysetup.AuthorizeDevice {
 		return errors.New("invalid relay setup operation")
+	}
+	if input.Anonymous && (input.RelayURL == "" || input.AccessKey != "" || input.RelayOperation != relaysetup.AddProfile) {
+		return errors.New("guest access requires adding a relay without a key")
 	}
 	if input.Preference == nil && input.RelayURL == "" && input.FrontURL == "" {
 		return errors.New("enter a relay or frontend URL")

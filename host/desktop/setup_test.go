@@ -275,3 +275,58 @@ func TestSetupRecoveryIsOnlyEmittedOnFailure(t *testing.T) {
 		})
 	}
 }
+
+func TestSetupInputValidateAnonymousCombinations(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   SetupInput
+		wantErr bool
+	}{
+		{
+			name:    "anonymous_with_preference",
+			input:   SetupInput{ID: "s1", Anonymous: true, Preference: &relayconfig.PreferenceEdit{Action: "mode", Value: "automatic"}},
+			wantErr: true,
+		},
+		{
+			name:    "anonymous_without_relay_url",
+			input:   SetupInput{ID: "s2", Anonymous: true, FrontURL: "https://front.example"},
+			wantErr: true,
+		},
+		{
+			name:    "anonymous_with_authorize_device",
+			input:   SetupInput{ID: "s3", Anonymous: true, RelayURL: "https://relay.example", RelayOperation: relaysetup.AuthorizeDevice},
+			wantErr: true,
+		},
+		{
+			name:    "anonymous_with_access_key_and_front_url",
+			input:   SetupInput{ID: "s4", Anonymous: true, RelayURL: "https://relay.example", RelayOperation: relaysetup.AddProfile, AccessKey: "secret", FrontURL: "https://front.example"},
+			wantErr: true,
+		},
+		{
+			name:    "anonymous_add_profile_valid",
+			input:   SetupInput{ID: "s5", Anonymous: true, RelayURL: "https://relay.example", RelayOperation: relaysetup.AddProfile, FrontURL: "https://front.example"},
+			wantErr: false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			a, _, _ := fixture(t)
+			var ran atomic.Bool
+			a.deps.setup = func(context.Context, SetupInput, func(relaysetup.Progress)) (SetupResult, error) {
+				ran.Store(true)
+				return SetupResult{RelayURL: tc.input.RelayURL, RelaySaved: true}, nil
+			}
+			reply := a.execute(Request{Command: "configure", Setup: &tc.input})
+			a.work.Wait()
+			if tc.wantErr {
+				if reply.Error == nil || ran.Load() {
+					t.Fatalf("expected synchronous rejection without running setup, got err=%v ran=%v", reply.Error, ran.Load())
+				}
+				return
+			}
+			if reply.Error != nil || !ran.Load() {
+				t.Fatalf("expected valid anonymous setup to run, got err=%v ran=%v", reply.Error, ran.Load())
+			}
+		})
+	}
+}

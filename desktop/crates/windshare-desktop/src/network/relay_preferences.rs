@@ -65,7 +65,7 @@ pub(super) fn community_toggle<V: 'static>(
 ) -> Div {
     let label = language(cx).text(Text::CommunityNodes);
     let checked = prefs.community_nodes;
-    let next = move || PreferenceEdit::CommunityNodes(if checked { "off" } else { "on" }.into());
+    let next = move || PreferenceEdit::CommunityNodes(!checked);
     let click = edit.clone();
     row()
         .justify_between()
@@ -303,7 +303,7 @@ impl Desktop {
         let prefs = &mut preview.preferences;
         let mut toast = None;
         match edit {
-            PreferenceEdit::CommunityNodes(value) => prefs.community_nodes = value == "on",
+            PreferenceEdit::CommunityNodes(enabled) => prefs.community_nodes = enabled,
             PreferenceEdit::Mode(mode) => prefs.mode = mode,
             PreferenceEdit::Enable(url) => {
                 if !prefs.at_capacity
