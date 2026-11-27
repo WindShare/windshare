@@ -76,3 +76,64 @@ fn json_array_bound_covers_empty_and_maximal_record_arrays() {
     let peers_max = 128 * MAX_RECORD + 127 + 2;
     assert!(peers_max <= json_array_bound(128));
 }
+
+fn signed_descriptor(label: usize, purpose: Purpose, issued_at: u64, expires_at: u64) -> Envelope {
+    let identity = Identity::generate().unwrap();
+    let signing_key = identity.key();
+    let key_b64 = B64.encode(signing_key.verifying_key().to_bytes());
+    let payload = json!({
+        "version": DESCRIPTOR_VERSION,
+        "node_id": identity.id(),
+        "node_key": key_b64,
+        "relay_endpoint": format!("wss://skew{label}.example/v2/ws"),
+        "services": { "relay": true, "stun": false },
+        "stun": [],
+        "zone": "global",
+        "region": "",
+        "operator": "",
+        "provider": "",
+        "platform": NODE_PLATFORM_NATIVE,
+        "classes": ["owner", "standard", "lowest"],
+        "issued_at": issued_at,
+        "expires_at": expires_at,
+        "public_relay": PublicRelay::Enabled { anonymous: true },
+        "authority": null,
+    });
+    let raw_payload = serde_json::to_vec(&payload).unwrap();
+    let signed = trust::sign(purpose.domain(), &raw_payload, &signing_key);
+    Envelope {
+        version: DESCRIPTOR_VERSION,
+        descriptor: B64.encode(&raw_payload),
+        signature: B64.encode(&signed[raw_payload.len()..]),
+    }
+}
+
+#[test]
+fn envelope_verify_matches_shared_clock_skew_for_live_and_gossip() {
+    let now = crate::node::now().unsigned_abs();
+    for (index, purpose) in [Purpose::Live, Purpose::Gossip].into_iter().enumerate() {
+        let lifetime = purpose.lifetime();
+        let at_limit = now + trust::CLOCK_SKEW;
+        assert!(
+            signed_descriptor(index, purpose, at_limit, at_limit + lifetime)
+                .verify(purpose, now)
+                .is_ok(),
+            "descriptor at shared trust::CLOCK_SKEW boundary should be accepted"
+        );
+
+        let beyond_limit = now + trust::CLOCK_SKEW + 1;
+        assert!(
+            signed_descriptor(index + 10, purpose, beyond_limit, beyond_limit + lifetime)
+                .verify(purpose, now)
+                .is_err(),
+            "descriptor beyond shared trust::CLOCK_SKEW should be rejected"
+        );
+
+        assert!(
+            signed_descriptor(index + 20, purpose, now - lifetime, now)
+                .verify(purpose, now)
+                .is_err(),
+            "expired descriptor must remain rejected without skew grace"
+        );
+    }
+}

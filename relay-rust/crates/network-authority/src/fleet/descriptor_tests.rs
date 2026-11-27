@@ -117,9 +117,18 @@ fn inspect_classifies_malformed_oversized_and_unsigned_descriptors() {
 fn inspect_classifies_expired_skewed_and_mismatched_descriptors() {
     let (key, node_key, node_id) = node_identity(9);
 
+    let mut at_skew_limit = valid_payload(&node_key, &node_id);
+    at_skew_limit["issued_at"] = json!(NOW + trust::CLOCK_SKEW);
+    at_skew_limit["expires_at"] = json!(NOW + trust::CLOCK_SKEW + MAX_DESCRIPTOR_LIFETIME_SECONDS);
+    inspect_node(ORIGIN, &sign_envelope(&key, &at_skew_limit), NOW)
+        .expect("descriptor within shared trust::CLOCK_SKEW should be accepted");
+
     for mutate in [
         |p: &mut Value| p["expires_at"] = json!(NOW),
-        |p: &mut Value| p["issued_at"] = json!(NOW + 61),
+        |p: &mut Value| {
+            p["issued_at"] = json!(NOW + trust::CLOCK_SKEW + 1);
+            p["expires_at"] = json!(NOW + trust::CLOCK_SKEW + 1 + MAX_DESCRIPTOR_LIFETIME_SECONDS);
+        },
         |p: &mut Value| p["expires_at"] = json!(NOW + 301),
         |p: &mut Value| {
             p["issued_at"] = json!(NOW + 20);

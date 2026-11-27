@@ -7,15 +7,16 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as B64};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt;
+use windshare_relay_access::{
+    descriptor::{
+        DESCRIPTOR_VERSION, InvariantError, NODE_IDENTITY_DOMAIN, NODE_PLATFORM_NATIVE, Purpose,
+        validate_service_invariants,
+    },
+    trust,
+};
 
 pub const MAX_DESCRIPTOR: usize = 16 * 1024;
-const MAX_CLOCK_SKEW_SECONDS: u64 = 60;
-const MAX_DESCRIPTOR_LIFETIME_SECONDS: u64 =
-    windshare_relay_access::descriptor::Purpose::Live.lifetime();
-use windshare_relay_access::descriptor::{
-    DESCRIPTOR_VERSION, InvariantError, NODE_IDENTITY_DOMAIN, NODE_PLATFORM_NATIVE,
-    validate_service_invariants,
-};
+const MAX_DESCRIPTOR_LIFETIME_SECONDS: u64 = Purpose::Live.lifetime();
 const BYTES_PER_MBPS: u64 = 125_000;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -118,7 +119,7 @@ fn decode_verified(bytes: &[u8]) -> Result<(Descriptor, [u8; 32]), DescriptorErr
     })?;
     verify_bytes(
         &value.node_key,
-        windshare_relay_access::descriptor::Purpose::Live.domain(),
+        Purpose::Live.domain(),
         &payload,
         &envelope.signature,
     )
@@ -173,7 +174,7 @@ fn validate_freshness(value: &Descriptor, now: u64) -> Result<(), DescriptorErro
             value.expires_at
         )));
     }
-    if value.issued_at > now.saturating_add(MAX_CLOCK_SKEW_SECONDS) {
+    if value.issued_at > now.saturating_add(trust::CLOCK_SKEW) {
         return Err(DescriptorError::expired(format!(
             "descriptor issued_at {} exceeds authority clock skew (authority time {now})",
             value.issued_at

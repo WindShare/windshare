@@ -19,7 +19,6 @@ pub(super) const MAX_RECORD: usize = 16 * 1024;
 // strings are URL-safe base64 without JSON-escaped characters.
 const ENVELOPE_JSON_FRAMING: usize = r#"{"version":2,"descriptor":"","signature":""}"#.len();
 const _: () = assert!(DESCRIPTOR_VERSION < 10);
-const CLOCK_SKEW: u64 = 60;
 const SIGNATURE_B64_LEN: usize = 86;
 
 /// Upper bound in bytes for a compact JSON array of `count` verified `Envelope`s
@@ -165,7 +164,7 @@ impl Envelope {
             }
         })?;
         ensure!(
-            value.issued_at <= now.saturating_add(CLOCK_SKEW)
+            value.issued_at <= now.saturating_add(trust::CLOCK_SKEW)
                 && now < value.expires_at
                 && (1..=purpose.lifetime())
                     .contains(&value.expires_at.saturating_sub(value.issued_at)),
