@@ -12,7 +12,7 @@ use hyper::{
     body::{Bytes, Incoming},
     header,
 };
-use record::{Envelope, MAX_RECORD, Record};
+use record::{Envelope, MAX_RECORD, Record, json_array_bound};
 use std::{
     net::IpAddr,
     sync::{Arc, Mutex},
@@ -326,8 +326,11 @@ impl Discovery {
         // Pull before announcing so remote POST rejections (rate limits or a full
         // probe queue) never block peer sampling or mark a busy peer dead, while
         // unreachable peers still fail fast on a single request timeout.
-        let bytes =
-            transport::body(client.get(url.clone()).send().await?, SAMPLE * MAX_RECORD).await?;
+        let bytes = transport::body(
+            client.get(url.clone()).send().await?,
+            json_array_bound(SAMPLE),
+        )
+        .await?;
         let entries: Vec<Envelope> = serde_json::from_slice(&bytes)?;
         ensure!(entries.len() <= SAMPLE, "oversized sample");
         let now = crate::node::now().unsigned_abs();

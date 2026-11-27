@@ -14,8 +14,19 @@ use windshare_relay_access::{
 };
 
 pub(super) const MAX_RECORD: usize = 16 * 1024;
+// Exact compact JSON framing of `{"version":2,"descriptor":"","signature":""}`.
+// `DESCRIPTOR_VERSION` is a single ASCII digit and verified `descriptor` / `signature`
+// strings are URL-safe base64 without JSON-escaped characters.
+const ENVELOPE_JSON_FRAMING: usize = r#"{"version":2,"descriptor":"","signature":""}"#.len();
+const _: () = assert!(DESCRIPTOR_VERSION < 10);
 const CLOCK_SKEW: u64 = 60;
 const SIGNATURE_B64_LEN: usize = 86;
+
+/// Upper bound in bytes for a compact JSON array of `count` verified `Envelope`s
+/// (`[` + up to `count` records of at most `MAX_RECORD` bytes separated by commas + `]`).
+pub(super) const fn json_array_bound(count: usize) -> usize {
+    count * (MAX_RECORD + 1) + 2
+}
 
 #[derive(Clone, Deserialize, Serialize)]
 pub(super) struct Envelope {
@@ -99,10 +110,17 @@ fn decode_public_key(raw: &str) -> Result<[u8; 32]> {
 }
 
 impl Envelope {
+    /// Exact compact JSON wire size for a `DESCRIPTOR_VERSION` envelope whose
+    /// base64url fields contain no JSON-escaped characters.
+    pub(super) const fn encoded_len(&self) -> usize {
+        ENVELOPE_JSON_FRAMING
+            .saturating_add(self.descriptor.len())
+            .saturating_add(self.signature.len())
+    }
+
     pub fn verify(self, purpose: Purpose, now: u64) -> Result<Record> {
         ensure!(
-            self.version == DESCRIPTOR_VERSION
-                && self.descriptor.len() + self.signature.len() < MAX_RECORD,
+            self.version == DESCRIPTOR_VERSION && self.encoded_len() <= MAX_RECORD,
             "invalid envelope"
         );
         let mut bytes = B64.decode(&self.descriptor)?;
@@ -168,3 +186,7 @@ impl Envelope {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "record_tests.rs"]
+pub(super) mod tests;

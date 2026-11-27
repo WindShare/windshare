@@ -1,8 +1,11 @@
-use super::super::*;
+use super::super::{book::MAX_PEERS, record::tests::padded_gossip_envelope, *};
 use crate::{Database, Endpoint, node::Identity};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as B64};
+use hyper::{server::conn::http1, service::service_fn};
+use hyper_util::rt::TokioIo;
 use serde_json::{Value, json};
 use std::net::{Ipv4Addr, Ipv6Addr};
+use tokio::net::TcpListener;
 use windshare_relay_access::{descriptor::PublicRelay, trust};
 
 fn signed_gossip(
@@ -315,4 +318,108 @@ async fn sqlite_cache_round_trips_and_restore_reprobes_only_valid_remote_communi
     assert!(receiver.try_recv().is_err());
     assert_eq!(first.record.endpoint, "wss://peer-a.example/v2/ws");
     assert_eq!(second.record.endpoint, "wss://peer-b.example/v2/ws");
+}
+
+#[tokio::test]
+async fn restore_accepts_full_book_of_maximal_envelopes_and_ignores_oversized_blob() {
+    let now = crate::node::now().unsigned_abs();
+    let self_ep = Endpoint::parse("wss://self.example/v2/ws").unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open(&dir.path().join("node.db"), self_ep.identity).unwrap();
+
+    let envelopes: Vec<_> = (0..MAX_PEERS)
+        .map(|idx| padded_gossip_envelope(idx, now, MAX_RECORD))
+        .collect();
+    let encoded = serde_json::to_vec(&envelopes).unwrap();
+    assert!(encoded.len() <= json_array_bound(MAX_PEERS));
+    db.cache_peers(&encoded).unwrap();
+
+    let (discovery, mut receiver) = Discovery::new();
+    let drain = tokio::spawn(async move {
+        let mut count = 0usize;
+        while receiver.recv().await.is_some() {
+            count += 1;
+        }
+        count
+    });
+    discovery.restore(db.clone(), None, &self_ep).await.unwrap();
+    drop(discovery);
+    assert_eq!(drain.await.unwrap(), MAX_PEERS);
+
+    let oversized = vec![b' '; json_array_bound(MAX_PEERS) + 1];
+    db.cache_peers(&oversized).unwrap();
+    assert!(
+        db.cached_peers(json_array_bound(MAX_PEERS))
+            .unwrap()
+            .is_none()
+    );
+}
+
+async fn serve_single_get(body: Vec<u8>) -> (url::Url, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        if let Ok((stream, _)) = listener.accept().await {
+            let io = TokioIo::new(stream);
+            let _ = http1::Builder::new()
+                .serve_connection(
+                    io,
+                    service_fn(move |_| {
+                        let body = body.clone();
+                        async move {
+                            Ok::<_, std::io::Error>(
+                                Response::builder()
+                                    .status(StatusCode::OK)
+                                    .header(header::CONTENT_TYPE, "application/json")
+                                    .header(header::CONNECTION, "close")
+                                    .body(Full::new(Bytes::from(body)))
+                                    .unwrap(),
+                            )
+                        }
+                    }),
+                )
+                .await;
+        }
+    });
+    let url = url::Url::parse(&format!("http://{addr}{PATH}")).unwrap();
+    (url, server)
+}
+
+#[tokio::test]
+async fn exchange_accepts_full_sample_of_maximal_envelopes_and_rejects_oversized_entry() {
+    let now = crate::node::now().unsigned_abs();
+    let self_ep = Endpoint::parse("wss://self.example/v2/ws").unwrap();
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+
+    let maximal_sample: Vec<_> = (0..SAMPLE)
+        .map(|idx| padded_gossip_envelope(idx, now, MAX_RECORD))
+        .collect();
+    let sample_body = serde_json::to_vec(&maximal_sample).unwrap();
+    assert!(sample_body.len() > SAMPLE * MAX_RECORD);
+    assert!(sample_body.len() <= json_array_bound(SAMPLE));
+
+    let (url, server) = serve_single_get(sample_body).await;
+    let (discovery, mut receiver) = Discovery::new();
+    discovery
+        .exchange_with_client(&client, &url, "https://peer.example", None, &self_ep, None)
+        .await
+        .unwrap();
+    server.abort();
+
+    let mut queued = 0usize;
+    while receiver.try_recv().is_ok() {
+        queued += 1;
+    }
+    assert_eq!(queued, SAMPLE);
+
+    let oversized_entry = vec![padded_gossip_envelope(99, now, MAX_RECORD + 1)];
+    let oversized_body = serde_json::to_vec(&oversized_entry).unwrap();
+    let (url, server) = serve_single_get(oversized_body).await;
+    let (discovery, mut receiver) = Discovery::new();
+    discovery
+        .exchange_with_client(&client, &url, "https://peer.example", None, &self_ep, None)
+        .await
+        .unwrap();
+    server.abort();
+    assert!(receiver.try_recv().is_err());
 }

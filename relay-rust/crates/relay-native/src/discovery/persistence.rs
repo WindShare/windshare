@@ -1,7 +1,7 @@
 use super::{
     Discovery,
     book::MAX_PEERS,
-    record::{Envelope, MAX_RECORD},
+    record::{Envelope, json_array_bound},
 };
 use anyhow::Result;
 use std::time::Duration;
@@ -14,10 +14,9 @@ impl Discovery {
         own_key: Option<&str>,
         endpoint: &crate::Endpoint,
     ) -> Result<()> {
-        let raw = tokio::task::spawn_blocking(move || {
-            store.cached_peers(MAX_PEERS * (MAX_RECORD + 1) + 2)
-        })
-        .await??;
+        let raw =
+            tokio::task::spawn_blocking(move || store.cached_peers(json_array_bound(MAX_PEERS)))
+                .await??;
         if let Some(raw) = raw {
             let entries: Vec<Envelope> = serde_json::from_slice(&raw)?;
             for entry in entries.into_iter().take(MAX_PEERS) {
