@@ -112,11 +112,13 @@ func TestSelectionNamingALinkStaysRefused(t *testing.T) {
 	}
 	separator := string(filepath.Separator)
 	for name, paths := range map[string][]string{
-		"directory link":            {fixture.link},
-		"chain":                     {chain},
-		"file link":                 {fileLink},
-		"file link with separator":  {fileLink + separator},
-		"glob match among siblings": {filepath.Join(fixture.target, "a.txt"), fixture.link},
+		"directory link":                   {fixture.link},
+		"chain":                            {chain},
+		"file link":                        {fileLink},
+		"file link with separator":         {fileLink + separator},
+		"file link with separator and dot": {fileLink + separator + "."},
+		"file link with dot and separator": {fileLink + separator + "." + separator},
+		"glob match among siblings":        {filepath.Join(fixture.target, "a.txt"), fixture.link},
 	} {
 		t.Run(name, func(t *testing.T) {
 			source, err := NewSelectedFileSource(context.Background(), SelectedCatalogSourceConfig{
@@ -153,12 +155,17 @@ func TestSelectionNamingAnUnusableLinkKeepsItsReason(t *testing.T) {
 	if err := os.Symlink("loop", loop); err != nil {
 		t.Fatal(err)
 	}
-	for _, selection := range []string{loop, loop + string(filepath.Separator)} {
-		_, err := openSelection(t, selection, nil)
-		failure, _ := errors.AsType[*catalog.SourceError](err)
-		if !errors.Is(err, content.ErrUnsupportedStability) || failure == nil || failure.Failure != catalog.SourceFailureUnsupported {
-			t.Fatalf("link loop %q = %v", selection, err)
-		}
+	separator := string(filepath.Separator)
+	for name, selection := range map[string]string{
+		"loop": loop, "loop with separator": loop + separator, "loop with separator and dot": loop + separator + ".",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := openSelection(t, selection, nil)
+			failure, _ := errors.AsType[*catalog.SourceError](err)
+			if !errors.Is(err, content.ErrUnsupportedStability) || failure == nil || failure.Failure != catalog.SourceFailureUnsupported {
+				t.Fatalf("link loop %q = %v", selection, err)
+			}
+		})
 	}
 	device := filepath.Join(fixture.parent, "device")
 	if err := os.Symlink(os.DevNull, device); err != nil {

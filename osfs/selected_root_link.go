@@ -39,10 +39,7 @@ func resolveSelectedRoot(selectedPath string, follow func(string) (fs.FileInfo, 
 	if leaf, err := os.Lstat(absolute); err != nil || leaf.Mode()&fs.ModeSymlink == 0 {
 		return selection, nil
 	}
-	namesLink, err := typedPathNamesLink(selectedPath)
-	if err != nil {
-		return selectedRoot{}, pathfailure.Filesystem("inspect selected root", absolute, err)
-	}
+	namesLink := typedPathNamesLink(selectedPath)
 	// The absolute spelling of a named link is the link itself; otherwise the
 	// typed path is followed so the kernel, not lexical cleaning, resolves "..".
 	followPath := selectedPath
@@ -76,29 +73,18 @@ func resolveSelectedRoot(selectedPath string, follow func(string) (fs.FileInfo, 
 	return selection, nil
 }
 
-// typedPathNamesLink reports whether the kernel's no-follow view of the typed
-// path is not a directory: the user named the link itself. POSIX resolves a
+// typedPathNamesLink reports whether the user named the link itself rather
+// than a directory the kernel reaches through it: anything but a successful
+// no-follow Lstat of the typed path that yields a directory. POSIX resolves a
 // final link for ".", "..", "link/" and "link/."; Windows Lstat resolves it only
 // for a trailing separator, because "." and ".." are cleaned lexically there, so
-// those spellings name the link on Windows. A trailing separator after a link
-// to a non-directory (`file-link/`) fails differently per platform (ENOTDIR,
-// ERROR_INVALID_NAME, ...), so it is recognised by the link before it.
-func typedPathNamesLink(selectedPath string) (bool, error) {
+// those spellings name the link on Windows. A failing Lstat (`file-link/`,
+// `file-link/.`, `loop/.`, `dangling/`, with platform-specific errors) never
+// follows: the named link's own reason, or the kernel's refusal to follow it,
+// is reported instead.
+func typedPathNamesLink(selectedPath string) bool {
 	typed, err := os.Lstat(selectedPath)
-	if err == nil {
-		return !typed.IsDir(), nil
-	}
-	trimmed := selectedPath
-	for len(trimmed) > 1 && os.IsPathSeparator(trimmed[len(trimmed)-1]) {
-		trimmed = trimmed[:len(trimmed)-1]
-	}
-	if trimmed == selectedPath {
-		return false, err
-	}
-	if leaf, leafErr := os.Lstat(trimmed); leafErr == nil && leaf.Mode()&fs.ModeSymlink != 0 {
-		return true, nil
-	}
-	return false, err
+	return err != nil || !typed.IsDir()
 }
 
 // namedLinkSelection keeps the no-follow boundary for a path naming a link (or
