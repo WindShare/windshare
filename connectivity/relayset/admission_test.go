@@ -3,6 +3,7 @@ package relayset
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -683,5 +684,156 @@ func TestCandidateFailingOrStoppingBeforeBeginDoesNotBlockBackup(t *testing.T) {
 			t.Fatalf("fallback blocked in Begin/Admit by unstarted candidate: %v", err)
 		}
 		fallback.Release()
+	})
+}
+
+func TestCommunityAdmissionTargetMatchesInitialWaveRole(t *testing.T) {
+	t.Run("pure community admits pair and parks surplus until loss", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			plan := relayplan.Plan{
+				Network: []relayplan.Candidate{
+					{URL: "comm1", Source: relayplan.Community, Verified: true},
+					{URL: "comm2", Source: relayplan.Community, Verified: true},
+				},
+				Standby: []relayplan.Candidate{
+					{URL: "ip1", Source: relayplan.Community, IPLiteral: true},
+				},
+			}
+			a := NewNetworkAdmissions(plan, nil, nil)
+			var events []Admission
+			a.Observe(func(event Admission) { events = append(events, event) })
+
+			p1, err := a.Control("comm1").Begin(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			p2, err := a.Control("comm2").Begin(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			p3, err := a.Control("ip1").Begin(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !p1.Admit() || !p2.Admit() {
+				t.Fatal("pure community pair failed to admit both routes")
+			}
+			p1.Release()
+			p2.Release()
+			if p3.Admit() {
+				t.Fatal("third community route exceeded target pair")
+			}
+			p3.Release()
+
+			waiting := make(chan AttemptPermit, 1)
+			go func() {
+				p, _ := a.Control("ip1").Begin(t.Context())
+				waiting <- p
+			}()
+			synctest.Wait()
+			select {
+			case <-waiting:
+				t.Fatal("surplus community route started while pair was active")
+			default:
+			}
+
+			a.Control("comm1").Unavailable()
+			recovered := <-waiting
+			if recovered == nil || !recovered.Admit() {
+				t.Fatal("standby community route failed to claim freed slot")
+			}
+			recovered.Release()
+
+			want := []Admission{
+				{Endpoint: "comm1", Primary: "", State: AdmissionAdmitted, Reason: AdmissionReasonCommunity, Count: 1},
+				{Endpoint: "comm2", Primary: "", State: AdmissionAdmitted, Reason: AdmissionReasonCommunity, Count: 2},
+				{Endpoint: "ip1", Primary: "", State: AdmissionParked, Reason: AdmissionReasonTargetReached, Count: 2},
+				{Endpoint: "comm1", Primary: "", State: AdmissionUnavailable, Reason: AdmissionReasonCommunityLost, Count: 1},
+				{Endpoint: "ip1", Primary: "", State: AdmissionAdmitted, Reason: AdmissionReasonCommunity, Count: 2},
+			}
+			if !slices.Equal(events, want) {
+				t.Fatalf("events = %+v, want %+v", events, want)
+			}
+		})
+	})
+
+	t.Run("second community admission follows initial-wave role and remaining budget", func(t *testing.T) {
+		configured := func(n int) []relayplan.Candidate {
+			out := make([]relayplan.Candidate, n)
+			for i := range n {
+				out[i] = relayplan.Candidate{URL: fmt.Sprintf("own-%d", i), Source: relayplan.Configured}
+			}
+			return out
+		}
+		for _, tc := range []struct {
+			name       string
+			plan       relayplan.Plan
+			wantSecond bool
+		}{
+			{
+				name: "server-deferred official standby lets community initial wave admit pair",
+				plan: relayplan.Plan{
+					Network: []relayplan.Candidate{
+						{URL: "comm1", Source: relayplan.Community},
+						{URL: "comm2", Source: relayplan.Community},
+					},
+					Standby: []relayplan.Candidate{
+						{URL: "cn", Source: relayplan.Official, Zone: "cn", ServerRetryAt: time.Now().Add(time.Minute)},
+						{URL: "global", Source: relayplan.Official, Zone: "global", ServerRetryAt: time.Now().Add(time.Minute)},
+					},
+				},
+				wantSecond: true,
+			},
+			{
+				name: "pure community still respects remaining endpoint budget",
+				plan: relayplan.Plan{
+					Configured: configured(MaximumEndpoints - 1),
+					Network: []relayplan.Candidate{
+						{URL: "comm1", Source: relayplan.Community},
+						{URL: "comm2", Source: relayplan.Community},
+					},
+				},
+				wantSecond: false,
+			},
+			{
+				name: "official initial wave keeps community capped at single supplemental route",
+				plan: relayplan.Plan{
+					Network: []relayplan.Candidate{
+						{URL: "cn", Source: relayplan.Official, Zone: "cn"},
+						{URL: "global", Source: relayplan.Official, Zone: "global"},
+						{URL: "comm1", Source: relayplan.Community, Verified: true},
+					},
+					Standby: []relayplan.Candidate{
+						{URL: "comm2", Source: relayplan.Community},
+					},
+				},
+				wantSecond: false,
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				a := NewNetworkAdmissions(tc.plan, nil, nil)
+				p1, err := a.Control("comm1").Begin(t.Context())
+				if err != nil {
+					t.Fatal(err)
+				}
+				p2, err := a.Control("comm2").Begin(t.Context())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !p1.Admit() {
+					t.Fatal("first community route failed to admit")
+				}
+				p1.Release()
+				got := p2.Admit()
+				p2.Release()
+				wantActive := 1
+				if tc.wantSecond {
+					wantActive = 2
+				}
+				if got != tc.wantSecond || a.communityActive != wantActive {
+					t.Fatalf("second admit=%v communityActive=%d, want %v, %d", got, a.communityActive, tc.wantSecond, wantActive)
+				}
+			})
+		}
 	})
 }

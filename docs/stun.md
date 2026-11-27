@@ -8,8 +8,11 @@ deployment, or explicit local endpoint catalogs. Remote signaling and capability
 links cannot supply endpoints. Entries have stable IDs, STUN URLs with explicit
 ports, address family, trust, deployment priority, and optional region, provider
 and failure-domain facts. Unknown facts remain empty. Enabled entries must be
-explicitly allowed (`reviewed` deployment/build config or `local`);
-`unreviewed` entries remain catalog-only.
+explicitly allowed: both native and web accept `reviewed` deployment/build
+config and `local` entries, while native `connectivity/icepolicy` also accepts
+live-verified `community` entries (strictly ranked below `reviewed` and `local`,
+bound to the same public host as the community relay); `unreviewed` entries
+remain catalog-only.
 
 An attempt snapshots at most two endpoints. A recovery wave contacts at most four,
 using distinct known failure domains for the backup. Endpoint-attributed failures

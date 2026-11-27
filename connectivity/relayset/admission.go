@@ -2,6 +2,7 @@ package relayset
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"time"
 
@@ -24,11 +25,12 @@ type AttemptPermit interface {
 	ReleaseFailed()
 }
 
-const targetCommunityRegistrations = 1
+const supplementalCommunityRegistrations = 1
 
 // NetworkAdmissions reserves the official pair and one independent community
-// admission within the remaining MaximumEndpoints budget. Explicitly configured
-// endpoints own their own registration lifetimes.
+// admission within the remaining MaximumEndpoints budget, or up to the normal
+// network target pair when the initial wave is community-only. Explicitly
+// configured endpoints own their own registration lifetimes.
 type NetworkAdmissions struct {
 	mu              sync.Mutex
 	candidates      []relayplan.Candidate
@@ -38,6 +40,7 @@ type NetworkAdmissions struct {
 	primary         int
 	remaining       int
 	target          int
+	communityTarget int
 	inflight        int
 	communityActive int
 	active          int
@@ -114,9 +117,18 @@ func NewNetworkAdmissions(plan relayplan.Plan, clock Clock, serverRetryAt func(s
 		clock = SystemClock{}
 	}
 	remaining := max(0, MaximumEndpoints-len(plan.Configured))
+	target := min(relayplan.TargetNetworkRegistrations, remaining)
+	// Community routes stay a single supplemental registration alongside an
+	// official initial wave, and scale up to the normal target pair when no
+	// official routes are dialable in the initial wave (pure-community or
+	// server-deferred official fallback).
+	communityTarget := min(supplementalCommunityRegistrations, remaining)
+	if !slices.ContainsFunc(plan.Network, func(c relayplan.Candidate) bool { return c.Source != relayplan.Community }) {
+		communityTarget = target
+	}
 	candidates := plan.NetworkCandidates()
 	a := &NetworkAdmissions{clock: clock, serverRetryAt: serverRetryAt, candidates: candidates, policy: plan.Policy,
-		remaining: remaining, target: min(relayplan.TargetNetworkRegistrations, remaining),
+		remaining: remaining, target: target, communityTarget: communityTarget,
 		states: make([]admissionState, len(candidates)), changed: make(chan struct{}), primary: -1}
 	for i, candidate := range a.candidates {
 		at := candidate.ServerRetryAt
@@ -336,7 +348,7 @@ func (a *NetworkAdmissions) canAdmit(index int) bool {
 		return false
 	}
 	if a.candidates[index].Source == relayplan.Community {
-		return a.communityActive < targetCommunityRegistrations
+		return a.communityActive < a.communityTarget
 	}
 	return a.active < a.target && (a.primary < 0 || a.backup() == index)
 }
