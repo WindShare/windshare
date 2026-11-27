@@ -431,8 +431,8 @@ func signedOpenNativeDescriptor(t *testing.T, baseURL string, now time.Time) map
 	digest := sha256.Sum256(append([]byte("windshare/node-identity/v1\x00"), pub...))
 	enc := base64.RawURLEncoding.EncodeToString
 	wsEndpoint := "wss://" + strings.TrimPrefix(baseURL, "https://") + "/v2/ws"
-	if strings.HasPrefix(baseURL, "http://") {
-		wsEndpoint = "ws://" + strings.TrimPrefix(baseURL, "http://") + "/v2/ws"
+	if rest, ok := strings.CutPrefix(baseURL, "http://"); ok {
+		wsEndpoint = "ws://" + rest + "/v2/ws"
 	}
 	payload, err := json.Marshal(map[string]any{
 		"version":        2,

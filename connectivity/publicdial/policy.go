@@ -157,8 +157,8 @@ func forbiddenOriginRune(r rune) bool {
 func isReservedDNSHost(host string) bool {
 	trimmed := strings.TrimSuffix(host, ".")
 	suffix := trimmed
-	if idx := strings.LastIndexByte(trimmed, '.'); idx >= 0 {
-		suffix = trimmed[idx+1:]
+	if _, after, ok := strings.CutLast(trimmed, "."); ok {
+		suffix = after
 	}
 	switch suffix {
 	case "localhost", "local", "internal", "invalid", "onion", "arpa":
