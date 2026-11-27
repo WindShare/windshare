@@ -21,6 +21,7 @@ func (a *Application) snapshotLocked() Snapshot {
 		Shares: make([]Share, 0, len(a.operations)), Setup: a.setup,
 		Preferences: a.preferences, Account: a.accountView, SenderTrace: a.deps.senderTrace.state(),
 	}
+	next.Preferences.CommunityNotice = a.communityNotice
 	for _, op := range a.operations {
 		view := a.reconcileAndProjectLocked(op)
 		a.recordOfficialAuthorizationFailureLocked(op, view)

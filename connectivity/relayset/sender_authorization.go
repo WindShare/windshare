@@ -81,7 +81,7 @@ func (lifecycle *SenderLifecycle) acquireRegistrationAttempt(ctx context.Context
 		authorization := lifecycle.config.Candidate.reserveAuthorization()
 		if authorization.State == AuthorizationReady && validBearer(authorization.Bearer) {
 			if announced != 0 {
-				lifecycle.showAuthorizationWait(false)
+				lifecycle.showAuthorizationWait(RegistrationPending)
 			}
 			return permit, authorization, nil
 		}
@@ -104,7 +104,11 @@ func (lifecycle *SenderLifecycle) acquireRegistrationAttempt(ctx context.Context
 }
 
 func (lifecycle *SenderLifecycle) observeAuthorizationWait(attempt uint32, authorization Authorization) {
-	lifecycle.showAuthorizationWait(authorization.State == AuthorizationUserActionRequired)
+	state := RegistrationWaitingAuthorization
+	if authorization.State == AuthorizationUserActionRequired {
+		state = RegistrationNeedsUserAuthorization
+	}
+	lifecycle.showAuthorizationWait(state)
 	lifecycle.observeRecoveryAttempt(Attempt{ShareInstance: lifecycle.config.Fresh.ShareInstance,
 		Number: attempt, State: AttemptAuthorization, Authorization: authorization.State,
 		Failure:  &AuthorizationError{State: authorization.State, Cause: authorization.Cause},

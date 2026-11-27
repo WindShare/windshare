@@ -93,6 +93,7 @@ fn observe_active_setup_tracks_only_settings_visible_unfinished_setups() {
             stage: "discover".into(),
             verification_url: String::new(),
             user_code: String::new(),
+            guest_available: false,
             service_login: None,
         },
         ..Model::default()
@@ -142,6 +143,7 @@ fn observe_active_setup_tracks_only_settings_visible_unfinished_setups() {
             stage: "discover".into(),
             verification_url: String::new(),
             user_code: String::new(),
+            guest_available: false,
             service_login: None,
         },
         ..Model::default()
@@ -280,6 +282,7 @@ fn blocked_share_dialog_does_not_adopt_another_shares_running_setup() {
             stage: "discover".into(),
             verification_url: String::new(),
             user_code: String::new(),
+            guest_available: false,
             service_login: None,
         },
         setup_request: SetupRequest::Pending {
@@ -538,6 +541,7 @@ fn settings_setup_banner_routes_share_scoped_unfinished_setups_to_return_card() 
         stage: "discover".into(),
         verification_url: String::new(),
         user_code: String::new(),
+        guest_available: false,
         service_login: None,
     };
     assert_eq!(
@@ -576,6 +580,7 @@ fn settings_setup_banner_routes_share_scoped_unfinished_setups_to_return_card() 
         stage: "approval".into(),
         verification_url: "https://relay.example/approve".into(),
         user_code: "ABCD-1234".into(),
+        guest_available: false,
         service_login: None,
     };
     assert!(settings_visible_setup(&share_running).is_none());

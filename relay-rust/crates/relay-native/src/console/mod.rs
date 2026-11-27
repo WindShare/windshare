@@ -33,6 +33,7 @@ struct Inner {
     owner: [u8; 16],
     node_key: ed25519_dalek::SigningKey,
     account_service: Option<crate::node::usage::Authority>,
+    contribution: Option<crate::node::contribution::Control>,
     bootstrap: Digest,
 }
 
@@ -79,6 +80,7 @@ impl Console {
         access: Service,
         identity: &Identity,
         authority: Option<crate::node::usage::Authority>,
+        contribution: Option<crate::node::contribution::Control>,
     ) -> Result<Option<Self>> {
         let url = url::Url::parse(endpoint.relay_url())?;
         let loopback = match url.host() {
@@ -109,6 +111,7 @@ impl Console {
             owner: identity.owner().principal,
             node_key: identity.key(),
             account_service: authority,
+            contribution,
             bootstrap: Digest::of(token.as_bytes()),
         }))))
     }
@@ -137,6 +140,11 @@ impl Console {
         database::cleanup(&tx.db, now)?;
         let result = match (method, path) {
             (&Method::POST, "/api/initialize") => self.initialize(&tx.db, body, now),
+            (&Method::GET, "/api/session") | (&Method::POST, "/api/login")
+                if !sessions::initialized(&tx.db)? =>
+            {
+                Ok(Reply::error(StatusCode::UNAUTHORIZED, "uninitialized"))
+            }
             (&Method::POST, "/api/login") => Self::login(&tx.db, body, now),
             (&Method::POST, "/api/enrollments/account") => self.approve_account(&tx.db, body, now),
             (&Method::POST, path) if is_claimant_endpoint(path) => {
@@ -148,8 +156,19 @@ impl Console {
             (&Method::POST, "/api/logout") => Self::logout(&tx.db, session),
             (&Method::POST, "/api/password") => Self::change_password(&tx.db, body, now),
             (&Method::GET, "/api/session") => Ok(Reply::ok(
-                json!({"authenticated": true, "capabilities": {"revocation_stops_shares": true, "password_change": true}}),
+                json!({"authenticated": true, "capabilities": {"revocation_stops_shares": true, "password_change": true,"contribution":self.0.contribution.is_some()}}),
             )),
+            (&Method::GET, "/api/contribution") if let Some(local) = &self.0.contribution => {
+                Ok(Reply::ok(local.view()?))
+            }
+            (&Method::POST, "/api/contribution") if let Some(local) = &self.0.contribution => {
+                match serde_json::from_value::<crate::node::contribution::Policy>(body.clone()) {
+                    Ok(policy) if policy.validate().is_ok() => {
+                        Ok(Reply::ok(json!({"disabled_notice":local.set(policy)?})))
+                    }
+                    _ => Ok(Reply::error(StatusCode::BAD_REQUEST, "invalid_request")),
+                }
+            }
             _ => self.manage(&mut tx, method, path, query, body, now),
         };
         let reply = match result {

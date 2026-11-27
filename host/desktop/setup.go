@@ -13,6 +13,7 @@ import (
 )
 
 type SetupInput struct {
+	Anonymous      bool                        `json:"anonymous,omitempty"`
 	ID             string                      `json:"id"`
 	RelayURL       string                      `json:"relay_url"`
 	FrontURL       string                      `json:"front_url"`
@@ -48,6 +49,8 @@ func (result SetupResult) affectsAdmission(explicitRelays []string) bool {
 }
 
 type SetupView struct {
+	GuestAvailable  bool `json:"guest_available,omitempty"`
+	guestRequested  bool
 	State           string                    `json:"state"`
 	ID              string                    `json:"id,omitempty"`
 	OperationID     string                    `json:"operation_id,omitempty"`
@@ -67,6 +70,7 @@ type SetupView struct {
 func (view SetupView) busy() bool { return view.State == "running" || view.State == "cancelling" }
 
 func (view *SetupView) clearApproval() {
+	view.GuestAvailable = false
 	view.VerificationURL = ""
 	view.UserCode = ""
 	view.ServiceLogin = nil
@@ -170,6 +174,7 @@ func (a *Application) runSetup(ctx context.Context, input SetupInput) {
 		if a.setup.State == "running" {
 			a.setup.Stage = progress.Stage
 			if progress.VerificationURL != "" {
+				a.setup.GuestAvailable = progress.GuestAvailable
 				a.setup.VerificationURL, a.setup.UserCode, a.setup.ServiceLogin = progress.VerificationURL, progress.UserCode, progress.ServiceLogin
 			}
 		}
@@ -177,10 +182,22 @@ func (a *Application) runSetup(ctx context.Context, input SetupInput) {
 	})
 	preferences, preferencesErr := a.deps.load()
 	a.mu.Lock()
+	if a.setup.guestRequested && !a.closing {
+		a.setup.guestRequested = false
+		a.setup.State, a.setup.Stage = "running", "guest"
+		next, cancel := context.WithCancel(context.Background())
+		a.interruptSetup = cancel
+		a.work.Add(1)
+		input.Anonymous = true
+		input.FrontURL = ""
+		a.mu.Unlock()
+		go a.runSetup(next, input)
+		return
+	}
 	if preferencesErr == nil {
 		a.preferences = preferences.Preferences(a.deps.defaultFrontend)
 	}
-	a.setup.FrontendSaved, a.setup.RelaySaved, a.setup.RelayRemoved = result.FrontendSaved, result.RelaySaved, result.RelayRemoved
+	a.setup.FrontendSaved, a.setup.RelaySaved, a.setup.RelayRemoved = a.setup.FrontendSaved || result.FrontendSaved, result.RelaySaved, result.RelayRemoved
 	a.setup.RelayURL = result.RelayURL
 	cancelled := ctx.Err() != nil || a.closing
 	a.interruptSetup()

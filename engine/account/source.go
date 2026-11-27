@@ -33,6 +33,7 @@ type ShareAuthorization struct {
 	credential   *credentialSession
 	nodes        map[string]struct{}
 	selectionErr error
+	loading      chan struct{}
 }
 
 // NewShareAuthorization binds the selected local credential before any official
@@ -42,11 +43,38 @@ func (service *Service) NewShareAuthorization(ctx context.Context) *ShareAuthori
 		return nil
 	}
 	share := &ShareAuthorization{service: service}
+	share.loadSelection(ctx)
+	return share
+}
+
+// PrepareShareAuthorization lets independent routes register while the local
+// account store resolves. Every official route waits on the same selection.
+func (service *Service) PrepareShareAuthorization(ctx context.Context) *ShareAuthorization {
+	if service == nil {
+		return nil
+	}
+	share := &ShareAuthorization{service: service, loading: make(chan struct{})}
+	service.workers.Go(func() {
+		share.loadSelection(ctx)
+		service.mu.Lock()
+		close(share.loading)
+		share.loading = nil
+		service.mu.Unlock()
+	})
+	return share
+}
+
+func (share *ShareAuthorization) loadSelection(ctx context.Context) {
+	service := share.service
 	bounded, cancel := context.WithTimeout(ctx, CacheLoadTimeout)
 	defer cancel()
 	_, err := service.syncSelection(bounded, service.load, share.bindSelectionLocked)
 	if err != nil {
 		service.mu.Lock()
+		if share.attribution == attributionClosed {
+			service.mu.Unlock()
+			return
+		}
 		share.selectionErr = fmt.Errorf("read selected account: %w", err)
 		if service.unconfirmedShares == nil {
 			service.unconfirmedShares = make(map[*ShareAuthorization]struct{})
@@ -54,10 +82,12 @@ func (service *Service) NewShareAuthorization(ctx context.Context) *ShareAuthori
 		service.unconfirmedShares[share] = struct{}{}
 		service.mu.Unlock()
 	}
-	return share
 }
 
 func (share *ShareAuthorization) bindSelectionLocked(record Record) {
+	if share.attribution == attributionClosed {
+		return
+	}
 	share.credential = share.service.retainCredentialLocked(record)
 	share.selectionErr = nil
 }
@@ -157,6 +187,9 @@ func (source *Source) ReserveRegistrationAuthorization() serviceauthority.Regist
 		// The relay enforces its current anonymous policy. A stale discovery
 		// result need not hold up recovery once the share is already anonymous.
 		return serviceauthority.RegistrationAuthorization{State: serviceauthority.AdmissionReady}
+	}
+	if share.loading != nil {
+		return serviceauthority.RegistrationAuthorization{State: serviceauthority.AdmissionPendingSetup, Changed: share.loading}
 	}
 	if share.selectionErr != nil {
 		// Unreadable state can conceal a different login or an explicit denial.

@@ -118,10 +118,16 @@ func (s *activeShare) run(ctx, resourceContext context.Context, request Request)
 	if err := s.prepared.AuthorizeRegistration(); err != nil {
 		return task.FailureLocal, err
 	}
-	s.relays, err = d.Relays(resourceContext, urls, func(_ context.Context, url string) (relayset.SenderEndpoint, error) {
+	s.relays, err = d.Relays(resourceContext, urls, func(ctx context.Context, url string) (relayset.SenderEndpoint, error) {
 		candidate, ok := candidates[url]
 		if !ok {
 			return nil, ErrConfiguration
+		}
+		if route := candidate.Community; route != nil {
+			if err := route.Check(ctx); err != nil {
+				return nil, err
+			}
+			route.Ready.Store(true)
 		}
 		return prepareRelay(s.prepared, candidate, d, o)
 	})

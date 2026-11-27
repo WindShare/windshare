@@ -205,7 +205,7 @@ async fn disabling_closes_every_live_sender_and_denies_fresh_registrations() {
 #[tokio::test]
 async fn public_daily_budget_exhaustion_refuses_new_public_registrations_and_disconnects_active_public_shares()
  {
-    use crate::node::{ContributionLimits, Settings};
+    use crate::node::{Ceiling, Settings};
     use windshare_relay_core::error_frame::RetryAfter;
 
     const BUDGET_RETRY_MS: u32 = 30_000;
@@ -213,14 +213,14 @@ async fn public_daily_budget_exhaustion_refuses_new_public_registrations_and_dis
     let (_generation, account_bearer, policy) = access_fixture(fixture.now(false).0 / 1000);
     let base_settings = Settings {
         access: policy,
-        contribution: ContributionLimits {
+        ceiling: Ceiling {
             daily_bytes: Some(1024),
             ..Default::default()
         },
         ..Settings::default()
     };
     let exhausted_settings = Settings {
-        contribution: ContributionLimits {
+        ceiling: Ceiling {
             daily_bytes: Some(0),
             ..Default::default()
         },
@@ -734,7 +734,7 @@ async fn restarted_actor_refuses_resume_and_join_for_previously_banned_share() {
 
 #[tokio::test]
 async fn public_daily_budget_exhaustion_refuses_resume_and_join_with_retry_after() {
-    use crate::node::{ContributionLimits, Settings};
+    use crate::node::{Ceiling, Settings};
     use windshare_relay_core::error_frame::RetryAfter;
 
     const BUDGET_RETRY_MS: u32 = 30_000;
@@ -742,14 +742,14 @@ async fn public_daily_budget_exhaustion_refuses_resume_and_join_with_retry_after
     let (_generation, account_bearer, policy) = access_fixture(fixture.now(false).0 / 1000);
     let base_settings = Settings {
         access: policy,
-        contribution: ContributionLimits {
+        ceiling: Ceiling {
             daily_bytes: Some(1024),
             ..Default::default()
         },
         ..Settings::default()
     };
     let exhausted_settings = Settings {
-        contribution: ContributionLimits {
+        ceiling: Ceiling {
             daily_bytes: Some(0),
             ..Default::default()
         },
@@ -795,7 +795,7 @@ async fn public_daily_budget_exhaustion_refuses_resume_and_join_with_retry_after
 
 #[tokio::test]
 async fn registration_authorized_traces_record_class_and_specific_refusal_reasons() {
-    use crate::node::{ContributionLimits, Settings};
+    use crate::node::{Ceiling, Settings};
     use crate::test_support::capture_events_async;
 
     async fn capture_registration(
@@ -840,7 +840,7 @@ async fn registration_authorized_traces_record_class_and_specific_refusal_reason
         .configure(
             Settings {
                 access: policy,
-                contribution: ContributionLimits {
+                ceiling: Ceiling {
                     daily_bytes: Some(0),
                     ..Default::default()
                 },

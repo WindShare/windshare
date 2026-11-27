@@ -39,6 +39,28 @@ func DefaultPool() ICEEndpointPool {
 	return pool
 }
 
+func (pool ICEEndpointPool) WithCommunity(entries []Endpoint) ICEEndpointPool {
+	all := append([]Endpoint(nil), pool.endpoints...)
+	seen := map[string]bool{}
+	for _, e := range all {
+		seen[e.URL] = true
+	}
+	for _, e := range entries {
+		if len(all) >= MaximumCatalogEndpoints {
+			break
+		}
+		if !seen[e.URL] && e.Trust == "community" {
+			all = append(all, e)
+			seen[e.URL] = true
+		}
+	}
+	next, err := NewICEEndpointPool(all)
+	if err != nil {
+		return pool
+	}
+	return next
+}
+
 // DirectoryPool consumes only an application's currently trusted snapshot.
 // Directory entries are deduplicated ahead of fallbacks so signed metadata and
 // priority win when a URL also appears in the embedded fallback set.

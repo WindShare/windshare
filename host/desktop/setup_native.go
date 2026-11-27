@@ -59,7 +59,7 @@ func (setup nativeSetup) run(ctx context.Context, input SetupInput, progress fun
 		return result, nil
 	}
 	current, err := setup.engine.StartRelaySetup(ctx, engine.RelaySetupRequest{
-		URL: input.RelayURL, Operation: input.RelayOperation, AccessKey: input.AccessKey,
+		URL: input.RelayURL, Anonymous: input.Anonymous, Operation: input.RelayOperation, AccessKey: input.AccessKey,
 		DeviceName: setup.defaultDeviceName(),
 	})
 	if err != nil {

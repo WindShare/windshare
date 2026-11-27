@@ -14,9 +14,10 @@ import (
 )
 
 const (
-	Settings           = "settings"
-	maximumCommitBytes = 256 * 1024
-	commitName         = "commit.json"
+	CommunityEligibility = "community-eligibility.json"
+	Settings             = "settings"
+	maximumCommitBytes   = 256 * 1024
+	commitName           = "commit.json"
 )
 
 type mutation struct {
@@ -71,7 +72,7 @@ func (tx *Transaction) location(name string) (string, error) {
 		return tx.path, nil
 	}
 	// Records cannot escape the settings namespace or replace the recovery log.
-	if !filepath.IsLocal(name) || filepath.Dir(filepath.FromSlash(name)) != "setup" || filepath.Ext(name) != ".json" {
+	if name != CommunityEligibility && (!filepath.IsLocal(name) || filepath.Dir(filepath.FromSlash(name)) != "setup" || filepath.Ext(name) != ".json") {
 		return "", errors.New("invalid operation record name")
 	}
 	return filepath.Join(StateDirectory(tx.path), filepath.FromSlash(name)), nil

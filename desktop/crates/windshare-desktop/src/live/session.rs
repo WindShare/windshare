@@ -79,6 +79,8 @@ impl Runtime {
             delay,
             preferences: RelayPreferences {
                 mode: RelayMode::Automatic,
+                community_nodes: true,
+                community_notice: 0,
                 frontend: PREVIEW_DEFAULT_FRONTEND.into(),
                 custom_frontend: false,
                 relays: vec![
@@ -258,6 +260,11 @@ impl Desktop {
         }
         self.network_ui.prune_expanded(&model.preferences);
         self.project_native_shares(model);
+        if model.preferences.community_notice != 0
+            && model.preferences.community_notice != previous_model.preferences.community_notice
+        {
+            self.notify(Text::CommunityPaused, cx);
+        }
         if let Some(toast) = crate::network::relay_removed_toast(previous_model, model) {
             self.notify(toast, cx);
         }

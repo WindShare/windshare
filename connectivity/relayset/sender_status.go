@@ -61,7 +61,11 @@ func (s *Sender) setRegistrationLocked(url string, registration routeRegistratio
 	s.routes[url] = registration
 	s.everReady = s.everReady || registration.state == RegistrationAvailable
 	var notifyFallback func()
-	if registration.terminal || registration.state == RegistrationRetrying || registration.state == RegistrationNeedsUserAuthorization {
+	var startedCommunity bool
+	if registration.state == RegistrationWaitingAuthorization || registration.state == RegistrationNeedsUserAuthorization {
+		notifyFallback, startedCommunity = s.communityDuringAuthorizationLocked()
+	}
+	if !startedCommunity && (registration.terminal || registration.state == RegistrationRetrying || registration.state == RegistrationNeedsUserAuthorization) {
 		notifyFallback = s.initialFailureLocked(url)
 	}
 	if !s.stopping && s.ctx.Err() == nil && s.observer != nil {

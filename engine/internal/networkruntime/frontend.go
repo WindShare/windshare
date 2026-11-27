@@ -78,6 +78,10 @@ func (r *Runtime) run(changes <-chan networkstate.Snapshot, unsubscribe func()) 
 }
 
 func (r *Runtime) handleNetworkChange() {
+	select {
+	case r.communityKick <- struct{}{}:
+	default:
+	}
 	if r.directory != nil {
 		r.directory.NetworkChanged()
 	}

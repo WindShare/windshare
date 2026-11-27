@@ -382,7 +382,7 @@ Implementation status (2026-11-26): implemented and archived in
 
 Volunteers join by running a node, and discovery works without the official operator.
 
-See [P4 implementation plan](p4-community-nodes.md).
+Implemented 2026-11-27. See the [P4 plan](p4-community-nodes.md) and [native node installer](../../../scripts/deploy/wsrelay/README.md).
 
 ### P5 — Priority time and redeem codes
 

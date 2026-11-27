@@ -19,9 +19,9 @@ import (
 // Relay synopses are the single source of truth shared between `wind relay`
 // help and top-level `wind` usage so subcommands cannot drift out of sync.
 const (
-	relayAddSynopsis        = command.Name + " relay add <url> [--access-key <key>] [--name <device>] [--no-browser]"
+	relayAddSynopsis        = command.Name + " relay add <url> [--access-key <key> | --anonymous] [--name <device>] [--no-browser]"
 	relayOnboardSynopsis    = command.Name + " relay onboard <url> [--name <device>] [--no-browser]"
-	relayPreferenceSynopsis = command.Name + " relay list | mode <automatic|selected> | enable|disable|remove <url> | frontend <url|default>"
+	relayPreferenceSynopsis = command.Name + " relay list | mode <automatic|selected> | enable|disable|remove <url> | community <on|off> | frontend <url|default>"
 	relayCancelSynopsis     = command.Name + " relay cancel <url>"
 )
 
@@ -47,7 +47,7 @@ func (app *App) runRelay(ctx context.Context, args []string) (code int) {
 			return outcome.exitCode()
 		}
 		return app.runRelaySetup(ctx, request)
-	case "list", "mode", "enable", "disable", "remove", "frontend":
+	case "list", "mode", "enable", "disable", "remove", "frontend", "community":
 		return app.relayPreferences(ctx, args)
 	case "cancel":
 		flags := command.NewFlagSet("relay cancel")
@@ -84,7 +84,8 @@ func (app *App) parseRelaySetupRequest(operation string, args []string) (relaySe
 	}
 	flags := command.NewFlagSet("relay " + operation)
 	if operation == "add" {
-		flags.StringVar(&cmd.request.AccessKey, "access-key", "", "merge this service key into the saved relay")
+		flags.BoolVar(&cmd.request.Anonymous, "anonymous", false, "use public guest access without pairing")
+		flags.StringVar(&cmd.request.AccessKey, "access-key", "", "save this relay access key")
 	}
 	hostname, _ := os.Hostname()
 	flags.BoolVar(&cmd.noBrowser, "no-browser", false, "display the approval URL without opening a browser")
@@ -95,6 +96,10 @@ func (app *App) parseRelaySetupRequest(operation string, args []string) (relaySe
 	}
 	if err := relaysetup.ValidateDeviceName(cmd.request.DeviceName); err != nil {
 		app.writeRelaySetupFailure(err)
+		return relaySetupCommand{}, requestParseUsageFailure
+	}
+	if cmd.request.Anonymous && cmd.request.AccessKey != "" {
+		app.writeCompleteLine("Choose one of --access-key and --anonymous.")
 		return relaySetupCommand{}, requestParseUsageFailure
 	}
 	cmd.request.URL = address
@@ -159,6 +164,9 @@ func (app *App) runRelaySetup(ctx context.Context, command relaySetupCommand) (c
 }
 
 func (app *App) presentRelayApproval(ctx context.Context, event engine.RelaySetupProgress, noBrowser bool) {
+	if event.GuestAvailable {
+		app.writeCompleteLine("For guest access, interrupt this command and run wind relay add --anonymous with the same relay address.")
+	}
 	if event.ServiceLogin != nil {
 		// Match Desktop: when both service-account sign-in and owner approval
 		// are available, display the discovered login host and let the user

@@ -90,10 +90,26 @@ func TestRustAuthorityContractsAndMonotonicIdentity(t *testing.T) {
 	}
 	key, _ := PublicKey(fixture.NodeKey)
 	descriptor, err := VerifyDescriptor(fixture.Descriptor, key, now)
-	if err != nil || !descriptor.Anonymous || !descriptor.Services.Relay {
+	if err != nil || descriptor.PublicRelay != RelayAnonymous || !descriptor.Services.Relay {
 		t.Fatal(descriptor, err)
 	}
 	if _, err := VerifyDescriptor(fixture.Descriptor, root, now); !errors.Is(err, ErrSignature) {
 		t.Fatal("unbound node accepted", err)
+	}
+}
+
+func TestPublicRelayRequiresCompleteTaggedState(t *testing.T) {
+	for _, wire := range []string{`{"state":"enabled"}`, `{"state":"enabled","anonymous":null}`, `{"state":"disabled","anonymous":false}`, `{"state":"unavailable","anonymous":null}`, `{"state":"disabled","enabled":true}`} {
+		var state PublicRelay
+		if err := json.Unmarshal([]byte(wire), &state); err == nil {
+			t.Errorf("accepted %s", wire)
+		}
+	}
+	for _, want := range []PublicRelay{RelayAnonymous, RelayAuthenticated, RelayBudgetExhausted, RelayUnavailable, RelayDisabled} {
+		bytes, err := json.Marshal(want)
+		var got PublicRelay
+		if err != nil || json.Unmarshal(bytes, &got) != nil || got != want {
+			t.Fatal(want, got, err)
+		}
 	}
 }

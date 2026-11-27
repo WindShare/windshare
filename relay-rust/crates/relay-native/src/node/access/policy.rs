@@ -23,6 +23,10 @@ pub struct TrustedIssuer {
 #[serde(default, deny_unknown_fields)]
 pub struct Policy {
     pub anonymous: bool,
+    #[serde(skip, default = "contributing")]
+    pub(crate) contributing: bool,
+    #[serde(skip, default = "unlimited_connections")]
+    pub(crate) public_connections: usize,
     pub shares_per_principal: usize,
     pub owner_reserved_shares: usize,
     pub trusted_issuers: Vec<TrustedIssuer>,
@@ -30,10 +34,19 @@ pub struct Policy {
     pub owner_principals: Vec<[u8; 16]>,
 }
 
+const fn unlimited_connections() -> usize {
+    usize::MAX
+}
+const fn contributing() -> bool {
+    true
+}
+
 impl Default for Policy {
     fn default() -> Self {
         Self {
             anonymous: true,
+            contributing: true,
+            public_connections: usize::MAX,
             shares_per_principal: DEFAULT_PRINCIPAL_SHARES,
             owner_reserved_shares: DEFAULT_OWNER_RESERVE,
             trusted_issuers: Vec::new(),

@@ -3,9 +3,21 @@ import { relayCopy } from './locales'
 import { request, RequestError } from '../ui/request'
 
 export interface Capabilities {
+  contribution?: boolean
   managed_turn?: boolean
   revocation_stops_shares?: boolean
   password_change?: boolean
+}
+export interface ContributionPolicy {
+  enabled: boolean
+  daily_bytes: number
+  bytes_per_second: number
+  connections: number
+  host_uplink: number | null
+}
+export interface ContributionSettings {
+  policy: ContributionPolicy
+  ceiling: { daily_bytes?: number; bytes_per_second?: number; connections?: number }
 }
 export interface Enrollment {
   enrollment_id: string
@@ -49,6 +61,7 @@ export class RelayClient {
       const result = await request<{ capabilities: Capabilities }>('/api/session', { signal, messages })
       return result.capabilities
     } catch (error) {
+      if (error instanceof RequestError && error.code === 'uninitialized') return 'uninitialized' as const
       if (error instanceof RequestError && error.code === 'login_required') return null
       throw error
     }
@@ -56,6 +69,8 @@ export class RelayClient {
   signIn(password: string, token: string | null) {
     return this.call(token ? 'initialize' : 'login', token ? { password, token } : { password })
   }
+  contribution = (signal: AbortSignal) => this.call<ContributionSettings>('contribution', undefined, signal)
+  saveContribution = (policy: ContributionPolicy) => this.call<{ disabled_notice: boolean }>('contribution', policy)
   turnStatus = (signal: AbortSignal) => this.call<{ enabled: boolean }>('turn/status', undefined, signal)
   toggleTURN = (enabled: boolean) => this.call<{ enabled: boolean }>('turn/toggle', { enabled })
   signOut = () => this.call('logout', {})

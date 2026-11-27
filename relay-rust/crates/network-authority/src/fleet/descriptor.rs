@@ -11,8 +11,9 @@ use std::fmt;
 pub const MAX_DESCRIPTOR: usize = 16 * 1024;
 const DESCRIPTOR_VERSION: u8 = 2;
 const MAX_CLOCK_SKEW_SECONDS: u64 = 60;
-const MAX_DESCRIPTOR_LIFETIME_SECONDS: u64 = 300;
-const MAX_STUN_URLS: usize = 4;
+const MAX_DESCRIPTOR_LIFETIME_SECONDS: u64 =
+    windshare_relay_access::descriptor::Purpose::Live.lifetime();
+use windshare_relay_access::descriptor::MAX_STUN_URLS;
 const BYTES_PER_MBPS: u64 = 125_000;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -68,15 +69,17 @@ struct Authority {
 #[derive(Deserialize)]
 struct Descriptor {
     authority: Option<Authority>,
+    platform: String,
     version: u8,
     node_id: String,
     node_key: String,
     relay_endpoint: String,
     services: Services,
+    public_relay: windshare_relay_access::descriptor::PublicRelay,
     stun: Vec<String>,
     zone: Zone,
     region: String,
-    capacity_bytes_per_second: Option<u64>,
+    public_capacity_bytes_per_second: Option<u64>,
     issued_at: u64,
     expires_at: u64,
 }
@@ -113,7 +116,7 @@ fn decode_verified(bytes: &[u8]) -> Result<(Descriptor, [u8; 32]), DescriptorErr
     })?;
     verify_bytes(
         &value.node_key,
-        b"windshare/node-descriptor/v2\0",
+        windshare_relay_access::descriptor::Purpose::Live.domain(),
         &payload,
         &envelope.signature,
     )
@@ -125,6 +128,9 @@ fn decode_verified(bytes: &[u8]) -> Result<(Descriptor, [u8; 32]), DescriptorErr
             "unsupported descriptor payload version {}",
             value.version
         )));
+    }
+    if value.platform != "native" {
+        return Err(DescriptorError::invalid("unsupported node platform"));
     }
     let key = public_key(&value.node_key)
         .map_err(|error| DescriptorError::invalid(format!("invalid node_key: {error}")))?;
@@ -186,6 +192,15 @@ fn validate_services(
     origin: &str,
     value: &Descriptor,
 ) -> Result<(Vec<Role>, Vec<String>), DescriptorError> {
+    if matches!(
+        value.public_relay,
+        windshare_relay_access::descriptor::PublicRelay::Enabled { .. }
+    ) && !value.services.relay
+    {
+        return Err(DescriptorError::mismatch(
+            "enabled public relay requires the relay service",
+        ));
+    }
     let mut roles = Vec::new();
     if value.services.relay {
         roles.push(Role::Relay);
@@ -300,7 +315,7 @@ pub fn inspect(
     }
     let (roles, stun) = validate_services(&origin, &value)?;
     let capacity_mbps = value
-        .capacity_bytes_per_second
+        .public_capacity_bytes_per_second
         .and_then(|n| u32::try_from(n.div_ceil(BYTES_PER_MBPS)).ok());
     Ok(Discovery {
         node_key: value.node_key,

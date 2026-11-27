@@ -64,7 +64,7 @@ func TestCanaryStartsAfterEveryActiveFailsAndKeepsPendingRoutes(t *testing.T) {
 	close(reject)
 	waitValue(t, standby)
 	event := waitValue(t, fallbacks)
-	if !slices.Equal(event.Active, []string{"retrying", "rejected"}) || !slices.Equal(event.Canaries, []string{"standby"}) {
+	if !slices.Equal(event.Active, []string{"retrying", "rejected"}) || !slices.Equal(event.Next, []string{"standby"}) {
 		t.Fatalf("unexpected fallback event: %+v", event)
 	}
 	if err := set.WaitReady(t.Context()); err != nil {

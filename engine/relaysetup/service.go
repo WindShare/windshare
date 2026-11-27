@@ -56,6 +56,7 @@ type Dependencies struct {
 	Log    *slog.Logger
 }
 type Request struct {
+	Anonymous       bool
 	URL, DeviceName string
 	AccessKey       string
 	Operation       Operation
@@ -67,6 +68,7 @@ type Result struct {
 	ConsoleURL, OfferedFrontend      string
 }
 type Progress struct {
+	GuestAvailable                                              bool
 	Stage, OperationID, EnrollmentID, VerificationURL, UserCode string
 	ServiceLogin                                                *ServiceLogin
 	RetryAfter                                                  time.Duration

@@ -6,6 +6,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relayprofile"
 )
 
@@ -33,6 +34,21 @@ func (run *workflow) execute(ctx context.Context, request Request, progress func
 	if err != nil {
 		return Result{}, err
 	}
+	if request.Anonymous && (request.AccessKey != "" || request.Operation != AddProfile) {
+		return Result{}, errors.New("guest access requires adding a relay without a key")
+	}
+	if saved.Pending != nil && request.Anonymous {
+		if !saved.Pending.matches(request) || !saved.Pending.GuestAvailable {
+			return Result{}, ErrPendingSetup
+		}
+		if err := run.cancelPending(ctx, saved.Pending); err != nil {
+			return Result{}, err
+		}
+		saved, err = run.dependencies.Store.Load()
+		if err != nil {
+			return Result{}, err
+		}
+	}
 	if saved.Pending != nil {
 		if !saved.Pending.matches(request) {
 			return Result{}, ErrPendingSetup
@@ -40,28 +56,45 @@ func (run *workflow) execute(ctx context.Context, request Request, progress func
 		return run.continueEnrollment(ctx, saved, progress)
 	}
 	if request.AccessKey != "" {
-		profile := saved.CredentialProfile(request.URL, request.AccessKey)
-		// Manual credentials also work with offline relays. Discovery is public
-		// and bounded so an unavailable console cannot prevent installation.
-		const capabilityTimeout = 3 * time.Second
-		probe, cancel := context.WithTimeout(ctx, capabilityTimeout)
-		capability, err := run.discover(probe, request.URL)
-		cancel()
-		if err == nil {
-			profile.ManagedTurn = capability.ManagedTurn
-			profile.ConsoleURL = capability.ConsoleURL
-			profile.OfferedFrontend = capability.OfferedFrontend
-		}
-		return run.install(ctx, saved.SettingsRevision(), profile)
+		return run.installManualKey(ctx, saved, request)
 	}
 	discovery, err := run.discover(ctx, request.URL)
 	if err != nil {
 		return Result{}, err
 	}
-	candidate := relayprofile.Candidate{PublicURL: discovery.RelayURL, ConsoleURL: discovery.ConsoleURL, ManagedTurn: discovery.ManagedTurn, OfferedFrontend: discovery.OfferedFrontend}
-	if discovery.Access == "open" && request.Operation == AddProfile {
-		return run.install(ctx, saved.SettingsRevision(), candidate)
+	candidate := relayprofile.Candidate{PublicURL: discovery.RelayURL, Node: discovery.Node, ConsoleURL: discovery.ConsoleURL, ManagedTurn: discovery.ManagedTurn, OfferedFrontend: discovery.OfferedFrontend}
+	guest := discovery.Access == "open"
+	if request.Anonymous && !guest {
+		return Result{}, errors.New("relay does not permit guest access")
 	}
+	if guest && request.Operation == AddProfile && (request.Anonymous || discovery.Node.Platform != "native" || discovery.ConsoleURL == "") {
+		update := relayconfig.Config.RefreshMetadata
+		if request.Anonymous {
+			update = relayconfig.Config.ReplaceIdentity
+		}
+		return run.install(ctx, saved.SettingsRevision(), candidate, update)
+	}
+	return run.startEnrollment(ctx, saved, request, discovery, progress)
+}
+
+func (run *workflow) installManualKey(ctx context.Context, saved Snapshot, request Request) (Result, error) {
+	profile := saved.CredentialProfile(request.URL, request.AccessKey)
+	// Manual credentials also work with offline relays. Discovery is public
+	// and bounded so an unavailable console cannot prevent installation.
+	const capabilityTimeout = 3 * time.Second
+	probe, cancel := context.WithTimeout(ctx, capabilityTimeout)
+	capability, err := run.discover(probe, request.URL)
+	cancel()
+	if err == nil {
+		profile.Node = capability.Node
+		profile.ManagedTurn = capability.ManagedTurn
+		profile.ConsoleURL = capability.ConsoleURL
+		profile.OfferedFrontend = capability.OfferedFrontend
+	}
+	return run.install(ctx, saved.SettingsRevision(), profile, relayconfig.Config.ReplaceIdentity)
+}
+
+func (run *workflow) startEnrollment(ctx context.Context, saved Snapshot, request Request, discovery discovery, progress func(Progress)) (Result, error) {
 	if discovery.ConsoleURL == "" {
 		if discovery.Access == nativeKeyAccess {
 			return Result{}, ErrLocalCredentialRequired
@@ -80,13 +113,13 @@ func (run *workflow) execute(ctx context.Context, request Request, progress func
 		return Result{}, err
 	}
 	saved.Pending = &PendingSetup{
-		SettingsRevision: saved.SettingsRevision(), OperationID: encode(operation),
+		SettingsRevision: saved.SettingsRevision(), OperationID: encode(operation), Node: discovery.Node, GuestAvailable: discovery.Access == "open" && request.Operation == AddProfile, PublicRelay: discovery.PublicRelay,
 		RelayURL: discovery.RelayURL, ConsoleURL: discovery.ConsoleURL, ManagedTurn: discovery.ManagedTurn, OfferedFrontend: discovery.OfferedFrontend,
 		AccountLoginPage: discovery.AccountLoginPage, DeviceName: request.DeviceName, ClaimSecret: encode(secret), Operation: request.Operation, phase: requesting{}}
 
 	// Persist the claimant before the first request; a lost response can recover by digest.
 	pending := saved.Pending
-	saved, err = run.dependencies.Store.Update(ctx, func(current *Snapshot) error {
+	saved, err := run.dependencies.Store.Update(ctx, func(current *Snapshot) error {
 		if current.Pending != nil {
 			return ErrPendingSetup
 		}
@@ -94,7 +127,7 @@ func (run *workflow) execute(ctx context.Context, request Request, progress func
 			return errSettingsChangedBeforePending
 		}
 		// Detect capacity and selection failures before asking anyone to approve.
-		if _, err := current.MergeRelay(pending.profile("")); err != nil {
+		if _, err := current.ReplaceIdentity(pending.profile("")); err != nil {
 			return err
 		}
 		current.Pending = pending

@@ -75,6 +75,9 @@ func newSender(parent context.Context, urls []string, fallback *startupFallback,
 	all := slices.Clone(urls)
 	if fallback != nil {
 		all = append(all, fallback.canaries...)
+		for _, wave := range fallback.later {
+			all = append(all, wave...)
+		}
 	}
 	seen := make(map[string]bool, len(all))
 	for _, url := range all {

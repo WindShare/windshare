@@ -45,7 +45,7 @@ fn open_console(
             }),
         })
         .unwrap();
-    let console = Console::open(endpoint, db, access.clone(), identity, Some(service))
+    let console = Console::open(endpoint, db, access.clone(), identity, Some(service), None)
         .unwrap()
         .unwrap();
     assert!(console.login_page(10).is_none());

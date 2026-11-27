@@ -336,17 +336,17 @@ func TestDiagnosticRecordsIncludeReadableAttemptStatesPlanTimingsAndAdmissionRea
 	}
 
 	fallback := FallbackRecord(relayset.Fallback{
-		Active:   []string{"https://active.example"},
-		Canaries: []string{"https://canary.example"},
+		Active: []string{"https://active.example"},
+		Next:   []string{"https://canary.example"},
 	})
-	if fallback.Name() != "network_canary_fallback" {
+	if fallback.Name() != "network_relay_fallback" {
 		t.Fatalf("fallback record name = %q", fallback.Name())
 	}
 	rawActive, err := fallback.Payload().Get("active_relays").MarshalJSON()
 	if err != nil {
 		t.Fatal(err)
 	}
-	rawCanaries, err := fallback.Payload().Get("canary_relays").MarshalJSON()
+	rawCanaries, err := fallback.Payload().Get("next_relays").MarshalJSON()
 	if err != nil {
 		t.Fatal(err)
 	}

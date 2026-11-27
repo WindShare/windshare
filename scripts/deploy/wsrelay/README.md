@@ -1,53 +1,20 @@
-# wsrelay deployment
+# Native community relay
 
-`wsrelay` is the Rust native relay. It serves encrypted application traffic and
-independent UDP STUN, with durable ownership and STOP history in SQLite.
-Keep the database and its WAL together, and run only one host per database.
-The former Go server and its bbolt state are retired.
-
-Build the container from the repository root:
+On a Linux host with Docker Compose and Python 3, point a DNS name at the host and run from this checkout:
 
 ```sh
-docker build -f deploy/wsrelay/Dockerfile -t windshare-wsrelay .
-docker run --rm -p 8484:8484/tcp -p 3478:3478/udp \
-  -v windshare-relay-state:/state \
-  -v /absolute/path/node.json:/state/node.json:ro windshare-wsrelay
+sh scripts/deploy/wsrelay/install.sh relay.example.com
 ```
 
-Copy [node.example.json](../../../deploy/wsrelay/node.example.json) and set its
-endpoint, origins and capacity before starting. The container runs
-`wsrelay --config /state/node.json`; relative identity and SQLite paths stay in the volume.
-The state volume must be writable by UID 65532. Terminate TLS at a reverse proxy.
-The public endpoint must be the exact canonical WebSocket URL used by clients;
-browser origins require an explicit allowlist. For a local trusted tunnel, add
-`"proxy":{"peers":["127.0.0.1","::1"],"header":"CF-Connecting-IP"}`.
-See the [native host](../../../relay-rust/crates/relay-native/README.md) for limits,
-source policy and recovery, and [STUN](../../../docs/stun.md) for UDP/admin settings.
+Open the one-time initialization URL from the relay log, set the console password, then add the relay address in WindShare to pair an owner device. The console controls anonymous contribution, daily traffic, public bandwidth, connections and an optional host uplink estimate. Defaults are 10 GiB/day, 25 Mbps and 64 public connections. Keep the identity file, SQLite database and WAL together in the relay state volume.
 
-If correcting an old wildcard endpoint reports `database belongs to a different
-public endpoint`, stop the host and use a new configuration `database` path or Docker volume.
-Retain the old database and WAL together; their ownership and STOP history belong
-to the old endpoint identity.
+Open TCP 443 for HTTPS and WebSockets, UDP 3478 for STUN, and preferably TCP 80 for HTTP-01. A public IP address also works as the installer argument. The pinned Caddy obtains Let's Encrypt's 160-hour `shortlived` IP certificates, uses ACME Renewal Info for automatic renewal and can validate on port 443 using TLS-ALPN-01 when port 80 is blocked. Keep the Caddy data volume across upgrades.
 
-To extract a static Linux/amd64 executable on Windows, install Docker with Linux
-containers, then run:
-
-```powershell
-./scripts/deploy/wsrelay/build.ps1
-$manifest = Get-Content dist/deploy/wsrelay/manifest.json | ConvertFrom-Json
-```
-
-The builder uses the same Dockerfile, writes the binary and provenance manifest
-to `dist/deploy/wsrelay/`, and records changes in the Rust workspace and builder.
-Add `-RunTests` to run the local `make rust` gate first.
-
-To upgrade a standalone `wsrelay` binary without Docker, validate the existing
-configuration with the new executable, replace the binary atomically, and restart
-your service:
+The [Compose bundle](../../../deploy/wsrelay/compose.yaml) uses Linux host networking. Caddy overwrites the source-IP header and proxies to the loopback listener. Edit `deploy/wsrelay/instance/node.json` for services, billing ceilings and untrusted bootstrap URLs. Add independent seeds there as they become available. Rerunning the installer preserves the configuration and volumes. To apply a Caddyfile edit without dropping listeners:
 
 ```sh
-./wsrelay --check-config /path/to/node.json
-sudo install -m 0755 ./wsrelay /usr/local/bin/wsrelay.next
-sudo mv -f /usr/local/bin/wsrelay.next /usr/local/bin/wsrelay
-sudo systemctl restart <your-service>
+cd deploy/wsrelay
+docker compose --env-file instance/.env exec caddy caddy reload --config /etc/caddy/Caddyfile
 ```
+
+For standalone deployments, adapt the [example configuration](../../../deploy/wsrelay/node.example.json) and run `wsrelay --check-config /path/to/node.json` before restarting. On Windows, `scripts/deploy/wsrelay/build.ps1` exports a static Linux/amd64 binary and provenance manifest. See [native relay operation](../../../relay-rust/crates/relay-native/README.md) and [STUN](../../../docs/stun.md).

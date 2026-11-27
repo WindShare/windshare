@@ -24,7 +24,7 @@ func (s Selection) DiagnosticRecord() diagnostics.Record {
 		plannedNetwork[candidate.URL] = candidate
 	}
 	for _, candidate := range s.Decision.Candidates {
-		fields := diagnostics.Fields{"endpoint": diagnostics.Text(candidate.URL), "alias": diagnostics.Text(candidate.Alias), "configured": diagnostics.Bool(candidate.Configured)}
+		fields := diagnostics.Fields{"endpoint": diagnostics.Text(candidate.URL), "alias": diagnostics.Text(candidate.Alias), "source": diagnostics.Text(candidate.Source), "configured": diagnostics.Bool(candidate.Configured)}
 		if !candidate.Configured {
 			if planned, ok := plannedNetwork[candidate.URL]; ok {
 				fields["observation"] = diagnostics.Text(planned.HistoryState())
@@ -46,7 +46,7 @@ func (s Selection) DiagnosticRecord() diagnostics.Record {
 	}
 	return diagnostics.New("share_network_plan", diagnostics.Fields{"generation": diagnostics.Uint(s.Decision.DirectoryGeneration), "serial": diagnostics.Uint(s.Decision.DirectorySerial),
 		"network_generation": diagnostics.Text(s.Decision.NetworkGeneration), "configured_only": diagnostics.Bool(s.Decision.ConfiguredOnly),
-		"cooldown_fallback": diagnostics.Bool(s.Decision.CooldownFallback), "initial_candidates": diagnostics.Array(candidates...), "standby_canaries": diagnostics.Array(standby...), "filters": diagnostics.Array(filters...), "frontend": diagnostics.Text(s.Frontend),
+		"cooldown_fallback": diagnostics.Bool(s.Decision.CooldownFallback), "initial_candidates": diagnostics.Array(candidates...), "standby_relays": diagnostics.Array(standby...), "filters": diagnostics.Array(filters...), "frontend": diagnostics.Text(s.Frontend),
 		"alternate_frontend": diagnostics.Text(s.AlternateFrontend), "frontend_reason": diagnostics.Text(s.Decision.FrontendReason)})
 }
 
@@ -56,9 +56,9 @@ func AdmissionRecord(value relayset.Admission) diagnostics.Record {
 }
 
 func FallbackRecord(value relayset.Fallback) diagnostics.Record {
-	return diagnostics.New("network_canary_fallback", diagnostics.Fields{
+	return diagnostics.New("network_relay_fallback", diagnostics.Fields{
 		"active_relays": textArray(value.Active),
-		"canary_relays": textArray(value.Canaries),
+		"next_relays":   textArray(value.Next),
 	})
 }
 
@@ -91,10 +91,10 @@ func deadlineField(fields diagnostics.Fields, key string, deadline time.Time) {
 }
 
 func (r *Runtime) Observer(selection Selection, sink diagnostics.Sink) func(string, relayset.Attempt) {
-	candidates := selection.Plan.DirectoryCandidates()
-	identities := make(map[string]string, len(candidates))
+	candidates := selection.Plan.NetworkCandidates()
+	identities := make(map[string]relayplan.Candidate, len(candidates))
 	for _, candidate := range candidates {
-		identities[candidate.URL] = candidate.Identity
+		identities[candidate.URL] = candidate
 	}
 	var mu sync.Mutex
 	generations := make(map[string]uint64, len(identities))
@@ -103,7 +103,8 @@ func (r *Runtime) Observer(selection Selection, sink diagnostics.Sink) func(stri
 		var entry healthEntry
 		var change relayplan.CooldownReason
 		now := r.now()
-		if identity, directory := identities[url]; directory {
+		if candidate, tracked := identities[url]; tracked {
+			identity := candidate.Identity
 			mu.Lock()
 			if attempt.State == relayset.AttemptStarted {
 				generations[url] = r.generation()
@@ -112,7 +113,7 @@ func (r *Runtime) Observer(selection Selection, sink diagnostics.Sink) func(stri
 			mu.Unlock()
 			switch attempt.State {
 			case relayset.AttemptSucceeded, relayset.AttemptParked, relayset.AttemptFailed:
-				if r.shouldRefreshDirectoryOnRefusal(identity, attempt) {
+				if candidate.Source != relayplan.Community && r.shouldRefreshDirectoryOnRefusal(identity, attempt) {
 					r.directory.TriggerRefresh()
 				}
 				entry, change = r.health.RecordAttempt(identity, started, r.generation(), now, attempt)

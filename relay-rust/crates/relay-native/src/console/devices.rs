@@ -176,7 +176,12 @@ impl Console {
                 }
                 response
             }
-            "/api/enrollments/claim" => into_anyhow(access::claim(&mut store, body, now))?.body,
+            "/api/enrollments/claim" => {
+                let mut outcome = into_anyhow(access::claim(&mut store, body, now))?;
+                let bound = database::binding(&store.tx.db, &outcome.credential_id)?.is_some();
+                outcome.body["role"] = if bound { "account" } else { "owner" }.into();
+                outcome.body
+            }
             "/api/enrollments/installed" => {
                 let outcome = into_anyhow(access::installed(&mut store, body, now))?;
                 if outcome.newly_installed {

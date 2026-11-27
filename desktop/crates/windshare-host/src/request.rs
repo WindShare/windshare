@@ -37,6 +37,9 @@ pub enum Command {
         operation_id: String,
         setup: SetupInput,
     },
+    GuestSetup {
+        setup_id: String,
+    },
     CancelSetup {
         setup_id: String,
     },
@@ -162,6 +165,10 @@ impl Command {
                 fields.setup_id = Some(&setup.id);
                 fields.action = setup.preference.as_ref().map(crate::PreferenceEdit::action);
                 "configure"
+            }
+            Self::GuestSetup { setup_id } => {
+                fields.setup_id = Some(setup_id);
+                "guest_setup"
             }
             Self::CancelSetup { setup_id } => {
                 fields.setup_id = Some(setup_id);

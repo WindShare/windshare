@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/windshare/windshare/core/serviceauthority"
 	"github.com/windshare/windshare/engine/internal/statefile"
 	"github.com/windshare/windshare/engine/relayconfig"
 )
@@ -75,6 +76,15 @@ func (store FileStore) Update(ctx context.Context, change func(*Snapshot) error)
 		}
 		if err := stageSettings(tx, revision, current.Config); err != nil {
 			return err
+		}
+		if revision != current.SettingsRevision() {
+			var observed map[string]serviceauthority.PublicRelay
+			if before != nil && current.Pending == nil && before.credential().Role == "owner" {
+				observed = map[string]serviceauthority.PublicRelay{before.Node.NodeKey: before.PublicRelay}
+			}
+			if _, err := relayconfig.ReconcileEligibility(tx, current.Config, observed); err != nil {
+				return err
+			}
 		}
 		if err := stageCheckpoint(tx, before, current.Pending); err != nil {
 			return err

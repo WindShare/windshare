@@ -121,7 +121,7 @@ func TestShareEmitsCanaryFallbackDiagnosticWithoutSlog(t *testing.T) {
 
 		var sawFallback bool
 		for record := range stream.Records() {
-			if record.Name() != "network_canary_fallback" {
+			if record.Name() != "network_relay_fallback" {
 				continue
 			}
 			scope := record.Scope()
@@ -133,7 +133,7 @@ func TestShareEmitsCanaryFallbackDiagnosticWithoutSlog(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			rawCanaries, err := record.Payload().Get("canary_relays").MarshalJSON()
+			rawCanaries, err := record.Payload().Get("next_relays").MarshalJSON()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -144,13 +144,13 @@ func TestShareEmitsCanaryFallbackDiagnosticWithoutSlog(t *testing.T) {
 				t.Fatal(err)
 			}
 			slices.Sort(active)
-			if !slices.Equal(active, activeURLs) || !slices.Equal(canaries, []string{canaryURL}) {
+			if len(active) != 1 || !slices.Contains(activeURLs, active[0]) || !slices.Equal(canaries, []string{canaryURL}) {
 				t.Fatalf("unexpected fallback payload: active=%v canaries=%v", active, canaries)
 			}
 			sawFallback = true
 		}
 		if !sawFallback {
-			t.Fatal("missing network_canary_fallback diagnostic record")
+			t.Fatal("missing network_relay_fallback diagnostic record")
 		}
 		if slogOutput.Len() != 0 {
 			t.Fatalf("share canary fallback bypassed diagnostics sink via slog: %s", slogOutput.String())

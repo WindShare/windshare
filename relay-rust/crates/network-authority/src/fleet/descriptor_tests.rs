@@ -25,12 +25,14 @@ fn valid_payload(node_key: &str, node_id: &str) -> Value {
         "authority": { "url": "https://api.example/", "issuer": "issuer" },
         "node_id": node_id,
         "node_key": node_key,
+        "platform": "native",
         "relay_endpoint": "wss://relay.example/v2/ws",
         "services": { "relay": true, "stun": true },
+        "public_relay":{"state":"enabled","anonymous":true},
         "stun": ["stun:relay.example:3478"],
         "zone": "global",
         "region": "tokyo",
-        "capacity_bytes_per_second": 12_500_000,
+        "public_capacity_bytes_per_second": 12_500_000,
         "issued_at": NOW,
         "expires_at": NOW + 300
     })

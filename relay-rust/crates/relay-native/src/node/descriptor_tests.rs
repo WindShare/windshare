@@ -16,7 +16,7 @@ fn verify_envelope(body: &serde_json::Value, identity: &Identity) -> serde_json:
     let mut signed = payload.clone();
     signed.extend_from_slice(&signature);
     let key = identity.key().verifying_key().to_bytes();
-    let verified = trust::verify(DESCRIPTOR_DOMAIN, &signed, &key).unwrap();
+    let verified = trust::verify(Purpose::Live.domain(), &signed, &key).unwrap();
     assert_eq!(verified, payload.as_slice());
     serde_json::from_slice(&payload).unwrap()
 }
@@ -80,4 +80,36 @@ async fn services_and_unbudgeted_admission_checks_do_not_lock_runtime_state() {
         }
     );
     drop(state);
+}
+
+#[tokio::test]
+async fn discovery_derives_stun_from_bound_ports_and_omits_absent_listeners() {
+    use crate::stun;
+    let ep = Endpoint::parse("wss://[2606:4700:4700::1111]/v2/ws").unwrap();
+    let identity = Identity::generate().unwrap();
+    for enabled in [true, false] {
+        let runtime = Runtime::default();
+        runtime.identify(identity.clone()).unwrap();
+        let service = stun::Service::bind_with_node(
+            stun::Config {
+                udp_addresses: if enabled {
+                    vec!["127.0.0.1:0".parse().unwrap()]
+                } else {
+                    Vec::new()
+                },
+                admin_address: None,
+                ..stun::Config::default()
+            },
+            runtime.clone(),
+        )
+        .unwrap();
+        let d = verify_envelope(&runtime.descriptor(&ep).unwrap(), &identity);
+        assert_eq!(d["services"]["stun"], enabled);
+        let expected: Vec<_> = service
+            .udp_addresses()
+            .iter()
+            .map(|addr| format!("stun:[2606:4700:4700::1111]:{}", addr.port()))
+            .collect();
+        assert_eq!(d["stun"], serde_json::json!(expected));
+    }
 }

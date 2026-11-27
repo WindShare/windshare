@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -396,5 +397,25 @@ func TestDirectoryPoolRanksActiveAheadOfCanaryAndDraining(t *testing.T) {
 		if got := backup.URLs(); !reflect.DeepEqual(got, []string{"stun:us1.example:3478", "stun:cn-public.example:3478"}) {
 			t.Fatalf("wave %d backup = %v, want [us1, cn-public]", i, got)
 		}
+	}
+}
+
+func TestCommunityTrustCannotDisplaceHigherTrustInEitherSlot(t *testing.T) {
+	entry := func(id, trust, domain string, priority int) Endpoint {
+		return Endpoint{ID: id, URL: "stun:" + id + ".example:3478", Family: "any", Trust: trust, Region: domain, FailureDomain: domain, Provider: domain, Enabled: true, Priority: priority}
+	}
+	pool, err := NewICEEndpointPool([]Endpoint{entry("official", "reviewed", "same", 1),
+		entry("local", "local", "same", 2), entry("community", "community", "different", 1000)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := selection()
+	facts := GenerationFacts{NetworkGenerationID: req.NetworkGenerationID, Profiles: []ProfileFact{{EndpointIDs: []string{"community"}, ServerReflexiveProduced: true, ObservedAt: req.Now}}}
+	if got := SelectAttemptProfile(pool, req, facts).EndpointIDs(); !slices.Equal(got, []string{"official", "local"}) {
+		t.Fatal(got)
+	}
+	facts.Endpoints = []EndpointFact{{EndpointID: "local", FailedUntil: req.Now.Add(time.Minute)}}
+	if got := SelectAttemptProfile(pool, req, facts).EndpointIDs(); !slices.Equal(got, []string{"official", "community"}) {
+		t.Fatal(got)
 	}
 }

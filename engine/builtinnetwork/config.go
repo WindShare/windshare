@@ -24,6 +24,7 @@ type releaseConfig struct {
 	Network               string   `json:"network"`
 	LinkHost              string   `json:"link_host"`
 	BackupEntry           string   `json:"backup_entry"`
+	BootstrapNodes        []string `json:"bootstrap_nodes"`
 	Mirrors               []string `json:"mirrors"`
 	NativeFallbackMirrors []string `json:"native_fallback_mirrors"`
 	Roots                 []struct {
@@ -50,7 +51,7 @@ func Parse(data []byte, configPath string) (*networkconfig.Config, error) {
 	if provisioned && (len(source.Roots) != 2 || source.Roots[0].ID == source.Roots[1].ID || source.Roots[0].Key == source.Roots[1].Key) {
 		return nil, errors.New("built-in network requires two distinct roots")
 	}
-	result := &networkconfig.Config{LinkHost: source.LinkHost, BackupEntry: source.BackupEntry, GlobalPairCoversMainland: source.GlobalPairCoversMainland,
+	result := &networkconfig.Config{CommunitySettingsPath: configPath, BootstrapNodes: source.BootstrapNodes, LinkHost: source.LinkHost, BackupEntry: source.BackupEntry, GlobalPairCoversMainland: source.GlobalPairCoversMainland,
 		Directory: networkdirectory.Config{Network: source.Network, Mirrors: source.Mirrors, FallbackMirrors: source.NativeFallbackMirrors}}
 	if configPath != "" {
 		result.Directory.Cache = networkdirectory.NewFileCache(configPath, source.Network)

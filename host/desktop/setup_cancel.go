@@ -10,6 +10,16 @@ import (
 
 const setupCancellationTimeout = 20 * time.Second
 
+func (a *Application) guestSetup(id string) error {
+	if id == "" || a.setup.ID != id || a.setup.State != "running" || !a.setup.GuestAvailable {
+		return errors.New("no guest approval is pending")
+	}
+	a.setup.guestRequested = true
+	a.setup.clearApproval()
+	a.interruptSetup()
+	return nil
+}
+
 func (a *Application) cancelSetupRequest(id string) error {
 	if id == "" {
 		return errors.New("setup_id is required")
@@ -48,6 +58,7 @@ func setupCleanupFor(relayURL string, relaySaved bool, recovery relaysetup.Recov
 // The application fences admission synchronously, then joins Run before asking
 // the setup owner to revoke its unfinished enrollment. Committed settings survive.
 func (a *Application) cancelSetupLocked() {
+	a.setup.guestRequested = false
 	switch a.setup.State {
 	case "running":
 		a.setup.State = "cancelling"

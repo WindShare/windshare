@@ -114,6 +114,10 @@ impl Service {
         self.read().anonymous()
     }
 
+    pub(crate) fn public_connections(&self) -> usize {
+        self.read().policy.public_connections
+    }
+
     pub fn share_limit(&self, priority: crate::connection::AdmissionPriority) -> usize {
         self.read().share_limit(priority)
     }
@@ -253,7 +257,8 @@ impl State {
             (_, Some(policy)) => policy.admission,
             // An official install needs its first signed approval before admitting users.
             (Some(_), None) => Admission::Draining,
-            (None, None) => Admission::Accepting,
+            (None, None) if self.policy.contributing => Admission::Accepting,
+            (None, None) => Admission::Disabled,
         }
     }
 
@@ -283,7 +288,9 @@ impl State {
         share: ShareId,
         attribution: Attribution,
     ) -> Option<RefusalReason> {
-        if self.admission() == Admission::Disabled {
+        if self.admission() == Admission::Disabled
+            && (self.controller.is_some() || !self.owner(attribution))
+        {
             return Some(RefusalReason::NodePublicDisabled);
         }
         let local_key = match attribution {

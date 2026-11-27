@@ -24,21 +24,22 @@ type AttemptPermit interface {
 	ReleaseFailed()
 }
 
-// NetworkAdmissions coordinates only directory candidates. Configured endpoints
-// keep independent lifetimes, and no successful published connection is evicted.
+// NetworkAdmissions reserves the official pair and one independent community
+// admission. Explicitly configured endpoints own their own registration lifetimes.
 type NetworkAdmissions struct {
-	mu            sync.Mutex
-	candidates    []relayplan.Candidate
-	policy        relayplan.Policy
-	states        []admissionState
-	changed       chan struct{}
-	primary       int
-	target        int
-	inflight      int
-	active        int
-	clock         Clock
-	serverRetryAt func(string) time.Time
-	observe       func(Admission)
+	mu              sync.Mutex
+	candidates      []relayplan.Candidate
+	policy          relayplan.Policy
+	states          []admissionState
+	changed         chan struct{}
+	primary         int
+	target          int
+	inflight        int
+	communityActive int
+	active          int
+	clock           Clock
+	serverRetryAt   func(string) time.Time
+	observe         func(Admission)
 }
 
 const (
@@ -106,7 +107,7 @@ func NewNetworkAdmissions(plan relayplan.Plan, clock Clock, serverRetryAt func(s
 	if clock == nil {
 		clock = SystemClock{}
 	}
-	candidates := plan.DirectoryCandidates()
+	candidates := plan.NetworkCandidates()
 	a := &NetworkAdmissions{clock: clock, serverRetryAt: serverRetryAt, candidates: candidates, policy: plan.Policy,
 		target: min(relayplan.TargetNetworkRegistrations, MaximumEndpoints-len(plan.Configured)),
 		states: make([]admissionState, len(candidates)), changed: make(chan struct{}), primary: -1}
@@ -155,8 +156,7 @@ func (c admissionControl) Begin(ctx context.Context) (AttemptPermit, error) {
 			state.eligible = eligible
 			a.notify()
 		}
-		if state.eligible && a.active < a.target && a.inflight < relayplan.MaximumConcurrentAttempts &&
-			(a.primary < 0 || a.backup() == c.index) {
+		if state.eligible && a.canAdmit(c.index) && a.inflight < relayplan.MaximumConcurrentAttempts {
 			a.inflight++
 			a.mu.Unlock()
 			return &admissionPermit{control: c}, nil
@@ -190,6 +190,12 @@ func (c admissionControl) Unavailable() {
 		return
 	}
 	a.states[c.index].admitted = false
+	if a.candidates[c.index].Source == relayplan.Community {
+		a.communityActive--
+		a.record(c.index, AdmissionUnavailable, "community_lost")
+		a.notify()
+		return
+	}
 	a.active--
 	reason := AdmissionReasonBackupLost
 	if a.primary == c.index {
@@ -197,7 +203,7 @@ func (c admissionControl) Unavailable() {
 		a.releaseSoftCooldown()
 		a.primary = -1
 		for i, state := range a.states {
-			if state.admitted {
+			if state.admitted && a.candidates[i].Source != relayplan.Community {
 				a.primary = i
 				break
 			}
@@ -219,6 +225,17 @@ func (p *admissionPermit) Admit() bool {
 	// Completing a handshake proves current reachability before backup ranking,
 	// even if the connection ends up parked.
 	a.states[index].health = candidateHealthCleared
+	if a.candidates[index].Source == relayplan.Community {
+		if !a.canAdmit(index) {
+			a.record(index, AdmissionParked, AdmissionReasonTargetReached)
+			return false
+		}
+		a.communityActive++
+		a.states[index].admitted = true
+		a.record(index, AdmissionAdmitted, "community")
+		a.notify()
+		return true
+	}
 	if a.active >= a.target {
 		a.record(index, AdmissionParked, AdmissionReasonTargetReached)
 		return false
@@ -276,7 +293,7 @@ func (a *NetworkAdmissions) backup() int {
 	var candidates []relayplan.Candidate
 	var indexes []int
 	for i, state := range a.states {
-		if state.eligible && !state.admitted {
+		if state.eligible && !state.admitted && a.candidates[i].Source != relayplan.Community {
 			candidates = append(candidates, a.candidateForBackup(i))
 			indexes = append(indexes, i)
 		}
@@ -297,6 +314,13 @@ func (a *NetworkAdmissions) candidateForBackup(index int) relayplan.Candidate {
 	default:
 		return candidate
 	}
+}
+
+func (a *NetworkAdmissions) canAdmit(index int) bool {
+	if a.candidates[index].Source == relayplan.Community {
+		return a.communityActive < 1
+	}
+	return a.active < a.target && (a.primary < 0 || a.backup() == index)
 }
 
 func (a *NetworkAdmissions) notify() { close(a.changed); a.changed = make(chan struct{}) }

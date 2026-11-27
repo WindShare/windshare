@@ -104,11 +104,14 @@ func (o selectionOrder) selectNetwork(plan *Plan, available int, ready, cooled [
 			active = append(active, candidate)
 		}
 	}
-	plan.Network = selectReady(active, available, plan.Policy)
+	plan.Network = selectReady(active, target, plan.Policy)
+	if len(active) > target {
+		plan.Standby = append(plan.Standby, activeAlternates(active, plan.Network, target)...)
+	}
 	switch {
 	case len(active) >= target:
 		// A separate startup wave can reuse link slots if the active relays all fail.
-		plan.Standby = selectReady(canaries, target, plan.Policy)
+		plan.Standby = append(plan.Standby, selectReady(canaries, target, plan.Policy)...)
 	case len(active) == 0:
 		plan.Network = selectReady(canaries, target, plan.Policy)
 	case len(canaries) != 0:
@@ -164,7 +167,7 @@ func selectReady(ready []Candidate, available int, policy Policy) []Candidate {
 	primary, rest := ready[0], ready[1:]
 	backup := BackupIndex(primary, rest, policy)
 	selected := []Candidate{primary, rest[backup]}
-	rest = slices.Delete(rest, backup, backup+1)
+	rest = slices.Delete(slices.Clone(rest), backup, backup+1)
 	if len(selected) < available {
 		// Keep exploring an unmeasured endpoint even when known fast ones fill the prefix.
 		if index := slices.IndexFunc(rest, func(c Candidate) bool { return c.history == unmeasured }); index >= 0 {

@@ -214,7 +214,7 @@ func (lifecycle *SenderLifecycle) connectAttempt(caller, recovery context.Contex
 		descriptor = lifecycle.config.Descriptor
 	}
 	dialContext, cancel := context.WithTimeout(recovery, senderRelayAttemptTimeout)
-	dialOptions := registrationDialOptions(lifecycle.config.LifecycleObservationCapacity, resume, authorization)
+	dialOptions := lifecycle.dialOptions(resume, authorization)
 	stageAttempt := *attempt
 	dialOptions.ObserveStage = func(stage relayv2.DialStage) {
 		event := stageAttempt

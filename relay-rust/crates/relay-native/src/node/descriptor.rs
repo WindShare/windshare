@@ -4,8 +4,7 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use ed25519_dalek::SigningKey;
 use windshare_relay_access::{Credential, trust};
 
-const DESCRIPTOR_DOMAIN: &[u8] = b"windshare/node-descriptor/v2\0";
-const DESCRIPTOR_SECONDS: u64 = 300;
+use windshare_relay_access::descriptor::{PublicRelay, Purpose};
 
 /// Immutable node identity installed once at startup with pre-derived key material
 /// so discovery and status checks never re-expand the seed or lock `Runtime::state`.
@@ -58,7 +57,9 @@ struct DescriptorSnapshot {
     region: String,
     capacity_bytes_per_second: Option<u64>,
     authority: Option<super::usage::Authority>,
-    relay_ready: bool,
+    public_relay: PublicRelay,
+    operator: String,
+    provider: String,
 }
 
 impl Runtime {
@@ -91,6 +92,7 @@ impl Runtime {
             self.access.clone(),
             identity.raw(),
             authority,
+            self.local_contribution.get().cloned(),
         )? {
             self.console
                 .set(console)
@@ -120,22 +122,86 @@ impl Runtime {
         Reporter::new(self.clone(), store, signing_key, authority).map(Some)
     }
 
-    fn descriptor_snapshot(&self, timestamp: i64) -> Result<DescriptorSnapshot> {
+    pub(crate) fn report_stun_ports(&self, ports: impl Iterator<Item = u16>) -> Result<()> {
+        let mut ports: Vec<_> = ports.collect();
+        ports.sort_unstable();
+        ports.dedup();
+        self.state
+            .lock()
+            .map_err(|_| anyhow!("node state"))?
+            .bound_stun_ports = Some(ports);
+        Ok(())
+    }
+
+    fn descriptor_snapshot(
+        &self,
+        timestamp: i64,
+        endpoint: &crate::Endpoint,
+    ) -> Result<DescriptorSnapshot> {
         let state = self.state.lock().map_err(|_| anyhow!("node state"))?;
+        let mut services = state.settings.services;
+        // The kernel may select an ephemeral port or refuse one address family.
+        // Only advertise STUN after a listener exists, honoring explicit NAT port mappings.
+        let stun_urls =
+            if !services.stun || state.bound_stun_ports.as_ref().is_some_and(Vec::is_empty) {
+                Vec::new()
+            } else if !state.settings.stun_urls.is_empty() {
+                state.settings.stun_urls.clone()
+            } else {
+                let url = url::Url::parse(endpoint.as_str())?;
+                let host = url.host_str().ok_or_else(|| anyhow!("missing STUN host"))?;
+                state
+                    .bound_stun_ports
+                    .iter()
+                    .flatten()
+                    .take(windshare_relay_access::descriptor::MAX_STUN_URLS)
+                    .map(|port| format!("stun:{host}:{port}"))
+                    .collect()
+            };
+        services.stun = !stun_urls.is_empty();
         Ok(DescriptorSnapshot {
-            services: state.settings.services,
-            stun_urls: state.settings.stun_urls.clone(),
+            services,
+            stun_urls,
             zone: state.settings.zone.clone(),
             region: state.settings.region.clone(),
-            capacity_bytes_per_second: state.settings.capacity_bytes_per_second,
+            capacity_bytes_per_second: state
+                .settings
+                .contribution
+                .bytes_per_second
+                .or(state.settings.ceiling.bytes_per_second),
+            operator: state.settings.operator.clone(),
+            provider: state.settings.provider.clone(),
             authority: state.settings.authority.clone(),
-            relay_ready: state.settings.services.relay
-                && !state.unavailable
-                && !state.budgets.public_exhausted(&state.settings, timestamp),
+            public_relay: if !state.settings.access.contributing {
+                PublicRelay::Disabled
+            } else if state.storage_failed
+                || !state.settings.services.relay
+                || !self.access.public_enabled()
+            {
+                PublicRelay::Unavailable
+            } else if state.budgets.public_exhausted(&state.settings, timestamp)
+                || state.budgets.node_remaining(&state.settings) == 0
+            {
+                PublicRelay::BudgetExhausted
+            } else if state.unavailable {
+                PublicRelay::Unavailable
+            } else {
+                PublicRelay::Enabled {
+                    anonymous: self.access.anonymous(),
+                }
+            },
         })
     }
 
     pub(crate) fn descriptor(&self, endpoint: &crate::Endpoint) -> Result<serde_json::Value> {
+        self.sign_descriptor(endpoint, Purpose::Live)
+    }
+
+    pub(crate) fn sign_descriptor(
+        &self,
+        endpoint: &crate::Endpoint,
+        purpose: Purpose,
+    ) -> Result<serde_json::Value> {
         let identity = self
             .identity
             .get()
@@ -143,7 +209,7 @@ impl Runtime {
         let timestamp = super::now();
         let now = timestamp.unsigned_abs();
         // Snapshot settings together so signing and access checks can run outside the state lock.
-        let snapshot = self.descriptor_snapshot(timestamp)?;
+        let snapshot = self.descriptor_snapshot(timestamp, endpoint)?;
         let accepting = self.access.public_enabled();
         let login_page = self
             .console
@@ -159,18 +225,20 @@ impl Runtime {
             "stun": snapshot.stun_urls,
             "zone": snapshot.zone,
             "region": snapshot.region,
-            "capacity_bytes_per_second": snapshot.capacity_bytes_per_second,
+            "public_capacity_bytes_per_second": snapshot.capacity_bytes_per_second,
+            "operator": snapshot.operator,
+            "provider": snapshot.provider,
+            "platform": "native",
             "classes": ["owner", "standard", "lowest"],
             "issued_at": now,
-            "expires_at": now + DESCRIPTOR_SECONDS,
-            "relay_available": snapshot.relay_ready && accepting,
-            "anonymous": accepting && self.access.anonymous(),
+            "expires_at": now + purpose.lifetime(),
+            "public_relay": snapshot.public_relay,
             "account_login_page": login_page,
             "console_url": self.console.get().map(crate::console::Console::origin),
             "authority": snapshot.authority,
         });
         let payload = serde_json::to_vec(&descriptor)?;
-        let signed = trust::sign(DESCRIPTOR_DOMAIN, &payload, identity.signing_key());
+        let signed = trust::sign(purpose.domain(), &payload, identity.signing_key());
         Ok(serde_json::json!({
             "version": 2,
             "relay_url": endpoint.relay_url(),

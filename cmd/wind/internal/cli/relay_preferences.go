@@ -78,6 +78,9 @@ func (app *App) relayPreferences(ctx context.Context, args []string) int {
 	}
 	view := saved.Preferences(app.defaultFrontend())
 	app.writeCompleteLine("Relay mode: %s. Share website: %s", view.Mode, view.Frontend)
+	if view.Mode == relayconfig.Automatic {
+		app.writeCompleteLine("Community nodes: %s", relayEnabledLabel(view.CommunityNodes))
+	}
 	for _, relay := range view.Relays {
 		app.writeCompleteLine("%s (%s)", relay.URL, relayEnabledLabel(relay.Enabled))
 	}

@@ -338,6 +338,12 @@ impl Controller {
         id
     }
 
+    pub fn guest_setup(&self, setup_id: &str) {
+        self.command(Command::GuestSetup {
+            setup_id: setup_id.into(),
+        });
+    }
+
     pub fn cancel_setup(&self, setup_id: &str) -> bool {
         let id = setup_id.to_owned();
         let mut accepted = false;

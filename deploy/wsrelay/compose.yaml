@@ -1,0 +1,27 @@
+name: windshare-community
+services:
+  relay:
+    build:
+      context: ../..
+      dockerfile: deploy/wsrelay/Dockerfile
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - relay-state:/state
+      - ${WSRELAY_NODE_CONFIG:-./instance/node.json}:/state/node.json:ro
+  caddy:
+    image: caddy:2.11.9-alpine
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      RELAY_HOST: ${RELAY_HOST:?Set the public relay hostname or IP}
+      RELAY_SNI: ${RELAY_SNI:-${RELAY_HOST}}
+      CERT_POLICY: ${CERT_POLICY:-domain_cert}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+volumes:
+  relay-state:
+  caddy-data:
+  caddy-config:

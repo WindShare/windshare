@@ -17,11 +17,13 @@ type RelayView struct {
 }
 
 type Preferences struct {
-	Mode           string      `json:"mode"`
-	Frontend       string      `json:"frontend"`
-	CustomFrontend bool        `json:"custom_frontend"`
-	Relays         []RelayView `json:"relays"`
-	AtCapacity     bool        `json:"at_capacity"`
+	CommunityNotice uint64      `json:"community_notice,omitempty"`
+	CommunityNodes  bool        `json:"community_nodes"`
+	Mode            string      `json:"mode"`
+	Frontend        string      `json:"frontend"`
+	CustomFrontend  bool        `json:"custom_frontend"`
+	Relays          []RelayView `json:"relays"`
+	AtCapacity      bool        `json:"at_capacity"`
 }
 
 const (
@@ -44,7 +46,7 @@ func (c Config) profileIndex(address string) int {
 }
 
 func (c Config) Preferences(defaultFrontend string) Preferences {
-	view := Preferences{Mode: Automatic, Frontend: c.FrontURL, CustomFrontend: c.FrontURL != "", Relays: []RelayView{}}
+	view := Preferences{CommunityNodes: c.CommunityEnabled(), Mode: Automatic, Frontend: c.FrontURL, CustomFrontend: c.FrontURL != "", Relays: []RelayView{}}
 	if c.ConfiguredOnly {
 		view.Mode = Selected
 	}
@@ -67,12 +69,25 @@ func (c Config) CredentialProfile(address, key string) relayprofile.Candidate {
 		p = c.Profiles[index]
 	}
 	p.AccessKey = key
+	p.Role = relayprofile.Service
 	return p
 }
 
-// MergeRelay runs on a copy for both enrollment preflight and its eventual commit.
-// Re-discovery cannot erase a device key or re-enable a deliberately disabled profile.
-func (c Config) MergeRelay(p relayprofile.Candidate) (Config, error) {
+// RefreshMetadata preserves the device identity across capability rediscovery.
+func (c Config) RefreshMetadata(p relayprofile.Candidate) (Config, error) {
+	if i := c.profileIndex(p.PublicURL); i >= 0 {
+		previous := c.Profiles[i]
+		if previous.Node.NodeKey != "" && p.Node.NodeKey != previous.Node.NodeKey && previous.AccessKey != "" {
+			return Config{}, fmt.Errorf("%w: enrolled relay identity changed", ErrConfig)
+		}
+		p.AccessKey, p.Role = previous.AccessKey, previous.Role
+	}
+	return c.ReplaceIdentity(p)
+}
+
+func (c Config) CommunityEnabled() bool { return c.CommunityNodes == nil || *c.CommunityNodes }
+
+func (c Config) ReplaceIdentity(p relayprofile.Candidate) (Config, error) {
 	if err := p.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -89,10 +104,6 @@ func (c Config) MergeRelay(p relayprofile.Candidate) (Config, error) {
 			c.ActiveRelays = append(slices.Clone(c.ActiveRelays), p.PublicURL)
 		}
 	} else {
-		old := c.Profiles[index]
-		if p.AccessKey == "" {
-			p.AccessKey = old.AccessKey
-		}
 		c.Profiles[index] = p
 	}
 	return c, c.Validate()
@@ -147,6 +158,15 @@ type PreferenceEdit struct {
 
 func (e PreferenceEdit) Apply(c *Config) error {
 	switch e.Action {
+	case "community_nodes", "community":
+		switch e.Value {
+		case "on", "off":
+			enabled := e.Value == "on"
+			c.CommunityNodes = &enabled
+			return nil
+		default:
+			return errors.New("choose on or off for community nodes")
+		}
 	case "mode":
 		return c.SetMode(e.Value)
 	case "enable", "disable":

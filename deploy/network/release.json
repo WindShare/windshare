@@ -2,6 +2,7 @@
   "network": "windshare",
   "link_host": "https://ws.ourworld.top",
   "backup_entry": "https://windshare.cc",
+  "bootstrap_nodes": ["https://cn1.ourworld.top", "https://us1.windshare.cc", "https://eu1.windshare.cc"],
   "mirrors": [
     "https://ws.ourworld.top/.well-known/windshare-network",
     "https://windshare.cc/.well-known/windshare-network"

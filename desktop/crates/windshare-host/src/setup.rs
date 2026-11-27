@@ -15,6 +15,8 @@ pub enum Setup {
         #[serde(default)]
         user_code: String,
         service_login: Option<ServiceLogin>,
+        #[serde(default)]
+        guest_available: bool,
     },
     Finished {
         #[serde(flatten)]
@@ -179,14 +181,36 @@ impl SetupRequest {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct RelayPreferences {
     pub mode: RelayMode,
+    #[serde(default = "enabled_by_default")]
+    pub community_nodes: bool,
+    #[serde(default)]
+    pub community_notice: u64,
     pub frontend: String,
     #[serde(default)]
     pub custom_frontend: bool,
     pub relays: Vec<SavedRelay>,
     pub at_capacity: bool,
+}
+
+impl Default for RelayPreferences {
+    fn default() -> Self {
+        Self {
+            mode: RelayMode::Automatic,
+            community_nodes: true,
+            community_notice: 0,
+            frontend: String::new(),
+            custom_frontend: false,
+            relays: Vec::new(),
+            at_capacity: false,
+        }
+    }
+}
+
+const fn enabled_by_default() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -209,6 +233,7 @@ pub enum RelayMode {
 #[serde(tag = "action", content = "value", rename_all = "snake_case")]
 pub enum PreferenceEdit {
     Mode(RelayMode),
+    CommunityNodes(String),
     Enable(String),
     Disable(String),
     Remove(String),
@@ -219,6 +244,7 @@ impl PreferenceEdit {
     pub(crate) const fn action(&self) -> &'static str {
         match self {
             Self::Mode(_) => "mode",
+            Self::CommunityNodes(_) => "community_nodes",
             Self::Enable(_) => "enable",
             Self::Disable(_) => "disable",
             Self::Remove(_) => "remove",

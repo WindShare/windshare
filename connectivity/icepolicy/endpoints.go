@@ -49,7 +49,7 @@ func NewICEEndpointPool(entries []Endpoint) (ICEEndpointPool, error) {
 	for _, endpoint := range entries {
 		if endpoint.ID == "" || seen[endpoint.ID] || !validEndpointURL(endpoint.URL) ||
 			(endpoint.Family != "ipv4" && endpoint.Family != "ipv6" && endpoint.Family != "any") ||
-			(endpoint.Trust != "reviewed" && endpoint.Trust != "local" && endpoint.Trust != "unreviewed") ||
+			(endpoint.Trust != "reviewed" && endpoint.Trust != "local" && endpoint.Trust != "unreviewed" && endpoint.Trust != "community") ||
 			(endpoint.Enabled && endpoint.Trust == "unreviewed") || endpoint.Priority < 0 {
 			return ICEEndpointPool{}, ErrConfiguration
 		}
@@ -171,6 +171,9 @@ func SelectAttemptProfile(pool ICEEndpointPool, request SelectionRequest, facts 
 	}
 	seed := request.NetworkGenerationID + "|" + request.WaveID
 	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].Trust != candidates[j].Trust {
+			return trustRank(candidates[i].Trust) > trustRank(candidates[j].Trust)
+		}
 		left, right := successfulProfileMember(candidates[i].ID, request, facts), successfulProfileMember(candidates[j].ID, request, facts)
 		if left != right {
 			return left
@@ -206,7 +209,7 @@ func endpointEligible(endpoint Endpoint, request SelectionRequest, facts Generat
 }
 func endpointLess(a, b Endpoint, seed string) bool {
 	if a.Trust != b.Trust {
-		return a.Trust == "reviewed"
+		return trustRank(a.Trust) > trustRank(b.Trust)
 	}
 	if a.Priority != b.Priority {
 		return a.Priority > b.Priority
@@ -238,6 +241,9 @@ func diverseEndpointIndex(candidates, selected []Endpoint) int {
 	}
 	index, best := 0, -1
 	for i, endpoint := range candidates {
+		if trustRank(endpoint.Trust) < trustRank(candidates[0].Trust) {
+			continue
+		}
 		score := 0
 		if endpoint.FailureDomain != "" && endpoint.FailureDomain != selected[0].FailureDomain {
 			score += 2
@@ -253,6 +259,18 @@ func diverseEndpointIndex(candidates, selected []Endpoint) int {
 		}
 	}
 	return index
+}
+func trustRank(trust string) int {
+	switch trust {
+	case "reviewed":
+		return 3
+	case "local":
+		return 2
+	case "community":
+		return 1
+	default:
+		return 0
+	}
 }
 func policyHash(value string) uint32 {
 	h := fnv.New32a()

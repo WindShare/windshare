@@ -1,6 +1,16 @@
 import type { en } from './en'
 
 export const zhCN = {
+  initializeAtNode: '请打开 wsrelay 输出的初始化链接，设置所有者密码。',
+  contribution: '社区贡献',
+  dailyBudget: '每日公共流量（GiB）',
+  publicRate: '公共带宽（Mbps）',
+  publicConnections: '公共连接数',
+  hostUplink: '主机上行带宽（Mbps，可选）',
+  saveLimits: '保存限额',
+  disabledNotice: '当你拥有的所有原生节点都关闭贡献时，你的设备会暂停使用社区节点。',
+  ceiling: '配置文件上限',
+  limitsSaved: '已保存',
   managedTURN: '托管 TURN',
   managedTURNHint: '每个 Cloudflare 账号每月有 1,000 GB 免费流量，与 Realtime SFU 共享。超额按 Cloudflare 费率计费。暂停后停止签发新凭据，已签发的凭据在 30 分钟内到期。',
   managedTURNBilling: '在 Cloudflare Billing 查看用量',

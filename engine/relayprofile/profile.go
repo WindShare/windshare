@@ -8,8 +8,24 @@ import (
 const MaximumEndpoints = relayset.MaximumEndpoints
 const MaxAccessKeyBytes = relayset.MaxAccessKeyBytes
 
+type CredentialRole string
+
+const (
+	Owner   CredentialRole = "owner"
+	Service CredentialRole = "service"
+	Account CredentialRole = "account"
+)
+
+type NodeIdentity struct {
+	Platform  string `json:"platform,omitempty"`
+	NodeKey   string `json:"node_key,omitempty"`
+	Authority string `json:"authority,omitempty"`
+}
+
 type Candidate struct {
-	ManagedTurn     bool `json:"managed_turn,omitempty"`
+	Node            NodeIdentity   `json:"-"`
+	Role            CredentialRole `json:"-"`
+	ManagedTurn     bool           `json:"managed_turn,omitempty"`
 	PublicURL       string
 	ConsoleURL      string `json:"-"`
 	OfferedFrontend string `json:"-"`
@@ -17,6 +33,9 @@ type Candidate struct {
 }
 
 func (candidate Candidate) Validate() error {
+	if candidate.Role != "" && (candidate.AccessKey == "" || (candidate.Role != Owner && candidate.Role != Account && candidate.Role != Service)) {
+		return relayset.ErrCandidate
+	}
 	return (relayset.Candidate{PublicURL: candidate.PublicURL, Authorization: relayset.StaticKey(candidate.AccessKey)}).Validate()
 }
 

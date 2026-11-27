@@ -37,6 +37,7 @@ pub(super) fn setup_progress_panel<V: 'static>(
     setup: &Setup,
     approve_owner: impl FnOnce(&Context<V>) -> Button,
     approve_device: impl FnOnce(&Context<V>) -> Button,
+    guest: impl FnOnce(&Context<V>) -> Button,
     cancel_button: impl FnOnce(Text, &Context<V>) -> Button,
     cx: &Context<V>,
 ) -> Div {
@@ -57,6 +58,7 @@ pub(super) fn setup_progress_panel<V: 'static>(
             verification_url,
             user_code,
             service_login,
+            guest_available,
             ..
         } if !verification_url.is_empty() => {
             if let Some(login) = service_login {
@@ -86,6 +88,10 @@ pub(super) fn setup_progress_panel<V: 'static>(
                             .child(theme.heading(user_code.clone(), 18.))
                             .child(approve_device(cx)),
                     );
+            }
+
+            if *guest_available {
+                panel = panel.child(guest(cx));
             }
         }
         Setup::Running { .. } => {
@@ -199,6 +205,17 @@ impl Desktop {
                     .icon(Icon::External)
                     .style(ButtonStyle::Primary)
                     .on_press(cx.listener(|this, (), _, cx| this.approve_relay(cx)))
+            },
+            |cx| {
+                Button::new("connect-as-guest", language(cx).text(Text::ConnectAsGuest))
+                    .style(ButtonStyle::Quiet)
+                    .on_press(cx.listener(|this, (), _, cx| {
+                        if let Runtime::Native(session) = &this.runtime
+                            && let Some(context) = session.model(cx).setup.context()
+                        {
+                            session.controller(cx).guest_setup(&context.id);
+                        }
+                    }))
             },
             |label, cx| {
                 Button::new("cancel-sharing-setup", language(cx).text(label))

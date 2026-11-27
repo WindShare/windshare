@@ -24,7 +24,7 @@ func TestPlanReservesDiversityWithinSharedLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Network) != 4 || plan.Network[1].Zone != "cn" {
+	if len(plan.Network) != TargetNetworkRegistrations || len(plan.Standby) != 2 || plan.Network[1].Zone != "cn" {
 		t.Fatalf("missing reserved backup: %+v", plan.Network)
 	}
 	for i := range 7 {
@@ -64,9 +64,9 @@ func TestPlanFiltersTrustRolesAndExpiredObservations(t *testing.T) {
 
 func TestPlanDirectoryCandidatesIncludesStandbyAfterNetwork(t *testing.T) {
 	plan := Plan{
-		Configured: []Candidate{{URL: "https://own.example", Configured: true}},
-		Network:    []Candidate{{URL: "https://active1.example"}, {URL: "https://active2.example"}},
-		Standby:    []Candidate{{URL: "https://canary1.example", Canary: true}},
+		Configured: []Candidate{{URL: "https://own.example", Source: Configured}},
+		Network:    []Candidate{{URL: "https://active1.example", Source: Official}, {URL: "https://active2.example", Source: Official}},
+		Standby:    []Candidate{{URL: "https://canary1.example", Canary: true, Source: Official}, {URL: "https://peer.example", Source: Community}},
 	}
 	got := plan.DirectoryCandidates()
 	want := []string{"https://active1.example", "https://active2.example", "https://canary1.example"}

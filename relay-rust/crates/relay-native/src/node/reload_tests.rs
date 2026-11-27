@@ -20,7 +20,10 @@ fn configured_node() -> (TempDir, Endpoint, Runtime, Settings) {
     let endpoint = Endpoint::parse("wss://node.example/v2/ws").unwrap();
     let store = Database::open(&directory.path().join("node.sqlite"), endpoint.identity).unwrap();
     let settings = Settings {
-        capacity_bytes_per_second: Some(OLD_CAPACITY),
+        ceiling: crate::node::Ceiling {
+            bytes_per_second: Some(OLD_CAPACITY),
+            ..Default::default()
+        },
         relay_budget: Some(MonthlyBudget {
             bytes: QUOTA as u64,
             reset_day_utc: 1,
@@ -29,7 +32,7 @@ fn configured_node() -> (TempDir, Endpoint, Runtime, Settings) {
     };
     let node = Runtime::default();
     node.identify(Identity::generate().unwrap()).unwrap();
-    node.configure(settings.clone(), store).unwrap();
+    node.install_settings(settings.clone(), store).unwrap();
     (directory, endpoint, node, settings)
 }
 
@@ -45,8 +48,12 @@ fn assert_public_settings(node: &Runtime, endpoint: &Endpoint, capacity: u64, an
     assert_eq!(node.governor.capacity(), Some(capacity));
     assert_eq!(node.access.anonymous(), anonymous);
     let descriptor = describe(node, endpoint);
-    assert_eq!(descriptor["capacity_bytes_per_second"], capacity);
-    assert_eq!(descriptor["anonymous"], anonymous);
+    assert_eq!(descriptor["public_capacity_bytes_per_second"], capacity);
+    if node.available() {
+        assert_eq!(descriptor["public_relay"]["anonymous"], anonymous);
+    } else {
+        assert_eq!(descriptor["public_relay"]["state"], "budget_exhausted");
+    }
 }
 
 fn next_period(node: &Runtime) -> i64 {
@@ -60,7 +67,7 @@ fn next_period(node: &Runtime) -> i64 {
 }
 
 fn change_public_settings(settings: &mut Settings) {
-    settings.capacity_bytes_per_second = Some(NEW_CAPACITY);
+    settings.ceiling.bytes_per_second = Some(NEW_CAPACITY);
     settings.access.anonymous = false;
 }
 
@@ -225,13 +232,22 @@ fn spent_public_day_changes_discovery_without_revoking_the_node() {
     let today = now();
     node.update(settings.clone(), today).unwrap();
     let connection_epoch = node.epoch();
-    assert_eq!(describe(&node, &endpoint)["relay_available"], true);
+    assert_eq!(
+        describe(&node, &endpoint)["public_relay"]["state"],
+        "enabled"
+    );
     assert_eq!(write_bytes(&node, 1).unwrap(), 1);
-    assert_eq!(describe(&node, &endpoint)["relay_available"], false);
+    assert_eq!(
+        describe(&node, &endpoint)["public_relay"]["state"],
+        "budget_exhausted"
+    );
     assert!(node.available());
     node.update(settings, today + chrono::TimeDelta::days(1).num_seconds())
         .unwrap();
-    assert_eq!(describe(&node, &endpoint)["relay_available"], true);
+    assert_eq!(
+        describe(&node, &endpoint)["public_relay"]["state"],
+        "enabled"
+    );
     assert_eq!(node.epoch(), connection_epoch);
 }
 
@@ -254,7 +270,6 @@ fn unpaced_relay_warns_once_per_transition_including_default_startup() {
     node.identify(identity).unwrap();
 
     let mut settings = Settings {
-        capacity_bytes_per_second: None,
         services: super::super::Services {
             relay: false,
             stun: true,
@@ -262,7 +277,7 @@ fn unpaced_relay_warns_once_per_transition_including_default_startup() {
         ..Settings::default()
     };
     let warnings = capture_pacing_warnings(|| {
-        node.configure(settings.clone(), store).unwrap();
+        node.install_settings(settings.clone(), store).unwrap();
     });
     assert_eq!(warnings, NO_WARNINGS);
 
@@ -275,14 +290,14 @@ fn unpaced_relay_warns_once_per_transition_including_default_startup() {
     assert_eq!(warnings[0]["fields"]["node_id"], expected_node_id);
     assert_eq!(warnings[0]["fields"]["zone"], "global");
 
-    settings.capacity_bytes_per_second = Some(OLD_CAPACITY);
+    settings.ceiling.bytes_per_second = Some(OLD_CAPACITY);
     let warnings = capture_pacing_warnings(|| {
         node.update(settings.clone(), now()).unwrap();
     });
     assert_eq!(warnings, NO_WARNINGS);
 
     let invalid = Settings {
-        capacity_bytes_per_second: None,
+        ceiling: crate::node::Ceiling::default(),
         relay_budget: Some(MonthlyBudget {
             bytes: QUOTA as u64,
             reset_day_utc: 0,
@@ -295,7 +310,7 @@ fn unpaced_relay_warns_once_per_transition_including_default_startup() {
     assert_eq!(warnings, NO_WARNINGS);
 
     // Public contribution pacing alone still governs non-owner traffic.
-    settings.capacity_bytes_per_second = None;
+    settings.ceiling.bytes_per_second = None;
     settings.contribution.bytes_per_second = Some(NEW_CAPACITY);
     let warnings = capture_pacing_warnings(|| {
         node.update(settings.clone(), now()).unwrap();
@@ -313,8 +328,72 @@ fn unpaced_relay_warns_once_per_transition_including_default_startup() {
     let default_node = Runtime::default();
     let warnings = capture_pacing_warnings(|| {
         default_node
-            .configure(Settings::default(), default_store)
+            .install_settings(Settings::default(), default_store)
             .unwrap();
     });
     assert_eq!(warnings.len(), 1);
+}
+#[test]
+fn headless_contribution_is_durable_and_independent_of_the_host_uplink() {
+    use crate::node::{Ceiling, contribution::Policy};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("node.sqlite");
+    let endpoint = Endpoint::parse("wss://node.example/v2/ws").unwrap();
+    let settings = Settings {
+        ceiling: Ceiling {
+            connections: Some(3),
+            ..Default::default()
+        },
+        ..Settings::default()
+    };
+    let open = || {
+        let node = Runtime::default();
+        node.identify(Identity::generate().unwrap()).unwrap();
+        node.configure(
+            settings.clone(),
+            Database::open(&path, endpoint.identity).unwrap(),
+        )
+        .unwrap();
+        node
+    };
+    let node = open();
+    let policy = Policy {
+        enabled: false,
+        host_uplink: Some(25_000_000),
+        bytes_per_second: 2_000_000,
+        ..Policy::default()
+    };
+    let control = node.local_contribution.get().unwrap();
+    assert!(control.set(policy).unwrap());
+    assert!(!control.set(policy).unwrap());
+    node.refresh_settings(None, now()).unwrap();
+    assert_eq!(
+        describe(&node, &endpoint)["public_relay"]["state"],
+        "disabled"
+    );
+    drop(node);
+    let node = open();
+    assert_eq!(
+        describe(&node, &endpoint)["public_relay"]["state"],
+        "disabled"
+    );
+    assert_eq!(
+        describe(&node, &endpoint)["public_capacity_bytes_per_second"],
+        2_000_000
+    );
+    assert_eq!(node.access.public_connections(), 3);
+    node.local_contribution
+        .get()
+        .unwrap()
+        .set(Policy {
+            enabled: true,
+            daily_bytes: 0,
+            ..policy
+        })
+        .unwrap();
+    node.refresh_settings(None, now()).unwrap();
+    assert_eq!(
+        describe(&node, &endpoint)["public_relay"]["state"],
+        "budget_exhausted"
+    );
 }

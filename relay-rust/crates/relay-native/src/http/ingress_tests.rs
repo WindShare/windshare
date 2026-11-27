@@ -451,7 +451,7 @@ async fn direct_upgrade_uses_socket_ip_without_port_or_forwarded_header_bypass()
 
 #[tokio::test]
 async fn exhausted_public_budget_refuses_unowned_upgrades() {
-    use crate::node::{ContributionLimits, Settings};
+    use crate::node::{Ceiling, Settings};
     let ingress = ingress(16);
     let directory = tempfile::tempdir().unwrap();
     let store = crate::Database::open(
@@ -460,7 +460,7 @@ async fn exhausted_public_budget_refuses_unowned_upgrades() {
     )
     .unwrap();
     let settings = Settings {
-        contribution: ContributionLimits {
+        ceiling: Ceiling {
             daily_bytes: Some(0),
             ..Default::default()
         },

@@ -138,7 +138,7 @@ func TestSelectionOrdersCapacityAndHandshakeBuckets(t *testing.T) {
 	}
 }
 
-func TestFailedDiverseCandidateCanRaceWithoutReservingBackup(t *testing.T) {
+func TestFailedDiverseCandidateDoesNotDisplaceHealthyPair(t *testing.T) {
 	input := Input{Now: time.Now()}
 	for i := range 5 {
 		input.Directory.Nodes = append(input.Directory.Nodes, planNode(i, "global"))
@@ -150,15 +150,13 @@ func TestFailedDiverseCandidateCanRaceWithoutReservingBackup(t *testing.T) {
 		input.Observations[i].Admitted = true
 	}
 	plan := selected(t, input)
-	if plan.Network[1].URL == nodes[1].Relay || plan.Network[2].URL != nodes[4].Relay {
-		t.Fatal(plan.Network)
+	if len(plan.Network) != 2 || plan.Network[1].URL == nodes[1].Relay || len(plan.Standby) != 2 {
+		t.Fatal(plan)
 	}
-	// With room for every endpoint, the admission coordinator still uses the
-	// same health preference when a different candidate wins the actual race.
 	input.Directory.Nodes = nodes[:4]
 	plan = selected(t, input)
-	if backup := BackupIndex(plan.Network[1], plan.Network[2:], plan.Policy); plan.Network[2+backup].URL == nodes[1].Relay {
-		t.Fatal(plan.Network)
+	if len(plan.Network) != 2 || plan.Network[1].URL == nodes[1].Relay {
+		t.Fatal(plan)
 	}
 }
 
@@ -252,7 +250,7 @@ func TestCandidateRetainsObservationHistoryAndHandshakeDuration(t *testing.T) {
 	input.Observations = []Observation{okFact, failFact}
 
 	byAlias := map[string]Candidate{}
-	for _, c := range selected(t, input).Network {
+	for _, c := range selected(t, input).NetworkCandidates() {
 		byAlias[c.Alias] = c
 	}
 	if d, ok := byAlias[admitted.Alias].ObservedHandshake(); !ok || d != 0 || byAlias[admitted.Alias].HistoryState() != "admitted" {

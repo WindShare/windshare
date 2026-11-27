@@ -151,6 +151,7 @@ pub struct Server {
     sources: SourcePolicy,
     limits: ConnectionLimits,
     node: crate::node::Runtime,
+    bootstrap_nodes: Vec<String>,
     settings_path: Option<std::path::PathBuf>,
 }
 
@@ -188,6 +189,7 @@ impl Server {
             sources,
             limits,
             node,
+            bootstrap_nodes: Vec::new(),
             settings_path: None,
         })
     }
@@ -199,6 +201,7 @@ impl Server {
         settings: crate::node::Settings,
         path: Option<std::path::PathBuf>,
     ) -> Result<Self> {
+        self.bootstrap_nodes.clone_from(&settings.bootstrap_nodes);
         self.node.configure(settings, self.registry.store.clone())?;
         self.node
             .open_console(&self.registry.endpoint, &self.registry.store)?;
@@ -224,16 +227,25 @@ impl Server {
             CONNECTION_ATTEMPTS,
             self.registry.environment.now(),
         )?;
-        let ingress = Arc::new(
-            Ingress::new(
-                self.registry.endpoint.clone(),
-                self.origins,
-                self.sources,
-                slots,
-                self.registry.environment.clone(),
-            )
-            .with_node(self.node.clone()),
+        let (discovery, receiver) = crate::discovery::Discovery::new();
+        let mut ingress = Ingress::new(
+            self.registry.endpoint.clone(),
+            self.origins,
+            self.sources,
+            slots,
+            self.registry.environment.clone(),
+        )
+        .with_node(self.node.clone());
+        ingress.discovery = Some(discovery.clone());
+        let ingress = Arc::new(ingress);
+        let gossip = discovery.run(
+            receiver,
+            &self.node,
+            &self.registry.endpoint,
+            &self.bootstrap_nodes,
+            &self.registry.store,
         );
+        tokio::pin!(gossip);
         let http_requests = Arc::new(Semaphore::new(MAX_HTTP_REQUESTS));
         let mut tasks = JoinSet::new();
         let (stop_connections, stopping) = watch::channel(false);
@@ -254,6 +266,7 @@ impl Server {
         tokio::pin!(reporting);
         let result = loop {
             tokio::select! {
+                () = &mut gossip => unreachable!("discovery lives with ingress"),
                 () = &mut shutdown => break Ok(()),
                 () = &mut maintenance => unreachable!("node maintenance runs until server shutdown"),
                 () = &mut scheduling => unreachable!("node scheduler runs until server shutdown"),

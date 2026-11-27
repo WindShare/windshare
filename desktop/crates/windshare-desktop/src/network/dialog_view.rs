@@ -1,6 +1,8 @@
 use super::{
     SetupDialog, SetupDialogEvent, SetupPage,
-    relay_preferences::{relay_actions_drawer, relay_actions_toggle, relay_mode_option},
+    relay_preferences::{
+        community_toggle, relay_actions_drawer, relay_actions_toggle, relay_mode_option,
+    },
     setup_feedback::{setup_progress_panel, setup_return_panel},
 };
 use crate::{
@@ -96,6 +98,17 @@ impl SetupDialog {
                     .icon(Icon::External)
                     .style(ButtonStyle::Primary)
                     .on_press(cx.listener(|this, (), _, cx| this.approve_relay(cx)))
+            },
+            |cx| {
+                Button::new("connect-as-guest", language(cx).text(Text::ConnectAsGuest))
+                    .style(ButtonStyle::Quiet)
+                    .on_press(cx.listener(|this, (), _, cx| {
+                        if let super::dialog::SetupSource::Native { host, .. } = &this.source
+                            && let Some(context) = this.setup(cx).context()
+                        {
+                            host.read(cx).controller().guest_setup(&context.id);
+                        }
+                    }))
             },
             |label, cx| {
                 Button::new("cancel-sharing-setup", language(cx).text(label))
@@ -215,6 +228,15 @@ impl SetupDialog {
                         cx,
                     )),
             )
+            .when(prefs.mode == RelayMode::Automatic, |panel| {
+                panel.child(community_toggle(
+                    theme,
+                    prefs,
+                    busy,
+                    Self::apply_preference,
+                    cx,
+                ))
+            })
             .child(list)
             .child(theme.separator())
             .child(

@@ -15,6 +15,9 @@ type RelaySetupProgress = relaysetup.Progress
 func (engine *Engine) StartRelaySetup(ctx context.Context, request RelaySetupRequest) (*Task[RelaySetupResult], error) {
 	return start(engine, ctx, func(ctx context.Context, control task.Control) task.Completion[RelaySetupResult] {
 		result, err := engine.relaySetup.Run(ctx, request, func(event relaysetup.Progress) { control.Emit(event) })
+		if err == nil {
+			engine.network.RelaySettingsChanged(ctx)
+		}
 		return task.Completion[RelaySetupResult]{Value: result, Settlement: relaySetupSettlement(ctx, err)}
 	})
 }

@@ -36,7 +36,7 @@ impl Runtime {
     // and authority responses cannot supersede either half of this transition.
     pub(super) fn apply_settings(
         &self,
-        settings: Settings,
+        mut settings: Settings,
         generations: &[Generation],
         timestamp: i64,
     ) -> Result<()> {
@@ -46,6 +46,15 @@ impl Runtime {
                 .is_none_or(|authority| *authority == settings.authority),
             "changing the accounting authority requires a node restart"
         );
+        if settings.authority.is_none()
+            && let Some(local) = self.local_contribution.get()
+        {
+            local.apply(&mut settings)?;
+            settings.validate()?;
+        } else if settings.authority.is_some() {
+            settings.contribution.daily_bytes = settings.ceiling.daily_bytes;
+            settings.access.public_connections = settings.ceiling.connections.unwrap_or(usize::MAX);
+        }
         let controller = settings
             .authority
             .as_ref()
@@ -107,8 +116,9 @@ impl Runtime {
         let changed = state.settings != settings;
         let was_public_exhausted = state.budgets.public_exhausted(&state.settings, timestamp);
         let publication = self.governor.publish_capacity(
-            settings.capacity_bytes_per_second,
+            settings.ceiling.bytes_per_second,
             settings.contribution.bytes_per_second,
+            settings.host_uplink,
             || {
                 state.budgets.advance(budgets);
                 state.settings = settings;
@@ -135,7 +145,7 @@ impl Runtime {
                 event = "node_settings_changed",
                 timestamp,
                 zone = state.settings.zone,
-                capacity_bytes_per_second = state.settings.capacity_bytes_per_second,
+                capacity_bytes_per_second = state.settings.ceiling.bytes_per_second,
                 monthly_relay_bytes = state.settings.relay_budget.map(|budget| budget.bytes),
                 public_daily_bytes = state.settings.contribution.daily_bytes,
                 public_bytes_per_second = state.settings.contribution.bytes_per_second,
@@ -148,7 +158,7 @@ impl Runtime {
         // default settings still warn once without repeating on every 1s reload.
         // Public pacing alone still governs non-owner traffic even without a node rate.
         let unpaced_relay = state.settings.services.relay
-            && state.settings.capacity_bytes_per_second.is_none()
+            && state.settings.ceiling.bytes_per_second.is_none()
             && state.settings.contribution.bytes_per_second.is_none();
         let unpaced_warning = (unpaced_relay && !state.unpaced_relay_warned).then(|| {
             (
@@ -164,7 +174,7 @@ impl Runtime {
                 timestamp,
                 node_id = node_id.as_deref(),
                 %zone,
-                "relay enabled without capacity_bytes_per_second or contribution.bytes_per_second; fair scheduling and priority pacing are bypassed"
+                "relay enabled without a public bandwidth limit; fair scheduling and priority pacing are bypassed"
             );
         }
         if publication.changed || public_just_exhausted {
@@ -237,7 +247,27 @@ impl Runtime {
     }
 
     fn refresh_settings(&self, path: Option<&Path>, timestamp: i64) -> Result<()> {
+        let revision = self
+            .local_contribution
+            .get()
+            .map_or(0, super::contribution::Control::revision);
         let Some(path) = path else {
+            let published = self
+                .last_config_bytes
+                .lock()
+                .expect("config cache")
+                .as_ref()
+                .map_or(0, |config| config.policy_revision);
+            if published != revision {
+                let settings = self.state.lock().expect("node state").settings.clone();
+                self.update(settings, timestamp)?;
+                *self.last_config_bytes.lock().expect("config cache") =
+                    Some(super::PublishedConfig {
+                        bytes: Vec::new(),
+                        policy_revision: revision,
+                    });
+                return Ok(());
+            }
             return self.rollover_budgets(timestamp);
         };
         let raw = match std::fs::read(path) {
@@ -253,15 +283,18 @@ impl Runtime {
             .last_config_bytes
             .lock()
             .expect("config cache")
-            .as_deref()
-            == Some(raw.as_slice());
+            .as_ref()
+            .is_some_and(|config| config.policy_revision == revision && config.bytes == raw);
         if unchanged {
             return self.rollover_budgets(timestamp);
         }
         let result = Configuration::read_bytes(path, &raw)
             .and_then(|config| self.update(config.node, timestamp));
         if result.is_ok() {
-            *self.last_config_bytes.lock().expect("config cache") = Some(raw);
+            *self.last_config_bytes.lock().expect("config cache") = Some(super::PublishedConfig {
+                bytes: raw,
+                policy_revision: revision,
+            });
             return Ok(());
         }
         // A rejected file must not freeze the active ledger at the end of its month.

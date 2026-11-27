@@ -35,6 +35,12 @@ impl Identity {
     /// # Errors
     /// Fails on invalid identity data or unavailable persistent storage.
     pub fn open(path: &Path) -> Result<Self> {
+        Self::open_for_endpoint(path, false)
+    }
+
+    /// # Errors
+    /// Fails when the persisted identity cannot be read or created.
+    pub fn open_for_endpoint(path: &Path, https: bool) -> Result<Self> {
         match std::fs::read(path) {
             Ok(bytes) => {
                 let identity: Self = serde_json::from_slice(&bytes)?;
@@ -74,7 +80,7 @@ impl Identity {
                 match std::fs::hard_link(&temporary.0, path) {
                     Ok(()) => {}
                     Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                        return Self::open(path);
+                        return Self::open_for_endpoint(path, https);
                     }
                     Err(error) => return Err(error).context("publish node identity"),
                 }
@@ -85,14 +91,12 @@ impl Identity {
                         .unwrap_or_else(|| Path::new(".")),
                 )?
                 .sync_all()?;
-                println!(
-                    "{}",
-                    serde_json::json!({
-                        "event":"node_initialized", "node_id":identity.id(),
-                        "node_key":URL_SAFE_NO_PAD.encode(identity.key().verifying_key().to_bytes()),
-                        "owner_access_key": identity.owner_token, "identity_file":path
-                    })
-                );
+                let mut event = serde_json::json!({"event":"node_initialized","node_id":identity.id(),"node_key":URL_SAFE_NO_PAD.encode(identity.key().verifying_key().to_bytes()),"identity_file":path});
+                if !https {
+                    event["owner_access_key"] =
+                        serde_json::Value::String(identity.owner_token.clone());
+                }
+                println!("{event}");
                 Ok(identity)
             }
             Err(error) => Err(error).context("read node identity"),
