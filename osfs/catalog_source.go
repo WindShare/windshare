@@ -139,9 +139,6 @@ func (source *SelectedCatalogSource) openSelectedRoot(
 		}
 		return catalog.NodeRecord{}, nil, fmt.Errorf("osfs: selected root %q is not a stable file or directory: %w", absolute, content.ErrUnsupportedStability)
 	}
-	if selection.followed != nil {
-		source.traceSelectedRootLink(slot, kind)
-	}
 	rootPath, relative := filepath.Dir(selection.inspect), filepath.Base(selection.inspect)
 	if kind == sourceEntryDirectory {
 		// The typed path keeps later omission paths in the user's spelling. When it
@@ -166,6 +163,9 @@ func (source *SelectedCatalogSource) openSelectedRoot(
 	record, err := source.buildSelectedRootRecord(filepath.Base(absolute), relative, slot, parent, kind, opened, identity, candidate)
 	if err != nil {
 		return catalog.NodeRecord{}, nil, err
+	}
+	if selection.followed != nil {
+		source.traceSelectedRootLink(slot)
 	}
 	ownedRoot = true
 	return record, root, nil

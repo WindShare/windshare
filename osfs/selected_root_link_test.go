@@ -46,10 +46,9 @@ func openSelection(t *testing.T, selection string, omissions catalog.SourceOmiss
 	return source, err
 }
 
-// The selected root is the user's explicit choice, so a final link is followed
-// as the kernel follows it, with or without a trailing separator. A shell entered
-// through a link reports it in $PWD, which filepath.Abs returns for ".".
-func TestSelectedRootFollowsAFinalLinkTheKernelFollows(t *testing.T) {
+// filepath.Abs reports "." as a shell's logical $PWD and drops a trailing "/" or
+// "/.". Such spellings name the directory the kernel reaches, not the link.
+func TestSelectionResolvingThroughAFinalLinkSharesTheDirectory(t *testing.T) {
 	fixture := newLinkedSelectionFixture(t)
 	chain := filepath.Join(fixture.parent, "chain")
 	if err := os.Symlink(fixture.link, chain); err != nil {
@@ -58,12 +57,11 @@ func TestSelectedRootFollowsAFinalLinkTheKernelFollows(t *testing.T) {
 	t.Chdir(fixture.link)
 	separator := string(filepath.Separator)
 	for name, test := range map[string]struct{ selection, root string }{
-		"link":               {fixture.link, "link"},
-		"dot in linked cwd":  {".", "link"},
-		"trailing separator": {fixture.link + separator, "link"},
-		"trailing dot":       {fixture.link + separator + ".", "link"},
-		"parent of a child":  {"inner" + separator + "..", "link"},
-		"two-level chain":    {chain, "chain"},
+		"dot in linked cwd":      {".", "link"},
+		"trailing separator":     {fixture.link + separator, "link"},
+		"trailing dot":           {fixture.link + separator + ".", "link"},
+		"parent of a child":      {"inner" + separator + "..", "link"},
+		"chain with a separator": {chain + separator, "chain"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			source, err := openSelection(t, test.selection, nil)
@@ -84,19 +82,34 @@ func TestSelectedRootFollowsAFinalLinkTheKernelFollows(t *testing.T) {
 	}
 }
 
-func TestSelectedFileLinkSharesItsTargetUnderTheTypedName(t *testing.T) {
+// A path naming a link keeps the documented no-follow boundary: a glob match, a
+// script's "$HOME/link" or a desktop selection never reaches outside it.
+func TestSelectionNamingALinkStaysRefused(t *testing.T) {
 	fixture := newLinkedSelectionFixture(t)
+	chain := filepath.Join(fixture.parent, "chain")
+	if err := os.Symlink(fixture.link, chain); err != nil {
+		t.Fatal(err)
+	}
 	fileLink := filepath.Join(fixture.parent, "current.txt")
 	if err := os.Symlink(filepath.Join(fixture.target, "a.txt"), fileLink); err != nil {
 		t.Fatal(err)
 	}
-	source, err := openSelection(t, fileLink, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	root := source.SelectedRoots()[0]
-	if _, file := root.FileID(); !file || root.Entry().Name() != "current.txt" {
-		t.Fatalf("selected file link = %q file=%v", root.Entry().Name(), file)
+	separator := string(filepath.Separator)
+	for name, paths := range map[string][]string{
+		"directory link":            {fixture.link},
+		"chain":                     {chain},
+		"file link":                 {fileLink},
+		"file link with separator":  {fileLink + separator},
+		"glob match among siblings": {filepath.Join(fixture.target, "a.txt"), fixture.link},
+	} {
+		t.Run(name, func(t *testing.T) {
+			source, err := NewSelectedFileSource(context.Background(), SelectedCatalogSourceConfig{
+				Paths: paths, SyntheticRoot: catalog.DirectoryID{1},
+			})
+			if source != nil || !errors.Is(err, content.ErrUnsupportedStability) {
+				t.Fatalf("selection %q = %v, %v", paths, source, err)
+			}
+		})
 	}
 }
 
@@ -106,7 +119,7 @@ func TestSelectedLinkOmissionsKeepTheTypedPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	var reports []catalog.SourceOmissions
-	source, err := openSelection(t, fixture.link, catalog.SourceOmissionObserverFunc(func(value catalog.SourceOmissions) {
+	source, err := openSelection(t, fixture.link+string(filepath.Separator), catalog.SourceOmissionObserverFunc(func(value catalog.SourceOmissions) {
 		reports = append(reports, value)
 	}))
 	if err != nil {
@@ -125,8 +138,12 @@ func TestSelectedLinkOmissionsKeepTheTypedPath(t *testing.T) {
 	}
 }
 
-func TestSelectedLinkResolvingElsewhereStaysUnsupported(t *testing.T) {
+func TestSelectionThroughAFinalLinkKeepsKernelRefusals(t *testing.T) {
 	fixture := newLinkedSelectionFixture(t)
+	dangling := filepath.Join(fixture.parent, "dangling")
+	if err := os.Symlink(filepath.Join(fixture.parent, "missing"), dangling); err != nil {
+		t.Fatal(err)
+	}
 	elsewhere := filepath.Join(fixture.parent, "elsewhere", "child")
 	if err := os.MkdirAll(elsewhere, 0o700); err != nil {
 		t.Fatal(err)
@@ -140,6 +157,7 @@ func TestSelectedLinkResolvingElsewhereStaysUnsupported(t *testing.T) {
 		failure   catalog.SourceFailure
 		cause     error
 	}{
+		"dangling link with separator": {dangling + separator, catalog.SourceFailureMissing, fs.ErrNotExist},
 		// Lexical cleaning yields "link", but the kernel resolves the typed path to "elsewhere".
 		"lexical and kernel disagree": {fixture.link + separator + "jump" + separator + "..", catalog.SourceFailureUnsupported, content.ErrUnsupportedStability},
 	} {
@@ -157,27 +175,28 @@ func TestSelectedLinkResolvingElsewhereStaysUnsupported(t *testing.T) {
 
 // Linux fs.protected_symlinks answers EACCES for a link the kernel refuses to
 // follow even though user-space EvalSymlinks would resolve it.
-func TestSelectedLinkTheKernelRefusesToFollowReportsAccessDenied(t *testing.T) {
+func TestSelectionTheKernelRefusesToFollowReportsAccessDenied(t *testing.T) {
 	fixture := newLinkedSelectionFixture(t)
+	selection := fixture.link + string(filepath.Separator)
 	refuse := func(string) (fs.FileInfo, error) {
-		return nil, &fs.PathError{Op: "stat", Path: fixture.link, Err: fs.ErrPermission}
+		return nil, &fs.PathError{Op: "stat", Path: selection, Err: fs.ErrPermission}
 	}
-	_, err := resolveSelectedRoot(fixture.link, refuse)
+	_, err := resolveSelectedRoot(selection, refuse)
 	failure, classified := errors.AsType[*catalog.SourceError](classifySourceError("acquire selected root", catalog.SourceReference{}, err))
 	if !errors.Is(err, fs.ErrPermission) || !classified || failure.Failure != catalog.SourceFailureAccessDenied {
 		t.Fatalf("kernel refusal = %v", err)
 	}
 	disagree := func(string) (fs.FileInfo, error) { return os.Stat(fixture.parent) }
-	if _, err := resolveSelectedRoot(fixture.link, disagree); !errors.Is(err, content.ErrUnsupportedStability) {
+	if _, err := resolveSelectedRoot(selection, disagree); !errors.Is(err, content.ErrUnsupportedStability) {
 		t.Fatalf("kernel and lexical resolution disagree = %v", err)
 	}
 }
 
 func TestSelectedLinkRootMustOpenTheKernelResolvedObject(t *testing.T) {
 	fixture := newLinkedSelectionFixture(t)
-	selection, err := resolveSelectedRoot(fixture.link, os.Stat)
-	if err != nil {
-		t.Fatal(err)
+	selection, err := resolveSelectedRoot(fixture.link+string(filepath.Separator), os.Stat)
+	if err != nil || selection.followed == nil {
+		t.Fatalf("selection = %+v, %v", selection, err)
 	}
 	opened, err := os.Open(fixture.target)
 	if err != nil {

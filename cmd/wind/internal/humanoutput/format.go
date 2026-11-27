@@ -284,11 +284,11 @@ func outputFailureMessage(code engine.FailureCode) string {
 func sourceFailureMessage(failure engine.Failure) string {
 	switch failure.Code {
 	case engine.FailureSourceMissing:
-		return "Source path not found. Check the path, and the target if it is a link, then try again."
+		return "Source path not found. Check the path and try again."
 	case engine.FailureSourceAccessDenied:
 		return "Permission denied while opening the source. Check read access to the source and its parent directory."
 	case engine.FailureSourceUnsupported:
-		return "This source cannot be shared safely. Select a regular file or directory on a supported filesystem; for a link that resolves elsewhere, select its target directly."
+		return "This source cannot be shared safely. Select a regular file or directory on a supported filesystem; symbolic links are not supported."
 	case engine.FailureSourceCloudPlaceholder:
 		return "This item is stored in the cloud and not fully available on this device. Make this item available on this device, then share it again."
 	case engine.FailureSourceOmitted:
