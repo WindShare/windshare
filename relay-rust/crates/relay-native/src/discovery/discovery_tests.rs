@@ -570,3 +570,243 @@ async fn http_handler_suppresses_disabled_and_cleartext_self_and_rejects_invalid
     let queued = receiver.try_recv().unwrap();
     assert_eq!(queued.endpoint, "wss://node3.example/v2/ws");
 }
+
+fn signed_endpoint(raw: &str, purpose: Purpose) -> Envelope {
+    let node = Runtime::default();
+    node.identify(Identity::generate().unwrap()).unwrap();
+    let ep = Endpoint::parse(raw).unwrap();
+    serde_json::from_value(node.sign_descriptor(&ep, purpose).unwrap()).unwrap()
+}
+
+#[test]
+fn exchange_targets_canonicalize_deduplicate_and_exclude_self() {
+    let now = crate::node::now().unsigned_abs();
+    let (discovery, _receiver) = Discovery::new();
+    for (endpoint, ip) in [
+        ("wss://us1.windshare.cc/v2/ws", "1.1.1.1"),
+        ("wss://sub.example/mount/v2/ws", "1.1.2.1"),
+        ("wss://alt.example:8443/v2/ws", "1.1.3.1"),
+        ("wss://self.example/v2/ws", "1.1.4.1"),
+    ] {
+        let record = signed_endpoint(endpoint, Purpose::Gossip)
+            .verify(Purpose::Gossip, now)
+            .unwrap();
+        discovery
+            .book
+            .lock()
+            .unwrap()
+            .insert(record, ip.parse().unwrap(), now)
+            .unwrap();
+    }
+
+    let mut book_targets = discovery.book.lock().unwrap().targets(now);
+    book_targets.sort_unstable();
+    assert_eq!(
+        book_targets,
+        [
+            "https://alt.example:8443",
+            "https://self.example",
+            "https://sub.example",
+            "https://us1.windshare.cc",
+        ]
+    );
+
+    let seeds: Vec<String> = [
+        "https://us1.windshare.cc",
+        "https://US1.WindShare.cc:443/",
+        "https://sub.example/",
+        "https://alt.example:8443/",
+        "https://alt.example",
+        "https://self.example",
+        "https://SELF.example:443/",
+        "https://eu1.windshare.cc",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+
+    let self_endpoint = Endpoint::parse("wss://self.example/base/v2/ws").unwrap();
+    assert_eq!(
+        discovery.exchange_targets(now, &self_endpoint, &seeds),
+        [
+            "https://alt.example",
+            "https://alt.example:8443",
+            "https://eu1.windshare.cc",
+            "https://sub.example",
+            "https://us1.windshare.cc",
+        ]
+    );
+
+    let (empty, _receiver) = Discovery::new();
+    let only_self = vec!["https://self.example".to_owned()];
+    assert_eq!(
+        empty.exchange_targets(now, &self_endpoint, &only_self),
+        Vec::<String>::new()
+    );
+
+    let local_cleartext = Endpoint::parse("ws://127.0.0.1:8484/v2/ws").unwrap();
+    let dedup_seeds = vec![
+        "https://us1.windshare.cc".to_owned(),
+        "https://US1.WindShare.cc:443/".to_owned(),
+        "https://eu1.windshare.cc/".to_owned(),
+    ];
+    assert_eq!(
+        empty.exchange_targets(now, &local_cleartext, &dedup_seeds),
+        ["https://eu1.windshare.cc", "https://us1.windshare.cc"]
+    );
+}
+
+#[derive(Clone, Copy)]
+enum PostBehavior {
+    Status(StatusCode),
+    DropConnection,
+}
+
+async fn spawn_discovery_stub(
+    get_status: StatusCode,
+    sample_body: Vec<u8>,
+    post_behavior: PostBehavior,
+) -> (
+    url::Url,
+    Arc<Mutex<Vec<(Method, Vec<u8>)>>>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let seen_server = Arc::clone(&seen);
+    let sample_body = Arc::new(sample_body);
+    let server = tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            let seen = Arc::clone(&seen_server);
+            let sample_body = Arc::clone(&sample_body);
+            tokio::spawn(async move {
+                let io = hyper_util::rt::TokioIo::new(stream);
+                let service = hyper::service::service_fn(move |req: Request<Incoming>| {
+                    let seen = Arc::clone(&seen);
+                    let sample_body = Arc::clone(&sample_body);
+                    async move {
+                        let method = req.method().clone();
+                        let body = req.into_body().collect().await.unwrap().to_bytes().to_vec();
+                        seen.lock().unwrap().push((method.clone(), body));
+                        match method {
+                            Method::GET => Ok::<_, std::io::Error>(
+                                Response::builder()
+                                    .status(get_status)
+                                    .header("content-type", "application/json")
+                                    .header("connection", "close")
+                                    .body(Full::new(Bytes::from((*sample_body).clone())))
+                                    .unwrap(),
+                            ),
+                            Method::POST => match post_behavior {
+                                PostBehavior::Status(status) => Ok(Response::builder()
+                                    .status(status)
+                                    .header("connection", "close")
+                                    .body(Full::new(Bytes::new()))
+                                    .unwrap()),
+                                PostBehavior::DropConnection => {
+                                    Err(std::io::Error::other("simulated post drop"))
+                                }
+                            },
+                            _ => Ok(Response::builder()
+                                .status(StatusCode::METHOD_NOT_ALLOWED)
+                                .header("connection", "close")
+                                .body(Full::new(Bytes::new()))
+                                .unwrap()),
+                        }
+                    }
+                });
+                let _ = hyper::server::conn::http1::Builder::new()
+                    .serve_connection(io, service)
+                    .await;
+            });
+        }
+    });
+    let url = url::Url::parse(&format!("http://{addr}{PATH}")).unwrap();
+    (url, seen, server)
+}
+
+#[tokio::test]
+async fn exchange_pulls_peers_even_when_post_fails_or_is_rejected() {
+    let remote_peer = signed_endpoint("wss://neighbor.example/v2/ws", Purpose::Gossip);
+    let sample_body = serde_json::to_vec(&vec![remote_peer]).unwrap();
+    let own = signed_endpoint("wss://self.example/v2/ws", Purpose::Gossip);
+    let own_json = serde_json::to_value(&own).unwrap();
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+
+    for behavior in [
+        PostBehavior::Status(StatusCode::ACCEPTED),
+        PostBehavior::Status(StatusCode::TOO_MANY_REQUESTS),
+        PostBehavior::Status(StatusCode::BAD_REQUEST),
+        PostBehavior::DropConnection,
+    ] {
+        let (discovery, mut receiver) = Discovery::new();
+        let (url, seen, server) =
+            spawn_discovery_stub(StatusCode::OK, sample_body.clone(), behavior).await;
+
+        discovery
+            .exchange_with_client(&client, &url, "https://peer.example", Some(&own))
+            .await
+            .unwrap();
+
+        let queued = receiver.try_recv().expect("peer queued from GET");
+        assert_eq!(queued.endpoint, "wss://neighbor.example/v2/ws");
+        assert!(receiver.try_recv().is_err());
+
+        let requests = seen.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].0, Method::GET);
+        assert_eq!(requests[1].0, Method::POST);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&requests[1].1).unwrap(),
+            own_json
+        );
+        server.abort();
+    }
+
+    // Observer-only nodes (own = None) pull samples without sending POST.
+    let (discovery, mut receiver) = Discovery::new();
+    let (url, seen, server) = spawn_discovery_stub(
+        StatusCode::OK,
+        sample_body,
+        PostBehavior::Status(StatusCode::ACCEPTED),
+    )
+    .await;
+    discovery
+        .exchange_with_client(&client, &url, "https://peer.example", None)
+        .await
+        .unwrap();
+    assert_eq!(
+        receiver.try_recv().expect("observer peer").endpoint,
+        "wss://neighbor.example/v2/ws"
+    );
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].0, Method::GET);
+    server.abort();
+}
+
+#[tokio::test]
+async fn exchange_skips_post_when_get_fails() {
+    let own = signed_endpoint("wss://self.example/v2/ws", Purpose::Gossip);
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let (discovery, mut receiver) = Discovery::new();
+    let (url, seen, server) = spawn_discovery_stub(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Vec::new(),
+        PostBehavior::Status(StatusCode::ACCEPTED),
+    )
+    .await;
+
+    let error = discovery
+        .exchange_with_client(&client, &url, "https://peer.example", Some(&own))
+        .await
+        .expect_err("GET failure should fail exchange");
+    assert!(error.to_string().contains("500"));
+    assert!(receiver.try_recv().is_err());
+
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].0, Method::GET);
+    server.abort();
+}

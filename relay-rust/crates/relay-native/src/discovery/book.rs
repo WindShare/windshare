@@ -108,25 +108,23 @@ impl Book {
     }
 
     pub fn note_exchange_success(&mut self, peer: &str) {
-        let Ok(origin) = transport::origin(peer).map(|url| url.origin().ascii_serialization())
-        else {
+        let Ok(origin) = transport::canonical_origin_str(peer) else {
             return;
         };
         for entry in self.peers.values_mut() {
-            if entry.record.origin.origin().ascii_serialization() == origin {
+            if transport::canonical_origin(&entry.record.origin) == origin {
                 entry.failures = 0;
             }
         }
     }
 
     pub fn note_exchange_failure(&mut self, peer: &str) -> bool {
-        let Ok(origin) = transport::origin(peer).map(|url| url.origin().ascii_serialization())
-        else {
+        let Ok(origin) = transport::canonical_origin_str(peer) else {
             return false;
         };
         let mut evicted = Vec::new();
         for (key, entry) in &mut self.peers {
-            if entry.record.origin.origin().ascii_serialization() != origin {
+            if transport::canonical_origin(&entry.record.origin) != origin {
                 continue;
             }
             entry.failures = entry.failures.saturating_add(1);
@@ -184,7 +182,7 @@ impl Book {
         self.peers
             .values()
             .filter(|p| p.record.expires > now)
-            .map(|p| p.record.origin.origin().ascii_serialization())
+            .map(|p| transport::canonical_origin(&p.record.origin))
             .collect()
     }
 }

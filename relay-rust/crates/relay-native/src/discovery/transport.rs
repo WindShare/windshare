@@ -54,6 +54,17 @@ pub(super) fn origin(raw: &str) -> Result<Url> {
     Ok(url)
 }
 
+/// Canonicalizes a validated node URL into its `scheme://host[:port]` origin
+/// without path or trailing slash so book peers, seeds, and local endpoints
+/// compare identically.
+pub(super) fn canonical_origin(url: &Url) -> String {
+    url.origin().ascii_serialization()
+}
+
+pub(super) fn canonical_origin_str(raw: &str) -> Result<String> {
+    origin(raw).map(|url| canonical_origin(&url))
+}
+
 pub(super) async fn pinned(url: &Url) -> Result<(Client, IpAddr)> {
     let host = url
         .host_str()

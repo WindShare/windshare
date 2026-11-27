@@ -190,24 +190,18 @@ impl Discovery {
         Ok(())
     }
 
-    async fn exchange(&self, peer: &str, own: Option<&Envelope>) -> Result<()> {
-        let url = transport::origin(peer)?.join(PATH)?;
-        let (client, _) = transport::pinned(&url).await?;
-        if let Some(own) = own {
-            // POST rejection (rate limits or a busy probe queue) does not indicate
-            // an offline peer; still pull its sample and judge reachability by GET.
-            match client.post(url.clone()).json(own).send().await {
-                Ok(response) => {
-                    if let Err(error) = response.error_for_status() {
-                        tracing::debug!(event = "discovery_announce_rejected", %peer, %error);
-                    }
-                }
-                Err(error) => {
-                    tracing::debug!(event = "discovery_announce_failed", %peer, %error);
-                }
-            }
-        }
-        let bytes = transport::body(client.get(url).send().await?, SAMPLE * MAX_RECORD).await?;
+    async fn exchange_with_client(
+        &self,
+        client: &reqwest::Client,
+        url: &url::Url,
+        peer: &str,
+        own: Option<&Envelope>,
+    ) -> Result<()> {
+        // Pull before announcing so remote POST rejections (rate limits or a full
+        // probe queue) never block peer sampling or mark a busy peer dead, while
+        // unreachable peers still fail fast on a single request timeout.
+        let bytes =
+            transport::body(client.get(url.clone()).send().await?, SAMPLE * MAX_RECORD).await?;
         let entries: Vec<Envelope> = serde_json::from_slice(&bytes)?;
         ensure!(entries.len() <= SAMPLE, "oversized sample");
         let now = crate::node::now().unsigned_abs();
@@ -223,7 +217,46 @@ impl Discovery {
                 tracing::debug!(event="discovery_rejected", source=%peer, %error);
             }
         }
+        if let Some(own) = own {
+            match client.post(url.clone()).json(own).send().await {
+                Ok(response) => {
+                    if let Err(error) = response.error_for_status() {
+                        tracing::debug!(event = "discovery_announce_rejected", %peer, %error);
+                    }
+                }
+                Err(error) => {
+                    tracing::debug!(event = "discovery_announce_failed", %peer, %error);
+                }
+            }
+        }
         Ok(())
+    }
+
+    async fn exchange(&self, peer: &str, own: Option<&Envelope>) -> Result<()> {
+        let url = transport::origin(peer)?.join(PATH)?;
+        let (client, _) = transport::pinned(&url).await?;
+        self.exchange_with_client(&client, &url, peer, own).await
+    }
+
+    fn exchange_targets(
+        &self,
+        now: u64,
+        endpoint: &crate::Endpoint,
+        seeds: &[String],
+    ) -> Vec<String> {
+        let own_origin = transport::canonical_origin_str(endpoint.relay_url()).ok();
+        let mut targets = self.book.lock().expect("peer book").targets(now);
+        targets.extend(
+            seeds
+                .iter()
+                .filter_map(|seed| transport::canonical_origin_str(seed).ok()),
+        );
+        if let Some(own) = own_origin.as_deref() {
+            targets.retain(|target| target != own);
+        }
+        targets.sort_unstable();
+        targets.dedup();
+        targets
     }
 
     async fn exchange_round(
@@ -233,23 +266,7 @@ impl Discovery {
         own: Option<&Envelope>,
         cursor: usize,
     ) {
-        let own_origin =
-            transport::origin(endpoint.relay_url()).map(|url| url.origin().ascii_serialization());
-        let mut targets = self
-            .book
-            .lock()
-            .expect("peer book")
-            .targets(crate::node::now().unsigned_abs());
-        for seed in seeds {
-            if let Ok(url) = transport::origin(seed) {
-                targets.push(url.origin().ascii_serialization());
-            }
-        }
-        if let Ok(own_origin) = own_origin {
-            targets.retain(|target| target != &own_origin);
-        }
-        targets.sort();
-        targets.dedup();
+        let targets = self.exchange_targets(crate::node::now().unsigned_abs(), endpoint, seeds);
         if targets.is_empty() {
             return;
         }
