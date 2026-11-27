@@ -802,3 +802,115 @@ func TestCommunityAuthBypassRetiresFailedOfficialRouteAtLimit(t *testing.T) {
 		t.Fatal(set.ReadyRelayURL(), candidates)
 	}
 }
+
+type trackingRetiredEndpoint struct {
+	*endpoint
+	observeCalls int
+	waitCalls    int
+}
+
+func (e *trackingRetiredEndpoint) ObserveRegistration(observer func(RegistrationState)) {
+	e.mu.Lock()
+	e.observeCalls++
+	e.mu.Unlock()
+	e.endpoint.ObserveRegistration(observer)
+}
+
+func (e *trackingRetiredEndpoint) WaitReady(ctx context.Context) error {
+	e.mu.Lock()
+	e.waitCalls++
+	e.mu.Unlock()
+	return e.endpoint.WaitReady(ctx)
+}
+
+func TestFreezeRegistrationsRetiresExcludedPendingRoutesAndUpdatesStatus(t *testing.T) {
+	plan := relayplan.Plan{
+		Network: []relayplan.Candidate{
+			{URL: "official", Source: relayplan.Official, Zone: "cn"},
+			{URL: "comm-verified", Source: relayplan.Community, Verified: true},
+			{URL: "comm-unverified", Source: relayplan.Community},
+			{URL: "comm-failed", Source: relayplan.Community},
+		},
+	}
+	verified := &waitingRegistration{endpoint: newEndpoint(), ready: make(chan struct{}), observed: make(chan struct{})}
+	unverifiedDialed := make(chan struct{})
+	unverifiedCanceled := make(chan struct{})
+	releaseUnverified := make(chan struct{})
+	racedEndpoint := &trackingRetiredEndpoint{endpoint: newEndpoint()}
+	failedDone := make(chan struct{})
+
+	set, err := NewPlannedSender(t.Context(), plan, func(ctx context.Context, url string) (SenderEndpoint, error) {
+		switch url {
+		case "official":
+			return newEndpoint(), nil
+		case "comm-verified":
+			return verified, nil
+		case "comm-unverified":
+			close(unverifiedDialed)
+			<-ctx.Done()
+			close(unverifiedCanceled)
+			<-releaseUnverified
+			// Simulate dial returning a freshly constructed endpoint right after retirement.
+			return racedEndpoint, nil
+		case "comm-failed":
+			close(failedDone)
+			return nil, errors.New("probe failed")
+		default:
+			return nil, fmt.Errorf("unexpected relay %s", url)
+		}
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	statusChanges := make(chan SenderStatus, 16)
+	set.ObserveStatus(func(status SenderStatus) {
+		statusChanges <- status
+	})
+	if err := set.WaitReady(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	waitValue(t, verified.observed)
+	waitValue(t, unverifiedDialed)
+	waitValue(t, failedDone)
+	for set.Status().Availability.Terminal != 1 {
+		waitValue(t, statusChanges)
+	}
+	// Drain earlier notifications before asserting the freeze transition.
+	for len(statusChanges) > 0 {
+		<-statusChanges
+	}
+
+	// Even if keep returns false for firstReady, the publishing route stays protected.
+	frozen := set.FreezeRegistrations(func(url string) bool {
+		return url != "comm-unverified" && url != "official"
+	})
+	waitValue(t, unverifiedCanceled)
+
+	if !slices.Equal(frozen.Candidates, []string{"comm-verified", "official"}) ||
+		!slices.Equal(frozen.Admitted, []string{"official"}) ||
+		!slices.Equal(frozen.Rejected, []string{"comm-failed"}) {
+		t.Fatalf("frozen registrations = %+v", frozen)
+	}
+	status := waitValue(t, statusChanges)
+	if status.Availability.Total != 3 || status.Availability.Available != 1 || status.Availability.Terminal != 1 {
+		t.Fatalf("status after freeze = %+v, want Total=3 Available=1 Terminal=1", status)
+	}
+
+	close(releaseUnverified)
+	// Verified pending route remains active and can still admit after publication.
+	verified.publish(RegistrationAvailable)
+	close(verified.ready)
+	if got := waitValue(t, statusChanges); got.Availability.Available != 2 || got.Availability.Total != 3 {
+		t.Fatalf("status after verified admission = %+v", got)
+	}
+
+	cleanupSet(t, set)
+	racedEndpoint.mu.Lock()
+	observeCalls, waitCalls, stopped, cleaned := racedEndpoint.observeCalls, racedEndpoint.waitCalls, racedEndpoint.stopped, racedEndpoint.cleaned
+	racedEndpoint.mu.Unlock()
+	if observeCalls != 0 || waitCalls != 0 || !stopped || !cleaned {
+		t.Fatalf("retired raced endpoint was not stopped cleanly before WaitReady: observe=%d wait=%d stopped=%v cleaned=%v",
+			observeCalls, waitCalls, stopped, cleaned)
+	}
+}

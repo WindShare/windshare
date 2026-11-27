@@ -11,6 +11,7 @@ import (
 
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/liveshare"
 
 	sendersession "github.com/windshare/windshare/core/session/sendersession"
@@ -127,6 +128,11 @@ func (s *activeShare) run(ctx, resourceContext context.Context, request Request)
 			if err := route.Check(ctx); err != nil {
 				return nil, err
 			}
+			// Publication freezes verified community routes by retiring unverified
+			// ones; avoid flipping Ready or preparing a lifecycle after retirement.
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			route.Ready.Store(true)
 		}
 		return prepareRelay(s.prepared, candidate, d, o)
@@ -165,10 +171,10 @@ func (s *activeShare) run(ctx, resourceContext context.Context, request Request)
 	if err := s.relays.WaitReady(ctx); err != nil {
 		return task.FailureNetwork, err
 	}
-	return s.serve(ctx, resourceContext, urls)
+	return s.serve(ctx, resourceContext, urls, candidates)
 }
 
-func (s *activeShare) serve(ctx, resourceContext context.Context, initial []string) (task.FailureClass, error) {
+func (s *activeShare) serve(ctx, resourceContext context.Context, initial []string, candidates map[string]relayprofile.Registration) (task.FailureClass, error) {
 	d, o := s.dependencies, s.observations
 	endpoint, err := v2.NormalizeRelayEndpoint(s.relays.ReadyRelayURL())
 	if err != nil {
@@ -202,12 +208,7 @@ func (s *activeShare) serve(ctx, resourceContext context.Context, initial []stri
 	// Admission belongs to the share lifetime, so callers need no presentation
 	// acknowledgement to make a returned capability usable.
 	s.server = startSessionServer(resourceContext, s.factory, s.relays, o)
-	registrations := relayset.SenderRegistrations{Candidates: initial, Admitted: []string{s.relays.ReadyRelayURL()}}
-	if source, ok := s.relays.(interface {
-		Registrations() relayset.SenderRegistrations
-	}); ok {
-		registrations = source.Registrations()
-	}
+	registrations := s.freezePublishedRegistrations(initial, candidates)
 	if !d.Controller.publish(Ready{Capability: s.prepared.Capability(), SelectedRootSummary: s.prepared.SelectedRootSummary(), RelayEndpoint: endpoint, Registrations: registrations}) {
 		return task.FailureNone, context.Cause(ctx)
 	}
@@ -226,6 +227,39 @@ func (s *activeShare) serve(ctx, resourceContext context.Context, initial []stri
 		s.server.result, s.server.received = err, true
 		return task.FailureNetwork, err
 	}
+}
+
+func (s *activeShare) freezePublishedRegistrations(initial []string, candidates map[string]relayprofile.Registration) relayset.SenderRegistrations {
+	if source, ok := s.relays.(interface {
+		FreezeRegistrations(keep func(string) bool) relayset.SenderRegistrations
+	}); ok {
+		var retired []string
+		registrations := source.FreezeRegistrations(func(url string) bool {
+			candidate, ok := candidates[url]
+			if ok && (candidate.Community == nil || candidate.Community.Ready.Load()) {
+				return true
+			}
+			retired = append(retired, url)
+			return false
+		})
+		if len(retired) > 0 && s.dependencies.Control.Diagnostics.Enabled() {
+			slices.Sort(retired)
+			items := make([]diagnostics.Value, len(retired))
+			for i, url := range retired {
+				items[i] = diagnostics.Text(url)
+			}
+			s.dependencies.Control.Diagnostics.Emit(diagnostics.New("share_publication_retired_unverified_routes", diagnostics.Fields{
+				"retired_relays": diagnostics.Array(items...),
+			}))
+		}
+		return registrations
+	}
+	if source, ok := s.relays.(interface {
+		Registrations() relayset.SenderRegistrations
+	}); ok {
+		return source.Registrations()
+	}
+	return relayset.SenderRegistrations{Candidates: initial, Admitted: []string{s.relays.ReadyRelayURL()}}
 }
 
 func (s *activeShare) close() (task.FailureClass, error) {

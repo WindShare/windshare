@@ -110,11 +110,12 @@ func (s *Sender) startLocked(url string, dial SenderFactory) {
 func (s *Sender) run(ctx context.Context, url string, dial SenderFactory) {
 	defer s.workers.Done()
 	endpoint, err := dial(ctx, url)
-	s.mu.Lock()
-	if endpoint != nil {
-		s.endpoints = append(s.endpoints, endpoint)
+	if !s.registerDialed(url, endpoint) {
+		if endpoint != nil {
+			endpoint.StopRecovery()
+		}
+		return
 	}
-	s.mu.Unlock()
 	if err == nil && endpoint == nil {
 		err = ErrConfig
 	}
@@ -124,8 +125,35 @@ func (s *Sender) run(ctx context.Context, url string, dial SenderFactory) {
 		})
 		err = endpoint.WaitReady(ctx)
 	}
+	selected, notifyFallback := s.finishRegistration(url, err)
+	if notifyFallback != nil {
+		notifyFallback()
+	}
+	if !selected || endpoint == nil || err != nil {
+		if !selected && endpoint != nil {
+			endpoint.StopRecovery()
+		}
+		return
+	}
+	s.acceptEndpoint(ctx, url, endpoint)
+}
+
+func (s *Sender) registerDialed(url string, endpoint SenderEndpoint) bool {
 	s.mu.Lock()
-	s.pendingRegistrations--
+	defer s.mu.Unlock()
+	if endpoint != nil {
+		s.endpoints = append(s.endpoints, endpoint)
+	}
+	_, selected := s.routes[url]
+	if !selected {
+		s.finishPendingLocked()
+	}
+	return selected
+}
+
+func (s *Sender) finishRegistration(url string, err error) (bool, func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	_, selected := s.routes[url]
 	var notifyFallback func()
 	if selected && err == nil {
@@ -136,26 +164,21 @@ func (s *Sender) run(ctx context.Context, url string, dial SenderFactory) {
 		s.registrationErrors = append(s.registrationErrors, &RegistrationFailure{URL: url, Cause: err})
 		notifyFallback = s.setRegistrationLocked(url, routeRegistration{terminal: true})
 	}
+	s.finishPendingLocked()
+	return selected, notifyFallback
+}
+
+func (s *Sender) finishPendingLocked() {
+	s.pendingRegistrations--
 	if s.firstReady != "" || s.pendingRegistrations == 0 {
 		s.readyOnce.Do(func() { close(s.ready) })
 	}
-	s.mu.Unlock()
-	if notifyFallback != nil {
-		notifyFallback()
-	}
-	if !selected || endpoint == nil || err != nil {
-		if !selected && endpoint != nil {
-			endpoint.StopRecovery()
-		}
-		return
-	}
+}
+
+func (s *Sender) acceptEndpoint(ctx context.Context, url string, endpoint SenderEndpoint) {
 	for {
 		channel, err := endpoint.Accept(ctx)
-		if err != nil {
-			s.setRegistration(url, routeRegistration{terminal: true})
-			return
-		}
-		if channel == nil {
+		if err != nil || channel == nil {
 			s.setRegistration(url, routeRegistration{terminal: true})
 			return
 		}
@@ -195,6 +218,35 @@ type SenderRegistrations struct {
 func (s *Sender) Registrations() SenderRegistrations {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.registrationsLocked()
+}
+
+// FreezeRegistrations atomically retires active routes excluded from publication
+// and returns the frozen registration snapshot. The keep predicate runs under
+// s.mu and must be non-blocking and non-reentrant.
+func (s *Sender) FreezeRegistrations(keep func(string) bool) SenderRegistrations {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var retired bool
+	if keep != nil {
+		for url, registration := range s.routes {
+			if registration.terminal || url == s.firstReady || keep(url) {
+				continue
+			}
+			s.retireRouteLocked(url)
+			retired = true
+		}
+	}
+	if s.firstReady != "" {
+		s.startup = nil
+	}
+	if retired && !s.stopping && s.ctx.Err() == nil && s.observer != nil {
+		s.observer(s.statusLocked())
+	}
+	return s.registrationsLocked()
+}
+
+func (s *Sender) registrationsLocked() SenderRegistrations {
 	var snapshot SenderRegistrations
 	for _, failure := range s.registrationErrors {
 		snapshot.Rejected = append(snapshot.Rejected, failure.URL)
