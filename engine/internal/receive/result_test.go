@@ -379,6 +379,10 @@ func TestReceiveSettlementPreservesReplacementCauseOnlyForTerminalSessionTranspo
 	if err != nil {
 		t.Fatal(err)
 	}
+	checkpointIO, err := transferfault.NewCheckpoint(transferfault.ScopeOutputPause, transferfault.CheckpointStateIO)
+	if err != nil {
+		t.Fatal(err)
+	}
 	sourceDrift, err := transferfault.NewSource(transferfault.ScopeFileLocal, transferfault.SourceRevisionChanged)
 	if err != nil {
 		t.Fatal(err)
@@ -455,15 +459,49 @@ func TestReceiveSettlementPreservesReplacementCauseOnlyForTerminalSessionTranspo
 			wantStop:    ShareStopUnconfirmed,
 		},
 		{
-			name: "output fault ignores replacement error",
+			name: "output fault ignores replacement error and stays local",
 			mutate: func(input *SettlementInput) {
 				input.Result.TerminationFault = outputIO
 				input.ReplacementError = waitExpired
 			},
 			wantOutcome: task.OutcomePaused,
-			wantClass:   task.FailureNetwork,
+			wantClass:   task.FailureLocal,
 			wantFault:   outputIO,
 			wantStop:    ShareStopUnconfirmed,
+		},
+		{
+			name: "checkpoint fault ignores replacement error and stays local",
+			mutate: func(input *SettlementInput) {
+				input.Result.TerminationFault = checkpointIO
+				input.ReplacementError = waitExpired
+			},
+			wantOutcome: task.OutcomePaused,
+			wantClass:   task.FailureLocal,
+			wantFault:   checkpointIO,
+			wantStop:    ShareStopUnconfirmed,
+		},
+		{
+			name: "settlement output fault stays local despite concurrent network errors",
+			mutate: func(input *SettlementInput) {
+				input.Result.SettlementFault = outputIO
+				input.RuntimeError = errors.New("peer closed during finalize")
+				input.ReplacementError = waitExpired
+			},
+			wantOutcome: task.OutcomePaused,
+			wantClass:   task.FailureLocal,
+			wantFault:   outputIO,
+			wantStop:    ShareStopUnconfirmed,
+		},
+		{
+			name: "checkpoint fault keeps precedence and local class over relay stop",
+			mutate: func(input *SettlementInput) {
+				input.Result.TerminationFault = checkpointIO
+				input.ConnectionError = shareStopped
+			},
+			wantOutcome: task.OutcomeFailed,
+			wantClass:   task.FailureLocal,
+			wantFault:   checkpointIO,
+			wantStop:    ShareStopRelays,
 		},
 		{
 			name: "protocol fault ignores replacement error",
@@ -552,5 +590,14 @@ func TestPreparationReplacementFailureClassifiesNetworkAndShareStopPrecedence(t 
 	if !ok || failure.Code != FailureShareStopped || failure.Fault.Valid() || failure.ReplacementCause != nil ||
 		stopped.FailureClass != task.FailureNetwork || stopped.Value.Recovery.ShareStop != ShareStopRelays {
 		t.Fatalf("stopped preparation failure = %+v (failure=%+v)", stopped, failure)
+	}
+
+	// Failure.Unwrap must expose both Cause and ReplacementCause when both are set.
+	primaryCause := errors.New("primary transport cause")
+	replacementCause := errors.New("replacement cause")
+	combined := Failure{Fault: sessionTransport, Cause: primaryCause, ReplacementCause: replacementCause}
+	if !errors.Is(combined, primaryCause) || !errors.Is(combined, replacementCause) {
+		t.Fatalf("combined Failure lost unwrapped cause: primary=%v replacement=%v",
+			errors.Is(combined, primaryCause), errors.Is(combined, replacementCause))
 	}
 }

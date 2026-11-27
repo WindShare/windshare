@@ -145,7 +145,7 @@ func (active *receiveOperation) settleAttempt(ctx context.Context, settlement *S
 	failure.Cause = errors.Join(failure.Cause, replacementErr, peerStop, relayStop)
 	if replacementErr != nil && failure.Code == 0 {
 		if boundary, ok := errors.AsType[*transferfault.BoundaryError](failure.Cause); ok &&
-			boundary != nil && isTerminalSessionTransportFault(boundary.Fault()) {
+			boundary != nil && IsTerminalSessionTransportFault(boundary.Fault()) {
 			failure.Fault = boundary.Fault()
 			failure.ReplacementCause = replacementErr
 			step = stepNetworkFailure

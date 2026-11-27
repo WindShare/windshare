@@ -368,7 +368,7 @@ func classifyAuthorizationState(state relayset.AuthorizationState) (Failure, boo
 
 func classifyReceiveFailure(value receive.Failure) (Failure, bool) {
 	if value.Fault.Valid() {
-		if value.ReplacementCause != nil && isTerminalSessionTransportFault(value.Fault) {
+		if value.ReplacementCause != nil && receive.IsTerminalSessionTransportFault(value.Fault) {
 			if f, known := classifyReplacementCause(value.ReplacementCause, value.Fault); known {
 				return f, true
 			}
@@ -426,7 +426,7 @@ func classifyReplacementCause(cause error, transportFault transferfault.Fault) (
 		return withFallbackFault(f, transportFault), true
 	}
 	if boundary, ok := errors.AsType[*transferfault.BoundaryError](cause); ok && boundary != nil &&
-		boundary.Fault().Valid() && !isTerminalSessionTransportFault(boundary.Fault()) {
+		boundary.Fault().Valid() && !receive.IsTerminalSessionTransportFault(boundary.Fault()) {
 		if f, known := FailureFromFault(boundary.Fault()); known {
 			return f, true
 		}
@@ -438,11 +438,6 @@ func classifyReplacementCause(cause error, transportFault transferfault.Fault) (
 		return withFallbackFault(f, transportFault), true
 	}
 	return Failure{}, false
-}
-
-func isTerminalSessionTransportFault(fault transferfault.Fault) bool {
-	code, ok := fault.SessionCode()
-	return ok && fault.Scope() == transferfault.ScopeSessionTerminal && code == transferfault.SessionTransport
 }
 
 func withFallbackFault(failure Failure, fallback transferfault.Fault) Failure {

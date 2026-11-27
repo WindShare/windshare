@@ -61,11 +61,17 @@ func (failure Failure) Error() string {
 	}
 }
 
-func (failure Failure) Unwrap() error {
-	if failure.Cause != nil {
-		return failure.Cause
+func (failure Failure) Unwrap() []error {
+	switch {
+	case failure.Cause != nil && failure.ReplacementCause != nil:
+		return []error{failure.Cause, failure.ReplacementCause}
+	case failure.Cause != nil:
+		return []error{failure.Cause}
+	case failure.ReplacementCause != nil:
+		return []error{failure.ReplacementCause}
+	default:
+		return nil
 	}
-	return failure.ReplacementCause
 }
 
 type Result struct {
@@ -163,6 +169,8 @@ func Settle(input SettlementInput) (task.Completion[Result], error) {
 		class = task.FailureUsage
 	case resultHasTerminalNetworkFault(r):
 		class = task.FailureNetwork
+	case resultHasLocalStorageFault(r):
+		class = task.FailureLocal
 	case input.CleanupError != nil:
 		class = task.FailureLocal
 	case r.TerminationInterruption.Valid() || r.SettlementInterruption.Valid():
@@ -226,11 +234,22 @@ func resultHasTerminalNetworkFault(r transfer.JobResult) bool {
 	return isTerminalSessionFault(r.TerminationFault)
 }
 
+func resultHasLocalStorageFault(r transfer.JobResult) bool {
+	if isLocalStorageFault(r.TerminationFault) {
+		return true
+	}
+	return !r.TerminationFault.Valid() && isLocalStorageFault(r.SettlementFault)
+}
+
+func isLocalStorageFault(value transferfault.Fault) bool {
+	return value.Domain() == transferfault.DomainOutput || value.Domain() == transferfault.DomainCheckpoint
+}
+
 func isTerminalSessionFault(value transferfault.Fault) bool {
 	return value.Domain() == transferfault.DomainSession && value.Scope() == transferfault.ScopeSessionTerminal
 }
 
-func isTerminalSessionTransportFault(value transferfault.Fault) bool {
+func IsTerminalSessionTransportFault(value transferfault.Fault) bool {
 	code, ok := value.SessionCode()
 	return ok && value.Scope() == transferfault.ScopeSessionTerminal && code == transferfault.SessionTransport
 }
@@ -257,7 +276,7 @@ func stoppedShareFailure(input SettlementInput, primary Failure, class task.Fail
 	if class == task.FailureUsage || r.SourceDriftFault.Valid() || input.CleanupError != nil {
 		return primary, class
 	}
-	if r.TerminationFault.Domain() == transferfault.DomainOutput {
+	if isLocalStorageFault(r.TerminationFault) {
 		return Failure{Fault: r.TerminationFault}, task.FailureLocal
 	}
 	if code, ok := r.SettlementFault.OutputCode(); ok && code == transferfault.OutputContract {
@@ -279,7 +298,7 @@ func resultFailure(input SettlementInput, class task.FailureClass) Failure {
 	}
 	if r.TerminationFault.Valid() {
 		failure := Failure{Fault: r.TerminationFault}
-		if isTerminalSessionTransportFault(r.TerminationFault) {
+		if IsTerminalSessionTransportFault(r.TerminationFault) {
 			failure.ReplacementCause = input.ReplacementError
 		}
 		return failure
