@@ -73,16 +73,41 @@ func (r *Runtime) maintainCommunity(cursor *int) {
 	}
 }
 
+func (r *Runtime) kickCommunity() {
+	select {
+	case r.communityKick <- struct{}{}:
+	default:
+	}
+}
+
+// observeShareOrigin keeps background warming aligned with explicit per-share
+// frontend overrides while letting default shares continue tracking saved
+// settings and built-in LinkHost/BackupEntry failover dynamically.
+func (r *Runtime) observeShareOrigin(frontend, savedFront, origin string) {
+	if frontend != "" && origin != frontendOrigin(savedFront) {
+		r.noteOrigin(origin)
+		return
+	}
+	r.clearExplicitOrigin(origin)
+}
+
 func (r *Runtime) noteOrigin(origin string) {
 	r.mu.Lock()
 	changed := r.communityOrigin != origin
 	r.communityOrigin = origin
 	r.mu.Unlock()
 	if changed {
-		select {
-		case r.communityKick <- struct{}{}:
-		default:
-		}
+		r.kickCommunity()
+	}
+}
+
+func (r *Runtime) clearExplicitOrigin(currentOrigin string) {
+	r.mu.Lock()
+	previous := r.communityOrigin
+	r.communityOrigin = ""
+	r.mu.Unlock()
+	if previous != "" && previous != currentOrigin {
+		r.kickCommunity()
 	}
 }
 
@@ -109,10 +134,7 @@ func (r *Runtime) RelaySettingsChanged(ctx context.Context) {
 	r.communityOrigin = ""
 	r.mu.Unlock()
 	r.deliverCommunityNotice(ctx)
-	select {
-	case r.communityKick <- struct{}{}:
-	default:
-	}
+	r.kickCommunity()
 }
 
 func (r *Runtime) communitySettings(ctx context.Context) (relayconfig.Config, bool) {
@@ -290,12 +312,16 @@ func (r *Runtime) bootstrap(ctx context.Context, scope community.Scope, settings
 	return build()
 }
 
-func (r *Runtime) scope(frontend string) community.Scope {
+func frontendOrigin(frontend string) string {
 	u, err := url.Parse(frontend)
 	if err != nil || u.Host == "" {
-		return community.Scope{Generation: r.generation()}
+		return ""
 	}
-	return community.Scope{Origin: u.Scheme + "://" + u.Host, Generation: r.generation()}
+	return u.Scheme + "://" + u.Host
+}
+
+func (r *Runtime) scope(frontend string) community.Scope {
+	return community.Scope{Origin: frontendOrigin(frontend), Generation: r.generation()}
 }
 
 func (r *Runtime) registration(c relayplan.Candidate, s Selection, scope community.Scope) relayprofile.Registration {

@@ -435,8 +435,8 @@ func TestLiveDescriptorSuppressionAndEviction(t *testing.T) {
 	if err := pool.Verify(t.Context(), scopeA, identity); err == nil {
 		t.Fatal("expected Verify to fail for live disabled")
 	}
-	if len(pool.records()) != 0 || len(pool.Candidates(scopeA)) != 0 || len(pool.STUN(scopeA)) != 0 {
-		t.Fatalf("live disabled peer was not evicted: records=%d candidates=%v stun=%v", len(pool.records()), pool.Candidates(scopeA), pool.STUN(scopeA))
+	if len(pool.records()) != 0 || len(pool.Candidates(scopeA)) != 0 || len(pool.STUN(scopeA.Generation)) != 0 {
+		t.Fatalf("live disabled peer was not evicted: records=%d candidates=%v stun=%v", len(pool.records()), pool.Candidates(scopeA), pool.STUN(scopeA.Generation))
 	}
 
 	sawBudget, sawEvicted := false, false

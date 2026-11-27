@@ -26,7 +26,7 @@ import (
 type Runtime struct {
 	community        *community.Pool
 	communityKick    chan struct{}
-	communityOrigin  string
+	communityOrigin  string // Explicit per-share origin override; empty follows settings or built-in frontend.
 	communityWorkers sync.WaitGroup
 	accounts         *account.Service
 	config           networkconfig.Config
@@ -153,7 +153,7 @@ func (r *Runtime) Plan(ctx context.Context, intent relayprofile.Intent, frontend
 	build := func() (relayplan.Plan, error) { return r.planFor(urls, only, scope, allowed) }
 	plan, err := build()
 	if allowed {
-		r.noteOrigin(scope.Origin)
+		r.observeShareOrigin(frontend, settings.FrontURL, scope.Origin)
 	}
 	if err == nil && !only && len(plan.Configured)+len(plan.Network) == 0 {
 		plan, err = r.bootstrap(ctx, scope, settings, allowed, build)
@@ -202,8 +202,8 @@ func (r *Runtime) Plan(ctx context.Context, intent relayprofile.Intent, frontend
 }
 
 func (r *Runtime) buildPlan(configured []string, only bool) (relayplan.Plan, error) {
-	front := r.frontend("").primary
-	_, allowed := r.communitySettings(r.ctx)
+	settings, allowed := r.communitySettings(r.ctx)
+	front := r.frontend(settings.FrontURL).primary
 	return r.planFor(configured, only, r.scope(front), allowed)
 }
 

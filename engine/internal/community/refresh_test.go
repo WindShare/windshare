@@ -139,9 +139,12 @@ func TestPullWarmRestartAndOriginPolicy(t *testing.T) {
 	if len(peers) != 1 || !peers[0].Verified || pulls.Load() != 1 || upgrades.Load() != 1 {
 		t.Fatalf("peers=%v pulls=%d upgrades=%d", peers, pulls.Load(), upgrades.Load())
 	}
-	stun := pool.STUN(scope)
+	stun := pool.STUN(scope.Generation)
 	if len(stun) != 1 || stun[0].URL != "stun:127.0.0.1:3478" || stun[0].FailureDomain != "127.0.0.0/24" {
 		t.Fatal(stun)
+	}
+	if len(pool.STUN(0)) != 0 || len(pool.STUN(scope.Generation+1)) != 0 {
+		t.Fatalf("STUN leaked across network generations: zero=%v next=%v", pool.STUN(0), pool.STUN(scope.Generation+1))
 	}
 	other := Scope{Origin: "https://other.example", Generation: 1}
 	if err := pool.Verify(t.Context(), other, identity); err == nil || len(pool.Candidates(other)) != 0 {
@@ -149,6 +152,9 @@ func TestPullWarmRestartAndOriginPolicy(t *testing.T) {
 	}
 	if got := pool.Candidates(scope); len(got) != 1 || !got[0].Verified {
 		t.Fatal("rejected origin must not invalidate verified origin", got)
+	}
+	if got := pool.STUN(other.Generation); len(got) != 1 || got[0].URL != "stun:127.0.0.1:3478" {
+		t.Fatalf("rejected browser origin hid origin-independent STUN: %+v", got)
 	}
 	pool.Close()
 	restored := open()
@@ -202,7 +208,7 @@ func TestDisabledContributionExcludedFromPoolAndLiveSTUN(t *testing.T) {
 	if err := pool.check(t.Context(), scope, identity, 0); err == nil {
 		t.Fatal("live disabled node must not be admitted for STUN")
 	}
-	if stun := pool.STUN(scope); len(stun) != 0 {
+	if stun := pool.STUN(scope.Generation); len(stun) != 0 {
 		t.Fatalf("expected no STUN endpoints for disabled node, got %v", stun)
 	}
 
@@ -845,8 +851,8 @@ func TestStaleCacheRecoveryWarmsNewlyDiscoveredPeersWithoutReprobingDeadOnes(t *
 	if verified != fanout {
 		t.Fatalf("expected %d newly discovered peers verified immediately, got %d (%+v)", fanout, verified, pool.Candidates(scope))
 	}
-	if len(pool.STUN(scope)) != fanout {
-		t.Fatalf("expected %d verified community STUN endpoints, got %+v", fanout, pool.STUN(scope))
+	if len(pool.STUN(scope.Generation)) != fanout {
+		t.Fatalf("expected %d verified community STUN endpoints, got %+v", fanout, pool.STUN(scope.Generation))
 	}
 	if deadA.probes.Load() != 1 || deadB.probes.Load() != 1 {
 		t.Fatalf("dead cached peers were re-probed during follow-up warm: a=%d b=%d", deadA.probes.Load(), deadB.probes.Load())

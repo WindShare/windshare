@@ -460,14 +460,18 @@ func publicPrefix(ip netip.Addr) netip.Prefix {
 
 func (p *Pool) Transport() *http.Client { return p.http }
 
-func (p *Pool) STUN(scope Scope) []icepolicy.Endpoint {
-	if p == nil {
+// STUN returns live-verified community STUN endpoints for the current network
+// generation. Native UDP STUN does not depend on browser WebSocket Origin, so
+// validity is keyed on network generation, descriptor lifetime, and dial policy.
+func (p *Pool) STUN(generation uint64) []icepolicy.Endpoint {
+	if p == nil || generation == 0 {
 		return nil
 	}
+	now := p.now()
 	var out []icepolicy.Endpoint
 	for _, r := range p.records() {
 		v := r.live
-		if v.scope != scope || !v.until.After(p.now()) || !p.policy.Permits(v.ip) {
+		if v.scope.Generation != generation || !v.until.After(now) || !p.policy.Permits(v.ip) {
 			continue
 		}
 		family := "ipv6"
