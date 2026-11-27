@@ -96,9 +96,11 @@
         "malformed": 1,
         "not-found": 8,
         "resume-stale": 12,
+        "sender-detached": 15,
         "share-id-collision": 3,
         "starting": 9,
         "stopped": 11,
+        "stopping": 16,
         "unsupported-mode": 2
       },
       "name": "relay-registration-errors"

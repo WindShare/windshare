@@ -58,6 +58,10 @@ pub enum ErrorFrame {
     AccessDenied,
     /// Access authority is temporarily unavailable; share progress is retained.
     AccessUnavailable(RetryAfter),
+    /// The relay holds the share route in grace while the sender is detached; retry after the hint.
+    SenderDetached(RetryAfter),
+    /// A permanent stop for the share is committing; retry after the hint.
+    Stopping(RetryAfter),
 }
 
 impl ErrorFrame {
@@ -80,14 +84,18 @@ impl ErrorFrame {
             Self::ResumeStale => 12,
             Self::AccessDenied => 13,
             Self::AccessUnavailable(_) => 14,
+            Self::SenderDetached(_) => 15,
+            Self::Stopping(_) => 16,
         }
     }
 
     const fn retry_after(self) -> RetryAfter {
         match self {
-            Self::Starting(retry) | Self::Admission(retry) | Self::AccessUnavailable(retry) => {
-                retry
-            }
+            Self::Starting(retry)
+            | Self::Admission(retry)
+            | Self::AccessUnavailable(retry)
+            | Self::SenderDetached(retry)
+            | Self::Stopping(retry) => retry,
             _ => RetryAfter::IMMEDIATE,
         }
     }

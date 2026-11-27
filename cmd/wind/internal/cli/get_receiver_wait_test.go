@@ -78,6 +78,46 @@ func TestGetFirstJoinWaitTimeoutAndCancellation(t *testing.T) {
 	}
 }
 
+func TestGetInitialWaitReportsShareLifecycleErrorsWithoutRelayOutageAdvice(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		relayCode     v2.ErrorCode
+		wantSubstring string
+		wantRetryLink bool
+	}{
+		{"sender detached", v2.ErrorSenderDetached, "The sender is temporarily offline.", true},
+		{"share starting", v2.ErrorStarting, "The share is still starting.", true},
+		{"share stopping", v2.ErrorStopping, "The share is stopping.", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clock := &getRecoveryClock{}
+			output := testoutputroot.New(t)
+			errorsOutput := &lockedTestBuffer{}
+			app := &App{
+				Stdout: &lockedTestBuffer{}, Stderr: errorsOutput, Stdin: strings.NewReader(""),
+				receiverRecoveryOptions: engine.ReceiveRecoverySettings{Clock: clock, Jitter: func(delay time.Duration) time.Duration { return delay }},
+				receiverDial: func(context.Context, engine.ReceiveDialRequest) (engine.ReceiveConnection, error) {
+					return nil, &relayv2.RelayError{Code: tc.relayCode, RetryAfter: 250 * time.Millisecond}
+				},
+			}
+			code := app.Run(context.Background(), []string{"get", validGetTestLink(t), "-o", output.RootPath, "--wait-timeout", "2s"})
+			if code != ExitNetwork {
+				t.Fatalf("exit=%d stderr=%s", code, errorsOutput.String())
+			}
+			got := errorsOutput.String()
+			if !strings.Contains(got, tc.wantSubstring) {
+				t.Fatalf("stderr = %q, want %q", got, tc.wantSubstring)
+			}
+			if strings.Contains(got, "relay is unavailable") || strings.Contains(got, "Retry after") {
+				t.Fatalf("stderr misattributed share lifecycle error to relay outage: %q", got)
+			}
+			if strings.Contains(got, "Retry the original link.") != tc.wantRetryLink {
+				t.Fatalf("stderr retry-link advice mismatch (%v): %q", tc.wantRetryLink, got)
+			}
+		})
+	}
+}
+
 func validGetTestLink(t *testing.T) string {
 	t.Helper()
 	capability := newSemanticCapability(t, "wss://relay.example")

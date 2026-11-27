@@ -189,3 +189,25 @@ fn pending_resume_disconnect_and_timeout_preserve_grace_and_close_the_replaced_o
         assert!(!registered(&complete(&mut relay, &grace, at)));
     }
 }
+
+#[test]
+fn join_reports_sender_detached_during_grace_and_not_found_after_expiry() {
+    let fixture = Fixture::new();
+    let mut relay = fixture.relay();
+    fixture.register(&mut relay);
+    let detached = relay.handle(Input::Disconnected(connection(1)), fixture.at);
+    let grace = work(&detached);
+    let Record::Grace(record) = next_record(&grace) else {
+        panic!("unexpected disconnect must persist grace");
+    };
+    let _ = complete(&mut relay, &grace, fixture.at);
+    assert!(matches!(
+        join_error(&fixture, &mut relay, 2, fixture.at),
+        ErrorFrame::SenderDetached(_)
+    ));
+    let _ = relay.handle(Input::Tick, record.deadline());
+    assert_eq!(
+        join_error(&fixture, &mut relay, 3, record.deadline()),
+        ErrorFrame::NotFound
+    );
+}

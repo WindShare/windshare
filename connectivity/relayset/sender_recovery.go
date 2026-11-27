@@ -295,7 +295,7 @@ func classifyRegistrationFailure(resume bool, failure error) (resumeNext, termin
 		return true, true
 	default:
 		// This includes uncertain REGISTER acknowledgements / AlreadyRegistered,
-		// admission limits, Starting, expired challenges and competing resume claims.
+		// admission limits, Starting, Stopping, expired challenges and competing resume claims.
 		return true, false
 	}
 }

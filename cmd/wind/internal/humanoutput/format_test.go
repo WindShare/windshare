@@ -69,7 +69,8 @@ func TestFailureMessagesCoverClosedVocabulary(t *testing.T) {
 		engine.FailureSelectionMissing, engine.FailureSelectionCollision, engine.FailurePublication,
 		engine.FailureAccountStorageError, engine.FailureRelayRejected, engine.FailureRelayUnavailable,
 		engine.FailureRelayNotFound, engine.FailureRelayStopped, engine.FailureRelayAccessDenied,
-		engine.FailureRelayRouteNotFound, engine.FailureShareStopped, engine.FailureDirectUnavailable,
+		engine.FailureRelayRouteNotFound, engine.FailureShareStarting, engine.FailureSenderDetached,
+		engine.FailureShareStopping, engine.FailureShareStopped, engine.FailureDirectUnavailable,
 		engine.FailureDirectPolicy, engine.FailureDirectBusy, engine.FailureDirectAdmission,
 		engine.FailureSourceUnavailable, engine.FailureSourceChanged, engine.FailureSourceMissing,
 		engine.FailureSourceAccessDenied, engine.FailureSourceUnsupported, engine.FailureSourceOmitted,
@@ -88,5 +89,8 @@ func TestFailureMessagesCoverClosedVocabulary(t *testing.T) {
 	retryable := engine.Failure{Code: engine.FailureRelayUnavailable, RetryAfter: 1001 * time.Millisecond}
 	if got := failureMessage(retryable); !strings.Contains(got, "Retry after 2s") {
 		t.Fatalf("retryable message = %q", got)
+	}
+	if got := failureMessage(engine.Failure{Code: engine.FailureShareStopping}); strings.Contains(got, "Retry the original link.") {
+		t.Fatalf("stopping message should not advise retrying original link: %q", got)
 	}
 }

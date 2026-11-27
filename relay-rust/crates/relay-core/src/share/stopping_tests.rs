@@ -177,7 +177,7 @@ fn duplicate_stop_and_uncertain_commit_do_not_settle_or_reopen_the_share() {
     assert!(duplicate.outputs.iter().any(|output| matches!(
         output,
         Output::Send {
-            control: Control::Error(ErrorFrame::Admission(_)),
+            control: Control::Error(ErrorFrame::Stopping(_)),
             ..
         }
     )));

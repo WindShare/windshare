@@ -62,4 +62,12 @@ fn retry_hints_stop_at_the_limit_every_client_accepts() {
         ErrorFrame::Admission(limit).encode().as_slice(),
         accepted_decoding_case("error/retry-at-limit")
     );
+    assert_eq!(
+        ErrorFrame::SenderDetached(limit).encode().as_slice(),
+        accepted_decoding_case("error/sender-detached")
+    );
+    assert_eq!(
+        ErrorFrame::Stopping(limit).encode().as_slice(),
+        accepted_decoding_case("error/stopping")
+    );
 }

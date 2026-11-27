@@ -56,6 +56,35 @@ func TestFailedRelayRecoveryRemainsAWarningWhenRedirected(t *testing.T) {
 	}
 }
 
+func TestNonTerminalRelayRecoveryOmitsTerminalLinkAdvice(t *testing.T) {
+	origin := engine.RelayOrigin{Scheme: "wss", Host: "relay.example", Port: 443}
+	for _, tc := range []struct {
+		code     engine.FailureCode
+		wantText string
+	}{
+		{engine.FailureSenderDetached, "The sender is temporarily offline."},
+		{engine.FailureShareStarting, "The share is still starting."},
+		{engine.FailureRelayNotFound, "The share is not currently available."},
+		{engine.FailureShareStopping, "The share is stopping."},
+	} {
+		failure := engine.Failure{Code: tc.code}
+		nonTerminal := lineText(formatRelayRecovery(engine.RelayRecovery{
+			Origin: origin, Attempt: 2, State: engine.RelayRecoveryFailed, Failure: &failure,
+		}, SelectSymbols(false)))
+		if !strings.Contains(nonTerminal, tc.wantText) || strings.Contains(nonTerminal, "Retry the original link.") {
+			t.Fatalf("%s non-terminal = %q", tc.code, nonTerminal)
+		}
+		if tc.code != engine.FailureShareStopping {
+			terminal := lineText(formatRelayRecovery(engine.RelayRecovery{
+				Origin: origin, Attempt: 2, State: engine.RelayRecoveryFailed, Terminal: true, Failure: &failure,
+			}, SelectSymbols(false)))
+			if !strings.Contains(terminal, "Retry the original link.") {
+				t.Fatalf("%s terminal = %q", tc.code, terminal)
+			}
+		}
+	}
+}
+
 func TestPeerAttemptIdentitySurvivesEventSequenceAndInterleaving(t *testing.T) {
 	harness := newRenderHarness(t, terminalcanvas.Capabilities{}, true)
 	for _, id := range []string{"first", "second", "first", "first"} {

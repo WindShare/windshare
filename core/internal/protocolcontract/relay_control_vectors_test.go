@@ -26,7 +26,7 @@ const (
 
 	relayErrorAdmission      = 10
 	relayErrorStopped        = 11
-	relayErrorLastCode       = 14
+	relayErrorLastCode       = 16
 	relayRetryLimitMillis    = 30_000
 	relayPermanentRetryProbe = 1_000
 
@@ -272,6 +272,8 @@ func relayControlFrameDecodingVectors(r relayControlFixture) map[string]any {
 			rejectedFrame("unknown-code-zero", relayErrorFrame(0, 0)),
 			{name: "access-denied", encoded: relayErrorFrame(13, 0), accepted: true},
 			{name: "access-unavailable", encoded: relayErrorFrame(14, relayRetryLimitMillis), accepted: true},
+			{name: "sender-detached", encoded: relayErrorFrame(15, relayRetryLimitMillis), accepted: true},
+			{name: "stopping", encoded: relayErrorFrame(16, relayRetryLimitMillis), accepted: true},
 			rejectedFrame("retry-on-access-denied", relayErrorFrame(13, relayPermanentRetryProbe)),
 			rejectedFrame("unknown-code-after-last", relayErrorFrame(relayErrorLastCode+1, 0)),
 			rejectedFrame("retry-on-permanent-refusal", relayErrorFrame(relayErrorStopped, relayPermanentRetryProbe)),

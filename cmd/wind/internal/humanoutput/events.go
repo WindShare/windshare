@@ -109,7 +109,11 @@ func formatRelayRecovery(event engine.RelayRecovery, symbols Symbols) terminalca
 	}
 	style, symbol := terminalcanvas.StyleDefault, symbols.Relay
 	if event.Failure != nil && event.Failure.Valid() {
-		message += " " + failureMessage(*event.Failure)
+		if event.Terminal {
+			message += " " + failureMessage(*event.Failure)
+		} else {
+			message += " " + recoveryFailureMessage(*event.Failure)
+		}
 		style, symbol = terminalcanvas.StyleWarning, symbols.Warning
 	}
 	return statusLine(symbol, message, style)

@@ -1367,6 +1367,20 @@
           "accepted": true
         },
         {
+          "name": "error/sender-detached",
+          "frame": "WS2E",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyRQIAAA8AAHUw",
+          "accepted": true
+        },
+        {
+          "name": "error/stopping",
+          "frame": "WS2E",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyRQIAABAAAHUw",
+          "accepted": true
+        },
+        {
           "name": "error/retry-on-access-denied",
           "frame": "WS2E",
           "direction": "relay-to-client",
@@ -1377,7 +1391,7 @@
           "name": "error/unknown-code-after-last",
           "frame": "WS2E",
           "direction": "relay-to-client",
-          "encodedB64": "V1MyRQIAAA8AAAAA",
+          "encodedB64": "V1MyRQIAABEAAAAA",
           "accepted": false
         },
         {

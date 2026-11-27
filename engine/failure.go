@@ -48,6 +48,9 @@ const (
 	FailureRelayStopped                  FailureCode = "relay_stopped"
 	FailureRelayAccessDenied             FailureCode = "relay_access_denied"
 	FailureRelayRouteNotFound            FailureCode = "relay_route_not_found"
+	FailureShareStarting                 FailureCode = "share_starting"
+	FailureSenderDetached                FailureCode = "sender_detached"
+	FailureShareStopping                 FailureCode = "share_stopping"
 	FailureShareStopped                  FailureCode = "share_stopped"
 	FailureDirectUnavailable             FailureCode = "direct_unavailable"
 	FailureDirectAdmission               FailureCode = "direct_admission"
@@ -316,7 +319,13 @@ func classifyRelayError(relayErr *relayv2.RelayError) (Failure, bool) {
 		code = FailureRelayRejected
 	case v2.ErrorNotFound:
 		code = FailureRelayNotFound
-	case v2.ErrorStarting, v2.ErrorAdmission, v2.ErrorAccessUnavailable:
+	case v2.ErrorStarting:
+		code = FailureShareStarting
+	case v2.ErrorSenderDetached:
+		code = FailureSenderDetached
+	case v2.ErrorStopping:
+		code = FailureShareStopping
+	case v2.ErrorAdmission, v2.ErrorAccessUnavailable:
 		code = FailureRelayUnavailable
 	case v2.ErrorStopped:
 		code = FailureRelayStopped
@@ -326,8 +335,10 @@ func classifyRelayError(relayErr *relayv2.RelayError) (Failure, bool) {
 		return Failure{}, false
 	}
 	f := Failure{Code: code}
-	if (relayErr.Code == v2.ErrorStarting || relayErr.Code == v2.ErrorAdmission ||
-		relayErr.Code == v2.ErrorAccessUnavailable) && relayErr.RetryAfter > 0 {
+	// Share-lifecycle refusals carry short internal polling hints (250ms) for
+	// relayset recovery; keep RetryAfter only for relay-level cooldowns so UI
+	// does not turn internal polling intervals into misleading user advice.
+	if code == FailureRelayUnavailable && relayErr.RetryAfter > 0 {
 		f.RetryAfter = relayErr.RetryAfter
 	}
 	return f, true

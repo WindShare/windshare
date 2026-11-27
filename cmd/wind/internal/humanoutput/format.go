@@ -131,6 +131,16 @@ func statusLine(symbol, text string, style terminalcanvas.Style) terminalcanvas.
 const ConfigureRelaysGuidance = "configure relay candidates with wind config import <file|->, or pass --relay for this share"
 
 func failureMessage(failure engine.Failure) string {
+	return formatFailureMessage(failure, true)
+}
+
+// recoveryFailureMessage describes why an automatic retry failed without
+// appending terminal next-step advice such as "Retry the original link."
+func recoveryFailureMessage(failure engine.Failure) string {
+	return formatFailureMessage(failure, false)
+}
+
+func formatFailureMessage(failure engine.Failure, includeRecoveryAdvice bool) string {
 	var message string
 	switch failure.Code {
 	case engine.FailureCanceled:
@@ -164,7 +174,22 @@ func failureMessage(failure engine.Failure) string {
 	case engine.FailureRelayUnavailable:
 		message = "The relay is unavailable."
 	case engine.FailureRelayNotFound:
-		message = "The share is not currently available. Retry the original link."
+		message = "The share is not currently available."
+		if includeRecoveryAdvice {
+			message += " Retry the original link."
+		}
+	case engine.FailureShareStarting:
+		message = "The share is still starting."
+		if includeRecoveryAdvice {
+			message += " Retry the original link."
+		}
+	case engine.FailureSenderDetached:
+		message = "The sender is temporarily offline."
+		if includeRecoveryAdvice {
+			message += " Retry the original link."
+		}
+	case engine.FailureShareStopping:
+		message = "The share is stopping."
 	case engine.FailureRelayStopped:
 		message = "A relay reported that its route for this share was stopped."
 	case engine.FailureShareStopped:

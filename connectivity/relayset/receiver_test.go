@@ -90,3 +90,14 @@ func TestReceiverCancellationJoinsPendingDial(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestReceiverTreatsSenderDetachedAndStoppingAsRetryable(t *testing.T) {
+	for _, code := range []v2.ErrorCode{v2.ErrorStarting, v2.ErrorSenderDetached, v2.ErrorStopping} {
+		if !receiverEndpointRetryable(&relayv2.RelayError{Code: code, RetryAfter: 250 * time.Millisecond}) {
+			t.Fatalf("code %d was treated as terminal", code)
+		}
+	}
+	if receiverEndpointRetryable(&relayv2.RelayError{Code: v2.ErrorStopped}) {
+		t.Fatal("ErrorStopped was treated as retryable")
+	}
+}

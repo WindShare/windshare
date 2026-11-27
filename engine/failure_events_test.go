@@ -79,6 +79,9 @@ func TestDescribeFailureCoversDomainCategoriesAndContext(t *testing.T) {
 		{"route 404", &relayv2.WebSocketRouteError{BaseHint: hint}, FailureRelayRouteNotFound},
 		{"relay rejected", &relayv2.RelayError{Code: v2.ErrorInvalidProof}, FailureRelayRejected},
 		{"relay not found", &relayv2.RelayError{Code: v2.ErrorNotFound}, FailureRelayNotFound},
+		{"share starting", &relayv2.RelayError{Code: v2.ErrorStarting, RetryAfter: 250 * time.Millisecond}, FailureShareStarting},
+		{"sender detached", &relayv2.RelayError{Code: v2.ErrorSenderDetached, RetryAfter: 250 * time.Millisecond}, FailureSenderDetached},
+		{"share stopping", &relayv2.RelayError{Code: v2.ErrorStopping, RetryAfter: 250 * time.Millisecond}, FailureShareStopping},
 		{"relay retryable", &relayv2.RelayError{Code: v2.ErrorAdmission, RetryAfter: 2 * time.Second}, FailureRelayUnavailable},
 		{"relay stopped", &relayv2.RelayError{Code: v2.ErrorStopped}, FailureRelayStopped},
 		{"relay denied", &relayv2.RelayError{Code: v2.ErrorAccessDenied}, FailureRelayAccessDenied},
@@ -180,6 +183,21 @@ func TestDescribeFailurePrecedenceAndFallthrough(t *testing.T) {
 			err:      errors.Join(relayset.ErrReceiverUnavailable, &relayv2.WebSocketRouteError{BaseHint: hint}),
 			wantCode: FailureRelayRouteNotFound,
 			wantHint: hint,
+		},
+		{
+			name:     "initial join timeout maps sender detached without retry hint",
+			err:      errors.Join(relayset.ErrReceiverUnavailable, &relayv2.RelayError{Code: v2.ErrorSenderDetached, RetryAfter: 250 * time.Millisecond}),
+			wantCode: FailureSenderDetached,
+		},
+		{
+			name:     "initial join timeout maps share starting without retry hint",
+			err:      errors.Join(relayset.ErrReceiverUnavailable, &relayv2.RelayError{Code: v2.ErrorStarting, RetryAfter: 250 * time.Millisecond}),
+			wantCode: FailureShareStarting,
+		},
+		{
+			name:     "initial join timeout maps share stopping without retry hint",
+			err:      errors.Join(relayset.ErrReceiverUnavailable, &relayv2.RelayError{Code: v2.ErrorStopping, RetryAfter: 250 * time.Millisecond}),
+			wantCode: FailureShareStopping,
 		},
 		{
 			name:     "initial join timeout maps relay not found",

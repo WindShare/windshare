@@ -73,6 +73,8 @@ export const RELAY_ERROR = Object.freeze({
   resumeStale: 12,
   accessDenied: 13,
   accessUnavailable: 14,
+  senderDetached: 15,
+  stopping: 16,
 } as const)
 export type RelayErrorCode = (typeof RELAY_ERROR)[keyof typeof RELAY_ERROR]
 
@@ -646,12 +648,14 @@ function decodeProbeFrame(encoded: Uint8Array, magic: string): bigint {
 }
 
 function validErrorCode(code: number): code is RelayErrorCode {
-  return code >= RELAY_ERROR.malformed && code <= RELAY_ERROR.accessUnavailable
+  return code >= RELAY_ERROR.malformed && code <= RELAY_ERROR.stopping
 }
 
 export function encodeRelayError(frame: RelayErrorFrame): Uint8Array<ArrayBuffer> {
   const retryAllowed =
-    frame.code === RELAY_ERROR.starting || frame.code === RELAY_ERROR.admission || frame.code === RELAY_ERROR.accessUnavailable
+    frame.code === RELAY_ERROR.starting || frame.code === RELAY_ERROR.admission ||
+    frame.code === RELAY_ERROR.accessUnavailable || frame.code === RELAY_ERROR.senderDetached ||
+    frame.code === RELAY_ERROR.stopping
   if (
     !validErrorCode(frame.code) ||
     !Number.isInteger(frame.retryAfterMilliseconds) ||

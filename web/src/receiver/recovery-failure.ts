@@ -25,7 +25,8 @@ export function isTerminalRecoveryFailure(error: unknown): boolean {
   }
   return isShareRecoveryFailure(error) || isRejectedRelayData(error) ||
     (error instanceof RelayReceiverError && error.relayError !== undefined &&
-      ![RELAY_ERROR.notFound, RELAY_ERROR.starting, RELAY_ERROR.admission, RELAY_ERROR.accessUnavailable,
+      ![RELAY_ERROR.notFound, RELAY_ERROR.starting, RELAY_ERROR.senderDetached, RELAY_ERROR.stopping,
+        RELAY_ERROR.admission, RELAY_ERROR.accessUnavailable,
         RELAY_ERROR.challengeExpired].some(code => code === error.relayError?.code))
 }
 

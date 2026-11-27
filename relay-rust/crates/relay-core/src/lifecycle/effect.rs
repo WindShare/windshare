@@ -155,8 +155,10 @@ impl Refusal {
             Self::InvalidReceiver => Some(ErrorFrame::Malformed),
             Self::Expired => Some(ErrorFrame::ChallengeExpired),
             Self::Occupied => Some(ErrorFrame::AlreadyRegistered),
-            Self::SequenceExhausted | Self::StopPending => Some(ErrorFrame::Admission(RETRY)),
-            Self::Starting | Self::SenderDetached => Some(ErrorFrame::Starting(RETRY)),
+            Self::SequenceExhausted => Some(ErrorFrame::Admission(RETRY)),
+            Self::StopPending => Some(ErrorFrame::Stopping(RETRY)),
+            Self::Starting => Some(ErrorFrame::Starting(RETRY)),
+            Self::SenderDetached => Some(ErrorFrame::SenderDetached(RETRY)),
             Self::Stopped => Some(ErrorFrame::Stopped),
             Self::ResumeMismatch | Self::StopMismatch | Self::WrongRelay => {
                 Some(ErrorFrame::InvalidProof)

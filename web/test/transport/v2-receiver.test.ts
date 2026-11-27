@@ -134,10 +134,13 @@ describe('v2 relay receiver ingress', () => {
     await expect(connection.channel.frames.getReader().read()).rejects.toMatchObject({ kind: 'malformed' })
   })
 
-  it('distinguishes AccessDenied and AccessUnavailable error frames', async () => {
+  it('distinguishes relay access and share-lifecycle error frames', async () => {
     const cases = [
       { code: RELAY_ERROR.accessDenied, retryAfterMilliseconds: 0, pattern: /denied/i },
       { code: RELAY_ERROR.accessUnavailable, retryAfterMilliseconds: 1_000, pattern: /temporarily unavailable/i },
+      { code: RELAY_ERROR.starting, retryAfterMilliseconds: 250, pattern: /still starting/i },
+      { code: RELAY_ERROR.senderDetached, retryAfterMilliseconds: 250, pattern: /temporarily offline/i },
+      { code: RELAY_ERROR.stopping, retryAfterMilliseconds: 250, pattern: /stopping/i },
     ] as const
     const messages: string[] = []
     for (const testCase of cases) {
@@ -163,7 +166,7 @@ describe('v2 relay receiver ingress', () => {
       expect(error.relayError).toEqual({ code: testCase.code, retryAfterMilliseconds: testCase.retryAfterMilliseconds })
       messages.push(error.message)
     }
-    expect(messages[0]).not.toBe(messages[1])
+    expect(new Set(messages).size).toBe(cases.length)
   })
 })
 

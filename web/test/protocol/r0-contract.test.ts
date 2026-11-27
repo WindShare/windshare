@@ -888,6 +888,8 @@ describe('R0 resource and state-machine contract', () => {
         'resume-stale': RELAY_ERROR.resumeStale,
         'access-denied': RELAY_ERROR.accessDenied,
         'access-unavailable': RELAY_ERROR.accessUnavailable,
+        'sender-detached': RELAY_ERROR.senderDetached,
+        stopping: RELAY_ERROR.stopping,
       },
     })
   })
