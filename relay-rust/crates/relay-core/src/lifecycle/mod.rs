@@ -506,8 +506,9 @@ impl<O: Observer> ShareLifecycle<O> {
             State::Reserved(_) | State::Activating(_) => Action::Refused(Refusal::Starting),
             State::Published(published) => Action::JoinReady(published),
             State::Grace(_) => Action::Refused(Refusal::SenderDetached),
-            State::Stopping(_) => Action::Refused(Refusal::StopPending),
-            State::Stopped(_) => Action::Refused(Refusal::Stopped),
+            // STOP is irreversible once accepted; receivers should see Stopped
+            // immediately rather than retry against an internal cleanup barrier.
+            State::Stopping(_) | State::Stopped(_) => Action::Refused(Refusal::Stopped),
         }
     }
 

@@ -45,7 +45,7 @@ fn join_cannot_cross_stop_or_create_authority_on_the_sender_connection() {
     };
     assert_eq!(
         engine.handle(input, fixture.at).action,
-        Action::Refused(Refusal::StopPending)
+        Action::Refused(Refusal::Stopped)
     );
     let retirement = joined.handle(&engine, SessionEvent::Revoke(revoke), fixture.at, &mut ());
     assert_eq!(

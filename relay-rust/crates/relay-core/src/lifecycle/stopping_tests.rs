@@ -88,8 +88,11 @@ fn complete(
 fn assert_fenced(fixture: &Fixture, engine: &mut ShareLifecycle<Recorder>, at: UnixMillis) {
     assert_eq!(engine.phase(), Phase::Stopping);
     assert_eq!(engine.deadline(), None);
+    assert_eq!(
+        engine.handle(Event::CheckJoin(fixture.share()), at).action,
+        Action::Refused(Refusal::Stopped)
+    );
     for event in [
-        Event::CheckJoin(fixture.share()),
         fixture.reserve_event(at),
         Event::BeginResume {
             connection: connection(4, 1),

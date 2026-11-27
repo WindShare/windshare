@@ -48,6 +48,10 @@ fn join_preserves_absent_and_permanently_stopped_outcomes() {
     );
     fixture.prepare_stop(&mut relay);
     let intent = work(&fixture.stop(&mut relay));
+    assert_eq!(
+        join_error(&fixture, &mut relay, 4, fixture.at),
+        ErrorFrame::Stopped
+    );
     let commit = work(&complete(&mut relay, &intent, fixture.at));
     let step = complete(&mut relay, &commit, fixture.at);
     assert!(step.outputs.iter().any(|output| matches!(
