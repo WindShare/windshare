@@ -23,30 +23,30 @@ wind share <path...> [--relay <url>]... [--configured-relays-only] [--front-url 
 
 - Commits the selected roots, registers the descriptor with active relays, prints the capability link once a relay admits sessions, and serves catalog pages and file blocks on demand until stopped.
 - Default stdout output is `Link: <link>`. `--split-key` prints `Bare link: <link-without-key>` and `Key: <key>`.
-- Default sharing combines saved active relays with the built-in signed network. `--configured-relays-only` excludes network relays; repeatable `--relay` supplies the complete relay set for that run.
+- Automatic sharing combines saved active relays, official nodes and eligible community nodes. `--configured-relays-only` uses saved active relays. Repeat `--relay` to choose the complete set for one share.
 - `--front-url` overrides the saved frontend; otherwise the release's built-in frontend applies. `--browser-trace` enables browser receiver diagnostics.
 
 ### Sharing defaults
 
 ```text
-wind relay add <url> [--access-key <key>] [--name <device>] [--no-browser]
+wind relay add <url> [--access-key <key> | --anonymous] [--name <device>] [--no-browser]
 wind relay onboard <url> [--name <device>] [--no-browser]
 wind relay list | mode <automatic|selected> | enable <url> | disable <url> | remove <url>
-wind relay frontend <url|default>
+wind relay community <on|off> | frontend <url|default>
 wind relay cancel <url>
 wind config import <file|-> [--front-url <url>] [-v|--verbose]
 ```
 
-- `relay onboard` pairs this device in the browser (via service-account sign-in when advertised, or as the relay owner). `relay add` uses public admission when available, pairs when restricted, or accepts a service key with `--access-key`.
-- In automatic mode, new relays are enabled while a candidate slot is free. In selected mode, new relays start disabled. `relay list` shows the shared CLI/desktop settings. Use `relay frontend` to select a receiver website after pairing.
+- `relay add` opens owner pairing for a native relay with a console. Use `--anonymous` for guest access to an open relay, or `--access-key` for a manual credential. `relay onboard` explicitly pairs this device through the owner or service account.
+- New relays are enabled while a slot is free. `relay community off` keeps the official network available in automatic mode. `relay list` shows the shared CLI and desktop settings.
 - `relay cancel` abandons an unfinished enrollment and revokes its issued credential; it fails when nothing is pending for that relay.
 - `config import` validates and replaces the saved sharing configuration from a JSON file or stdin (`-`).
-- Settings live in `windshare/config.json` under the user configuration directory (or `WINDSHARE_CONFIG`). Alongside it, `config.json.state/` holds pending enrollment and network rollback protection.
+- Settings live in `windshare/config.json` under the user configuration directory (or `WINDSHARE_CONFIG`). `bootstrap_nodes` accepts independent HTTPS gossip seeds. `config.json.state/` holds enrollment, network rollback protection and the signed peer cache.
 
 ```json
 {
   "front_url": "https://your-site.example",
-  "profiles": [{ "url": "https://your-site.example", "access_key": "your-device-key" }],
+  "profiles": [{ "url": "https://your-site.example", "access_key": "your-device-key", "credential_role": "service" }],
   "active_relays": ["https://your-site.example"],
   "configured_relays_only": true
 }

@@ -1,6 +1,8 @@
 use super::{
     SetupDialog, SetupDialogEvent, SetupPage,
-    relay_preferences::{relay_actions_drawer, relay_actions_toggle, relay_mode_option},
+    relay_preferences::{
+        community_toggle, relay_actions_drawer, relay_actions_toggle, relay_mode_option,
+    },
     setup_feedback::{setup_progress_panel, setup_return_panel},
 };
 use crate::{
@@ -81,6 +83,7 @@ impl Render for SetupDialog {
 
 impl SetupDialog {
     fn progress_view(&self, theme: Theme, cx: &Context<Self>) -> Div {
+        let guest_disabled = self.guest_disabled(cx);
         let cancel_disabled = self.cancel_disabled(cx);
         setup_progress_panel(
             theme,
@@ -96,6 +99,12 @@ impl SetupDialog {
                     .icon(Icon::External)
                     .style(ButtonStyle::Primary)
                     .on_press(cx.listener(|this, (), _, cx| this.approve_relay(cx)))
+            },
+            |cx| {
+                Button::new("connect-as-guest", language(cx).text(Text::ConnectAsGuest))
+                    .style(ButtonStyle::Quiet)
+                    .disabled(guest_disabled)
+                    .on_press(cx.listener(|this, (), _, cx| this.guest_setup(cx)))
             },
             |label, cx| {
                 Button::new("cancel-sharing-setup", language(cx).text(label))
@@ -215,6 +224,15 @@ impl SetupDialog {
                         cx,
                     )),
             )
+            .when(prefs.mode == RelayMode::Automatic, |panel| {
+                panel.child(community_toggle(
+                    theme,
+                    prefs,
+                    busy,
+                    Self::apply_preference,
+                    cx,
+                ))
+            })
             .child(list)
             .child(theme.separator())
             .child(

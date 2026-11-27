@@ -5,6 +5,14 @@ type routeRegistration struct {
 	terminal bool
 }
 
+func (r routeRegistration) failed() bool {
+	return r.terminal || r.state == RegistrationRetrying
+}
+
+func (r routeRegistration) waitingAuthorization() bool {
+	return !r.terminal && (r.state == RegistrationWaitingAuthorization || r.state == RegistrationNeedsUserAuthorization)
+}
+
 // SenderAvailability describes only admission through relays. Existing direct
 // transfers have independent lifetimes and must never be inferred from this count.
 type SenderAvailability struct {
@@ -60,10 +68,7 @@ func (s *Sender) setRegistrationLocked(url string, registration routeRegistratio
 	}
 	s.routes[url] = registration
 	s.everReady = s.everReady || registration.state == RegistrationAvailable
-	var notifyFallback func()
-	if registration.terminal || registration.state == RegistrationRetrying || registration.state == RegistrationNeedsUserAuthorization {
-		notifyFallback = s.initialFailureLocked(url)
-	}
+	notifyFallback := s.advanceStartupLocked(url, registration)
 	if !s.stopping && s.ctx.Err() == nil && s.observer != nil {
 		s.observer(s.statusLocked())
 	}

@@ -18,7 +18,7 @@ func installationResult(saved relayconfig.Config, address, credentialID string) 
 	return result
 }
 
-func (run *workflow) install(ctx context.Context, revision string, candidate relayprofile.Candidate) (Result, error) {
+func (run *workflow) install(ctx context.Context, revision string, candidate relayprofile.Candidate, apply func(relayconfig.Config, relayprofile.Candidate) (relayconfig.Config, error)) (Result, error) {
 	saved, err := run.dependencies.Store.Update(ctx, func(current *Snapshot) error {
 		if current.Pending != nil {
 			return ErrPendingSetup
@@ -26,7 +26,7 @@ func (run *workflow) install(ctx context.Context, revision string, candidate rel
 		if current.SettingsRevision() != revision {
 			return errSettingsChangedBeforePending
 		}
-		next, err := current.MergeRelay(candidate)
+		next, err := apply(current.Config, candidate)
 		if err == nil {
 			current.Config = next
 		}
@@ -48,9 +48,9 @@ func pendingInstallation(current Snapshot, pending *PendingSetup) (relayconfig.C
 	if current.SettingsRevision() != pending.SettingsRevision {
 		return relayconfig.Config{}, errSettingsChangedWhilePending
 	}
-	return current.MergeRelay(pending.profile(pending.credential().AccessKey))
+	return current.ReplaceIdentity(pending.profile(pending.credential().AccessKey))
 }
 
 func (pending *PendingSetup) profile(accessKey string) relayprofile.Candidate {
-	return relayprofile.Candidate{PublicURL: pending.RelayURL, AccessKey: accessKey, ConsoleURL: pending.ConsoleURL, ManagedTurn: pending.ManagedTurn, OfferedFrontend: pending.OfferedFrontend}
+	return relayprofile.Candidate{PublicURL: pending.RelayURL, Node: pending.Node, Role: pending.credential().Role, AccessKey: accessKey, ConsoleURL: pending.ConsoleURL, ManagedTurn: pending.ManagedTurn, OfferedFrontend: pending.OfferedFrontend}
 }

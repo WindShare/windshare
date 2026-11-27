@@ -503,6 +503,7 @@ pub fn create_service_key<S: AccessStore>(
     let configuration = service_configuration(relay_url, &access_key);
     let body = json!({
         "credential": credential_view(&credential),
+        "role": "service",
         "access_key": access_key,
         "configuration": configuration,
     });

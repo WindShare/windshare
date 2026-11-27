@@ -271,3 +271,39 @@ func TestApplicationReportsTaskObservationCapacityDropsOnce(t *testing.T) {
 		t.Fatalf("reported observation drops = %d, want 7", got)
 	}
 }
+
+func TestWatchCommunityNoticesIncrementsSnapshotAndStopsOnClose(t *testing.T) {
+	a, _, _ := fixture(t)
+	notices := make(chan struct{}, 1)
+	a.watchCommunityNotices(notices)
+
+	queue, unsubscribe := a.subscribe()
+	defer unsubscribe()
+
+	for want := uint64(1); want <= 2; want++ {
+		notices <- struct{}{}
+		select {
+		case snap := <-queue.snapshots:
+			if snap.Preferences.CommunityNotice != want {
+				t.Fatalf("snapshot CommunityNotice = %d, want %d", snap.Preferences.CommunityNotice, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for CommunityNotice %d", want)
+		}
+	}
+	if got := a.snapshot().Preferences.CommunityNotice; got != 2 {
+		t.Fatalf("current snapshot CommunityNotice = %d, want 2", got)
+	}
+
+	// Closing must exit watchCommunityNotices cleanly via accountContext without closing notices.
+	done := make(chan error, 1)
+	go func() { done <- a.close() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("close after watchCommunityNotices: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Application.close hung waiting on watchCommunityNotices")
+	}
+}

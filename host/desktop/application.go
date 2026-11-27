@@ -116,6 +116,7 @@ type Application struct {
 	readers         sync.WaitGroup
 	subscribers     map[*subscription]struct{}
 	preferences     relayconfig.Preferences
+	communityNotice uint64
 	setup           SetupView
 	setupRequests   map[string]setupCommand
 	interruptSetup  context.CancelFunc
@@ -184,6 +185,8 @@ func (a *Application) execute(request Request) Message {
 		err = a.repeat(request)
 	case "configure":
 		err = a.configure(request)
+	case "guest_setup":
+		err = a.guestSetup(request.SetupID)
 	case "cancel_setup":
 		err = a.cancelSetupRequest(request.SetupID)
 	case "resume":
@@ -216,6 +219,22 @@ func (a *Application) execute(request Request) Message {
 		reply.Snapshot = &snapshot
 	}
 	return reply
+}
+
+func (a *Application) watchCommunityNotices(notices <-chan struct{}) {
+	a.readers.Go(func() {
+		for {
+			select {
+			case <-a.accountContext.Done():
+				return
+			case <-notices:
+				a.mu.Lock()
+				a.communityNotice++
+				a.snapshotLocked()
+				a.mu.Unlock()
+			}
+		}
+	})
 }
 
 func validOperation(id string) bool { return len(id) > 0 && len(id) <= maximumOperationIDBytes }

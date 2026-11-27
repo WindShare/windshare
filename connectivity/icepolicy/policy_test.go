@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -396,5 +397,94 @@ func TestDirectoryPoolRanksActiveAheadOfCanaryAndDraining(t *testing.T) {
 		if got := backup.URLs(); !reflect.DeepEqual(got, []string{"stun:us1.example:3478", "stun:cn-public.example:3478"}) {
 			t.Fatalf("wave %d backup = %v, want [us1, cn-public]", i, got)
 		}
+	}
+}
+
+func TestCommunityTrustCannotDisplaceHigherTrustInEitherSlot(t *testing.T) {
+	entry := func(id, trust, domain string, priority int) Endpoint {
+		return Endpoint{ID: id, URL: "stun:" + id + ".example:3478", Family: "any", Trust: trust, Region: domain, FailureDomain: domain, Provider: domain, Enabled: true, Priority: priority}
+	}
+	pool, err := NewICEEndpointPool([]Endpoint{entry("official", "reviewed", "same", 1),
+		entry("local", "local", "same", 2), entry("community", "community", "different", 1000)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := selection()
+	facts := GenerationFacts{NetworkGenerationID: req.NetworkGenerationID, Profiles: []ProfileFact{{EndpointIDs: []string{"community"}, ServerReflexiveProduced: true, ObservedAt: req.Now}}}
+	if got := SelectAttemptProfile(pool, req, facts).EndpointIDs(); !slices.Equal(got, []string{"official", "local"}) {
+		t.Fatal(got)
+	}
+	facts.Endpoints = []EndpointFact{{EndpointID: "local", FailedUntil: req.Now.Add(time.Minute)}}
+	if got := SelectAttemptProfile(pool, req, facts).EndpointIDs(); !slices.Equal(got, []string{"official", "community"}) {
+		t.Fatal(got)
+	}
+}
+
+func TestWithCommunityFiltersInvalidAndCollidingEntriesIndividually(t *testing.T) {
+	base := DefaultPool()
+	baseCount := len(base.endpoints)
+	valid1 := Endpoint{ID: "community:stun:198.51.100.1:3478", URL: "stun:198.51.100.1:3478", Family: "ipv4", Trust: "community", FailureDomain: "198.51.100.0/24", Enabled: true}
+	valid2 := Endpoint{ID: "community:stun:[2001:db8::1]:3478", URL: "stun:[2001:db8::1]:3478", Family: "ipv6", Trust: "community", FailureDomain: "2001:db8::/48", Enabled: true}
+
+	merged := base.WithCommunity([]Endpoint{
+		valid1,
+		{ID: "", URL: "stun:198.51.100.2:3478", Family: "ipv4", Trust: "community", Enabled: true},
+		{ID: "shipped-google-stun", URL: "stun:198.51.100.3:3478", Family: "ipv4", Trust: "community", Enabled: true},
+		{ID: valid1.ID, URL: "stun:198.51.100.4:3478", Family: "ipv4", Trust: "community", Enabled: true},
+		{ID: "community:dup-base-url", URL: CloudflareSTUNServer, Family: "any", Trust: "community", Enabled: true},
+		{ID: "community:dup-base-canonical-url", URL: "stun:STUN.CLOUDFLARE.COM:3478", Family: "any", Trust: "community", Enabled: true},
+		{ID: "community:dup-batch-url", URL: valid1.URL, Family: "ipv4", Trust: "community", Enabled: true},
+		{ID: "community:bad-url", URL: "turn:198.51.100.5:3478", Family: "ipv4", Trust: "community", Enabled: true},
+		{ID: "community:bad-family", URL: "stun:198.51.100.6:3478", Family: "", Trust: "community", Enabled: true},
+		{ID: "community:bad-priority", URL: "stun:198.51.100.7:3478", Family: "ipv4", Trust: "community", Priority: -1, Enabled: true},
+		{ID: "community:wrong-trust", URL: "stun:198.51.100.8:3478", Family: "ipv4", Trust: "reviewed", Enabled: true},
+		valid2,
+	})
+
+	if len(base.endpoints) != baseCount {
+		t.Fatalf("base pool mutated: got %d entries, want %d", len(base.endpoints), baseCount)
+	}
+	if _, err := NewICEEndpointPool(merged.endpoints); err != nil {
+		t.Fatalf("merged pool violates NewICEEndpointPool invariants: %v", err)
+	}
+	added := merged.endpoints[baseCount:]
+	if len(added) != 2 || added[0].ID != valid1.ID || added[1].ID != valid2.ID {
+		t.Fatalf("unexpected community entries appended: %+v", added)
+	}
+
+	// Empty or all-invalid batches leave the base pool unchanged.
+	if got := base.WithCommunity(nil); len(got.endpoints) != baseCount {
+		t.Fatalf("nil entries changed pool: %+v", got.endpoints)
+	}
+	if got := base.WithCommunity([]Endpoint{{ID: "", URL: "stun:198.51.100.9:3478", Family: "ipv4", Trust: "community", Enabled: true}}); len(got.endpoints) != baseCount {
+		t.Fatalf("all-invalid entries changed pool: %+v", got.endpoints)
+	}
+
+	// Invalid and colliding entries do not consume remaining catalog capacity.
+	nearFullEntries := make([]Endpoint, 0, MaximumCatalogEndpoints-1)
+	for i := range MaximumCatalogEndpoints - 1 {
+		nearFullEntries = append(nearFullEntries, Endpoint{
+			ID: fmt.Sprintf("base-%d", i), URL: fmt.Sprintf("stun:node%d.example:3478", i),
+			Family: "any", Trust: "reviewed", Enabled: true,
+		})
+	}
+	nearFull, err := NewICEEndpointPool(nearFullEntries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fits := Endpoint{ID: "community:fits", URL: "stun:198.51.100.10:3478", Family: "ipv4", Trust: "community", Enabled: true}
+	overflow := Endpoint{ID: "community:overflow", URL: "stun:198.51.100.11:3478", Family: "ipv4", Trust: "community", Enabled: true}
+	capped := nearFull.WithCommunity([]Endpoint{
+		{ID: "", URL: "stun:198.51.100.12:3478", Family: "ipv4", Trust: "community", Enabled: true},
+		{ID: "base-0", URL: "stun:198.51.100.13:3478", Family: "ipv4", Trust: "community", Enabled: true},
+		{ID: "community:dup-url", URL: "stun:node0.example:3478", Family: "ipv4", Trust: "community", Enabled: true},
+		fits,
+		overflow,
+	})
+	if len(capped.endpoints) != MaximumCatalogEndpoints || capped.endpoints[MaximumCatalogEndpoints-1].ID != fits.ID {
+		t.Fatalf("catalog cap handling failed: len=%d last=%+v", len(capped.endpoints), capped.endpoints[len(capped.endpoints)-1])
+	}
+	if full := capped.WithCommunity([]Endpoint{overflow}); len(full.endpoints) != MaximumCatalogEndpoints {
+		t.Fatalf("already-full pool exceeded cap: len=%d", len(full.endpoints))
 	}
 }

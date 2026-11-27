@@ -10,6 +10,30 @@ import (
 
 const setupCancellationTimeout = 20 * time.Second
 
+func (a *Application) guestSetup(id string) error {
+	if id == "" {
+		return errors.New("no guest approval is pending")
+	}
+	if a.setup.ID != id {
+		if _, known := a.setupRequests[id]; known {
+			return nil
+		}
+		return errors.New("no guest approval is pending")
+	}
+	// Late, duplicate, or replayed guest opt-ins for a setup that already switched
+	// to guest access or left the running approval phase are idempotent no-ops.
+	if a.setup.State != "running" || a.setup.guestRequested || a.setup.Stage == "guest" {
+		return nil
+	}
+	if !a.setup.GuestAvailable {
+		return errors.New("no guest approval is pending")
+	}
+	a.setup.guestRequested = true
+	a.setup.clearApproval()
+	a.interruptSetup()
+	return nil
+}
+
 func (a *Application) cancelSetupRequest(id string) error {
 	if id == "" {
 		return errors.New("setup_id is required")
@@ -48,6 +72,7 @@ func setupCleanupFor(relayURL string, relaySaved bool, recovery relaysetup.Recov
 // The application fences admission synchronously, then joins Run before asking
 // the setup owner to revoke its unfinished enrollment. Committed settings survive.
 func (a *Application) cancelSetupLocked() {
+	a.setup.guestRequested = false
 	switch a.setup.State {
 	case "running":
 		a.setup.State = "cancelling"

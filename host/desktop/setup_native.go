@@ -13,6 +13,7 @@ import (
 type relaySetupEngine interface {
 	StartRelaySetup(context.Context, engine.RelaySetupRequest) (*engine.Task[engine.RelaySetupResult], error)
 	CancelRelaySetup(context.Context, string) error
+	NotifyRelaySettingsChanged(context.Context)
 }
 
 type nativeSetup struct {
@@ -37,6 +38,9 @@ func (setup nativeSetup) run(ctx context.Context, input SetupInput, progress fun
 	var result SetupResult
 	if input.Preference != nil {
 		_, err := setup.settings.Update(ctx, input.Preference.Apply)
+		if err == nil {
+			setup.engine.NotifyRelaySettingsChanged(ctx)
+		}
 		result.FrontendSaved = err == nil && input.Preference.Action == "frontend"
 		result.RelayRemoved = err == nil && input.Preference.Action == "remove"
 		return result, err
@@ -51,6 +55,7 @@ func (setup nativeSetup) run(ctx context.Context, input SetupInput, progress fun
 		// The explicit frontend edit has its own commit point. Relay failure or
 		// cancellation cannot roll it back over a later CLI or GUI edit.
 		result.FrontendSaved = true
+		setup.engine.NotifyRelaySettingsChanged(ctx)
 		if progress != nil {
 			progress(relaysetup.Progress{Stage: "frontend_saved"})
 		}
@@ -59,7 +64,7 @@ func (setup nativeSetup) run(ctx context.Context, input SetupInput, progress fun
 		return result, nil
 	}
 	current, err := setup.engine.StartRelaySetup(ctx, engine.RelaySetupRequest{
-		URL: input.RelayURL, Operation: input.RelayOperation, AccessKey: input.AccessKey,
+		URL: input.RelayURL, Anonymous: input.Anonymous, Operation: input.RelayOperation, AccessKey: input.AccessKey,
 		DeviceName: setup.defaultDeviceName(),
 	})
 	if err != nil {

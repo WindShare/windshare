@@ -37,6 +37,7 @@ pub(super) fn setup_progress_panel<V: 'static>(
     setup: &Setup,
     approve_owner: impl FnOnce(&Context<V>) -> Button,
     approve_device: impl FnOnce(&Context<V>) -> Button,
+    guest: impl FnOnce(&Context<V>) -> Button,
     cancel_button: impl FnOnce(Text, &Context<V>) -> Button,
     cx: &Context<V>,
 ) -> Div {
@@ -57,6 +58,7 @@ pub(super) fn setup_progress_panel<V: 'static>(
             verification_url,
             user_code,
             service_login,
+            guest_available,
             ..
         } if !verification_url.is_empty() => {
             if let Some(login) = service_login {
@@ -87,6 +89,10 @@ pub(super) fn setup_progress_panel<V: 'static>(
                             .child(approve_device(cx)),
                     );
             }
+
+            if *guest_available {
+                panel = panel.child(guest(cx));
+            }
         }
         Setup::Running { .. } => {
             panel = panel.child(theme.caption(locale.text(Text::ConnectingRelay)));
@@ -110,6 +116,65 @@ impl Desktop {
             }
             Runtime::Preview(_) => true,
         }
+    }
+
+    fn setup_guest_disabled(&self, cx: &App) -> bool {
+        match &self.runtime {
+            Runtime::Native(session) => {
+                let store = session.host.read(cx);
+                store.selection_disabled() || !store.model().can_guest_current_setup()
+            }
+            Runtime::Preview(_) => true,
+        }
+    }
+
+    pub fn community_paused_notice(&self, theme: Theme, cx: &Context<Self>) -> Option<Div> {
+        if !self.community_notice.visible() {
+            return None;
+        }
+        let locale = language(cx);
+        Some(
+            theme
+                .card()
+                .px(px(18.))
+                .py(px(14.))
+                .border_color(Tone::Peach.accent(theme).opacity(0.45))
+                .child(
+                    row()
+                        .gap(px(12.))
+                        .justify_between()
+                        .child(
+                            row()
+                                .flex_1()
+                                .min_w_0()
+                                .gap(px(10.))
+                                .child(theme.dot(Tone::Peach))
+                                .child(
+                                    theme
+                                        .label(locale.text(Text::CommunityPaused), 14.)
+                                        .flex_1()
+                                        .min_w_0(),
+                                ),
+                        )
+                        .child(
+                            Button::new(
+                                "dismiss-community-paused-notice",
+                                locale.text(Text::GotIt),
+                            )
+                            .style(ButtonStyle::Quiet)
+                            .compact()
+                            .on_press(cx.listener(
+                                |this, (), window, cx| {
+                                    this.dispatch(
+                                        crate::model::Action::DismissCommunityNotice,
+                                        window,
+                                        cx,
+                                    );
+                                },
+                            )),
+                        ),
+                ),
+        )
     }
 
     pub fn setup_cancellation_notice(&self, theme: Theme, error: &str, cx: &Context<Self>) -> Div {
@@ -184,6 +249,7 @@ impl Desktop {
     }
 
     pub(super) fn setup_progress(&self, theme: Theme, setup: &Setup, cx: &Context<Self>) -> Div {
+        let guest_disabled = self.setup_guest_disabled(cx);
         let cancel_disabled = self.setup_cancel_disabled(cx);
         setup_progress_panel(
             theme,
@@ -199,6 +265,15 @@ impl Desktop {
                     .icon(Icon::External)
                     .style(ButtonStyle::Primary)
                     .on_press(cx.listener(|this, (), _, cx| this.approve_relay(cx)))
+            },
+            |cx| {
+                Button::new("connect-as-guest", language(cx).text(Text::ConnectAsGuest))
+                    .style(ButtonStyle::Quiet)
+                    .disabled(guest_disabled)
+                    .on_press(cx.listener(|this, (), _, cx| {
+                        this.guest_sharing_setup(cx);
+                        cx.notify();
+                    }))
             },
             |label, cx| {
                 Button::new("cancel-sharing-setup", language(cx).text(label))

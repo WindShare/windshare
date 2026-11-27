@@ -11,7 +11,6 @@
     "region": "",
     "services": { "relay": false, "stun": true },
     "relay_budget": null,
-    "capacity_bytes_per_second": null,
     "stun_urls": [],
     "authority": null,
     "access": { "anonymous": false, "trusted_issuers": [] }

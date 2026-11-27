@@ -126,7 +126,7 @@ func canonicalizeRelayAuthority(parsed *url.URL) error {
 		host = ip.Unmap().String()
 	} else if strings.HasPrefix(parsed.Host, "[") {
 		return fmt.Errorf("%w: bracketed relay host must be an IP literal", ErrInvalid)
-	} else if err := validateDNSHost(host); err != nil {
+	} else if err := ValidateDNSHost(host); err != nil {
 		return err
 	}
 	if parsed.Scheme == "ws" && port == "80" || parsed.Scheme == "wss" && port == "443" {

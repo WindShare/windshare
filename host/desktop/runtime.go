@@ -87,6 +87,13 @@ func Start() (*Host, error) {
 		directory = ""
 		close(host.diagnosticDone)
 	}
+	communityNotices := make(chan struct{}, 1)
+	network.CommunityPaused = func() {
+		select {
+		case communityNotices <- struct{}{}:
+		default:
+		}
+	}
 	store := relayconfig.FileStore{}
 	application, err := engine.New(engine.Config{
 		Network:        network,
@@ -120,6 +127,7 @@ func Start() (*Host, error) {
 		deps.accounts = accounts
 	}
 	host.app = newApplication(sessionID, deps)
+	host.app.watchCommunityNotices(communityNotices)
 	host.server, err = listen(host.app, token)
 	if err != nil {
 		_ = host.closeEngine()

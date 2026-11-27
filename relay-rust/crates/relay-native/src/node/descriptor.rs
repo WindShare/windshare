@@ -2,10 +2,43 @@ use super::{Identity, Runtime, Services, usage::Reporter};
 use anyhow::{Result, anyhow};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use ed25519_dalek::SigningKey;
+use serde::{Deserialize, Serialize};
+use std::sync::atomic::Ordering;
 use windshare_relay_access::{Credential, trust};
 
-const DESCRIPTOR_DOMAIN: &[u8] = b"windshare/node-descriptor/v2\0";
-const DESCRIPTOR_SECONDS: u64 = 300;
+use windshare_relay_access::descriptor::{
+    DESCRIPTOR_VERSION, NODE_PLATFORM_NATIVE, PublicRelay, Purpose, offers_community_service,
+};
+
+// Re-sign self gossip envelopes at a cadence shorter than Discovery's 10m
+// exchange period so healthy peers refresh monotonic issued_at timestamps while
+// unauthenticated GET bursts avoid per-request signing and Runtime::state locks.
+pub const GOSSIP_CACHE_TTL: u64 = 5 * 60;
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct GossipEnvelope {
+    pub version: u8,
+    pub descriptor: String,
+    pub signature: String,
+}
+
+#[derive(Clone)]
+pub enum GossipDescriptor {
+    /// Owner explicitly disabled community contribution on this self-hosted node.
+    OptedOut,
+    /// Node does not currently advertise a community relay or STUN service
+    /// (for example an official seed or temporarily exhausted relay without STUN).
+    ObserverOnly,
+    /// Signed gossip descriptor for a contributing community node.
+    Advertise(GossipEnvelope),
+}
+
+pub(super) struct CachedGossip {
+    endpoint: String,
+    revision: u64,
+    valid_until: u64,
+    descriptor: GossipDescriptor,
+}
 
 /// Immutable node identity installed once at startup with pre-derived key material
 /// so discovery and status checks never re-expand the seed or lock `Runtime::state`.
@@ -58,7 +91,9 @@ struct DescriptorSnapshot {
     region: String,
     capacity_bytes_per_second: Option<u64>,
     authority: Option<super::usage::Authority>,
-    relay_ready: bool,
+    public_relay: PublicRelay,
+    operator: String,
+    provider: String,
 }
 
 impl Runtime {
@@ -67,7 +102,13 @@ impl Runtime {
     pub fn identify(&self, identity: Identity) -> Result<()> {
         self.identity
             .set(InstalledIdentity::new(identity))
-            .map_err(|_| anyhow!("node identity already installed"))
+            .map_err(|_| anyhow!("node identity already installed"))?;
+        self.bump_descriptor_revision();
+        Ok(())
+    }
+
+    pub(crate) fn public_key_b64(&self) -> Option<&str> {
+        self.identity.get().map(InstalledIdentity::key_b64)
     }
 
     pub(crate) fn open_console(
@@ -95,6 +136,7 @@ impl Runtime {
             self.console
                 .set(console)
                 .map_err(|_| anyhow!("console already initialized"))?;
+            self.bump_descriptor_revision();
         }
         Ok(())
     }
@@ -120,30 +162,165 @@ impl Runtime {
         Reporter::new(self.clone(), store, signing_key, authority).map(Some)
     }
 
-    fn descriptor_snapshot(&self, timestamp: i64) -> Result<DescriptorSnapshot> {
+    pub(crate) fn report_stun_ports(&self, ports: impl Iterator<Item = u16>) -> Result<()> {
+        let mut ports: Vec<_> = ports.collect();
+        ports.sort_unstable();
+        ports.dedup();
+        let mut state = self.state.lock().map_err(|_| anyhow!("node state"))?;
+        state.bound_stun_ports = Some(ports);
+        self.bump_descriptor_revision();
+        drop(state);
+        Ok(())
+    }
+
+    fn descriptor_snapshot(
+        &self,
+        timestamp: i64,
+        endpoint: &crate::Endpoint,
+    ) -> Result<DescriptorSnapshot> {
         let state = self.state.lock().map_err(|_| anyhow!("node state"))?;
+        let mut services = state.settings.services;
+        // The kernel may select an ephemeral port or refuse one address family.
+        // Only advertise STUN after a listener exists, honoring explicit NAT port mappings.
+        let stun_urls =
+            if !services.stun || state.bound_stun_ports.as_ref().is_some_and(Vec::is_empty) {
+                Vec::new()
+            } else if !state.settings.stun_urls.is_empty() {
+                state.settings.stun_urls.clone()
+            } else {
+                let url = url::Url::parse(endpoint.as_str())?;
+                let host = url.host_str().ok_or_else(|| anyhow!("missing STUN host"))?;
+                state
+                    .bound_stun_ports
+                    .iter()
+                    .flatten()
+                    .take(windshare_relay_access::descriptor::MAX_STUN_URLS)
+                    .map(|port| format!("stun:{host}:{port}"))
+                    .collect()
+            };
+        services.stun = !stun_urls.is_empty();
         Ok(DescriptorSnapshot {
-            services: state.settings.services,
-            stun_urls: state.settings.stun_urls.clone(),
+            services,
+            stun_urls,
             zone: state.settings.zone.clone(),
             region: state.settings.region.clone(),
-            capacity_bytes_per_second: state.settings.capacity_bytes_per_second,
+            capacity_bytes_per_second: state
+                .settings
+                .contribution
+                .bytes_per_second
+                .or(state.settings.ceiling.bytes_per_second),
+            operator: state.settings.operator.clone(),
+            provider: state.settings.provider.clone(),
             authority: state.settings.authority.clone(),
-            relay_ready: state.settings.services.relay
-                && !state.unavailable
-                && !state.budgets.public_exhausted(&state.settings, timestamp),
+            public_relay: if !state.settings.access.contributing {
+                PublicRelay::Disabled
+            } else if state.storage_failed
+                || !state.settings.services.relay
+                || !self.access.public_enabled()
+            {
+                PublicRelay::Unavailable
+            } else if state.budgets.public_exhausted(&state.settings, timestamp)
+                || state.budgets.node_remaining(&state.settings) == 0
+            {
+                PublicRelay::BudgetExhausted
+            } else if state.unavailable {
+                PublicRelay::Unavailable
+            } else {
+                PublicRelay::Enabled {
+                    anonymous: self.access.anonymous(),
+                }
+            },
         })
     }
 
     pub(crate) fn descriptor(&self, endpoint: &crate::Endpoint) -> Result<serde_json::Value> {
+        self.sign_descriptor(endpoint, Purpose::Live)
+    }
+
+    pub(crate) fn gossip_descriptor(&self, endpoint: &crate::Endpoint) -> Result<GossipDescriptor> {
+        self.gossip_descriptor_at(endpoint, super::now())
+    }
+
+    pub(crate) fn gossip_descriptor_at(
+        &self,
+        endpoint: &crate::Endpoint,
+        timestamp: i64,
+    ) -> Result<GossipDescriptor> {
+        let now = timestamp.unsigned_abs();
+        let revision = self.descriptor_revision.load(Ordering::Acquire);
+        if let Some(cached) = self.gossip_cache.lock().expect("gossip cache").as_ref()
+            && cached.revision == revision
+            && cached.endpoint == endpoint.as_str()
+            && now < cached.valid_until
+        {
+            return Ok(cached.descriptor.clone());
+        }
+        let snapshot = self.descriptor_snapshot(timestamp, endpoint)?;
+        let descriptor = if snapshot.public_relay == PublicRelay::Disabled {
+            GossipDescriptor::OptedOut
+        } else if !offers_community_service(
+            snapshot.authority.is_some(),
+            snapshot.services.relay,
+            snapshot.services.stun,
+            snapshot.public_relay,
+        ) {
+            GossipDescriptor::ObserverOnly
+        } else {
+            GossipDescriptor::Advertise(self.sign_envelope(
+                endpoint,
+                Purpose::Gossip,
+                now,
+                &snapshot,
+            )?)
+        };
+        let rollover = u64::try_from(self.next_rollover.load(Ordering::Acquire)).unwrap_or(0);
+        let valid_until = now.saturating_add(GOSSIP_CACHE_TTL).min(rollover);
+        if self.descriptor_revision.load(Ordering::Acquire) == revision && now < valid_until {
+            *self.gossip_cache.lock().expect("gossip cache") = Some(CachedGossip {
+                endpoint: endpoint.as_str().to_owned(),
+                revision,
+                valid_until,
+                descriptor: descriptor.clone(),
+            });
+            tracing::debug!(
+                event = "discovery_gossip_descriptor_cached",
+                revision,
+                valid_until,
+                advertised = matches!(descriptor, GossipDescriptor::Advertise(_)),
+            );
+        }
+        Ok(descriptor)
+    }
+
+    pub(crate) fn sign_descriptor(
+        &self,
+        endpoint: &crate::Endpoint,
+        purpose: Purpose,
+    ) -> Result<serde_json::Value> {
+        let timestamp = super::now();
+        let now = timestamp.unsigned_abs();
+        // Snapshot settings together so signing and access checks can run outside the state lock.
+        let snapshot = self.descriptor_snapshot(timestamp, endpoint)?;
+        let envelope = self.sign_envelope(endpoint, purpose, now, &snapshot)?;
+        Ok(serde_json::json!({
+            "version": envelope.version,
+            "relay_url": endpoint.relay_url(),
+            "descriptor": envelope.descriptor,
+            "signature": envelope.signature,
+        }))
+    }
+
+    fn sign_envelope(
+        &self,
+        endpoint: &crate::Endpoint,
+        purpose: Purpose,
+        now: u64,
+        snapshot: &DescriptorSnapshot,
+    ) -> Result<GossipEnvelope> {
         let identity = self
             .identity
             .get()
             .ok_or_else(|| anyhow!("missing node identity"))?;
-        let timestamp = super::now();
-        let now = timestamp.unsigned_abs();
-        // Snapshot settings together so signing and access checks can run outside the state lock.
-        let snapshot = self.descriptor_snapshot(timestamp)?;
         let accepting = self.access.public_enabled();
         let login_page = self
             .console
@@ -151,7 +328,7 @@ impl Runtime {
             .filter(|_| snapshot.services.relay && accepting)
             .and_then(|console| console.login_page(now));
         let descriptor = serde_json::json!({
-            "version": 2,
+            "version": DESCRIPTOR_VERSION,
             "node_id": identity.id(),
             "node_key": identity.key_b64(),
             "relay_endpoint": endpoint.as_str(),
@@ -159,24 +336,25 @@ impl Runtime {
             "stun": snapshot.stun_urls,
             "zone": snapshot.zone,
             "region": snapshot.region,
-            "capacity_bytes_per_second": snapshot.capacity_bytes_per_second,
+            "public_capacity_bytes_per_second": snapshot.capacity_bytes_per_second,
+            "operator": snapshot.operator,
+            "provider": snapshot.provider,
+            "platform": NODE_PLATFORM_NATIVE,
             "classes": ["owner", "standard", "lowest"],
             "issued_at": now,
-            "expires_at": now + DESCRIPTOR_SECONDS,
-            "relay_available": snapshot.relay_ready && accepting,
-            "anonymous": accepting && self.access.anonymous(),
+            "expires_at": now + purpose.lifetime(),
+            "public_relay": snapshot.public_relay,
             "account_login_page": login_page,
             "console_url": self.console.get().map(crate::console::Console::origin),
             "authority": snapshot.authority,
         });
         let payload = serde_json::to_vec(&descriptor)?;
-        let signed = trust::sign(DESCRIPTOR_DOMAIN, &payload, identity.signing_key());
-        Ok(serde_json::json!({
-            "version": 2,
-            "relay_url": endpoint.relay_url(),
-            "descriptor": URL_SAFE_NO_PAD.encode(&payload),
-            "signature": URL_SAFE_NO_PAD.encode(&signed[payload.len()..]),
-        }))
+        let signed = trust::sign(purpose.domain(), &payload, identity.signing_key());
+        Ok(GossipEnvelope {
+            version: DESCRIPTOR_VERSION,
+            descriptor: URL_SAFE_NO_PAD.encode(&payload),
+            signature: URL_SAFE_NO_PAD.encode(&signed[payload.len()..]),
+        })
     }
 }
 

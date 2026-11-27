@@ -45,7 +45,7 @@ pub async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     }
     if req.method() == Method::Get && req.path() == "/.well-known/windshare" {
         let mut response = Response::from_json(&json!({
-            "version":1,"access":"restricted","managed_turn":env.secret("TURN_KEY").is_ok(),
+            "version":1,"platform":"cloudflare","authority":null,"access":"restricted","managed_turn":env.secret("TURN_KEY").is_ok(),
             "relay_url":env.var("RELAY_URL").map_or(origin,|value| value.to_string()),
             "console_url":console,"frontend_url":env.var("FRONTEND_URL").ok().map(|value| value.to_string()),
         }))?;

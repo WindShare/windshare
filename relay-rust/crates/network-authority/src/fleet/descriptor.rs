@@ -7,12 +7,16 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as B64};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt;
+use windshare_relay_access::{
+    descriptor::{
+        DESCRIPTOR_VERSION, InvariantError, NODE_IDENTITY_DOMAIN, NODE_PLATFORM_NATIVE, Purpose,
+        validate_service_invariants,
+    },
+    trust,
+};
 
 pub const MAX_DESCRIPTOR: usize = 16 * 1024;
-const DESCRIPTOR_VERSION: u8 = 2;
-const MAX_CLOCK_SKEW_SECONDS: u64 = 60;
-const MAX_DESCRIPTOR_LIFETIME_SECONDS: u64 = 300;
-const MAX_STUN_URLS: usize = 4;
+const MAX_DESCRIPTOR_LIFETIME_SECONDS: u64 = Purpose::Live.lifetime();
 const BYTES_PER_MBPS: u64 = 125_000;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -68,15 +72,17 @@ struct Authority {
 #[derive(Deserialize)]
 struct Descriptor {
     authority: Option<Authority>,
+    platform: String,
     version: u8,
     node_id: String,
     node_key: String,
     relay_endpoint: String,
     services: Services,
+    public_relay: windshare_relay_access::descriptor::PublicRelay,
     stun: Vec<String>,
     zone: Zone,
     region: String,
-    capacity_bytes_per_second: Option<u64>,
+    public_capacity_bytes_per_second: Option<u64>,
     issued_at: u64,
     expires_at: u64,
 }
@@ -113,7 +119,7 @@ fn decode_verified(bytes: &[u8]) -> Result<(Descriptor, [u8; 32]), DescriptorErr
     })?;
     verify_bytes(
         &value.node_key,
-        b"windshare/node-descriptor/v2\0",
+        Purpose::Live.domain(),
         &payload,
         &envelope.signature,
     )
@@ -126,6 +132,9 @@ fn decode_verified(bytes: &[u8]) -> Result<(Descriptor, [u8; 32]), DescriptorErr
             value.version
         )));
     }
+    if value.platform != NODE_PLATFORM_NATIVE {
+        return Err(DescriptorError::invalid("unsupported node platform"));
+    }
     let key = public_key(&value.node_key)
         .map_err(|error| DescriptorError::invalid(format!("invalid node_key: {error}")))?;
     Ok((value, key))
@@ -137,7 +146,7 @@ fn validate_identity_and_endpoint(
     key: &[u8; 32],
 ) -> Result<(), DescriptorError> {
     let mut digest = Sha256::new();
-    digest.update(b"windshare/node-identity/v1\0");
+    digest.update(NODE_IDENTITY_DOMAIN);
     digest.update(key);
     let expected_node_id = B64.encode(digest.finalize());
     if value.node_id != expected_node_id {
@@ -165,7 +174,7 @@ fn validate_freshness(value: &Descriptor, now: u64) -> Result<(), DescriptorErro
             value.expires_at
         )));
     }
-    if value.issued_at > now.saturating_add(MAX_CLOCK_SKEW_SECONDS) {
+    if value.issued_at > now.saturating_add(trust::CLOCK_SKEW) {
         return Err(DescriptorError::expired(format!(
             "descriptor issued_at {} exceeds authority clock skew (authority time {now})",
             value.issued_at
@@ -186,6 +195,20 @@ fn validate_services(
     origin: &str,
     value: &Descriptor,
 ) -> Result<(Vec<Role>, Vec<String>), DescriptorError> {
+    validate_service_invariants(
+        value.services.relay,
+        value.services.stun,
+        value.stun.len(),
+        value.public_relay,
+    )
+    .map_err(|error| match error {
+        InvariantError::EnabledWithoutRelayService => {
+            DescriptorError::mismatch("enabled public relay requires the relay service")
+        }
+        InvariantError::TooManyStunUrls | InvariantError::StunServiceWithoutUrls => {
+            DescriptorError::mismatch("descriptor STUN URL count does not match declared services")
+        }
+    })?;
     let mut roles = Vec::new();
     if value.services.relay {
         roles.push(Role::Relay);
@@ -196,11 +219,6 @@ fn validate_services(
     if roles.is_empty() {
         return Err(DescriptorError::mismatch(
             "descriptor advertises neither relay nor STUN service",
-        ));
-    }
-    if value.stun.len() > MAX_STUN_URLS || (value.services.stun && value.stun.is_empty()) {
-        return Err(DescriptorError::mismatch(
-            "descriptor STUN URL count does not match declared services",
         ));
     }
     let mut stun = Vec::new();
@@ -300,7 +318,7 @@ pub fn inspect(
     }
     let (roles, stun) = validate_services(&origin, &value)?;
     let capacity_mbps = value
-        .capacity_bytes_per_second
+        .public_capacity_bytes_per_second
         .and_then(|n| u32::try_from(n.div_ceil(BYTES_PER_MBPS)).ok());
     Ok(Discovery {
         node_key: value.node_key,

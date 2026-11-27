@@ -34,6 +34,7 @@ const MAX_HTTP_HEADERS: usize = 64;
 type ResponseBody = Full<Bytes>;
 
 pub struct Ingress {
+    pub(crate) discovery: Option<crate::discovery::Discovery>,
     endpoint: Endpoint,
     origins: OriginPolicy,
     sources: SourcePolicy,
@@ -58,6 +59,7 @@ impl Ingress {
         environment: NativeEnvironment,
     ) -> Self {
         Self {
+            discovery: None,
             endpoint,
             origins,
             sources,
@@ -68,6 +70,7 @@ impl Ingress {
     }
 
     pub(crate) fn with_node(mut self, node: crate::node::Runtime) -> Self {
+        let _ = self.capacity.access.set(node.access.clone());
         self.node = node;
         self
     }
@@ -243,12 +246,26 @@ impl RequestService<'_> {
         request: Request<Incoming>,
     ) -> Result<Response<ResponseBody>, Infallible> {
         let path = request.uri().path();
+        if path == crate::discovery::PATH
+            && let Some(discovery) = &self.ingress.discovery
+        {
+            let Ok(source) = self
+                .ingress
+                .sources
+                .resolve(self.peer.ip(), request.headers())
+            else {
+                return Ok(reply(StatusCode::BAD_REQUEST, "invalid source\n"));
+            };
+            return Ok(discovery
+                .handle(request, source, &self.ingress.node, &self.ingress.endpoint)
+                .await);
+        }
         // A configured relay mount can share the console's /api/ prefix.
         if let Some(console) = self.ingress.node.console.get()
             && path != self.ingress.endpoint.path
             && crate::console::Console::handles(path)
         {
-            return Ok(console.handle(request).await);
+            return Ok(console.handle(request, &self.ingress.node).await);
         }
         let response = match self.ingress.route(&request) {
             Route::Reply(response) => response,

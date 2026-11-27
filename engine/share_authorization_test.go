@@ -21,8 +21,8 @@ import (
 func TestShareAuthorizationPreservesAdmissionAuthority(t *testing.T) {
 	selection := networkruntime.Selection{Plan: relayplan.Plan{
 		Configured: []relayplan.Candidate{{URL: "https://own.example"}},
-		Network:    []relayplan.Candidate{{URL: "https://official.example"}},
-		Standby:    []relayplan.Candidate{{URL: "https://canary.example", Canary: true}},
+		Network:    []relayplan.Candidate{{URL: "https://official.example", Source: relayplan.Official}},
+		Standby:    []relayplan.Candidate{{URL: "https://canary.example", Canary: true, Source: relayplan.Official}, {URL: "https://community.example", Source: relayplan.Community}},
 	}}
 	rejection := func(url string, code v2.ErrorCode) error {
 		return &relayset.RegistrationFailure{URL: url, Cause: &relayv2.RelayError{Code: code}}
@@ -39,6 +39,7 @@ func TestShareAuthorizationPreservesAdmissionAuthority(t *testing.T) {
 		kind ShareAuthorizationKind
 		url  string
 	}{
+		{"community refusal", rejection("https://community.example", v2.ErrorAccessDenied), "", ""},
 		{"self hosted", rejection("https://own.example", v2.ErrorAccessDenied), ShareSelfHostedAuthorization, "https://own.example"},
 		{"official", rejection("https://official.example", v2.ErrorAccessDenied), ShareOfficialAuthorization, ""},
 		{"official local denial", authFailure("https://official.example", relayset.AuthorizationDenied), ShareOfficialAuthorization, ""},

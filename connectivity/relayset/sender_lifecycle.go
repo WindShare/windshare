@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	mathrand "math/rand/v2"
+	"net/http"
 	"slices"
 	"strconv"
 	"sync"
@@ -23,6 +24,8 @@ func (senderRelayRecoveryStoppedError) Error() string { return "sender relay rec
 var ErrStopped = senderRelayRecoveryStoppedError{}
 
 type SenderLifecycleConfig struct {
+	HTTPClient                   *http.Client
+	Origin                       string
 	Candidate                    Candidate
 	Fresh                        v2.RegisterInit
 	ResumeToken                  v2.ResumeToken
@@ -95,6 +98,7 @@ type RegistrationState uint8
 const (
 	RegistrationPending RegistrationState = iota
 	RegistrationNeedsUserAuthorization
+	RegistrationWaitingAuthorization
 	RegistrationRetrying
 	RegistrationAvailable
 )
@@ -245,15 +249,11 @@ func (lifecycle *SenderLifecycle) setRegistrationLocked(state RegistrationState)
 	}
 }
 
-func (lifecycle *SenderLifecycle) showAuthorizationWait(required bool) {
+func (lifecycle *SenderLifecycle) showAuthorizationWait(state RegistrationState) {
 	lifecycle.mu.Lock()
 	defer lifecycle.mu.Unlock()
 	if lifecycle.stopping {
 		return
-	}
-	state := RegistrationPending
-	if required {
-		state = RegistrationNeedsUserAuthorization
 	}
 	lifecycle.setRegistrationLocked(state)
 }
@@ -378,6 +378,7 @@ func (lifecycle *SenderLifecycle) Cleanup(ctx context.Context) error {
 				ShareInstance:    lifecycle.config.Fresh.ShareInstance,
 				PKHash:           lifecycle.config.Fresh.PKHash,
 				StopID:           lifecycle.stopID,
+				Dial:             lifecycle.dialOptions(true, Authorization{}),
 				SenderPrivateKey: lifecycle.config.PrivateKey,
 			})
 		}

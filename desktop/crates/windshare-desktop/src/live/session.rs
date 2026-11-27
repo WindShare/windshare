@@ -79,6 +79,8 @@ impl Runtime {
             delay,
             preferences: RelayPreferences {
                 mode: RelayMode::Automatic,
+                community_nodes: true,
+                community_notice: 0,
                 frontend: PREVIEW_DEFAULT_FRONTEND.into(),
                 custom_frontend: false,
                 relays: vec![
@@ -200,6 +202,25 @@ impl Runtime {
 }
 
 impl Desktop {
+    pub(crate) fn initial_community_notice(
+        runtime: &Runtime,
+        cx: &App,
+    ) -> crate::network::CommunityNoticeState {
+        let mut state = crate::network::CommunityNoticeState::default();
+        if let Runtime::Native(session) = runtime {
+            let notice = session.model(cx).preferences.community_notice;
+            if state.observe(notice) {
+                tracing::info!(
+                    event = "desktop.community_notice_shown",
+                    session = std::process::id(),
+                    notice,
+                    source = "initial_model",
+                );
+            }
+        }
+        state
+    }
+
     pub(crate) const fn interaction_epoch(&self) -> u64 {
         match &self.runtime {
             Runtime::Native(session) => session.interaction_epoch,
@@ -258,6 +279,15 @@ impl Desktop {
         }
         self.network_ui.prune_expanded(&model.preferences);
         self.project_native_shares(model);
+        let notice = model.preferences.community_notice;
+        if self.community_notice.observe(notice) {
+            tracing::info!(
+                event = "desktop.community_notice_shown",
+                session = std::process::id(),
+                notice,
+                source = "host_update",
+            );
+        }
         if let Some(toast) = crate::network::relay_removed_toast(previous_model, model) {
             self.notify(toast, cx);
         }

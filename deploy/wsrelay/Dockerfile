@@ -10,6 +10,7 @@ FROM scratch
 COPY --from=build /build/release/relay-native /wsrelay
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=build --chown=65532:65532 /state /state
+COPY --chown=65532:65532 deploy/wsrelay/node.example.json /state/node.json
 USER 65532:65532
 EXPOSE 8484/tcp 3478/udp
 VOLUME ["/state"]

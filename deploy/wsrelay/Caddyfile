@@ -1,0 +1,24 @@
+{
+	default_sni {$RELAY_SNI}
+}
+
+(domain_cert) {
+	tls {
+		issuer acme https://acme-v02.api.letsencrypt.org/directory
+	}
+}
+
+(ip_cert) {
+	tls {
+		issuer acme https://acme-v02.api.letsencrypt.org/directory {
+			profile shortlived
+		}
+	}
+}
+
+https://{$RELAY_HOST} {
+	import {$CERT_POLICY:domain_cert}
+	reverse_proxy 127.0.0.1:8484 {
+		header_up X-Windshare-Source-Ip {remote_host}
+	}
+}

@@ -171,6 +171,12 @@ impl HostStore {
         self.refresh(cx);
         accepted
     }
+
+    pub fn guest_setup(&mut self, setup_id: &str, cx: &mut Context<Self>) -> bool {
+        let accepted = self.controller.guest_setup(setup_id);
+        self.refresh(cx);
+        accepted
+    }
 }
 
 pub fn host_share_state<'a>(model: &'a Model, operation_id: &str) -> Option<&'a HostShareState> {

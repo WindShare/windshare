@@ -25,12 +25,14 @@ fn valid_payload(node_key: &str, node_id: &str) -> Value {
         "authority": { "url": "https://api.example/", "issuer": "issuer" },
         "node_id": node_id,
         "node_key": node_key,
+        "platform": "native",
         "relay_endpoint": "wss://relay.example/v2/ws",
         "services": { "relay": true, "stun": true },
+        "public_relay":{"state":"enabled","anonymous":true},
         "stun": ["stun:relay.example:3478"],
         "zone": "global",
         "region": "tokyo",
-        "capacity_bytes_per_second": 12_500_000,
+        "public_capacity_bytes_per_second": 12_500_000,
         "issued_at": NOW,
         "expires_at": NOW + 300
     })
@@ -115,9 +117,18 @@ fn inspect_classifies_malformed_oversized_and_unsigned_descriptors() {
 fn inspect_classifies_expired_skewed_and_mismatched_descriptors() {
     let (key, node_key, node_id) = node_identity(9);
 
+    let mut at_skew_limit = valid_payload(&node_key, &node_id);
+    at_skew_limit["issued_at"] = json!(NOW + trust::CLOCK_SKEW);
+    at_skew_limit["expires_at"] = json!(NOW + trust::CLOCK_SKEW + MAX_DESCRIPTOR_LIFETIME_SECONDS);
+    inspect_node(ORIGIN, &sign_envelope(&key, &at_skew_limit), NOW)
+        .expect("descriptor within shared trust::CLOCK_SKEW should be accepted");
+
     for mutate in [
         |p: &mut Value| p["expires_at"] = json!(NOW),
-        |p: &mut Value| p["issued_at"] = json!(NOW + 61),
+        |p: &mut Value| {
+            p["issued_at"] = json!(NOW + trust::CLOCK_SKEW + 1);
+            p["expires_at"] = json!(NOW + trust::CLOCK_SKEW + 1 + MAX_DESCRIPTOR_LIFETIME_SECONDS);
+        },
         |p: &mut Value| p["expires_at"] = json!(NOW + 301),
         |p: &mut Value| {
             p["issued_at"] = json!(NOW + 20);

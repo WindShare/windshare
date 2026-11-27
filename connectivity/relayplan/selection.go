@@ -15,10 +15,11 @@ const (
 type selectionOrder struct {
 	facts      map[string]Observation
 	seedPrefix string
+	now        time.Time
 }
 
 func newSelectionOrder(input Input) selectionOrder {
-	order := selectionOrder{facts: make(map[string]Observation)}
+	order := selectionOrder{facts: make(map[string]Observation), now: input.Now}
 	if input.SelectionSeed != "" {
 		order.seedPrefix = input.SelectionSeed + "|" + input.NetworkGeneration + "|"
 	}
@@ -33,24 +34,21 @@ func newSelectionOrder(input Input) selectionOrder {
 	return order
 }
 
-func (o selectionOrder) less(a, b Candidate) bool {
-	if a.history != b.history {
-		return a.history > b.history
-	}
-	if a.Canary != b.Canary {
-		return !a.Canary
-	}
-	if l, r := a.CapacityMbps >= BulkCapacityThresholdMbps, b.CapacityMbps >= BulkCapacityThresholdMbps; l != r {
-		return l
-	}
-	if left, right := o.facts[a.Identity], o.facts[b.Identity]; left.Admitted && right.Admitted {
-		if l, r := max(left.Duration, 0)/DurationBucket, max(right.Duration, 0)/DurationBucket; l != r {
-			return l < r
+func (o selectionOrder) applyHistory(candidate *Candidate) Observation {
+	candidate.history = unmeasured
+	candidate.ObservedDuration = 0
+	fact, measured := o.facts[candidate.Identity]
+	if measured {
+		candidate.history = recentlyFailed
+		if fact.Admitted {
+			candidate.history = recentlyAdmitted
+			candidate.ObservedDuration = max(fact.Duration, 0)
 		}
 	}
-	if a.CapacityMbps != b.CapacityMbps {
-		return a.CapacityMbps > b.CapacityMbps
-	}
+	return fact
+}
+
+func (o selectionOrder) tieBreak(a, b Candidate) bool {
 	if o.seedPrefix != "" {
 		hash := func(identity string) uint32 {
 			h := fnv.New32a()
@@ -62,6 +60,27 @@ func (o selectionOrder) less(a, b Candidate) bool {
 		}
 	}
 	return a.Identity < b.Identity
+}
+
+func (o selectionOrder) less(a, b Candidate) bool {
+	if a.history != b.history {
+		return a.history > b.history
+	}
+	if a.Canary != b.Canary {
+		return !a.Canary
+	}
+	if l, r := a.CapacityMbps >= BulkCapacityThresholdMbps, b.CapacityMbps >= BulkCapacityThresholdMbps; l != r {
+		return l
+	}
+	if a.history == recentlyAdmitted {
+		if l, r := max(a.ObservedDuration, 0)/DurationBucket, max(b.ObservedDuration, 0)/DurationBucket; l != r {
+			return l < r
+		}
+	}
+	if a.CapacityMbps != b.CapacityMbps {
+		return a.CapacityMbps > b.CapacityMbps
+	}
+	return o.tieBreak(a, b)
 }
 
 // A diversity reservation may break a tie within one retry priority. It must
@@ -104,11 +123,14 @@ func (o selectionOrder) selectNetwork(plan *Plan, available int, ready, cooled [
 			active = append(active, candidate)
 		}
 	}
-	plan.Network = selectReady(active, available, plan.Policy)
+	plan.Network = selectReady(active, target, plan.Policy)
+	if len(active) > target {
+		plan.Standby = append(plan.Standby, activeAlternates(active, plan.Network, target)...)
+	}
 	switch {
 	case len(active) >= target:
 		// A separate startup wave can reuse link slots if the active relays all fail.
-		plan.Standby = selectReady(canaries, target, plan.Policy)
+		plan.Standby = append(plan.Standby, selectReady(canaries, target, plan.Policy)...)
 	case len(active) == 0:
 		plan.Network = selectReady(canaries, target, plan.Policy)
 	case len(canaries) != 0:
@@ -164,7 +186,7 @@ func selectReady(ready []Candidate, available int, policy Policy) []Candidate {
 	primary, rest := ready[0], ready[1:]
 	backup := BackupIndex(primary, rest, policy)
 	selected := []Candidate{primary, rest[backup]}
-	rest = slices.Delete(rest, backup, backup+1)
+	rest = slices.Delete(slices.Clone(rest), backup, backup+1)
 	if len(selected) < available {
 		// Keep exploring an unmeasured endpoint even when known fast ones fill the prefix.
 		if index := slices.IndexFunc(rest, func(c Candidate) bool { return c.history == unmeasured }); index >= 0 {

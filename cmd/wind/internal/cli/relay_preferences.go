@@ -68,7 +68,10 @@ func (app *App) relayPreferences(ctx context.Context, args []string) int {
 		saved, err = store.Load()
 	} else {
 		change := relayconfig.PreferenceEdit{Action: action, Value: value}
-		if change.Action == "frontend" && change.Value == "default" {
+		switch {
+		case change.Action == "community":
+			change.Action = "community_nodes"
+		case change.Action == "frontend" && change.Value == "default":
 			change.Value = ""
 		}
 		saved, err = store.Update(ctx, func(snapshot *relaysetup.Snapshot) error { return change.Apply(&snapshot.Config) })
@@ -78,6 +81,12 @@ func (app *App) relayPreferences(ctx context.Context, args []string) int {
 	}
 	view := saved.Preferences(app.defaultFrontend())
 	app.writeCompleteLine("Relay mode: %s. Share website: %s", view.Mode, view.Frontend)
+	switch {
+	case view.Mode == relayconfig.Automatic:
+		app.writeCompleteLine("Community nodes: %s", relayEnabledLabel(view.CommunityNodes))
+	case action == "community":
+		app.writeCompleteLine("Community nodes: %s (applies in automatic mode)", relayEnabledLabel(view.CommunityNodes))
+	}
 	for _, relay := range view.Relays {
 		app.writeCompleteLine("%s (%s)", relay.URL, relayEnabledLabel(relay.Enabled))
 	}

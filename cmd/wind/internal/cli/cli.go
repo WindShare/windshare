@@ -134,6 +134,9 @@ func Main() int {
 	}
 	interrupts := make(chan os.Signal, interruptSignalBuffer)
 	defer notifyTerminationSignals(interrupts, signal.Ignored)()
+	network.CommunityPaused = func() {
+		app.writeCompleteLine("Community nodes are paused because contribution is disabled on all your native relays.")
+	}
 	app.engineConfig.RelaySetup.Store = relaysetup.FileStore{Settings: relayconfig.FileStore{}}
 	code := runCLIWithInterruptEscalation(
 		interrupts,

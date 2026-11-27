@@ -16,10 +16,10 @@ func Save(config Config) error {
 }
 
 func (config Config) document() document {
-	disk := document{TURNServices: config.TURNServices, FrontURL: config.FrontURL, Profiles: make([]savedRelay, 0, len(config.Profiles)), ActiveRelays: config.ActiveRelays, ConfiguredOnly: config.ConfiguredOnly}
+	disk := document{BootstrapNodes: config.BootstrapNodes, TURNServices: config.TURNServices, FrontURL: config.FrontURL, Profiles: make([]savedRelay, 0, len(config.Profiles)), ActiveRelays: config.ActiveRelays, CommunityNodes: config.CommunityNodes, ConfiguredOnly: config.ConfiguredOnly}
 	for _, candidate := range config.Profiles {
 		disk.Profiles = append(disk.Profiles, savedRelay{
-			ManagedTurn: candidate.ManagedTurn, URL: candidate.PublicURL, AccessKey: candidate.AccessKey, ConsoleURL: candidate.ConsoleURL, OfferedFrontend: candidate.OfferedFrontend,
+			Role: candidate.Role, Node: candidate.Node, ManagedTurn: candidate.ManagedTurn, URL: candidate.PublicURL, AccessKey: candidate.AccessKey, ConsoleURL: candidate.ConsoleURL, OfferedFrontend: candidate.OfferedFrontend,
 		})
 	}
 	return disk

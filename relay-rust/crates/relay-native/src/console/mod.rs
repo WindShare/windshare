@@ -36,6 +36,12 @@ struct Inner {
     bootstrap: Digest,
 }
 
+enum Outcome<'a> {
+    Reply(Reply),
+    ViewContribution(&'a crate::node::Runtime),
+    SetContribution(&'a crate::node::Runtime, crate::node::contribution::Policy),
+}
+
 struct Reply {
     status: StatusCode,
     body: Value,
@@ -124,6 +130,7 @@ impl Console {
         body: &Value,
         session: &str,
         now: u64,
+        node: Option<&crate::node::Runtime>,
     ) -> Result<Reply> {
         let (path, query) = path_and_query
             .split_once('?')
@@ -135,30 +142,66 @@ impl Console {
             .map_err(|_| anyhow!("console store poisoned"))?;
         let mut tx = database::Management::begin(&mut db)?;
         database::cleanup(&tx.db, now)?;
+        let contribution = node.filter(|runtime| runtime.has_local_contribution());
         let result = match (method, path) {
-            (&Method::POST, "/api/initialize") => self.initialize(&tx.db, body, now),
-            (&Method::POST, "/api/login") => Self::login(&tx.db, body, now),
-            (&Method::POST, "/api/enrollments/account") => self.approve_account(&tx.db, body, now),
+            (&Method::POST, "/api/initialize") => {
+                self.initialize(&tx.db, body, now).map(Outcome::Reply)
+            }
+            (&Method::GET, "/api/session") | (&Method::POST, "/api/login")
+                if !sessions::initialized(&tx.db)? =>
+            {
+                Ok(Outcome::Reply(Reply::error(
+                    StatusCode::UNAUTHORIZED,
+                    "uninitialized",
+                )))
+            }
+            (&Method::POST, "/api/login") => Self::login(&tx.db, body, now).map(Outcome::Reply),
+            (&Method::POST, "/api/enrollments/account") => {
+                self.approve_account(&tx.db, body, now).map(Outcome::Reply)
+            }
             (&Method::POST, path) if is_claimant_endpoint(path) => {
-                self.device(&mut tx, path, body, now)
+                self.device(&mut tx, path, body, now).map(Outcome::Reply)
             }
             _ if !sessions::authenticated(&tx.db, session, now)? => {
                 Err(ConsoleError::unauthorized("login_required").into())
             }
-            (&Method::POST, "/api/logout") => Self::logout(&tx.db, session),
-            (&Method::POST, "/api/password") => Self::change_password(&tx.db, body, now),
-            (&Method::GET, "/api/session") => Ok(Reply::ok(
-                json!({"authenticated": true, "capabilities": {"revocation_stops_shares": true, "password_change": true}}),
-            )),
-            _ => self.manage(&mut tx, method, path, query, body, now),
+            (&Method::POST, "/api/logout") => Self::logout(&tx.db, session).map(Outcome::Reply),
+            (&Method::POST, "/api/password") => {
+                Self::change_password(&tx.db, body, now).map(Outcome::Reply)
+            }
+            (&Method::GET, "/api/session") => Ok(Outcome::Reply(Reply::ok(json!({
+                "authenticated": true,
+                "capabilities": {
+                    "revocation_stops_shares": true,
+                    "password_change": true,
+                    "contribution": contribution.is_some(),
+                }
+            })))),
+            (&Method::GET, "/api/contribution") if let Some(runtime) = contribution => {
+                Ok(Outcome::ViewContribution(runtime))
+            }
+            (&Method::POST, "/api/contribution") if let Some(runtime) = contribution => {
+                match serde_json::from_value::<crate::node::contribution::Policy>(body.clone()) {
+                    Ok(policy) if policy.validate().is_ok() => {
+                        Ok(Outcome::SetContribution(runtime, policy))
+                    }
+                    _ => Ok(Outcome::Reply(Reply::error(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_request",
+                    ))),
+                }
+            }
+            _ => self
+                .manage(&mut tx, method, path, query, body, now)
+                .map(Outcome::Reply),
         };
-        let reply = match result {
-            Ok(reply) => reply,
+        let outcome = match result {
+            Ok(outcome) => outcome,
             Err(error) => {
                 let Some(console_error) = error.downcast_ref::<ConsoleError>() else {
                     return Err(error);
                 };
-                Reply::from_console_error(*console_error)
+                Outcome::Reply(Reply::from_console_error(*console_error))
             }
         };
         // Hold the database guard through publication so runtime order matches durable order.
@@ -168,6 +211,16 @@ impl Console {
             tracing::debug!(event = "device_credential_published", credential_id = ?id);
         }
         drop(db);
+        // Apply contribution actions outside `.console.sqlite` so console auth never nests
+        // with `Runtime::control_writer` or `node.sqlite`.
+        let reply = match outcome {
+            Outcome::Reply(reply) => reply,
+            Outcome::ViewContribution(runtime) => Reply::ok(runtime.contribution_view()?),
+            Outcome::SetContribution(runtime, policy) => {
+                let disabled = runtime.set_contribution(policy, i64::try_from(now / 1_000)?)?;
+                Reply::ok(json!({"disabled_notice": disabled}))
+            }
+        };
         tracing::debug!(
             event = "node_console_request",
             path,

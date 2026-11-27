@@ -14,7 +14,9 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/networkendpoint"
+	"github.com/windshare/windshare/core/serviceauthority"
 	"github.com/windshare/windshare/engine/relayconfig"
+	"github.com/windshare/windshare/engine/relayprofile"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
 
@@ -40,13 +42,16 @@ func (failure *apiFailure) temporary() bool {
 }
 
 type discovery struct {
-	ManagedTurn      bool   `json:"managed_turn,omitempty"`
-	Version          int    `json:"version"`
-	Access           string `json:"access"`
-	RelayURL         string `json:"relay_url"`
-	ConsoleURL       string `json:"console_url"`
-	OfferedFrontend  string `json:"frontend_url"`
-	AccountLoginPage string `json:"account_login_page"`
+	Platform         string                       `json:"platform"`
+	Node             relayprofile.NodeIdentity    `json:"-"`
+	PublicRelay      serviceauthority.PublicRelay `json:"-"`
+	ManagedTurn      bool                         `json:"managed_turn,omitempty"`
+	Version          int                          `json:"version"`
+	Access           string                       `json:"access"`
+	RelayURL         string                       `json:"relay_url"`
+	ConsoleURL       string                       `json:"console_url"`
+	OfferedFrontend  string                       `json:"frontend_url"`
+	AccountLoginPage string                       `json:"account_login_page"`
 }
 
 func (run *workflow) call(ctx context.Context, method, address string, body, out any) error {
@@ -135,6 +140,9 @@ func (run *workflow) discover(ctx context.Context, address string) (discovery, e
 		}
 	} else if result.Version != 1 || (result.Access != "open" && result.Access != "restricted") {
 		return result, errors.New("relay discovery returned an unsupported version or access policy")
+	}
+	if result.Version == 1 {
+		result.Node.Platform = result.Platform
 	}
 	if !sameRelay(address, result.RelayURL) {
 		if hint, ok := networkendpoint.WebSocketBaseHint(address); ok && sameRelay(hint.URL(), result.RelayURL) {

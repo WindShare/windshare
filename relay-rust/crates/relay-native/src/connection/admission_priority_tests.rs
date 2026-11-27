@@ -115,3 +115,50 @@ fn anonymous_attempt_churn_preserves_authenticated_then_owner_upgrade_rate() {
     // After full headroom recovers, Anonymous is admitted again.
     assert!(churn(AdmissionPriority::Anonymous, UnixMillis(1_100)).is_ok());
 }
+#[test]
+fn lowering_public_business_limit_preserves_existing_and_owner_connections() {
+    use crate::node::access::{Policy, Service};
+    let service = Service::default();
+    let limit = |n| {
+        service
+            .configure(Policy {
+                public_connections: n,
+                ..Default::default()
+            })
+            .unwrap();
+    };
+    limit(2);
+    let capacity = Capacity::new(
+        ConnectionLimits::default(),
+        AttemptRate {
+            burst: 64,
+            refill: Duration::from_secs(1),
+        },
+        UnixMillis(0),
+    )
+    .unwrap();
+    assert!(capacity.access.set(service.clone()).is_ok());
+    let init = Fixture::new().bytes("registerInitB64");
+    let open = |id, priority| -> Result<_, Refusal> {
+        let a = capacity.accept([1, 1, 1, 1].into(), connection(id), UnixMillis(0), priority)?;
+        a.inspect(&init)?;
+        Ok(a)
+    };
+    let first = open(1, AdmissionPriority::Anonymous).unwrap();
+    let second = open(2, AdmissionPriority::Authenticated).unwrap();
+    limit(1);
+    first.inspect(&init).unwrap();
+    assert!(matches!(
+        open(3, AdmissionPriority::Anonymous),
+        Err(Refusal::PublicBusiness)
+    ));
+    let owner = open(4, AdmissionPriority::Owner).unwrap();
+    drop(first);
+    assert!(matches!(
+        open(5, AdmissionPriority::Anonymous),
+        Err(Refusal::PublicBusiness)
+    ));
+    drop(second);
+    assert!(open(6, AdmissionPriority::Anonymous).is_ok());
+    drop(owner);
+}

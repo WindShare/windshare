@@ -1,7 +1,9 @@
+import { Contribution } from './contribution'
 import { ManagedTURN } from './managed-turn'
 import { useMemo, useState } from 'react'
 import { useAction, useResource, type Feedback } from '../ui/activity'
 import { ChangePasswordDialog, Login } from '../ui/forms'
+import { FocusPage } from '../ui/FocusPage'
 import { Icon } from '../ui/Icon'
 import './relay.css'
 import { Frame, Notice, SessionWait } from '../ui/layout'
@@ -18,8 +20,8 @@ import { CodeEntry, Pairing } from './pairing'
 
 function RelayContent({ api, session, capabilities, code, token, expired, clearToken, resetSession }: {
   api: RelayClient
-  session: ReturnType<typeof useResource<Capabilities | null>>
-  capabilities: Capabilities | null | undefined
+  session: ReturnType<typeof useResource<Capabilities | 'uninitialized' | null>>
+  capabilities: Capabilities | 'uninitialized' | null | undefined
   code: string
   token: string | null
   expired: boolean
@@ -27,12 +29,20 @@ function RelayContent({ api, session, capabilities, code, token, expired, clearT
   resetSession: () => void
 }) {
   const t = useCopy(relayCopy)
+  const shared = useCopy(sharedCopy)
   const page = usePage()
   // The signed-in console owns delivery of the key across route changes.
   const keyCreation = useServiceKeyCreation(api)
   if (capabilities === undefined) return <SessionWait error={session.error} retry={session.reload} />
-  if (capabilities === null) {
-    return <Login area={code ? t.pairing : t.owner} initialize={!!token} expired={expired} cancelSetup={clearToken}
+  if (capabilities === 'uninitialized' && !token) {
+    return <FocusPage icon="shield" label={t.owner} title={shared.ownerSetupTitle}>
+      <p className="lead">{t.initializeAtNode}</p>
+    </FocusPage>
+  }
+  if (capabilities === null || capabilities === 'uninitialized') {
+    // Uninitialized nodes have no password yet; offering password sign-in would discard the in-memory setup token.
+    const cancelSetup = capabilities === 'uninitialized' ? undefined : clearToken
+    return <Login area={code ? t.pairing : t.owner} initialize={!!token} expired={expired} cancelSetup={cancelSetup}
       submit={async password => { await api.signIn(password, token); resetSession() }} />
   }
   if (code) return <Pairing api={api} code={code} />
@@ -41,6 +51,7 @@ function RelayContent({ api, session, capabilities, code, token, expired, clearT
     <div className="view"><div className="page-title"><h1>{t.access}</h1></div>
       <CodeEntry /><Credentials api={api} capabilities={capabilities} keyPhase={keyCreation.state.phase}
         keyFeedback={keyCreation.feedback} />
+      {capabilities.contribution && <Contribution api={api} />}
       {capabilities.managed_turn && <ManagedTURN api={api} />}</div>
   </div>
 }
@@ -55,7 +66,7 @@ function Console({ api, code, token, expired, clearToken, resetSession }: {
   const t = useCopy(relayCopy)
   const shared = useCopy(sharedCopy)
   const capabilities = session.value
-  const tools = capabilities && <div className="mast-account">
+  const tools = capabilities && capabilities !== 'uninitialized' && <div className="mast-account">
     {capabilities.password_change && <button type="button" className="quiet" aria-label={shared.changePassword}
       title={shared.changePassword} disabled={logout.busy} onClick={() => { setPasswordNotice(null); setChangingPassword(true) }}>
       <Icon name="key" size={16} /><span>{shared.changePassword}</span></button>}

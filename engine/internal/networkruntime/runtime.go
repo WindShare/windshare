@@ -4,6 +4,8 @@ package networkruntime
 
 import (
 	"context"
+	"net/http"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -14,6 +16,7 @@ import (
 	"github.com/windshare/windshare/core/nodedirectory"
 	"github.com/windshare/windshare/core/serviceauthority"
 	"github.com/windshare/windshare/engine/account"
+	"github.com/windshare/windshare/engine/internal/community"
 	"github.com/windshare/windshare/engine/networkconfig"
 	"github.com/windshare/windshare/engine/networkdirectory"
 	"github.com/windshare/windshare/engine/relayconfig"
@@ -22,22 +25,31 @@ import (
 )
 
 type Runtime struct {
-	accounts        *account.Service
-	config          networkconfig.Config
-	directory       *networkdirectory.Directory
-	directoryError  error
-	diagnostics     diagnostics.Sink
-	now             func() time.Time
-	watcher         *networkstate.Watcher
-	ownWatcher      bool
-	health          nodeHealth
-	selectionSeed   string
-	mu              sync.Mutex
-	linkUnreachable bool
-	backupReachable bool
-	ctx             context.Context
-	cancel          context.CancelFunc
-	done            chan struct{}
+	community         *community.Pool
+	communityKick     chan struct{}
+	ownerKick         chan struct{}
+	communityOrigin   string // Explicit per-share origin override; empty follows settings or built-in frontend.
+	communityWorkers  sync.WaitGroup
+	accounts          *account.Service
+	config            networkconfig.Config
+	directory         *networkdirectory.Directory
+	directoryError    error
+	diagnostics       diagnostics.Sink
+	now               func() time.Time
+	httpTransport     http.RoundTripper // Test seam for owner/frontend probes; nil uses http.DefaultTransport.
+	watcher           *networkstate.Watcher
+	ownWatcher        bool
+	health            nodeHealth
+	selectionSeed     string
+	mu                sync.Mutex
+	eligibilityKnown  bool
+	eligibilityPaused bool
+	communityStateErr string
+	linkUnreachable   bool
+	backupReachable   bool
+	ctx               context.Context
+	cancel            context.CancelFunc
+	done              chan struct{}
 }
 
 func New(config *networkconfig.Config, now func() time.Time, selectionSeed string, sink diagnostics.Sink, watcher *networkstate.Watcher) (*Runtime, error) {
@@ -89,6 +101,7 @@ func New(config *networkconfig.Config, now func() time.Time, selectionSeed strin
 			return nil, err
 		}
 	}
+	r.startCommunity()
 	changes, unsubscribe := r.watcher.Subscribe()
 	go r.run(changes, unsubscribe)
 	return r, nil
@@ -96,6 +109,10 @@ func New(config *networkconfig.Config, now func() time.Time, selectionSeed strin
 
 func (r *Runtime) Close() {
 	r.cancel()
+	r.communityWorkers.Wait()
+	if r.community != nil {
+		r.community.Close()
+	}
 	r.accounts.Close()
 	if r.directory != nil {
 		r.directory.Close()
@@ -129,12 +146,23 @@ func (r *Runtime) Plan(ctx context.Context, intent relayprofile.Intent, frontend
 		urls = append(urls, candidate.PublicURL)
 	}
 	only := intent.Mode() != relayprofile.Planned
-	plan, err := r.buildPlan(urls, only)
-	if err == nil && len(plan.Configured)+len(plan.Network) == 0 && !only && r.directory != nil {
-		if err := r.directory.Refresh(ctx); err != nil {
-			return Selection{}, unavailable(err, networkdirectory.SnapshotUnavailable)
+	front := r.frontend(frontend)
+	scope := r.scope(front.primary)
+	var allowed bool
+	var settings relayconfig.Config
+	if !only && intent.CommunityAllowed() && scope.Origin != "" {
+		settings, allowed = r.communitySettings(ctx)
+		if err := ctx.Err(); err != nil {
+			return Selection{}, err
 		}
-		plan, err = r.buildPlan(urls, only)
+	}
+	build := func() (relayplan.Plan, error) { return r.planFor(urls, only, scope, allowed) }
+	plan, err := build()
+	if allowed {
+		r.observeShareOrigin(frontend, settings.FrontURL, scope.Origin)
+	}
+	if err == nil && !only && len(plan.Configured)+len(plan.Network) == 0 {
+		plan, err = r.bootstrap(ctx, scope, settings, allowed, build)
 	}
 	if err != nil {
 		return Selection{}, err
@@ -142,13 +170,12 @@ func (r *Runtime) Plan(ctx context.Context, intent relayprofile.Intent, frontend
 	if len(plan.Configured)+len(plan.Network) == 0 {
 		return Selection{}, r.noCandidates(NoRelayCandidates)
 	}
-	if plan.Decision.CooldownFallback {
+	if plan.Decision.CooldownFallback && r.directory != nil {
 		r.directory.TriggerRefresh()
 	}
 	result := Selection{Plan: plan, Relays: relayprofile.Registrations(configured)}
 	result.Decision = networkconfig.Decision{DirectoryGeneration: plan.Decision.DirectoryGeneration, DirectorySerial: plan.Decision.DirectorySerial,
 		NetworkGeneration: plan.Decision.NetworkGeneration, ConfiguredOnly: only, CooldownFallback: plan.Decision.CooldownFallback}
-	front := r.frontend(frontend)
 	result.Frontend, result.AlternateFrontend, result.Decision.FrontendReason = front.primary, front.alternate, front.reason
 	// Only these release frontends are built against this directory's trust roots.
 	result.useAliases = result.Frontend != "" && (result.Frontend == r.config.LinkHost || result.Frontend == r.config.BackupEntry)
@@ -158,17 +185,21 @@ func (r *Runtime) Plan(ctx context.Context, intent relayprofile.Intent, frontend
 		}
 	}
 	for _, candidate := range plan.Configured {
-		result.Decision.Candidates = append(result.Decision.Candidates, networkconfig.Candidate{URL: candidate.URL, Configured: true})
+		result.Decision.Candidates = append(result.Decision.Candidates, decisionCandidate(candidate))
 	}
-	if len(plan.Network) != 0 {
-		result.authorization = r.accounts.NewShareAuthorization(ctx)
+	if len(plan.DirectoryCandidates()) != 0 {
+		if len(configured) > 0 || slices.ContainsFunc(plan.NetworkCandidates(), func(c relayplan.Candidate) bool { return c.Source == relayplan.Community }) {
+			result.authorization = r.accounts.PrepareShareAuthorization(ctx)
+		} else {
+			result.authorization = r.accounts.NewShareAuthorization(ctx)
+		}
 	}
 	for _, candidate := range plan.Network {
-		result.Relays = append(result.Relays, relayprofile.Registration{PublicURL: candidate.URL, Authorization: result.authorization.Source(candidate.URL)})
+		result.Relays = append(result.Relays, r.registration(candidate, result, scope))
 		result.Decision.Candidates = append(result.Decision.Candidates, decisionCandidate(candidate))
 	}
 	for _, candidate := range plan.Standby {
-		result.Standby = append(result.Standby, relayprofile.Registration{PublicURL: candidate.URL, Authorization: result.authorization.Source(candidate.URL)})
+		result.Standby = append(result.Standby, r.registration(candidate, result, scope))
 	}
 	for _, filter := range plan.Decision.Filters {
 		result.Decision.Filters = append(result.Decision.Filters, networkconfig.Filter{Endpoint: filter.Endpoint, Reason: filter.Reason})
@@ -177,6 +208,16 @@ func (r *Runtime) Plan(ctx context.Context, intent relayprofile.Intent, frontend
 }
 
 func (r *Runtime) buildPlan(configured []string, only bool) (relayplan.Plan, error) {
+	settings, allowed := r.communitySettings(r.ctx)
+	front := r.frontend(settings.FrontURL).primary
+	return r.planFor(configured, only, r.scope(front), allowed)
+}
+
+func (r *Runtime) planFor(configured []string, only bool, scope community.Scope, allowed bool) (relayplan.Plan, error) {
+	var peers []relayplan.Candidate
+	if allowed && !only && scope.Origin != "" {
+		peers = r.community.Candidates(scope)
+	}
 	var payload nodedirectory.Payload
 	if !only && r.directory != nil {
 		if snapshot, usable := r.directory.Snapshot(); usable {
@@ -184,7 +225,7 @@ func (r *Runtime) buildPlan(configured []string, only bool) (relayplan.Plan, err
 		}
 	}
 	generation, now := r.generation(), r.now()
-	return relayplan.Build(relayplan.Input{Configured: configured, Directory: payload, NetworkGeneration: strconv.FormatUint(generation, 10), Now: now,
+	return relayplan.Build(relayplan.Input{Community: peers, Configured: configured, Directory: payload, NetworkGeneration: strconv.FormatUint(generation, 10), Now: now,
 		SelectionSeed: r.selectionSeed, Observations: r.health.Snapshot(generation, now), Policy: relayplan.Policy{ConfiguredOnly: only, GlobalPairCoversMainland: r.config.GlobalPairCoversMainland}})
 }
 
@@ -215,4 +256,14 @@ func (r *Runtime) officialNode(address string) (account.Node, bool) {
 func (r *Runtime) generation() uint64 {
 	// The first snapshot describes the same network as a cold-start handshake.
 	return max(1, r.watcher.Current().GenerationID())
+}
+
+// noRedirectHTTPClient enforces the non-redirect probe policy in one place
+// while allowing package tests to substitute a transport without widening
+// networkconfig.Config or disabling private LAN access for owned relays.
+func (r *Runtime) noRedirectHTTPClient() http.Client {
+	return http.Client{
+		Transport:     r.httpTransport,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 }

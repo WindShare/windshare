@@ -39,6 +39,46 @@ func DefaultPool() ICEEndpointPool {
 	return pool
 }
 
+// WithCommunity appends valid, non-colliding community endpoints up to the
+// catalog limit. Invalid or colliding entries are skipped individually so a
+// single malformed peer record cannot discard healthy community STUN servers.
+func (pool ICEEndpointPool) WithCommunity(entries []Endpoint) ICEEndpointPool {
+	if len(entries) == 0 || len(pool.endpoints) >= MaximumCatalogEndpoints {
+		return pool
+	}
+	seenURL := make(map[string]bool, len(pool.endpoints))
+	seenID := make(map[string]bool, len(pool.endpoints))
+	for _, e := range pool.endpoints {
+		if canonical, ok := validateEndpoint(e); ok {
+			seenURL[canonical] = true
+		} else {
+			seenURL[e.URL] = true
+		}
+		seenID[e.ID] = true
+	}
+	all := make([]Endpoint, len(pool.endpoints), min(MaximumCatalogEndpoints, len(pool.endpoints)+len(entries)))
+	copy(all, pool.endpoints)
+	for _, e := range entries {
+		if len(all) >= MaximumCatalogEndpoints {
+			break
+		}
+		if e.Trust != "community" || seenID[e.ID] {
+			continue
+		}
+		canonical, ok := validateEndpoint(e)
+		if !ok || seenURL[canonical] {
+			continue
+		}
+		all = append(all, e)
+		seenURL[canonical] = true
+		seenID[e.ID] = true
+	}
+	if len(all) == len(pool.endpoints) {
+		return pool
+	}
+	return ICEEndpointPool{endpoints: all}
+}
+
 // DirectoryPool consumes only an application's currently trusted snapshot.
 // Directory entries are deduplicated ahead of fallbacks so signed metadata and
 // priority win when a URL also appears in the embedded fallback set.

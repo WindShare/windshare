@@ -32,8 +32,7 @@ records. Private keys and API credentials stay outside the checkout.
    `/opt/windshare-network/releases/`, and point `current` to the selected release.
    Install `windshare-network.service` and the complete node configuration at
    `/etc/windshare-network/node.json`. Replace `REPLACE_NODE_HOST` and set
-   `node.capacity_bytes_per_second` to measured sustainable egress before enabling relay.
-   Use `node.contribution.bytes_per_second` for a separate public traffic cap.
+   `node.ceiling.bytes_per_second` to the public egress allowance before enabling relay.
    Preserve the generated identity file across upgrades.
    Keep unit/config files root-owned with mode 0644 and the binary executable.
    Follow [authority enrollment](../../relay-rust/crates/network-authority/README.md)

@@ -4,12 +4,11 @@ import (
 	"context"
 	"io"
 
-	"github.com/windshare/windshare/engine/relayprofile"
-
 	"github.com/windshare/windshare/connectivity/networkstate"
 	"github.com/windshare/windshare/connectivity/relayplan"
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/liveshare"
+	"github.com/windshare/windshare/engine/relayprofile"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
 )
@@ -50,7 +49,7 @@ func prepareRelay(prepared Prepared, candidate relayprofile.Registration, d Depe
 	if d.Attempts != nil {
 		attempts = d.Attempts(candidate.PublicURL)
 	}
-	relay, err := d.Relay(relayset.SenderLifecycleConfig{
+	config := relayset.SenderLifecycleConfig{
 		Candidate: relayset.Candidate{PublicURL: candidate.PublicURL, Authorization: candidate.Authorization}, Fresh: register, ResumeToken: resumeToken,
 		PrivateKey: material.SenderPrivateKey, Descriptor: material.Descriptor,
 		LifecycleObservationCapacity: capacity,
@@ -65,7 +64,11 @@ func prepareRelay(prepared Prepared, candidate relayprofile.Registration, d Depe
 				d.ObserveAttempt(candidate.PublicURL, attempt)
 			}
 		},
-	})
+	}
+	if route := candidate.Community; route != nil {
+		config.HTTPClient, config.Origin = route.Client, route.Origin
+	}
+	relay, err := d.Relay(config)
 	if relay != nil {
 		o.registerRelay(relay)
 	}

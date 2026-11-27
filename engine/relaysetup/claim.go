@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"time"
+
+	"github.com/windshare/windshare/engine/relayprofile"
 )
 
 func (run *workflow) awaitCredential(ctx context.Context, pending *PendingSetup, progress func(Progress)) (Snapshot, error) {
@@ -29,6 +31,14 @@ func (run *workflow) awaitCredential(ctx context.Context, pending *PendingSetup,
 		if err == nil {
 			if credential.ID == "" || credential.AccessKey == "" {
 				return Snapshot{}, errors.New("empty enrollment credential")
+			}
+			if credential.Role == "" && pending.Node.Platform == "" {
+				credential.Role = relayprofile.Service
+			}
+			switch credential.Role {
+			case relayprofile.Owner, relayprofile.Service, relayprofile.Account:
+			default:
+				return Snapshot{}, errors.New("invalid enrollment credential role")
 			}
 			// Retain cancellation authority even if settings changed during the
 			// HTTP call; only installation may publish the issued credential.

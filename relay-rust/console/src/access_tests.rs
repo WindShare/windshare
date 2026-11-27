@@ -221,6 +221,7 @@ fn service_keys_validate_names_and_paginate_revoked_history() {
         10,
     )
     .unwrap();
+    assert_eq!(created.body["role"], "service");
     assert_eq!(
         created.body["configuration"]["url"],
         "https://relay.example"

@@ -141,7 +141,10 @@ async fn run(
         config.connections,
         &config.database,
     )?;
-    let identity = Identity::open(&config.identity_file)?;
+    let identity = Identity::open_for_endpoint(
+        &config.identity_file,
+        endpoint.relay_url().starts_with("https://"),
+    )?;
     let _ = node_id_json.set(serde_json::to_string(&identity.id())?);
     server.node().identify(identity)?;
     let configured = server.configure(config.node, Some(path))?;

@@ -27,6 +27,10 @@ func (r *Runtime) frontend(explicit string) frontendChoice {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.builtinFrontendLocked()
+}
+
+func (r *Runtime) builtinFrontendLocked() frontendChoice {
 	if r.config.LinkHost != "" && (!r.linkUnreachable || !r.backupReachable) {
 		return frontendChoice{
 			primary:   r.config.LinkHost,
@@ -78,6 +82,8 @@ func (r *Runtime) run(changes <-chan networkstate.Snapshot, unsubscribe func()) 
 }
 
 func (r *Runtime) handleNetworkChange() {
+	r.kickCommunity()
+	r.kickOwnerObserve()
 	if r.directory != nil {
 		r.directory.NetworkChanged()
 	}
@@ -98,7 +104,7 @@ func (r *Runtime) checkFrontends() {
 		if err != nil {
 			return false
 		}
-		client := http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		client := r.noRedirectHTTPClient()
 		response, err := client.Do(request)
 		if err != nil {
 			return false
@@ -110,8 +116,16 @@ func (r *Runtime) checkFrontends() {
 	go func() { backup <- check(r.config.BackupEntry) }()
 	linkReady, backupReady := check(r.config.LinkHost), <-backup
 	r.mu.Lock()
+	before := frontendOrigin(r.builtinFrontendLocked().primary)
 	r.linkUnreachable, r.backupReachable = !linkReady, backupReady
+	after := frontendOrigin(r.builtinFrontendLocked().primary)
+	// Re-warm immediately when built-in failover changes the active origin; keep
+	// normal startup/network changes free of duplicate probes when unchanged.
+	kick := before != after && r.communityOrigin == ""
 	r.mu.Unlock()
+	if kick {
+		r.kickCommunity()
+	}
 	if r.diagnostics.Enabled() {
 		fields := diagnostics.Fields{
 			"network_generation": diagnostics.Uint(r.generation()),

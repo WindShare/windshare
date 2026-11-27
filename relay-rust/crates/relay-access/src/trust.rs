@@ -4,7 +4,7 @@ use crate::{
     cbor::{Decoder, Encoder},
 };
 use alloc::{collections::BTreeMap, vec::Vec};
-use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use ed25519_dalek::{SIGNATURE_LENGTH, Signature, Signer, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 pub const MAX_CERTIFICATE_LIFETIME: u64 = 180 * 86_400;
@@ -137,7 +137,10 @@ pub fn sign(domain: &[u8], payload: &[u8], key: &SigningKey) -> Vec<u8> {
 /// # Errors
 /// Refuses truncated records, invalid keys and invalid Ed25519 signatures.
 pub fn verify<'a>(domain: &[u8], signed: &'a [u8], key: &[u8; 32]) -> Result<&'a [u8], Error> {
-    let length = signed.len().checked_sub(64).ok_or(Error::Encoding)?;
+    let length = signed
+        .len()
+        .checked_sub(SIGNATURE_LENGTH)
+        .ok_or(Error::Encoding)?;
     let (payload, signature) = signed.split_at(length);
     let signature = Signature::from_slice(signature).map_err(|_| Error::Signature)?;
     let key = VerifyingKey::from_bytes(key).map_err(|_| Error::Signature)?;

@@ -46,7 +46,7 @@ func (a *Application) logRequestResult(request Request, rejection *Failure) {
 				case "frontend":
 					fields.Action = edit.Action
 					fields.FrontendOrigin = endpointOrigin(edit.Value)
-				case "mode":
+				case "mode", "community_nodes":
 					fields.Action = edit.Action
 				}
 			} else {

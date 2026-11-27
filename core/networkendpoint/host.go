@@ -20,7 +20,9 @@ func (err *NumericHostError) Error() string {
 
 func (err *NumericHostError) Unwrap() error { return ErrInvalid }
 
-func validateDNSHost(hostname string) error {
+// ValidateDNSHost enforces WindShare's shared ASCII DNS and WHATWG numeric-host
+// contract across relay, STUN, and discovery origins.
+func ValidateDNSHost(hostname string) error {
 	if !validDNSName(hostname) {
 		return fmt.Errorf("%w: invalid DNS host", ErrInvalid)
 	}

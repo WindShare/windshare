@@ -11,6 +11,7 @@ import (
 	"github.com/windshare/windshare/core/nodedirectory"
 	"github.com/windshare/windshare/engine/networkconfig"
 	"github.com/windshare/windshare/engine/networkdirectory"
+	"github.com/windshare/windshare/engine/relayprofile"
 )
 
 // PublishRelayHints retains pending registrations so a healthy relay can publish
@@ -18,9 +19,12 @@ import (
 func (selection Selection) PublishRelayHints(capability *link.Link, selected []string) []networkconfig.Candidate {
 	capability.Relays, capability.NodeAliases = nil, nil
 	var published []networkconfig.Candidate
-	for _, group := range [][]relayplan.Candidate{selection.Plan.Configured, selection.Plan.DirectoryCandidates()} {
+	for _, group := range [][]relayplan.Candidate{selection.Plan.Configured, selection.Plan.NetworkCandidates()} {
 		for _, candidate := range group {
 			if !slices.Contains(selected, candidate.URL) {
+				continue
+			}
+			if candidate.Source == relayplan.Community && !candidate.Verified && !selection.communityVerified(candidate.URL) {
 				continue
 			}
 			published = append(published, decisionCandidate(candidate))
@@ -34,8 +38,15 @@ func (selection Selection) PublishRelayHints(capability *link.Link, selected []s
 	return published
 }
 
+func (selection Selection) communityVerified(address string) bool {
+	ready := func(reg relayprofile.Registration) bool {
+		return reg.PublicURL == address && reg.Community != nil && reg.Community.Ready.Load()
+	}
+	return slices.ContainsFunc(selection.Relays, ready) || slices.ContainsFunc(selection.Standby, ready)
+}
+
 func decisionCandidate(candidate relayplan.Candidate) networkconfig.Candidate {
-	return networkconfig.Candidate{URL: candidate.URL, Alias: candidate.Alias, Configured: candidate.Configured,
+	return networkconfig.Candidate{URL: candidate.URL, Alias: candidate.Alias, Source: string(candidate.Source), Configured: candidate.Source == relayplan.Configured,
 		CooldownUntil: candidate.CooldownUntil, ServerRetryAt: candidate.ServerRetryAt}
 }
 

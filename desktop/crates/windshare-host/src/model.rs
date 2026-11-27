@@ -502,7 +502,12 @@ impl Model {
             if id != setup_id {
                 return false;
             }
-            return matches!(kind, crate::SetupRequestKind::Configure);
+            // Explicit cancellation must remain available even while a guest opt-in
+            // is in flight so users can abort immediately if they change their mind.
+            return matches!(
+                kind,
+                crate::SetupRequestKind::Configure | crate::SetupRequestKind::Guest
+            );
         }
         self.setup.unfinished()
             && !matches!(self.setup, Setup::Cancelling { .. })
@@ -513,6 +518,27 @@ impl Model {
         self.setup
             .context()
             .is_some_and(|ctx| self.can_cancel_setup(&ctx.id))
+    }
+
+    pub fn can_guest_setup(&self, setup_id: &str) -> bool {
+        if setup_id.is_empty() || self.setup_pending() {
+            return false;
+        }
+        matches!(
+            &self.setup,
+            Setup::Running {
+                context,
+                verification_url,
+                guest_available: true,
+                ..
+            } if context.id == setup_id && !verification_url.is_empty()
+        )
+    }
+
+    pub fn can_guest_current_setup(&self) -> bool {
+        self.setup
+            .context()
+            .is_some_and(|ctx| self.can_guest_setup(&ctx.id))
     }
 
     pub(crate) fn can_reject(&self, operation_id: &str, error: &Failure) -> bool {
@@ -628,7 +654,8 @@ impl Model {
                 if self.setup.context().is_none_or(|ctx| &ctx.id != id) {
                     if matches!(
                         *kind,
-                        crate::SetupRequestKind::Cancel { acknowledged: true }
+                        crate::SetupRequestKind::Guest
+                            | crate::SetupRequestKind::Cancel { acknowledged: true }
                     ) {
                         self.setup_request = crate::SetupRequest::Idle;
                     }
@@ -648,6 +675,16 @@ impl Model {
                     | (
                         Setup::Running { .. } | Setup::Failed { .. } | Setup::CancelFailed { .. },
                         crate::SetupRequestKind::Configure,
+                    )
+                    | (
+                        Setup::Running {
+                            guest_available: false,
+                            ..
+                        }
+                        | Setup::Cancelling { .. }
+                        | Setup::Failed { .. }
+                        | Setup::CancelFailed { .. },
+                        crate::SetupRequestKind::Guest,
                     )
                     | (
                         Setup::CancelFailed { .. },

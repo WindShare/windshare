@@ -47,10 +47,12 @@ const fn attempt_reserve(burst: u32, priority: AdmissionPriority) -> u32 {
 
 pub struct Capacity {
     limits: ConnectionLimits,
+    pub(crate) access: OnceLock<crate::node::access::Service>,
     state: Mutex<State>,
 }
 
 struct State {
+    public_business: usize,
     total: Usage,
     sources: BTreeMap<IpAddr, Usage>,
     attempts: AttemptLimiter,
@@ -65,7 +67,7 @@ struct Usage {
 #[derive(Clone, Copy, Debug)]
 enum Slot {
     Control,
-    Business,
+    Business(AdmissionPriority),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,6 +75,7 @@ pub enum Refusal {
     GlobalControl,
     SourceControl,
     GlobalBusiness,
+    PublicBusiness,
     SourceBusiness,
     AttemptRate,
 }
@@ -82,6 +85,7 @@ impl fmt::Display for Refusal {
         formatter.write_str(match self {
             Self::GlobalControl => "global_control_capacity",
             Self::SourceControl => "source_control_capacity",
+            Self::PublicBusiness => "public_connection_limit",
             Self::GlobalBusiness => "global_business_capacity",
             Self::SourceBusiness => "source_business_capacity",
             Self::AttemptRate => "connection_attempt_rate",
@@ -111,7 +115,9 @@ impl Capacity {
         limits.validate()?;
         Ok(Arc::new(Self {
             limits,
+            access: OnceLock::new(),
             state: Mutex::new(State {
+                public_business: 0,
                 total: Usage::default(),
                 sources: BTreeMap::new(),
                 attempts: AttemptLimiter::new(attempts, now)
@@ -195,7 +201,11 @@ impl State {
         limits: ConnectionLimits,
         source: IpAddr,
         priority: AdmissionPriority,
+        public_limit: usize,
     ) -> Result<(), Refusal> {
+        if priority != AdmissionPriority::Owner && self.public_business >= public_limit {
+            return Err(Refusal::PublicBusiness);
+        }
         if self.total.business >= admission_limit(limits.business, priority) {
             return Err(Refusal::GlobalBusiness);
         }
@@ -203,6 +213,7 @@ impl State {
         if usage.business >= admission_limit(limits.business_per_source, priority) {
             return Err(Refusal::SourceBusiness);
         }
+        self.public_business += usize::from(priority != AdmissionPriority::Owner);
         self.total.business += 1;
         usage.business += 1;
         self.total.controls -= 1;
@@ -217,7 +228,8 @@ impl State {
                 self.total.controls -= 1;
                 usage.controls -= 1;
             }
-            Slot::Business => {
+            Slot::Business(priority) => {
+                self.public_business -= usize::from(priority != AdmissionPriority::Owner);
                 self.total.business -= 1;
                 usage.business -= 1;
             }
@@ -253,14 +265,22 @@ impl Admission {
             return Ok(());
         }
         let mut slot = self.slot.lock().expect("admission lock");
-        if matches!(*slot, Slot::Business) {
+        if matches!(*slot, Slot::Business(_)) {
             return Ok(());
         }
         self.capacity
             .state
             .lock()
             .expect("admission lock")
-            .promote(self.capacity.limits, self.source, self.priority)
+            .promote(
+                self.capacity.limits,
+                self.source,
+                self.priority,
+                self.capacity
+                    .access
+                    .get()
+                    .map_or(usize::MAX, crate::node::access::Service::public_connections),
+            )
             .inspect_err(|reason| {
                 tracing::debug!(
                     event = "connection_admission_refused",
@@ -270,7 +290,7 @@ impl Admission {
                     %reason
                 );
             })?;
-        *slot = Slot::Business;
+        *slot = Slot::Business(self.priority);
         drop(slot);
         tracing::debug!(
             event = "business_connection_admitted",

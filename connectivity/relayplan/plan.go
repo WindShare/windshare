@@ -20,6 +20,14 @@ const (
 
 var ErrConfiguration = errors.New("invalid relay plan")
 
+type Source string
+
+const (
+	Official   Source = "official"
+	Configured Source = "configured"
+	Community  Source = "community"
+)
+
 type Candidate struct {
 	URL              string
 	Identity         string
@@ -32,9 +40,14 @@ type Candidate struct {
 	ObservedDuration time.Duration
 	CapacityMbps     uint32
 	Canary           bool
-	Configured       bool
-	CooldownUntil    time.Time
-	ServerRetryAt    time.Time
+	Source           Source
+	Verified         bool
+	IPLiteral        bool
+	// ProbeFailed marks a community candidate whose scoped live probe failed
+	// recently, keeping it behind unmeasured peers even after short backoff expires.
+	ProbeFailed   bool
+	CooldownUntil time.Time
+	ServerRetryAt time.Time
 }
 
 // ObservedHandshake returns the recent admitted handshake duration used for
@@ -125,6 +138,7 @@ type Policy struct {
 
 type Input struct {
 	Configured        []string
+	Community         []Candidate
 	Directory         nodedirectory.Payload
 	SelectionSeed     string
 	Observations      []Observation
@@ -156,8 +170,9 @@ type Plan struct {
 // order (initial Network followed by canary Standby) so consumers that classify
 // or coordinate official relays cannot overlook the standby wave.
 func (p Plan) DirectoryCandidates() []Candidate {
-	return slices.Concat(p.Network, p.Standby)
+	return slices.DeleteFunc(p.NetworkCandidates(), func(c Candidate) bool { return c.Source != Official })
 }
+func (p Plan) NetworkCandidates() []Candidate { return slices.Concat(p.Network, p.Standby) }
 
 func Build(input Input) (Plan, error) {
 	plan := Plan{Policy: input.Policy, Decision: Decision{DirectoryGeneration: input.Directory.Generation,
@@ -175,7 +190,7 @@ func Build(input Input) (Plan, error) {
 			return Plan{}, ErrConfiguration
 		}
 		seen[endpoint.IdentityURL] = true
-		plan.Configured = append(plan.Configured, Candidate{URL: raw, Identity: endpoint.IdentityURL, Configured: true})
+		plan.Configured = append(plan.Configured, Candidate{URL: raw, Identity: endpoint.IdentityURL, Source: Configured})
 	}
 	available := min(MaximumNetworkCandidates, MaximumEndpoints-len(plan.Configured))
 	if input.Policy.ConfiguredOnly || available == 0 {
@@ -199,21 +214,15 @@ func Build(input Input) (Plan, error) {
 		case input.Policy.Admit != nil && !input.Policy.Admit(node):
 			reason = "admission_policy"
 		}
+		// A current directory identity keeps its source even when its role is disabled.
+		seen[endpoint.IdentityURL] = true
 		if reason != "" {
 			plan.Decision.Filters = append(plan.Decision.Filters, Filter{Endpoint: node.Relay, Reason: reason})
 			continue
 		}
-		seen[endpoint.IdentityURL] = true
-		candidate := Candidate{URL: node.Relay, Identity: endpoint.IdentityURL, Alias: node.Alias, Zone: node.Zone,
+		candidate := Candidate{Source: Official, URL: node.Relay, Identity: endpoint.IdentityURL, Alias: node.Alias, Zone: node.Zone,
 			Region: node.Region, Provider: node.Provider, Operator: node.Operator, CapacityMbps: node.CapacityMbps, Canary: node.Status == nodedirectory.Canary}
-		fact, measured := order.facts[candidate.Identity]
-		if measured {
-			candidate.history = recentlyFailed
-			if fact.Admitted {
-				candidate.history = recentlyAdmitted
-				candidate.ObservedDuration = max(fact.Duration, 0)
-			}
-		}
+		fact := order.applyHistory(&candidate)
 		if !fact.CooldownUntil.IsZero() || !fact.ServerRetryAt.IsZero() {
 			candidate.CooldownUntil, candidate.ServerRetryAt = fact.CooldownUntil, fact.ServerRetryAt
 			cooled = append(cooled, candidate)
@@ -222,6 +231,7 @@ func Build(input Input) (Plan, error) {
 		}
 	}
 	order.selectNetwork(&plan, available, ready, cooled)
+	plan.addCommunity(input.Community, available, seen, order)
 	return finish(plan), nil
 }
 

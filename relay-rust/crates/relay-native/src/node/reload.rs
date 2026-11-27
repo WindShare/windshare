@@ -6,7 +6,7 @@ use crate::storage::budget::BudgetRecords;
 use anyhow::{Context, Result, anyhow, ensure};
 use std::{
     path::{Path, PathBuf},
-    sync::atomic::Ordering,
+    sync::{Arc, atomic::Ordering},
     time::{Duration, Instant},
 };
 use windshare_relay_access::{Issuer, trust::Generation};
@@ -32,14 +32,85 @@ impl Runtime {
         result
     }
 
+    pub(crate) fn has_local_contribution(&self) -> bool {
+        self.local_contribution.get().is_some()
+    }
+
+    pub(crate) fn contribution_view(&self) -> Result<serde_json::Value> {
+        self.local_contribution
+            .get()
+            .ok_or_else(|| anyhow!("local contribution policy is unavailable"))?
+            .view()
+    }
+
+    /// Persists and immediately publishes a self-hosted contribution policy,
+    /// serialized against `node.json` reloads without re-reading the file.
+    pub(crate) fn set_contribution(
+        &self,
+        policy: super::contribution::Policy,
+        timestamp: i64,
+    ) -> Result<bool> {
+        policy.validate()?;
+        ensure!(
+            self.local_contribution.get().is_some(),
+            "local contribution policy is unavailable"
+        );
+        let writer = self.lock_control()?;
+        let mut settings = self
+            .state
+            .lock()
+            .map_err(|_| anyhow!("node state poisoned"))?
+            .settings
+            .clone();
+        ensure!(
+            settings.authority.is_none(),
+            "local contribution policy is unavailable with an accounting authority"
+        );
+        policy.apply_to(&mut settings);
+        let generations = settings.validate()?;
+        let disabled = self.commit_settings(settings, &generations, Some(policy), timestamp)?;
+        drop(writer);
+        tracing::info!(
+            event = "contribution_policy_changed",
+            timestamp,
+            enabled = policy.enabled,
+            daily_bytes = policy.daily_bytes,
+            connections = policy.connections,
+            public_bytes_per_second = policy.bytes_per_second,
+            host_uplink = policy.host_uplink,
+            disabled_notice = disabled,
+        );
+        Ok(disabled)
+    }
+
     // The caller holds the control writer until publication, so quota reservations
     // and authority responses cannot supersede either half of this transition.
     pub(super) fn apply_settings(
         &self,
-        settings: Settings,
+        mut settings: Settings,
         generations: &[Generation],
         timestamp: i64,
     ) -> Result<()> {
+        if settings.authority.is_none()
+            && let Some(local) = self.local_contribution.get()
+        {
+            local.apply(&mut settings)?;
+            settings.validate()?;
+        } else if settings.authority.is_some() {
+            settings.contribution.daily_bytes = settings.ceiling.daily_bytes;
+            settings.access.public_connections = settings.ceiling.connections.unwrap_or(usize::MAX);
+        }
+        self.commit_settings(settings, generations, None, timestamp)?;
+        Ok(())
+    }
+
+    fn commit_settings(
+        &self,
+        settings: Settings,
+        generations: &[Generation],
+        contribution: Option<super::contribution::Policy>,
+        timestamp: i64,
+    ) -> Result<bool> {
         ensure!(
             self.reporting_authority
                 .get()
@@ -58,7 +129,7 @@ impl Runtime {
             .map_err(|_| anyhow!("node state poisoned"))?;
         let budgets = state.budgets.rollover(&settings, timestamp)?;
         ensure!(
-            budgets.is_empty() || state.control.is_some(),
+            (budgets.is_empty() && contribution.is_none()) || state.control.is_some(),
             "missing persistent relay ledger"
         );
         let store = state.control.clone();
@@ -77,11 +148,14 @@ impl Runtime {
                 .map(|policy| self.access.prepare_policy(policy, records))
                 .transpose()
         };
-        let access = match store {
+        let (access, disabled) = match store {
             Some(store) => store
-                .persist_node_settings(budgets, generations, prepare_access)
+                .persist_node_settings(budgets, generations, contribution, prepare_access)
                 .context("persisting node settings")?,
-            None => prepare_access(generations.iter().copied().map(Into::into).collect())?,
+            None => (
+                prepare_access(generations.iter().copied().map(Into::into).collect())?,
+                false,
+            ),
         };
 
         self.publish_settings(
@@ -93,7 +167,7 @@ impl Runtime {
             },
             timestamp,
         );
-        Ok(())
+        Ok(disabled)
     }
 
     fn publish_settings(&self, prepared: PreparedSettings<'_>, timestamp: i64) {
@@ -107,8 +181,9 @@ impl Runtime {
         let changed = state.settings != settings;
         let was_public_exhausted = state.budgets.public_exhausted(&state.settings, timestamp);
         let publication = self.governor.publish_capacity(
-            settings.capacity_bytes_per_second,
+            settings.ceiling.bytes_per_second,
             settings.contribution.bytes_per_second,
+            settings.host_uplink,
             || {
                 state.budgets.advance(budgets);
                 state.settings = settings;
@@ -125,9 +200,18 @@ impl Runtime {
                     state.budgets.next_rollover(&state.settings),
                     Ordering::Release,
                 );
+                self.bump_descriptor_revision();
                 publication
             },
         );
+        let bootstrap_nodes_changed = self.bootstrap_nodes.send_if_modified(|current| {
+            if current.as_ref() == state.settings.bootstrap_nodes.as_slice() {
+                false
+            } else {
+                *current = Arc::from(state.settings.bootstrap_nodes.as_slice());
+                true
+            }
+        });
         let public_just_exhausted =
             !was_public_exhausted && state.budgets.public_exhausted(&state.settings, timestamp);
         if changed {
@@ -135,12 +219,15 @@ impl Runtime {
                 event = "node_settings_changed",
                 timestamp,
                 zone = state.settings.zone,
-                capacity_bytes_per_second = state.settings.capacity_bytes_per_second,
+                capacity_bytes_per_second = state.settings.ceiling.bytes_per_second,
                 monthly_relay_bytes = state.settings.relay_budget.map(|budget| budget.bytes),
                 public_daily_bytes = state.settings.contribution.daily_bytes,
                 public_bytes_per_second = state.settings.contribution.bytes_per_second,
+                contributing = state.settings.access.contributing,
                 relay_enabled = state.settings.services.relay,
                 stun_enabled = state.settings.services.stun,
+                bootstrap_nodes = state.settings.bootstrap_nodes.len(),
+                bootstrap_nodes_changed,
                 access_changed = publication.changed,
             );
         }
@@ -148,7 +235,7 @@ impl Runtime {
         // default settings still warn once without repeating on every 1s reload.
         // Public pacing alone still governs non-owner traffic even without a node rate.
         let unpaced_relay = state.settings.services.relay
-            && state.settings.capacity_bytes_per_second.is_none()
+            && state.settings.ceiling.bytes_per_second.is_none()
             && state.settings.contribution.bytes_per_second.is_none();
         let unpaced_warning = (unpaced_relay && !state.unpaced_relay_warned).then(|| {
             (
@@ -156,15 +243,19 @@ impl Runtime {
                 state.settings.zone.clone(),
             )
         });
+        let ceiling = state.settings.ceiling;
         state.unpaced_relay_warned = unpaced_relay;
         drop(state);
+        if let Some(local) = self.local_contribution.get() {
+            local.record_ceiling(ceiling);
+        }
         if let Some((node_id, zone)) = unpaced_warning {
             tracing::warn!(
                 event = "relay_pacing_disabled",
                 timestamp,
                 node_id = node_id.as_deref(),
                 %zone,
-                "relay enabled without capacity_bytes_per_second or contribution.bytes_per_second; fair scheduling and priority pacing are bypassed"
+                "relay enabled without a public bandwidth limit; fair scheduling and priority pacing are bypassed"
             );
         }
         if publication.changed || public_just_exhausted {
@@ -186,6 +277,7 @@ impl Runtime {
         } else if state.unavailable {
             state.unavailable = false;
             self.unavailable.store(false, Ordering::Release);
+            self.bump_descriptor_revision();
             tracing::info!(event = "relay_service_available", timestamp);
         }
     }
@@ -215,7 +307,7 @@ impl Runtime {
         };
         if let Some(store) = store {
             store
-                .persist_node_settings(budgets, &[], |_| Ok(()))
+                .persist_node_settings(budgets, &[], None, |_| Ok(()))
                 .context("persisting rolled-over relay budgets")?;
         }
         let mut state = self.state.lock().expect("node state");
@@ -226,6 +318,7 @@ impl Runtime {
             state.budgets.next_rollover(&state.settings),
             Ordering::Release,
         );
+        self.bump_descriptor_revision();
         let public_just_exhausted =
             !was_public_exhausted && state.budgets.public_exhausted(&state.settings, timestamp);
         drop(state);

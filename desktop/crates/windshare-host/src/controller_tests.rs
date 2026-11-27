@@ -436,3 +436,107 @@ fn running_setup_clears_pending_configure_and_remains_cancellable() {
     assert!(!controller.cancel_setup(&active));
     assert!(receiver.try_recv().is_err());
 }
+
+#[test]
+fn guest_setup_marks_pending_blocks_duplicates_and_keeps_cancel_available() {
+    let (controller, receiver) = controller();
+    assert!(!controller.model().can_guest_current_setup());
+    assert!(!controller.guest_setup("setup:1"));
+    assert!(receiver.try_recv().is_err());
+
+    let private_approval: Snapshot = serde_json::from_value(serde_json::json!({
+        "session_id": "session",
+        "revision": 1,
+        "shares": [],
+        "setup": {
+            "state": "running",
+            "id": "setup:1",
+            "operation_id": "share:1",
+            "relay_url": "https://relay.example",
+            "verification_url": "https://console.example/approve",
+            "guest_available": false
+        }
+    }))
+    .unwrap();
+    controller
+        .shared
+        .update(|draft| draft.write().reconcile(private_approval));
+    assert!(!controller.model().can_guest_current_setup());
+    assert!(!controller.guest_setup("setup:1"));
+
+    let open_approval: Snapshot = serde_json::from_value(serde_json::json!({
+        "session_id": "session",
+        "revision": 2,
+        "shares": [],
+        "setup": {
+            "state": "running",
+            "id": "setup:1",
+            "operation_id": "share:1",
+            "relay_url": "https://relay.example",
+            "verification_url": "https://console.example/approve",
+            "guest_available": true
+        }
+    }))
+    .unwrap();
+    controller
+        .shared
+        .update(|draft| draft.write().reconcile(open_approval));
+    assert!(controller.model().can_guest_current_setup());
+
+    // First click queues GuestSetup, marks Pending(Guest), and disables duplicates while keeping Cancel enabled.
+    assert!(controller.guest_setup("setup:1"));
+    assert!(matches!(
+        receiver.try_recv().unwrap(),
+        Command::GuestSetup { setup_id } if setup_id == "setup:1"
+    ));
+    assert_eq!(
+        controller.model().setup_request,
+        SetupRequest::Pending {
+            id: "setup:1".into(),
+            operation_id: "share:1".into(),
+            kind: SetupRequestKind::Guest,
+        }
+    );
+    assert!(!controller.model().can_guest_current_setup());
+    assert!(!controller.guest_setup("setup:1"));
+    assert!(receiver.try_recv().is_err());
+    assert!(controller.model().can_cancel_current_setup());
+
+    // Cancelling while Guest is pending still succeeds and keeps Guest disabled.
+    assert!(controller.cancel_setup("setup:1"));
+    assert!(matches!(
+        receiver.try_recv().unwrap(),
+        Command::CancelSetup { setup_id } if setup_id == "setup:1"
+    ));
+    assert!(!controller.model().can_guest_current_setup());
+    assert!(controller.model().command_error.is_none());
+}
+
+#[test]
+fn guest_setup_local_rejection_routes_to_setup_request_instead_of_command_error() {
+    let (controller, _receiver) = controller();
+    let open_approval: Snapshot = serde_json::from_value(serde_json::json!({
+        "session_id": "session",
+        "revision": 1,
+        "shares": [],
+        "setup": {
+            "state": "running",
+            "id": "setup:1",
+            "relay_url": "https://relay.example",
+            "verification_url": "https://console.example/approve",
+            "guest_available": true
+        }
+    }))
+    .unwrap();
+    controller
+        .shared
+        .update(|draft| draft.write().reconcile(open_approval));
+    controller.begin_shutdown();
+
+    assert!(controller.guest_setup("setup:1"));
+    assert!(matches!(
+        &controller.model().setup_request,
+        SetupRequest::Rejected { id, .. } if id == "setup:1"
+    ));
+    assert!(controller.model().command_error.is_none());
+}

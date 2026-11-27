@@ -239,7 +239,10 @@ fn paced_governor(scenario: &Scenario, rate: u64) -> (tempfile::TempDir, Governo
     )
     .unwrap();
     let settings = Settings {
-        capacity_bytes_per_second: Some(rate),
+        ceiling: crate::node::Ceiling {
+            bytes_per_second: Some(rate),
+            ..Default::default()
+        },
         ..Settings::default()
     };
     (directory, Runtime::new(settings, store).unwrap().governor)

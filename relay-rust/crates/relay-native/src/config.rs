@@ -154,7 +154,7 @@ fn validate_endpoint_address(address: IpAddr) -> Result<()> {
     Ok(())
 }
 
-fn validate_dns(host: &str) -> Result<()> {
+pub fn validate_dns(host: &str) -> Result<()> {
     let name = host.strip_suffix('.').unwrap_or(host);
     ensure!(!name.is_empty() && name.len() <= 253, "invalid host");
     for label in name.split('.') {

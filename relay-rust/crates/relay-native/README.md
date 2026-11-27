@@ -1,18 +1,18 @@
 # Native relay host
 
 Run `wsrelay --config node.json`. Copy the [example](../../../deploy/wsrelay/node.example.json),
-set the public WebSocket endpoint, browser origins and capacity, and terminate TLS
+set the public WebSocket endpoint and browser origins, and terminate TLS
 at a reverse proxy. Relative database and identity paths resolve beside the config.
 A wildcard listen address requires an explicit endpoint. Copy `relay_url` from
-the startup JSON or `/.well-known/windshare` into `wind relay onboard <url>`.
-Use the one-time administrator URL printed at startup to set a password. Confirm
-the device name and code at the approval URL. Public guests can use `wind relay add`.
+the startup JSON or `/.well-known/windshare` into `wind relay add <url>`.
+On HTTPS deployments, open the one-time initialization link, set the admin password
+and approve the device code. Guests can use `wind relay add <url> --anonymous`.
+For headless HTTP deployments, the first start prints the owner access key.
 
-The first start creates a durable Ed25519 node identity and prints its owner access
-key. Back up the identity, relay SQLite database and its sibling `.console.sqlite`
+Back up the Ed25519 identity, relay SQLite database and its sibling `.console.sqlite`
 using a consistent SQLite backup. The console stores sessions, per-device installation
 receipts and revocations. Owner-approved devices share owner priority. Devices approved
-through a service account use that account?s allowance and receive a key scoped to this node. The console can issue a service key for a separate principal. Revoking a key
+through a service account use that account's allowance and receive a key scoped to this node. The console can issue a service key for a separate principal. Revoking a key
 also stops its active shares on this node. One host
 owns each database; its endpoint identity and permanent STOP history cannot be reset
 by changing configuration. JSON readiness goes to stdout; traces go to stderr.
@@ -31,16 +31,14 @@ by changing configuration. JSON readiness goes to stdout; traces go to stderr.
   is refused before authenticated admission. STOP has separate control capacity.
 - `stun`: `udp_addresses`, optional `admin_address`, and `limits`;
   see [STUN](../../../docs/stun.md).
-- `node`: enabled `services`, `zone`, `region`, `stun_urls`,
-  `capacity_bytes_per_second`, optional `relay_budget`, and `access`.
-  All classes share the configured bandwidth. The monthly budget caps WebSocket
-  egress, including owner traffic and control frames, on the UTC billing cycle.
-  Anonymous admission defaults off for `cn`, on for `global`.
-- `node.contribution` accepts optional `daily_bytes` (UTC midnight) and `bytes_per_second`
-  for non-owner shares. Receivers inherit their share's owner status. The public
-  rate works even without a configured node rate. With neither rate set, the host
-  forwards ready frames immediately, bypasses fair scheduling and priority pacing,
-  and logs `relay_pacing_disabled`.
+- `node` sets services, locality hints, STUN endpoints, optional monthly billing
+  budget and up to 16 untrusted `bootstrap_nodes`. The monthly budget counts all
+  WebSocket egress on the UTC billing cycle. Anonymous admission defaults off
+  for `cn` and on for `global`.
+- Self-hosted contribution lives in SQLite. Edit it in the native console.
+  The defaults allow 10 GiB per UTC day, 25 Mbps and 64 public business connections.
+  `node.ceiling` can bound `daily_bytes`, `bytes_per_second` and `connections`.
+  Owner traffic bypasses public pacing and the public daily budget.
 - `node.access`: local credentials/owner principals, trusted issuer certificates,
   `shares_per_principal` and `owner_reserved_shares`.
 - `node.authority`: official usage endpoint and issuer; see
@@ -51,7 +49,7 @@ authority changes require restart. Unknown fields and invalid policies fail vali
 
 ## Runtime
 
-`/.well-known/windshare` publishes the signed v2 node descriptor. `/healthz` reports
+`/.well-known/windshare` publishes the five-minute signed node descriptor. `/discovery/v1/peers` exchanges separately signed, one-day gossip records. `/healthz` reports
 HTTP liveness independently of relay capacity; UDP STUN has its own private health
 endpoint. Ctrl-C or SIGTERM joins relay, reporter and STUN teardown.
 
@@ -74,4 +72,6 @@ Schema version 5 rejects older databases. Unsubmitted frames are discarded on cl
 already submitted bytes may still arrive. Slow socket writes cannot block share actors.
 
 `make rust` covers protocol, persistence, fair scheduling, admission, usage, HTTP/STUN,
-fault-injected teardown and Go-client process interop.
+fault-injected teardown and Go-client process interop. From `relay-rust/`, run
+`cargo test -p windshare-relay-native tcp_contention -- --ignored --nocapture`
+to measure public egress with an idle, bulk or receiver-limited owner.

@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"github.com/windshare/windshare/core/serviceauthority"
+	"github.com/windshare/windshare/engine/relayprofile"
 )
 
 const nativeKeyAccess = "local-key"
@@ -17,10 +18,15 @@ func (run *workflow) discoverNative(raw []byte) (discovery, error) {
 		return discovery{}, err
 	}
 	access := nativeKeyAccess
-	if descriptor.Anonymous {
+	if descriptor.PublicRelay == serviceauthority.RelayAnonymous {
 		access = "open"
 	}
 	result := discovery{Version: 2, Access: access, RelayURL: descriptor.RelayBaseURL(), ConsoleURL: descriptor.ConsoleURL}
+	result.Node = relayprofile.NodeIdentity{Platform: descriptor.Platform, NodeKey: descriptor.NodeKey}
+	result.PublicRelay = descriptor.PublicRelay
+	if descriptor.Authority != nil {
+		result.Node.Authority = descriptor.Authority.Issuer
+	}
 	if descriptor.Services.Relay {
 		result.AccountLoginPage = descriptor.AccountLoginPage
 	}

@@ -47,16 +47,19 @@ impl AccessObject {
                     200,
                 )
             }),
-            "/api/enrollments/claim" => finish(access::claim(&mut store, body, now), |outcome| {
-                trace(
-                    "enrollment_claimed",
-                    &json!({
-                        "enrollment_id": text_id(&outcome.enrollment_id),
-                        "credential_id": text_id(&outcome.credential_id),
-                    }),
-                );
-                reply(&outcome.body, 200)
-            }),
+            "/api/enrollments/claim" => {
+                finish(access::claim(&mut store, body, now), |mut outcome| {
+                    outcome.body["role"] = "owner".into();
+                    trace(
+                        "enrollment_claimed",
+                        &json!({
+                            "enrollment_id": text_id(&outcome.enrollment_id),
+                            "credential_id": text_id(&outcome.credential_id),
+                        }),
+                    );
+                    reply(&outcome.body, 200)
+                })
+            }
             "/api/enrollments/installed" => {
                 finish(access::installed(&mut store, body, now), |outcome| {
                     if outcome.newly_installed {

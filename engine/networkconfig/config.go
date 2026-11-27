@@ -9,6 +9,9 @@ import (
 )
 
 type Config struct {
+	CommunitySettingsPath    string
+	CommunityPaused          func()
+	BootstrapNodes           []string
 	Authority                *account.Config
 	Directory                networkdirectory.Config
 	LinkHost                 string
@@ -17,6 +20,7 @@ type Config struct {
 }
 
 type Candidate struct {
+	Source        string
 	URL           string
 	Alias         string
 	Configured    bool
