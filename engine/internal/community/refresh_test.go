@@ -107,11 +107,13 @@ func TestPullWarmRestartAndOriginPolicy(t *testing.T) {
 				w.WriteHeader(http.StatusForbidden)
 				return
 			}
+			// Record before Accept writes 101 so the client cannot observe
+			// Verified before the handler goroutine executes the increment.
+			upgrades.Add(1)
 			ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: []string{"share.example"}})
 			if err != nil {
 				return
 			}
-			upgrades.Add(1)
 			_ = ws.CloseNow()
 		default:
 			w.WriteHeader(http.StatusNotFound)
@@ -235,11 +237,13 @@ func TestSubpathMountedCommunityRelayVerifiesAtOriginRootAndMountWebSocket(t *te
 				w.WriteHeader(http.StatusForbidden)
 				return
 			}
+			// Record before Accept writes 101 so the client cannot observe
+			// Verified before the handler goroutine executes the increment.
+			upgrades.Add(1)
 			ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: []string{"share.example"}})
 			if err != nil {
 				return
 			}
-			upgrades.Add(1)
 			_ = ws.CloseNow()
 		default:
 			w.WriteHeader(http.StatusNotFound)
@@ -323,17 +327,27 @@ func TestCancelledCallerDoesNotAbortSharedRefresh(t *testing.T) {
 	ctx1, cancel1 := context.WithCancel(t.Context())
 	done1 := make(chan struct{})
 	go func() {
-		pool.Refresh(ctx1, scope, Seeds{Active: []string{seed}})
+		pool.Refresh(ctx1, Scope{}, Seeds{Active: []string{seed}})
 		close(done1)
 	}()
 	<-pullEntered
 
-	// Coalesce a second caller before cancelling the first caller.
+	// Coalesce a second caller before cancelling the first caller and releasing
+	// the pull; advancing the empty initial scope proves caller 2 joined p.cycle.
 	done2 := make(chan struct{})
 	go func() {
 		pool.Refresh(t.Context(), scope, Seeds{Active: []string{seed}})
 		close(done2)
 	}()
+	for {
+		pool.mu.Lock()
+		joined := pool.cycle != nil && pool.cycle.scope == scope
+		pool.mu.Unlock()
+		if joined {
+			break
+		}
+		runtime.Gosched()
+	}
 	cancel1()
 	<-done1
 
