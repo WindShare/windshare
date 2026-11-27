@@ -216,6 +216,131 @@ func TestDescribeFailurePrecedenceAndFallthrough(t *testing.T) {
 	}
 }
 
+func TestDescribeFailureProjectsSessionReplacementCauseWithSafetyGuards(t *testing.T) {
+	sessionTransport, err := transferfault.NewSession(transferfault.ScopeSessionTerminal, transferfault.SessionTransport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionProtocol, err := transferfault.NewSession(transferfault.ScopeSessionTerminal, transferfault.SessionProtocol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hint, ok := networkendpoint.WebSocketBaseHint("wss://relay.example" + networkendpoint.WebSocketPath)
+	if !ok {
+		t.Fatal("missing websocket base hint")
+	}
+
+	cases := []struct {
+		name      string
+		failure   receive.Failure
+		wantCode  FailureCode
+		wantFault transferfault.Fault
+		wantHint  networkendpoint.RelayBaseHint
+	}{
+		{
+			name: "wait timeout expiry classifies as deadline while keeping transport fault",
+			failure: receive.Failure{
+				Fault:            sessionTransport,
+				ReplacementCause: errors.Join(relayset.ErrReceiverWaitExpired, &relayv2.RelayError{Code: v2.ErrorNotFound}),
+			},
+			wantCode:  FailureDeadline,
+			wantFault: sessionTransport,
+		},
+		{
+			name: "relay access denied survives session transport",
+			failure: receive.Failure{
+				Fault:            sessionTransport,
+				ReplacementCause: &relayv2.RelayError{Code: v2.ErrorAccessDenied},
+			},
+			wantCode:  FailureRelayAccessDenied,
+			wantFault: sessionTransport,
+		},
+		{
+			name: "relay route error preserves base hint",
+			failure: receive.Failure{
+				Fault:            sessionTransport,
+				ReplacementCause: &relayv2.WebSocketRouteError{BaseHint: hint},
+			},
+			wantCode:  FailureRelayRouteNotFound,
+			wantFault: sessionTransport,
+			wantHint:  hint,
+		},
+		{
+			name: "replacement connectivity code maps directly",
+			failure: receive.Failure{
+				Fault:            sessionTransport,
+				ReplacementCause: receive.Failure{Code: receive.FailurePeerNegotiation},
+			},
+			wantCode:  FailureDirectUnavailable,
+			wantFault: sessionTransport,
+		},
+		{
+			name: "protocol boundary inside replacement preserves protocol fault",
+			failure: receive.Failure{
+				Fault:            sessionTransport,
+				ReplacementCause: transferfault.Wrap(sessionProtocol, errors.New("bad handshake")),
+			},
+			wantCode:  FailureSessionFailed,
+			wantFault: sessionProtocol,
+		},
+		{
+			name: "bare context canceled cannot hijack session transport",
+			failure: receive.Failure{
+				Fault:            sessionTransport,
+				ReplacementCause: context.Canceled,
+			},
+			wantCode:  FailureSessionFailed,
+			wantFault: sessionTransport,
+		},
+		{
+			name: "bare child deadline cannot hijack session transport",
+			failure: receive.Failure{
+				Fault:            sessionTransport,
+				ReplacementCause: context.DeadlineExceeded,
+			},
+			wantCode:  FailureSessionFailed,
+			wantFault: sessionTransport,
+		},
+		{
+			name: "local fs error cannot hijack session transport",
+			failure: receive.Failure{
+				Fault:            sessionTransport,
+				ReplacementCause: &fs.PathError{Op: "open", Path: "x", Err: errors.New("io")},
+			},
+			wantCode:  FailureSessionFailed,
+			wantFault: sessionTransport,
+		},
+		{
+			name: "opaque error falls back to session failed rather than unexpected",
+			failure: receive.Failure{
+				Fault:            sessionTransport,
+				ReplacementCause: errors.New("opaque transport error"),
+			},
+			wantCode:  FailureSessionFailed,
+			wantFault: sessionTransport,
+		},
+		{
+			name: "non-transport session fault ignores replacement cause",
+			failure: receive.Failure{
+				Fault:            sessionProtocol,
+				ReplacementCause: relayset.ErrReceiverWaitExpired,
+			},
+			wantCode:  FailureSessionFailed,
+			wantFault: sessionProtocol,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := DescribeFailure(tc.failure)
+			if !ok || got.Code != tc.wantCode || got.Fault != tc.wantFault || got.RelayBaseHint != tc.wantHint {
+				t.Fatalf("DescribeFailure() = (%+v, %v), want code=%q fault=%v hint=%+v",
+					got, ok, tc.wantCode, tc.wantFault, tc.wantHint)
+			}
+		})
+	}
+}
+
 func TestWorkflowEventTranslationAndDiagnosticRecords(t *testing.T) {
 	origin, err := NormalizeRelayOrigin("https://relay.example:8443/path?secret=1")
 	if err != nil || origin.Scheme != "wss" || origin.Host != "relay.example" || origin.Port != 8443 || origin.HostPort() != "relay.example:8443" {

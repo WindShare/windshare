@@ -235,6 +235,10 @@ func classifyStdlibError(cause error) (Failure, bool) {
 	if _, ok := errors.AsType[*fs.PathError](cause); ok {
 		return Failure{Code: FailureOutputFailed}, true
 	}
+	return classifyNetworkStdlibError(cause)
+}
+
+func classifyNetworkStdlibError(cause error) (Failure, bool) {
 	if _, ok := errors.AsType[*url.Error](cause); ok {
 		return Failure{Code: FailureRelayUnavailable}, true
 	}
@@ -254,6 +258,22 @@ func classifySentinelError(cause error) (Failure, bool) {
 	case errors.Is(cause, share.ErrInvalidChunkSize), errors.Is(cause, share.ErrConfiguration),
 		errors.Is(cause, relayprofile.ErrCandidatesRequired):
 		return Failure{Code: FailureInvalidInput}, true
+	}
+	if f, ok := classifyNetworkSentinelError(cause); ok {
+		return f, true
+	}
+	switch {
+	case errors.Is(cause, output.ErrBusy):
+		return Failure{Code: FailureOutputBusy}, true
+	case errors.Is(cause, output.ErrShareStopped):
+		return Failure{Code: FailureShareStopped}, true
+	default:
+		return Failure{}, false
+	}
+}
+
+func classifyNetworkSentinelError(cause error) (Failure, bool) {
+	switch {
 	case errors.Is(cause, networkruntime.ErrUnavailable):
 		return Failure{Code: FailureNetworkUnavailable}, true
 	case errors.Is(cause, relayset.ErrReceiverUnavailable):
@@ -270,10 +290,6 @@ func classifySentinelError(cause error) (Failure, bool) {
 		errors.Is(cause, wsrtc.ErrFrameBounds), errors.Is(cause, wsrtc.ErrPeerProtocol),
 		errors.Is(cause, wsrtc.ErrTerminalNotAcknowledged), errors.Is(cause, wsrtc.ErrTransport):
 		return Failure{Code: FailureDirectUnavailable}, true
-	case errors.Is(cause, output.ErrBusy):
-		return Failure{Code: FailureOutputBusy}, true
-	case errors.Is(cause, output.ErrShareStopped):
-		return Failure{Code: FailureShareStopped}, true
 	default:
 		return Failure{}, false
 	}
@@ -352,6 +368,11 @@ func classifyAuthorizationState(state relayset.AuthorizationState) (Failure, boo
 
 func classifyReceiveFailure(value receive.Failure) (Failure, bool) {
 	if value.Fault.Valid() {
+		if value.ReplacementCause != nil && isTerminalSessionTransportFault(value.Fault) {
+			if f, known := classifyReplacementCause(value.ReplacementCause, value.Fault); known {
+				return f, true
+			}
+		}
 		return FailureFromFault(value.Fault)
 	}
 	switch value.Interruption {
@@ -378,6 +399,57 @@ func classifyReceiveFailure(value receive.Failure) (Failure, bool) {
 		return Failure{Code: code}, true
 	}
 	return Failure{}, false
+}
+
+// classifyReplacementCause projects the authoritative cause of a failed session
+// replacement while preserving the transfer's terminal SessionTransport fault.
+// Raw context cancellation/deadline sentinels and local filesystem errors are
+// intentionally excluded: caller interruption settles as TransferInterruption,
+// whereas child dial timeouts or local wrappers must not disguise a session
+// replacement failure as caller cancellation.
+func classifyReplacementCause(cause error, transportFault transferfault.Fault) (Failure, bool) {
+	if cause == nil {
+		return Failure{}, false
+	}
+	if reason, ok := errors.AsType[receive.Failure](cause); ok {
+		if code, known := classifyReceiveCode(reason.Code); known {
+			return Failure{Code: code, Fault: transportFault}, true
+		}
+		if reason.Cause != nil {
+			cause = reason.Cause
+		}
+	}
+	if f, ok := classifyRecoveryOutcome(cause); ok {
+		return withFallbackFault(f, transportFault), true
+	}
+	if f, ok := classifyTransportError(cause); ok {
+		return withFallbackFault(f, transportFault), true
+	}
+	if boundary, ok := errors.AsType[*transferfault.BoundaryError](cause); ok && boundary != nil &&
+		boundary.Fault().Valid() && !isTerminalSessionTransportFault(boundary.Fault()) {
+		if f, known := FailureFromFault(boundary.Fault()); known {
+			return f, true
+		}
+	}
+	if f, ok := classifyNetworkSentinelError(cause); ok {
+		return withFallbackFault(f, transportFault), true
+	}
+	if f, ok := classifyNetworkStdlibError(cause); ok {
+		return withFallbackFault(f, transportFault), true
+	}
+	return Failure{}, false
+}
+
+func isTerminalSessionTransportFault(fault transferfault.Fault) bool {
+	code, ok := fault.SessionCode()
+	return ok && fault.Scope() == transferfault.ScopeSessionTerminal && code == transferfault.SessionTransport
+}
+
+func withFallbackFault(failure Failure, fallback transferfault.Fault) Failure {
+	if !failure.Fault.Valid() {
+		failure.Fault = fallback
+	}
+	return failure
 }
 
 func classifyReceiveCode(code receive.FailureCode) (FailureCode, bool) {

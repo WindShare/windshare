@@ -361,3 +361,196 @@ func TestReceiveSettlementRejectsInvalidFileInterruption(t *testing.T) {
 		t.Fatalf("invalid file interruption err = %v, want ErrInvalidResult", err)
 	}
 }
+
+func TestReceiveSettlementPreservesReplacementCauseOnlyForTerminalSessionTransport(t *testing.T) {
+	sessionTransport, err := transferfault.NewSession(transferfault.ScopeSessionTerminal, transferfault.SessionTransport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionPause, err := transferfault.NewSession(transferfault.ScopeOutputPause, transferfault.SessionTransport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionProtocol, err := transferfault.NewSession(transferfault.ScopeSessionTerminal, transferfault.SessionProtocol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outputIO, err := transferfault.NewOutput(transferfault.ScopeOutputPause, transferfault.OutputStateIO)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceDrift, err := transferfault.NewSource(transferfault.ScopeFileLocal, transferfault.SourceRevisionChanged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitExpired := errors.Join(relayset.ErrReceiverWaitExpired, &relayv2.RelayError{Code: v2.ErrorNotFound})
+	accessDenied := &relayv2.RelayError{Code: v2.ErrorAccessDenied}
+	shareStopped := errors.Join(relayset.ErrReceiverShareStopped, &relayv2.RelayError{Code: v2.ErrorStopped})
+
+	tests := []struct {
+		name            string
+		mutate          func(*SettlementInput)
+		wantOutcome     task.Outcome
+		wantClass       task.FailureClass
+		wantFault       transferfault.Fault
+		wantCode        FailureCode
+		wantReplacement error
+		wantStop        ShareStopSource
+	}{
+		{
+			name: "terminal session transport preserves wait expiry",
+			mutate: func(input *SettlementInput) {
+				input.Result.TerminationFault = sessionTransport
+				input.ReplacementError = waitExpired
+			},
+			wantOutcome:     task.OutcomePaused,
+			wantClass:       task.FailureNetwork,
+			wantFault:       sessionTransport,
+			wantReplacement: waitExpired,
+			wantStop:        ShareStopUnconfirmed,
+		},
+		{
+			name: "terminal session transport preserves relay access denied",
+			mutate: func(input *SettlementInput) {
+				input.Result.TerminationFault = sessionTransport
+				input.ReplacementError = accessDenied
+			},
+			wantOutcome:     task.OutcomePaused,
+			wantClass:       task.FailureNetwork,
+			wantFault:       sessionTransport,
+			wantReplacement: accessDenied,
+			wantStop:        ShareStopUnconfirmed,
+		},
+		{
+			name: "replacement share stop promotes to stopped failure",
+			mutate: func(input *SettlementInput) {
+				input.Result.TerminationFault = sessionTransport
+				input.ReplacementError = shareStopped
+			},
+			wantOutcome: task.OutcomeFailed,
+			wantClass:   task.FailureNetwork,
+			wantCode:    FailureShareStopped,
+			wantStop:    ShareStopRelays,
+		},
+		{
+			name: "non-replacement session transport leaves replacement cause nil",
+			mutate: func(input *SettlementInput) {
+				input.Result.TerminationFault = sessionTransport
+			},
+			wantOutcome: task.OutcomePaused,
+			wantClass:   task.FailureNetwork,
+			wantFault:   sessionTransport,
+			wantStop:    ShareStopUnconfirmed,
+		},
+		{
+			name: "source drift dominates replacement error",
+			mutate: func(input *SettlementInput) {
+				input.Result.SourceDriftFault = sourceDrift
+				input.Result.TerminationFault = sessionTransport
+				input.ReplacementError = waitExpired
+			},
+			wantOutcome: task.OutcomePaused,
+			wantClass:   task.FailureSourceDrift,
+			wantFault:   sourceDrift,
+			wantStop:    ShareStopUnconfirmed,
+		},
+		{
+			name: "output fault ignores replacement error",
+			mutate: func(input *SettlementInput) {
+				input.Result.TerminationFault = outputIO
+				input.ReplacementError = waitExpired
+			},
+			wantOutcome: task.OutcomePaused,
+			wantClass:   task.FailureNetwork,
+			wantFault:   outputIO,
+			wantStop:    ShareStopUnconfirmed,
+		},
+		{
+			name: "protocol fault ignores replacement error",
+			mutate: func(input *SettlementInput) {
+				input.Result.TerminationFault = sessionProtocol
+				input.ReplacementError = waitExpired
+			},
+			wantOutcome: task.OutcomePaused,
+			wantClass:   task.FailureNetwork,
+			wantFault:   sessionProtocol,
+			wantStop:    ShareStopUnconfirmed,
+		},
+		{
+			name: "output-pause session transport ignores replacement error",
+			mutate: func(input *SettlementInput) {
+				input.Result.TerminationFault = sessionPause
+				input.ReplacementError = waitExpired
+			},
+			wantOutcome: task.OutcomePaused,
+			wantClass:   task.FailureNetwork,
+			wantFault:   sessionPause,
+			wantStop:    ShareStopUnconfirmed,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			input := SettlementInput{Result: successfulJobResult(t)}
+			input.Result.Outcome = transfer.DirectTreeOutcomePaused
+			tc.mutate(&input)
+			settled, settleErr := Settle(input)
+			if settleErr != nil {
+				t.Fatal(settleErr)
+			}
+			failure, ok := errors.AsType[Failure](settled.Err)
+			if !ok {
+				t.Fatalf("missing typed Failure in %v", settled.Err)
+			}
+			if settled.Outcome != tc.wantOutcome || settled.FailureClass != tc.wantClass ||
+				failure.Fault != tc.wantFault || failure.Code != tc.wantCode ||
+				settled.Value.Recovery.ShareStop != tc.wantStop {
+				t.Fatalf("settled=(outcome=%d class=%d stop=%d failure=%+v), want=(outcome=%d class=%d stop=%d fault=%v code=%d)",
+					settled.Outcome, settled.FailureClass, settled.Value.Recovery.ShareStop, failure,
+					tc.wantOutcome, tc.wantClass, tc.wantStop, tc.wantFault, tc.wantCode)
+			}
+			if tc.wantReplacement == nil {
+				if failure.ReplacementCause != nil {
+					t.Fatalf("unexpected ReplacementCause = %v", failure.ReplacementCause)
+				}
+			} else if failure.ReplacementCause != tc.wantReplacement || !errors.Is(failure, tc.wantReplacement) {
+				t.Fatalf("ReplacementCause = %v, want %v", failure.ReplacementCause, tc.wantReplacement)
+			}
+			if input.ReplacementError != nil && !errors.Is(settled.Err, input.ReplacementError) {
+				t.Fatalf("settlement dropped replacement diagnostic %v", input.ReplacementError)
+			}
+		})
+	}
+}
+
+func TestPreparationReplacementFailureClassifiesNetworkAndShareStopPrecedence(t *testing.T) {
+	sessionTransport, err := transferfault.NewSession(transferfault.ScopeSessionTerminal, transferfault.SessionTransport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outputIO, err := transferfault.NewOutput(transferfault.ScopeOutputPause, transferfault.OutputStateIO)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	observation := getObservation{observationState: &observationState{}}
+	if step := reportGetOutputAdmissionFailure(observation, transferfault.Wrap(sessionTransport, relayset.ErrReceiverWaitExpired)); step != stepNetworkFailure {
+		t.Fatalf("session transport admission step = %v, want stepNetworkFailure", step)
+	}
+	if step := reportGetOutputAdmissionFailure(observation, transferfault.Wrap(outputIO, errors.New("disk full"))); step != stepLocalFailure {
+		t.Fatalf("output admission step = %v, want stepLocalFailure", step)
+	}
+
+	// Share stop confirmed via ReplacementCause must clear Fault/ReplacementCause
+	// so FailureShareStopped owns precedence over SessionTransport.
+	stopped := settlePreparationFailure(stepNetworkFailure, Failure{
+		Fault:            sessionTransport,
+		ReplacementCause: relayset.ErrReceiverShareStopped,
+		Cause:            transferfault.Wrap(sessionTransport, relayset.ErrReceiverShareStopped),
+	}, nil, nil)
+	failure, ok := errors.AsType[Failure](stopped.Err)
+	if !ok || failure.Code != FailureShareStopped || failure.Fault.Valid() || failure.ReplacementCause != nil ||
+		stopped.FailureClass != task.FailureNetwork || stopped.Value.Recovery.ShareStop != ShareStopRelays {
+		t.Fatalf("stopped preparation failure = %+v (failure=%+v)", stopped, failure)
+	}
+}

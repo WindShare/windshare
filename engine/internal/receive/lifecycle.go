@@ -25,9 +25,25 @@ type receiveOperation struct {
 	options      receiverPeerOptions
 	continuation *receivercontinuation.Session
 
-	mu        sync.Mutex
-	session   *getReceiverSession
-	execution *getTransferExecution
+	mu             sync.Mutex
+	session        *getReceiverSession
+	execution      *getTransferExecution
+	replacementErr error
+}
+
+func (g *receiveOperation) recordReplacementError(err error) {
+	if err == nil {
+		return
+	}
+	g.mu.Lock()
+	g.replacementErr = err
+	g.mu.Unlock()
+}
+
+func (g *receiveOperation) replacementFailure() error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.replacementErr
 }
 
 func (g *receiveOperation) close() error {
@@ -66,14 +82,22 @@ func (g *receiveOperation) replace(ctx context.Context, _ *receiversession.Runti
 	g.observation.completeGeneration()
 	next, err := oldSession.recovery.replace(ctx)
 	if err != nil {
+		// Record only recovery-owned failures; a canceled continuation context
+		// means caller cancellation or task teardown stopped the flight.
+		if ctx.Err() == nil {
+			g.recordReplacementError(err)
+		}
 		return nil, err
 	}
 	next.runtime.BindDownloadMetrics(g.metrics)
 	nextExecution, step := g.runner.prepareGetConnectivity(ctx, g.input, g.output, next.runtime, g.observation, g.options)
 	if step != stepReady {
 		next.Close()
-		failure := g.observation.failureSnapshot()
-		return nil, errors.Join(errors.New("replacement content admission failed"), failure.Cause)
+		cause := replacementAdmissionCause(g.observation.failureSnapshot())
+		if ctx.Err() == nil {
+			g.recordReplacementError(cause)
+		}
+		return nil, errors.Join(errors.New("replacement content admission failed"), cause)
 	}
 	g.mu.Lock()
 	g.session, g.execution = next, nextExecution
@@ -95,4 +119,14 @@ func (g *receiveOperation) observeContent(_ transfer.ReceiveProgressSnapshot) {
 	current := g.execution
 	g.mu.Unlock()
 	current.paths.observeContent(current.runtime.LaneSet().ContentActivity(), g.runner.clock.Now())
+}
+
+func replacementAdmissionCause(failure Failure) error {
+	if failure.Code != 0 {
+		return Failure{Code: failure.Code, Cause: failure.Cause}
+	}
+	if failure.Cause != nil {
+		return failure.Cause
+	}
+	return errors.New("replacement content admission failed")
 }

@@ -32,12 +32,16 @@ const (
 
 // Failure retains the authoritative reason selected by application precedence.
 // Clients translate these domain values to vocabulary without re-deciding it.
+// When Fault is a terminal SessionTransport fault caused by failed session
+// replacement, ReplacementCause carries that recovery-owned failure so
+// transport-neutral transfer faults do not need connectivity vocabulary.
 type Failure struct {
-	Fault        transferfault.Fault
-	Interruption transfer.TransferInterruption
-	Local        LocalFailure
-	Code         FailureCode
-	Cause        error
+	Fault            transferfault.Fault
+	Interruption     transfer.TransferInterruption
+	Local            LocalFailure
+	Code             FailureCode
+	ReplacementCause error
+	Cause            error
 }
 
 func (failure Failure) Error() string {
@@ -57,7 +61,12 @@ func (failure Failure) Error() string {
 	}
 }
 
-func (failure Failure) Unwrap() error { return failure.Cause }
+func (failure Failure) Unwrap() error {
+	if failure.Cause != nil {
+		return failure.Cause
+	}
+	return failure.ReplacementCause
+}
 
 type Result struct {
 	OutputAttention     recovery.AttentionReason
@@ -72,15 +81,15 @@ type Result struct {
 	Connectivity        downloadmetrics.Snapshot
 }
 type SettlementInput struct {
-	Result                                                                    transfer.JobResult
-	AdmissionError, RuntimeError, ConnectionError, ContextError, CleanupError error
-	Elapsed                                                                   time.Duration
-	Destination                                                               string
-	DestinationAdjusted                                                       bool
-	NameAdjustments                                                           output.NameAdjustmentSummary
-	Operation                                                                 receivecontract.OperationID
-	Job                                                                       transfer.TransferJobID
-	Connectivity                                                              downloadmetrics.Snapshot
+	Result                                                                                      transfer.JobResult
+	AdmissionError, RuntimeError, ConnectionError, ReplacementError, ContextError, CleanupError error
+	Elapsed                                                                                     time.Duration
+	Destination                                                                                 string
+	DestinationAdjusted                                                                         bool
+	NameAdjustments                                                                             output.NameAdjustmentSummary
+	Operation                                                                                   receivecontract.OperationID
+	Job                                                                                         transfer.TransferJobID
+	Connectivity                                                                                downloadmetrics.Snapshot
 }
 
 func settlePreparationFailure(step stepOutcome, failure Failure, contextErr, cleanupErr error) task.Completion[Result] {
@@ -95,9 +104,9 @@ func settlePreparationFailure(step stepOutcome, failure Failure, contextErr, cle
 		failure.Cause = contextErr
 	}
 	cause := failure.Cause
-	stop := shareStopSource(cause)
+	stop := shareStopSource(cause, failure.ReplacementCause)
 	if stop != ShareStopUnconfirmed && failure.Code == 0 && class != task.FailureUsage {
-		failure.Code = FailureShareStopped
+		failure = Failure{Code: FailureShareStopped, Cause: cause}
 		class = task.FailureNetwork
 	}
 	if cleanupErr != nil {
@@ -158,7 +167,8 @@ func Settle(input SettlementInput) (task.Completion[Result], error) {
 		class = task.FailureLocal
 	case r.TerminationInterruption.Valid() || r.SettlementInterruption.Valid():
 		class = task.FailureLocal
-	case (r.Outcome == transfer.DirectTreeOutcomePaused || r.Outcome == transfer.DirectTreeOutcomeFailed) && (input.AdmissionError != nil || input.RuntimeError != nil || input.ConnectionError != nil):
+	case (r.Outcome == transfer.DirectTreeOutcomePaused || r.Outcome == transfer.DirectTreeOutcomeFailed) &&
+		(input.AdmissionError != nil || input.RuntimeError != nil || input.ConnectionError != nil || input.ReplacementError != nil):
 		class = task.FailureNetwork
 	}
 	result := task.Completion[Result]{
@@ -168,7 +178,7 @@ func Settle(input SettlementInput) (task.Completion[Result], error) {
 	if outcome != task.OutcomeSuccess {
 		// The typed reason keeps application precedence while the error tree retains
 		// diagnostic causes that may not have decided the user-visible outcome.
-		stop := shareStopSource(input.RuntimeError, input.ConnectionError, r.TerminationCause, r.SettlementFailure, r.SelectionResolutionFailure)
+		stop := shareStopSource(input.RuntimeError, input.ConnectionError, input.ReplacementError, r.TerminationCause, r.SettlementFailure, r.SelectionResolutionFailure)
 		failure := resultFailure(input, class)
 		if failure.Local == LocalSourceOmitted {
 			stop = ShareStopUnconfirmed
@@ -193,7 +203,7 @@ func Settle(input SettlementInput) (task.Completion[Result], error) {
 func (input SettlementInput) diagnosticCauses() error {
 	r := input.Result
 	return errors.Join(input.AdmissionError, input.RuntimeError, input.ConnectionError,
-		input.ContextError, input.CleanupError, r.TerminationCause, r.SettlementFailure,
+		input.ReplacementError, input.ContextError, input.CleanupError, r.TerminationCause, r.SettlementFailure,
 		r.SelectionResolutionFailure, r.SourceDriftFailure)
 }
 
@@ -213,7 +223,16 @@ func successfulGetResult(r transfer.JobResult) bool {
 		p.PreviouslyPublishedBytes <= p.DiscoveredBytes && p.VerifiedBytes == p.DiscoveredBytes-p.PreviouslyPublishedBytes
 }
 func resultHasTerminalNetworkFault(r transfer.JobResult) bool {
-	return r.TerminationFault.Domain() == transferfault.DomainSession && r.TerminationFault.Scope() == transferfault.ScopeSessionTerminal
+	return isTerminalSessionFault(r.TerminationFault)
+}
+
+func isTerminalSessionFault(value transferfault.Fault) bool {
+	return value.Domain() == transferfault.DomainSession && value.Scope() == transferfault.ScopeSessionTerminal
+}
+
+func isTerminalSessionTransportFault(value transferfault.Fault) bool {
+	code, ok := value.SessionCode()
+	return ok && value.Scope() == transferfault.ScopeSessionTerminal && code == transferfault.SessionTransport
 }
 
 func shareStopSource(causes ...error) ShareStopSource {
@@ -255,10 +274,18 @@ func resultFailure(input SettlementInput, class task.FailureClass) Failure {
 	if class == task.FailureUsage {
 		return Failure{Local: LocalSelectionMissing}
 	}
-	for _, f := range []transferfault.Fault{r.SourceDriftFault, r.TerminationFault, r.SettlementFault} {
-		if f.Valid() {
-			return Failure{Fault: f}
+	if r.SourceDriftFault.Valid() {
+		return Failure{Fault: r.SourceDriftFault}
+	}
+	if r.TerminationFault.Valid() {
+		failure := Failure{Fault: r.TerminationFault}
+		if isTerminalSessionTransportFault(r.TerminationFault) {
+			failure.ReplacementCause = input.ReplacementError
 		}
+		return failure
+	}
+	if r.SettlementFault.Valid() {
+		return Failure{Fault: r.SettlementFault}
 	}
 	// A real cleanup error remains authoritative when interruption happened too.
 	if input.CleanupError != nil {
@@ -293,7 +320,7 @@ func resultFailure(input SettlementInput, class task.FailureClass) Failure {
 	if r.Outcome == transfer.DirectTreeOutcomeSuccess && successfulGetResult(r) && r.Progress.SourceOmittedEntries != 0 {
 		return Failure{Local: LocalSourceOmitted}
 	}
-	for _, cause := range []error{input.AdmissionError, input.RuntimeError, input.ConnectionError, input.ContextError, r.TerminationCause, r.SettlementFailure, r.SelectionResolutionFailure, r.SourceDriftFailure} {
+	for _, cause := range []error{input.AdmissionError, input.RuntimeError, input.ConnectionError, input.ReplacementError, input.ContextError, r.TerminationCause, r.SettlementFailure, r.SelectionResolutionFailure, r.SourceDriftFailure} {
 		if cause != nil {
 			return Failure{Cause: cause}
 		}

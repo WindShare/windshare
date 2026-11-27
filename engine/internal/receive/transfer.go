@@ -15,6 +15,7 @@ import (
 
 	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	"github.com/windshare/windshare/core/transfer"
+	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
@@ -493,6 +494,10 @@ func reportGetOutputAdmissionFailure(observation getObservation, err error) step
 	case errors.Is(err, errGetOutputReservationContract), errors.Is(err, errGetOutputAdapterContract):
 		return observation.failCode(stepLocalFailure, FailureOutputContract)
 	default:
+		if boundary, ok := errors.AsType[*transferfault.BoundaryError](err); ok && boundary != nil &&
+			isTerminalSessionFault(boundary.Fault()) {
+			return observation.fail(stepNetworkFailure, err)
+		}
 		return observation.fail(stepLocalFailure, err)
 	}
 }

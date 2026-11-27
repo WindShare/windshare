@@ -15,6 +15,7 @@ import (
 
 	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	"github.com/windshare/windshare/core/transfer"
+	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/engine/internal/task"
 )
 
@@ -91,7 +92,19 @@ func runAttempt(ctx context.Context, input preparedRequest, deps Dependencies, r
 	if prepared.operation.Control != nil {
 		nameAdjustments = prepared.operation.Control.NameAdjustments()
 	}
-	settlement = &SettlementInput{Result: result, AdmissionError: admissionErr, RuntimeError: runtimeErr, ConnectionError: connectionErr, ContextError: ctx.Err(), Destination: prepared.destination, DestinationAdjusted: prepared.destinationAdjusted, NameAdjustments: nameAdjustments, Operation: prepared.job.ReceiveIntent().OperationID(), Job: prepared.job.JobID()}
+	settlement = &SettlementInput{
+		Result:              result,
+		AdmissionError:      admissionErr,
+		RuntimeError:        runtimeErr,
+		ConnectionError:     connectionErr,
+		ReplacementError:    active.replacementFailure(),
+		ContextError:        ctx.Err(),
+		Destination:         prepared.destination,
+		DestinationAdjusted: prepared.destinationAdjusted,
+		NameAdjustments:     nameAdjustments,
+		Operation:           prepared.job.ReceiveIntent().OperationID(),
+		Job:                 prepared.job.JobID(),
+	}
 	return
 }
 
@@ -128,7 +141,16 @@ func (active *receiveOperation) settleAttempt(ctx context.Context, settlement *S
 		return completed
 	}
 	failure := active.observation.failureSnapshot()
-	failure.Cause = errors.Join(failure.Cause, peerStop, relayStop)
+	replacementErr := active.replacementFailure()
+	failure.Cause = errors.Join(failure.Cause, replacementErr, peerStop, relayStop)
+	if replacementErr != nil && failure.Code == 0 {
+		if boundary, ok := errors.AsType[*transferfault.BoundaryError](failure.Cause); ok &&
+			boundary != nil && isTerminalSessionTransportFault(boundary.Fault()) {
+			failure.Fault = boundary.Fault()
+			failure.ReplacementCause = replacementErr
+			step = stepNetworkFailure
+		}
+	}
 	completed := settlePreparationFailure(step, failure, ctx.Err(), cleanupErr)
 	completed.Value.Destination = active.input.outDir
 	completed.Value.Elapsed = elapsed
