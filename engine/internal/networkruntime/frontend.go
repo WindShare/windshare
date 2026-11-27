@@ -104,7 +104,7 @@ func (r *Runtime) checkFrontends() {
 		if err != nil {
 			return false
 		}
-		client := http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		client := r.noRedirectHTTPClient()
 		response, err := client.Do(request)
 		if err != nil {
 			return false

@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -328,6 +330,123 @@ func TestPausedEligibilityWaitsForConcurrentOwnerObservationBeforeRefreshing(t *
 			}
 		default:
 			t.Fatal("missing community_eligibility_changed(paused=false) diagnostic")
+		}
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return fn(req) }
+
+func signOwnerDescriptor(t *testing.T, seedByte byte, domain, identity string, state serviceauthority.PublicRelay, authority map[string]any, now time.Time) []byte {
+	t.Helper()
+	priv := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{seedByte}, ed25519.SeedSize))
+	pub := priv.Public().(ed25519.PublicKey)
+	digest := sha256.Sum256(append([]byte("windshare/node-identity/v1\x00"), pub...))
+	enc := base64.RawURLEncoding.EncodeToString
+	lifetime := 5 * time.Minute
+	if domain == serviceauthority.GossipDomain {
+		lifetime = 24 * time.Hour
+	}
+	payload, err := json.Marshal(map[string]any{
+		"version":        2,
+		"platform":       "native",
+		"node_id":        enc(digest[:]),
+		"node_key":       enc(pub),
+		"relay_endpoint": identity,
+		"services":       map[string]bool{"relay": true, "stun": false},
+		"public_relay":   state,
+		"authority":      authority,
+		"issued_at":      now.Unix(),
+		"expires_at":     now.Add(lifetime).Unix(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig := ed25519.Sign(priv, append([]byte(domain), payload...))
+	raw, err := json.Marshal(map[string]any{
+		"version":    2,
+		"descriptor": enc(payload),
+		"signature":  enc(sig),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func TestObserveOwnerValidatesHTTPSRedirectsKeysEndpointsAndAuthority(t *testing.T) {
+	now := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
+	const (
+		publicURL = "https://owner.example/mount"
+		identity  = "wss://owner.example/mount/v2/ws"
+		wantURL   = "https://owner.example/.well-known/windshare"
+	)
+	profile := relayprofile.Candidate{
+		PublicURL: publicURL,
+		Role:      relayprofile.Owner,
+		AccessKey: "owner-key",
+		Node:      relayprofile.NodeIdentity{Platform: "native", NodeKey: ownerPublicKey(31)},
+	}
+
+	var calls atomic.Int32
+	var seenURL string
+	var status int
+	var headers http.Header
+	var body []byte
+
+	r, err := New(nil, func() time.Time { return now }, "", diagnostics.Sink{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(r.Close)
+	r.httpTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		seenURL = req.URL.String()
+		return &http.Response{
+			StatusCode: status,
+			Header:     headers,
+			Body:       io.NopCloser(bytes.NewReader(body)),
+		}, nil
+	})
+
+	// Valid HTTPS self-hosted descriptors map wss -> https and report exact PublicRelay state.
+	for _, want := range []serviceauthority.PublicRelay{serviceauthority.RelayDisabled, serviceauthority.RelayAnonymous} {
+		status, headers = http.StatusOK, make(http.Header)
+		body = signOwnerDescriptor(t, 31, serviceauthority.DescriptorDomain, identity, want, nil, now)
+		got, ok := r.observeOwner(profile)
+		if !ok || got != want || seenURL != wantURL {
+			t.Fatalf("valid observeOwner(%v) = (%v, %v, url=%q), want (%v, true, %q)", want, got, ok, seenURL, want, wantURL)
+		}
+	}
+
+	// Redirects must never be followed.
+	calls.Store(0)
+	status = http.StatusFound
+	headers = http.Header{"Location": []string{"https://redirected.example/.well-known/windshare"}}
+	body = nil
+	if _, ok := r.observeOwner(profile); ok || calls.Load() != 1 {
+		t.Fatalf("redirect observeOwner: ok=%v calls=%d, want (false, 1)", ok, calls.Load())
+	}
+
+	// Non-200, oversized body, wrong key, gossip domain, endpoint mismatch, and official authority fail closed.
+	authority := map[string]any{"url": "https://api.example", "issuer": ownerPublicKey(99)}
+	rejected := []struct {
+		name   string
+		status int
+		body   []byte
+	}{
+		{name: "non-200", status: http.StatusServiceUnavailable, body: nil},
+		{name: "oversized body", status: http.StatusOK, body: bytes.Repeat([]byte("x"), serviceauthority.MaximumDescriptorBytes+1)},
+		{name: "wrong signing key", status: http.StatusOK, body: signOwnerDescriptor(t, 32, serviceauthority.DescriptorDomain, identity, serviceauthority.RelayAnonymous, nil, now)},
+		{name: "gossip domain", status: http.StatusOK, body: signOwnerDescriptor(t, 31, serviceauthority.GossipDomain, identity, serviceauthority.RelayAnonymous, nil, now)},
+		{name: "endpoint mismatch", status: http.StatusOK, body: signOwnerDescriptor(t, 31, serviceauthority.DescriptorDomain, "wss://other.example/v2/ws", serviceauthority.RelayAnonymous, nil, now)},
+		{name: "authority-managed node", status: http.StatusOK, body: signOwnerDescriptor(t, 31, serviceauthority.DescriptorDomain, identity, serviceauthority.RelayAnonymous, authority, now)},
+	}
+	for _, tc := range rejected {
+		status, headers, body = tc.status, make(http.Header), tc.body
+		if got, ok := r.observeOwner(profile); ok {
+			t.Errorf("%s: observeOwner accepted invalid response (state=%v)", tc.name, got)
 		}
 	}
 }

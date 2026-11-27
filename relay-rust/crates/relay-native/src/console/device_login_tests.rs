@@ -120,6 +120,7 @@ fn service_approval_installs_an_account_key_and_node_revocation_survives_restart
     }
     let claim = json!({"enrollment_id":req.body["enrollment_id"],"claim_secret":text_id(&secret)});
     let claimed = post("/api/enrollments/claim", &claim);
+    assert_eq!(claimed.body["role"], "account");
     let key = Bearer::new(claimed.body["access_key"].as_str().unwrap());
     assert_eq!(
         post("/api/enrollments/installed", &claim).status,

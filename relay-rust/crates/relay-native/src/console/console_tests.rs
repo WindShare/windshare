@@ -47,6 +47,7 @@ fn pair(console: &Console, session: &str, secret: [u8; 32]) -> String {
     assert_eq!(approve.status, StatusCode::OK);
     let claim = json!({"enrollment_id":req.body["enrollment_id"],"claim_secret":text_id(&secret)});
     let credential = post(console, "/api/enrollments/claim", &claim, "");
+    assert_eq!(credential.body["role"], "owner");
     let key = credential.body["access_key"].as_str().unwrap();
     assert!(!admitted(console, key));
     let install = || post(console, "/api/enrollments/installed", &claim, "").status;
@@ -206,6 +207,7 @@ fn revocation_survives_reload_and_restart_without_affecting_other_owner_devices(
         &session,
     );
     assert_eq!(manual.status, StatusCode::CREATED);
+    assert_eq!(manual.body["role"], "service");
     let another = post(
         &console,
         "/api/credentials",
@@ -484,6 +486,7 @@ fn native_console_aligns_error_codes_and_enrollment_payload_contract() {
     });
     let claimed = post(&console, "/api/enrollments/claim", &claim_body, "");
     assert_eq!(claimed.status, StatusCode::OK);
+    assert_eq!(claimed.body["role"], "owner");
     assert_eq!(claimed.body["expires_at"], enrolled.body["expires_at"]);
     let key = claimed.body["access_key"].as_str().unwrap();
 
@@ -524,4 +527,223 @@ fn native_console_aligns_error_codes_and_enrollment_payload_contract() {
         StatusCode::OK
     );
     assert!(!admitted(&console, key));
+}
+
+#[test]
+fn uninitialized_console_reports_uninitialized_on_session_and_login_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("node.sqlite");
+    let identity = Identity::generate().unwrap();
+    let console = open(&db, &identity, &Policy::default());
+
+    let session = console
+        .dispatch(&Method::GET, "/api/session", &json!({}), "", 100, None)
+        .unwrap();
+    assert_eq!(session.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(session.body, json!({"error": "uninitialized"}));
+
+    let login = post(
+        &console,
+        "/api/login",
+        &json!({"password": "development-password"}),
+        "",
+    );
+    assert_eq!(login.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(login.body, json!({"error": "uninitialized"}));
+
+    let creds = console
+        .dispatch(&Method::GET, "/api/credentials", &json!({}), "", 100, None)
+        .unwrap();
+    assert_eq!(creds.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(creds.body, json!({"error": "login_required"}));
+
+    let setup =
+        json!({"token": identity.initialization_token(), "password": "development-password"});
+    assert_eq!(
+        post(&console, "/api/initialize", &setup, "").status,
+        StatusCode::OK
+    );
+
+    // Once initialized, unauthenticated session requests require login rather than initialization.
+    let unauthed = console
+        .dispatch(&Method::GET, "/api/session", &json!({}), "", 100, None)
+        .unwrap();
+    assert_eq!(unauthed.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(unauthed.body, json!({"error": "login_required"}));
+
+    let signed_in = post(
+        &console,
+        "/api/login",
+        &json!({"password": "development-password"}),
+        "",
+    );
+    assert_eq!(signed_in.status, StatusCode::OK);
+    assert!(signed_in.cookie.is_some());
+}
+
+fn open_contribution_fixture() -> (tempfile::TempDir, Console, crate::node::Runtime, String) {
+    use crate::node::{Ceiling, Runtime, Settings};
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("node.sqlite");
+    let endpoint = Endpoint::parse("wss://node.example/v2/ws").unwrap();
+    let store = Database::open(&path, endpoint.identity).unwrap();
+    let identity = Identity::generate().unwrap();
+    let node = Runtime::default();
+    node.identify(identity.clone()).unwrap();
+    node.configure(
+        Settings {
+            ceiling: Ceiling {
+                daily_bytes: Some(20_000_000),
+                bytes_per_second: Some(4_000_000),
+                connections: Some(12),
+            },
+            ..Settings::default()
+        },
+        store.clone(),
+    )
+    .unwrap();
+    let console = Console::open(&endpoint, &store, node.access.clone(), &identity, None)
+        .unwrap()
+        .unwrap();
+    let setup =
+        json!({"token": identity.initialization_token(), "password": "development-password"});
+    (dir, console, node, setup.to_string())
+}
+
+#[test]
+fn contribution_endpoints_enforce_auth_and_capability_availability() {
+    let (_dir, console, node, setup_raw) = open_contribution_fixture();
+    let sample_policy = json!({
+        "enabled": false,
+        "daily_bytes": 1_000_000,
+        "bytes_per_second": 2_000_000,
+        "connections": 8,
+        "host_uplink": null,
+    });
+
+    // Unauthenticated contribution reads and writes fail closed before touching runtime policy.
+    for (method, body) in [(Method::GET, json!({})), (Method::POST, sample_policy)] {
+        let reply = console
+            .dispatch(&method, "/api/contribution", &body, "", 10_000, Some(&node))
+            .unwrap();
+        assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
+        assert_eq!(reply.body, json!({"error": "login_required"}));
+    }
+
+    let setup: Value = serde_json::from_str(&setup_raw).unwrap();
+    let session = post(&console, "/api/initialize", &setup, "")
+        .cookie
+        .unwrap();
+
+    // Without local contribution support, capability is false and endpoints return 404.
+    let no_local_node = crate::node::Runtime::default();
+    let session_reply = console
+        .dispatch(
+            &Method::GET,
+            "/api/session",
+            &json!({}),
+            &session,
+            10_000,
+            Some(&no_local_node),
+        )
+        .unwrap();
+    assert_eq!(session_reply.status, StatusCode::OK);
+    assert_eq!(session_reply.body["capabilities"]["contribution"], false);
+    for method in [Method::GET, Method::POST] {
+        let missing = console
+            .dispatch(
+                &method,
+                "/api/contribution",
+                &json!({}),
+                &session,
+                10_000,
+                Some(&no_local_node),
+            )
+            .unwrap();
+        assert_eq!(missing.status, StatusCode::NOT_FOUND);
+    }
+}
+
+#[test]
+fn contribution_endpoints_validate_and_persist_policy_updates() {
+    let (_dir, console, node, setup_raw) = open_contribution_fixture();
+    let setup: Value = serde_json::from_str(&setup_raw).unwrap();
+    let session = post(&console, "/api/initialize", &setup, "")
+        .cookie
+        .unwrap();
+
+    let call = |method: Method, body: &Value, now: u64| {
+        console
+            .dispatch(
+                &method,
+                "/api/contribution",
+                body,
+                &session,
+                now,
+                Some(&node),
+            )
+            .unwrap()
+    };
+
+    // GET returns current policy together with configured static ceilings.
+    let initial = call(Method::GET, &json!({}), 10_000);
+    assert_eq!(initial.status, StatusCode::OK);
+    assert_eq!(initial.body["policy"]["enabled"], true);
+    assert_eq!(initial.body["ceiling"]["daily_bytes"], 20_000_000);
+    assert_eq!(initial.body["ceiling"]["bytes_per_second"], 4_000_000);
+    assert_eq!(initial.body["ceiling"]["connections"], 12);
+
+    // Malformed or out-of-range policies are rejected with 400 invalid_request.
+    for invalid in [
+        json!({"enabled": true, "daily_bytes": 100, "bytes_per_second": 0, "connections": 4, "host_uplink": null}),
+        json!({"enabled": true, "daily_bytes": 100, "bytes_per_second": 1000, "connections": 0, "host_uplink": null}),
+        json!({"enabled": true, "daily_bytes": 100, "bytes_per_second": 1000, "connections": 4, "host_uplink": 0}),
+        json!({"enabled": true, "daily_bytes": 100, "bytes_per_second": 1000, "connections": 4, "host_uplink": null, "extra": 1}),
+    ] {
+        let rejected = call(Method::POST, &invalid, 10_000);
+        assert_eq!(rejected.status, StatusCode::BAD_REQUEST, "{invalid}");
+        assert_eq!(rejected.body, json!({"error": "invalid_request"}));
+    }
+
+    // Valid enabled update persists and does not emit disabled_notice.
+    let updated = call(
+        Method::POST,
+        &json!({
+            "enabled": true,
+            "daily_bytes": 5_000_000,
+            "bytes_per_second": 1_500_000,
+            "connections": 6,
+            "host_uplink": 10_000_000,
+        }),
+        20_000,
+    );
+    assert_eq!(updated.status, StatusCode::OK);
+    assert_eq!(updated.body, json!({"disabled_notice": false}));
+
+    let persisted = call(Method::GET, &json!({}), 20_000);
+    assert_eq!(persisted.status, StatusCode::OK);
+    assert_eq!(persisted.body["policy"]["daily_bytes"], 5_000_000);
+    assert_eq!(persisted.body["policy"]["bytes_per_second"], 1_500_000);
+    assert_eq!(persisted.body["policy"]["connections"], 6);
+    assert_eq!(persisted.body["policy"]["host_uplink"], 10_000_000);
+
+    // Disabling contribution reports disabled_notice=true and persists enabled=false.
+    let disabled = call(
+        Method::POST,
+        &json!({
+            "enabled": false,
+            "daily_bytes": 5_000_000,
+            "bytes_per_second": 1_500_000,
+            "connections": 6,
+            "host_uplink": null,
+        }),
+        30_000,
+    );
+    assert_eq!(disabled.status, StatusCode::OK);
+    assert_eq!(disabled.body, json!({"disabled_notice": true}));
+    assert_eq!(
+        call(Method::GET, &json!({}), 30_000).body["policy"]["enabled"],
+        false
+    );
 }

@@ -111,6 +111,7 @@ test('SQLite access authority survives restart, approval retry, cancellation and
     await request('enrollments/approve', { enrollment_id: pending.enrollment_id, user_code: 'wrong' }, 403, true);
     await request('enrollments/approve', { enrollment_id: pending.enrollment_id, user_code: pending.user_code }, 200, true);
     const { data: credential } = await request('enrollments/claim', claim);
+    assert.equal(credential.role, 'owner');
     const { data: slow } = await request('enrollments/claim', claim, 429);
     await delay(slow.retry_after_ms);
     const { data: reclaimed } = await request('enrollments/claim', claim);
@@ -148,6 +149,7 @@ test('SQLite access authority survives restart, approval retry, cancellation and
     await request('enrollments/installed', retainedClaim);
 
     const { data: manual } = await request('credentials', { name: 'Automation' }, 201, true);
+    assert.equal(manual.role, 'service');
     assert.equal(manual.configuration.access_key, manual.access_key);
 
     await mf.setOptions(options('rotated-local-access-password'));

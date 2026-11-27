@@ -165,3 +165,65 @@ func TestNativeOwnerEnrollmentAndGuestCancellation(t *testing.T) {
 		t.Fatal("native enrollment installed a credential without an explicit role")
 	}
 }
+
+func TestNativeAlreadyDisabledOwnerEnrollmentPausesEligibilityAndManualKeyUsesServiceRole(t *testing.T) {
+	const address = "https://node.example"
+	now, d := nativeFixture(t)
+	d["console_url"] = address
+	d["public_relay"] = serviceauthority.RelayDisabled
+	d["authority"] = nil
+	envelope := signNativeFixture(t, d)
+
+	httpStub := fakeHTTP(func(r *http.Request) (*http.Response, error) {
+		switch r.URL.Path {
+		case "/.well-known/windshare":
+			return response(200, envelope)
+		case "/api/enrollments":
+			return response(201, enrollmentResponse{ID: "enrollment", UserCode: "PAIR", VerificationURL: address + "/?code=PAIR", IntervalMS: 1000, ExpiresAt: now.Add(time.Minute).UnixMilli()})
+		case "/api/enrollments/claim":
+			return response(200, credentialResponse{Role: relayprofile.Owner, AccessKey: "owner-key", ID: "credential"})
+		case "/api/enrollments/installed":
+			return response(200, struct{}{})
+		default:
+			t.Fatalf("unexpected endpoint %s", r.URL.Path)
+			return nil, nil
+		}
+	})
+
+	// Enrolling an owner device on an already-disabled native relay must immediately
+	// pause community eligibility and stage the one-time community pause notice.
+	ownerSettings := relayconfig.FileStore{Path: filepath.Join(t.TempDir(), "config.json")}
+	ownerService := New(Dependencies{Store: FileStore{Settings: ownerSettings}, Now: func() time.Time { return now }, HTTP: httpStub})
+	if _, err := ownerService.Run(t.Context(), Request{URL: address, Operation: AddProfile, DeviceName: "laptop"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	cfg, elig, err := ownerSettings.ReadCommunityState(t.Context())
+	if err != nil || len(cfg.OwnedNative()) != 1 || !elig.Paused {
+		t.Fatalf("already-disabled owner enrollment state = (owned=%d, paused=%v, err=%v), want (1, true, nil)", len(cfg.OwnedNative()), elig.Paused, err)
+	}
+	if show, err := ownerSettings.TakeCommunityNotice(t.Context()); err != nil || !show {
+		t.Fatalf("first TakeCommunityNotice = (%v, %v), want (true, nil)", show, err)
+	}
+	if show, err := ownerSettings.TakeCommunityNotice(t.Context()); err != nil || show {
+		t.Fatalf("second TakeCommunityNotice = (%v, %v), want (false, nil)", show, err)
+	}
+
+	// Installing a manual access key on the same disabled native relay must store
+	// Role=Service, exclude it from OwnedNative(), and never pause community access.
+	manualSettings := relayconfig.FileStore{Path: filepath.Join(t.TempDir(), "config.json")}
+	manualService := New(Dependencies{Store: FileStore{Settings: manualSettings}, Now: func() time.Time { return now }, HTTP: httpStub})
+	if _, err := manualService.Run(t.Context(), Request{URL: address, AccessKey: "manual-service-key", Operation: AddProfile}, nil); err != nil {
+		t.Fatal(err)
+	}
+	manualCfg, manualElig, err := manualSettings.ReadCommunityState(t.Context())
+	if err != nil || len(manualCfg.Profiles) != 1 {
+		t.Fatalf("manual key config = (%+v, %v)", manualCfg, err)
+	}
+	saved := manualCfg.Profiles[0]
+	if saved.Role != relayprofile.Service || saved.AccessKey != "manual-service-key" || saved.Node.Platform != "native" || saved.Node.NodeKey == "" {
+		t.Fatalf("manual key profile = %+v, want Role=service with native node identity", saved)
+	}
+	if len(manualCfg.OwnedNative()) != 0 || manualElig.Paused {
+		t.Fatalf("manual service key paused community eligibility: owned=%d paused=%v", len(manualCfg.OwnedNative()), manualElig.Paused)
+	}
+}

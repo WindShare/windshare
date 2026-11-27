@@ -295,7 +295,7 @@ func (r *Runtime) observeOwner(profile relayprofile.Candidate) (serviceauthority
 	if err != nil {
 		return 0, false
 	}
-	client := http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	client := r.noRedirectHTTPClient()
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, false

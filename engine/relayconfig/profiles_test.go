@@ -66,19 +66,19 @@ func TestSelectedModeEnablesNewRelaysWithoutReenablingDisabledOnes(t *testing.T)
 }
 
 func TestManualCredentialKeepsDiscoveryAndRediscoveryCanWithdrawIt(t *testing.T) {
-	p := relayprofile.Candidate{PublicURL: "https://relay.example", ConsoleURL: "https://console.example", OfferedFrontend: "https://self.example", AccessKey: "old"}
+	p := relayprofile.Candidate{PublicURL: "https://relay.example", ConsoleURL: "https://console.example", OfferedFrontend: "https://self.example", Role: relayprofile.Owner, AccessKey: "old"}
 	c := Config{Profiles: []relayprofile.Candidate{p}, FrontURL: "https://saved.example"}
 	manual, err := c.ReplaceIdentity(c.CredentialProfile(p.PublicURL, "new"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	updated := manual.Profiles[0]
-	if updated.AccessKey != "new" || updated.ConsoleURL != p.ConsoleURL || updated.OfferedFrontend != p.OfferedFrontend || len(manual.ActiveRelays) != 0 || manual.FrontURL != c.FrontURL {
-		t.Fatal("manual installation changed saved choices")
+	if updated.AccessKey != "new" || updated.Role != relayprofile.Service || updated.ConsoleURL != p.ConsoleURL || updated.OfferedFrontend != p.OfferedFrontend || len(manual.ActiveRelays) != 0 || manual.FrontURL != c.FrontURL {
+		t.Fatalf("manual installation changed saved choices or role: %+v", updated)
 	}
 	rediscovered, err := manual.RefreshMetadata(relayprofile.Candidate{PublicURL: p.PublicURL})
-	if err != nil || rediscovered.Profiles[0].AccessKey != "new" || rediscovered.Profiles[0].ConsoleURL != "" || rediscovered.Profiles[0].OfferedFrontend != "" {
-		t.Fatal("stale discovery or missing credential", err)
+	if err != nil || rediscovered.Profiles[0].AccessKey != "new" || rediscovered.Profiles[0].Role != relayprofile.Service || rediscovered.Profiles[0].ConsoleURL != "" || rediscovered.Profiles[0].OfferedFrontend != "" {
+		t.Fatalf("stale discovery, role, or missing credential: %+v err=%v", rediscovered.Profiles, err)
 	}
 }
 

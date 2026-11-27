@@ -3,6 +3,9 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -14,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/windshare/windshare/core/serviceauthority"
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relayprofile"
@@ -417,5 +421,165 @@ func TestRelayOwnerOnlyApprovalOpensBrowserAndFallsBackOnError(t *testing.T) {
 				t.Fatalf("fallback hint mismatch (browserErr=%v): %q", browserErr, out)
 			}
 		})
+	}
+}
+
+func signedOpenNativeDescriptor(t *testing.T, baseURL string, now time.Time) map[string]any {
+	t.Helper()
+	priv := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{41}, ed25519.SeedSize))
+	pub := priv.Public().(ed25519.PublicKey)
+	digest := sha256.Sum256(append([]byte("windshare/node-identity/v1\x00"), pub...))
+	enc := base64.RawURLEncoding.EncodeToString
+	wsEndpoint := "wss://" + strings.TrimPrefix(baseURL, "https://") + "/v2/ws"
+	if strings.HasPrefix(baseURL, "http://") {
+		wsEndpoint = "ws://" + strings.TrimPrefix(baseURL, "http://") + "/v2/ws"
+	}
+	payload, err := json.Marshal(map[string]any{
+		"version":        2,
+		"node_id":        enc(digest[:]),
+		"node_key":       enc(pub),
+		"relay_endpoint": wsEndpoint,
+		"platform":       "native",
+		"services":       map[string]bool{"relay": true, "stun": false},
+		"stun":           []string{},
+		"issued_at":      now.Unix(),
+		"expires_at":     now.Add(5 * time.Minute).Unix(),
+		"public_relay":   serviceauthority.RelayAnonymous,
+		"console_url":    baseURL,
+		"authority":      nil,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig := ed25519.Sign(priv, append([]byte(serviceauthority.DescriptorDomain), payload...))
+	return map[string]any{
+		"version":    2,
+		"descriptor": enc(payload),
+		"signature":  enc(sig),
+	}
+}
+
+func TestRelayAddAnonymousAndCommunityPreferences(t *testing.T) {
+	// Flag guardrails: --anonymous is mutually exclusive with --access-key and disallowed on onboard.
+	for _, args := range [][]string{
+		{"add", "https://relay.example", "--anonymous", "--access-key", "secret"},
+		{"onboard", "https://relay.example", "--anonymous"},
+	} {
+		var stderr bytes.Buffer
+		app := &App{Stderr: &stderr}
+		t.Cleanup(app.closeTerminalOutput)
+		if code := app.runRelay(t.Context(), args); code != ExitUsage {
+			t.Fatalf("args %v exit=%d, want ExitUsage (stderr=%q)", args, code, stderr.String())
+		}
+	}
+
+	// Direct --anonymous installation against a public native relay skips enrollment and saves a guest profile.
+	const relayURL = "https://native.example"
+	now := time.Now().UTC()
+	descriptor := signedOpenNativeDescriptor(t, relayURL, now)
+	var enrollments, cancellations atomic.Int32
+	var interruptPending context.CancelFunc
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var resp any
+		switch request.URL.Path {
+		case "/.well-known/windshare":
+			resp = descriptor
+		case "/api/enrollments":
+			enrollments.Add(1)
+			resp = map[string]any{
+				"enrollment_id": "pending-1", "user_code": "PAIR-1234",
+				"verification_uri_complete": relayURL + "/?code=PAIR-1234",
+				"expires_at":                now.Add(time.Minute).UnixMilli(), "interval_ms": 5000,
+			}
+		case "/api/enrollments/claim":
+			if interruptPending != nil {
+				interruptPending()
+			}
+			writer.WriteHeader(http.StatusBadRequest)
+			resp = map[string]any{"error": "authorization_pending", "retry_after_ms": 5000}
+		case "/api/enrollments/cancel":
+			cancellations.Add(1)
+			resp = map[string]bool{"ok": true}
+		default:
+			t.Errorf("unexpected endpoint %s", request.URL.Path)
+			writer.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if err := json.NewEncoder(writer).Encode(resp); err != nil {
+			t.Error(err)
+		}
+	}))
+
+	store := relayconfig.FileStore{Path: filepath.Join(t.TempDir(), "config.json")}
+	var stdout, stderr bytes.Buffer
+	app := &App{
+		Stdout: &stdout, Stderr: &stderr,
+		engineConfig: engine.Config{RelaySetup: relaysetup.Dependencies{
+			Store: relaysetup.FileStore{Settings: store},
+			HTTP:  server.Client(),
+			Now:   func() time.Time { return now },
+		}},
+	}
+	t.Cleanup(app.closeTerminalOutput)
+
+	if code := app.Run(t.Context(), []string{"relay", "add", relayURL, "--anonymous"}); code != ExitOK {
+		t.Fatalf("relay add --anonymous exit=%d stderr=%q", code, stderr.String())
+	}
+	if enrollments.Load() != 0 || stdout.Len() != 0 {
+		t.Fatalf("direct --anonymous entered enrollment or wrote stdout: enrollments=%d stdout=%q", enrollments.Load(), stdout.String())
+	}
+	saved, err := store.Load()
+	if err != nil || len(saved.Profiles) != 1 || saved.Profiles[0].AccessKey != "" || saved.Profiles[0].Role != "" || saved.Profiles[0].Node.Platform != "native" {
+		t.Fatalf("saved guest profile = (%+v, %v)", saved.Profiles, err)
+	}
+
+	// Switching from an interrupted owner enrollment to --anonymous cancels the pending enrollment and commits guest access.
+	pendingStore := relayconfig.FileStore{Path: filepath.Join(t.TempDir(), "config.json")}
+	var pStdout, pStderr bytes.Buffer
+	pendingApp := &App{
+		Stdout: &pStdout, Stderr: &pStderr,
+		engineConfig: engine.Config{RelaySetup: relaysetup.Dependencies{
+			Store: relaysetup.FileStore{Settings: pendingStore},
+			HTTP:  server.Client(),
+			Now:   func() time.Time { return now },
+		}},
+	}
+	t.Cleanup(pendingApp.closeTerminalOutput)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	interruptPending = cancel
+	if code := pendingApp.Run(ctx, []string{"relay", "add", relayURL, "--no-browser"}); code != ExitFailure {
+		t.Fatalf("interrupted owner add exit=%d, want ExitFailure", code)
+	}
+	interruptPending = nil
+	if code := pendingApp.Run(t.Context(), []string{"relay", "add", relayURL, "--anonymous"}); code != ExitOK {
+		t.Fatalf("guest switch exit=%d stderr=%q", code, pStderr.String())
+	}
+	if cancellations.Load() != 1 || pStdout.Len() != 0 {
+		t.Fatalf("guest switch cancellations=%d stdout=%q", cancellations.Load(), pStdout.String())
+	}
+	afterSwitch, err := (relaysetup.FileStore{Settings: pendingStore}).Load()
+	if err != nil || afterSwitch.Pending != nil || len(afterSwitch.Profiles) != 1 || afterSwitch.Profiles[0].AccessKey != "" || afterSwitch.Profiles[0].Role != "" {
+		t.Fatalf("state after guest switch = (%+v, %v)", afterSwitch, err)
+	}
+
+	// wind relay community off|on toggles persisted community_nodes preference and rejects invalid values.
+	if code := app.Run(t.Context(), []string{"relay", "community", "off"}); code != ExitOK || stdout.Len() != 0 {
+		t.Fatalf("relay community off exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if cfg, err := store.Load(); err != nil || cfg.CommunityEnabled() {
+		t.Fatalf("community off did not persist: enabled=%v err=%v", cfg.CommunityEnabled(), err)
+	}
+	if code := app.Run(t.Context(), []string{"relay", "community", "on"}); code != ExitOK || stdout.Len() != 0 {
+		t.Fatalf("relay community on exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if cfg, err := store.Load(); err != nil || !cfg.CommunityEnabled() {
+		t.Fatalf("community on did not persist: enabled=%v err=%v", cfg.CommunityEnabled(), err)
+	}
+	if code := app.Run(t.Context(), []string{"relay", "community", "invalid"}); code != ExitFailure {
+		t.Fatalf("relay community invalid exit=%d, want ExitFailure", code)
+	}
+	if cfg, err := store.Load(); err != nil || !cfg.CommunityEnabled() {
+		t.Fatalf("invalid community edit mutated config: enabled=%v err=%v", cfg.CommunityEnabled(), err)
 	}
 }

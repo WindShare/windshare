@@ -782,3 +782,113 @@ func TestCommunityVerifyFailureBackoffUnblocksSubsequentFallbackPlans(t *testing
 		t.Fatalf("solo retry failed after recovery: %v", err)
 	}
 }
+
+func TestBootstrapCommunityWinDoesNotWaitOnSlowDirectoryAndAllFailReturnsUnavailable(t *testing.T) {
+	data, err := os.ReadFile("../../../testdata/network/directory.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Now   time.Time
+		Roots []struct{ ID, Key string }
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	rootKey, err := base64.RawURLEncoding.DecodeString(fixture.Roots[0].Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const front = "https://front.example"
+	var gossip, live json.RawMessage
+	peerServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/discovery/v1/peers":
+			_ = json.NewEncoder(w).Encode([]json.RawMessage{gossip})
+		case "/.well-known/windshare":
+			_, _ = w.Write(live)
+		case "/v2/ws":
+			ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: []string{"front.example"}})
+			if err != nil {
+				return
+			}
+			_ = ws.CloseNow()
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer peerServer.Close()
+
+	_, port, _ := net.SplitHostPort(strings.TrimPrefix(peerServer.URL, "https://"))
+	seed := "https://fast-seed.example.com:" + port
+	identity := "wss://fast-seed.example.com:" + port + "/v2/ws"
+	gossip = makeCommunityPeerEnvelope(t, 78, identity, "fast-seed.example.com", serviceauthority.GossipDomain, fixture.Now, 24*time.Hour, false)
+	live = makeCommunityPeerEnvelope(t, 78, identity, "fast-seed.example.com", serviceauthority.DescriptorDomain, fixture.Now, 5*time.Minute, false)
+
+	releaseDir := make(chan struct{})
+	r, err := New(nil, func() time.Time { return fixture.Now }, "", diagnostics.Sink{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		close(releaseDir)
+		r.Close()
+	})
+	r.config.LinkHost = front
+	r.config.BootstrapNodes = []string{seed}
+	r.directory, err = networkdirectory.New(networkdirectory.Config{
+		Network: "test",
+		Roots:   []nodedirectory.Root{{ID: fixture.Roots[0].ID, Key: ed25519.PublicKey(rootKey)}},
+		Mirrors: []string{"https://slow-mirror.example/network"},
+		Now:     r.now,
+		Fetch: func(ctx context.Context, _ string) ([]byte, error) {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-releaseDir:
+				return nil, errors.New("mirror offline")
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := netip.MustParseAddr("127.0.0.1")
+	r.community = community.New("", publicdial.Policy{
+		Permit:          func(a netip.Addr) bool { return a == local },
+		Lookup:          func(context.Context, string, string) ([]netip.Addr, error) { return []netip.Addr{local}, nil },
+		TLSClientConfig: peerServer.Client().Transport.(*http.Transport).TLSClientConfig,
+	}, r.now, diagnostics.Sink{})
+
+	// Community discovery wins empty-cache bootstrap without waiting on the blocked directory mirror.
+	sel, err := r.Plan(t.Context(), relayprofile.Plan(nil), "")
+	if err != nil || len(sel.Plan.Network) != 1 || sel.Plan.Network[0].Source != relayplan.Community {
+		t.Fatalf("community-win bootstrap = (%+v, %v)", sel.Plan, err)
+	}
+
+	// When both community and directory bootstrap fail to yield candidates, Plan surfaces SnapshotUnavailable.
+	rFail, err := New(nil, func() time.Time { return fixture.Now }, "", diagnostics.Sink{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(rFail.Close)
+	rFail.config.LinkHost = front
+	rFail.directory, err = networkdirectory.New(networkdirectory.Config{
+		Network: "test",
+		Roots:   []nodedirectory.Root{{ID: fixture.Roots[0].ID, Key: ed25519.PublicKey(rootKey)}},
+		Mirrors: []string{"https://broken-mirror.example/network"},
+		Now:     rFail.now,
+		Fetch:   func(context.Context, string) ([]byte, error) { return nil, errors.New("mirror unreachable") },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rFail.community = community.New("", publicdial.Policy{}, rFail.now, diagnostics.Sink{})
+
+	_, err = rFail.Plan(t.Context(), relayprofile.Plan(nil), "")
+	var unavail *networkdirectory.UnavailableError
+	if !errors.As(err, &unavail) || unavail.Reason != networkdirectory.SnapshotUnavailable {
+		t.Fatalf("all-fail bootstrap err = %v, want UnavailableError(%s)", err, networkdirectory.SnapshotUnavailable)
+	}
+}

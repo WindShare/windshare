@@ -67,3 +67,7 @@ impl Discovery {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "persistence_tests.rs"]
+mod tests;

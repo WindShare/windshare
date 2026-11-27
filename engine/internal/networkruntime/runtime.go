@@ -4,6 +4,7 @@ package networkruntime
 
 import (
 	"context"
+	"net/http"
 	"slices"
 	"strconv"
 	"sync"
@@ -35,6 +36,7 @@ type Runtime struct {
 	directoryError    error
 	diagnostics       diagnostics.Sink
 	now               func() time.Time
+	httpTransport     http.RoundTripper // Test seam for owner/frontend probes; nil uses http.DefaultTransport.
 	watcher           *networkstate.Watcher
 	ownWatcher        bool
 	health            nodeHealth
@@ -253,4 +255,14 @@ func (r *Runtime) officialNode(address string) (account.Node, bool) {
 func (r *Runtime) generation() uint64 {
 	// The first snapshot describes the same network as a cold-start handshake.
 	return max(1, r.watcher.Current().GenerationID())
+}
+
+// noRedirectHTTPClient enforces the non-redirect probe policy in one place
+// while allowing package tests to substitute a transport without widening
+// networkconfig.Config or disabling private LAN access for owned relays.
+func (r *Runtime) noRedirectHTTPClient() http.Client {
+	return http.Client{
+		Transport:     r.httpTransport,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 }
