@@ -314,9 +314,13 @@ func classifyRelayError(relayErr *relayv2.RelayError) (Failure, bool) {
 		v2.ErrorAlreadyRegistered, v2.ErrorChallengeExpired, v2.ErrorInvalidProof,
 		v2.ErrorDescriptorInvalid, v2.ErrorResumeStale:
 		code = FailureRelayRejected
-	case v2.ErrorNotFound:
+	// Starting means the relay holds the share's route but no sender serves it:
+	// publication is pending, or the sender detached and may still resume within
+	// grace. The relay is healthy, so this is the same share unavailability that
+	// NotFound reports once grace lapses, not a relay outage.
+	case v2.ErrorNotFound, v2.ErrorStarting:
 		code = FailureRelayNotFound
-	case v2.ErrorStarting, v2.ErrorAdmission, v2.ErrorAccessUnavailable:
+	case v2.ErrorAdmission, v2.ErrorAccessUnavailable:
 		code = FailureRelayUnavailable
 	case v2.ErrorStopped:
 		code = FailureRelayStopped
@@ -326,8 +330,7 @@ func classifyRelayError(relayErr *relayv2.RelayError) (Failure, bool) {
 		return Failure{}, false
 	}
 	f := Failure{Code: code}
-	if (relayErr.Code == v2.ErrorStarting || relayErr.Code == v2.ErrorAdmission ||
-		relayErr.Code == v2.ErrorAccessUnavailable) && relayErr.RetryAfter > 0 {
+	if code == FailureRelayUnavailable && relayErr.RetryAfter > 0 {
 		f.RetryAfter = relayErr.RetryAfter
 	}
 	return f, true

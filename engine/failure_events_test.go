@@ -182,6 +182,16 @@ func TestDescribeFailurePrecedenceAndFallthrough(t *testing.T) {
 			wantHint: hint,
 		},
 		{
+			name:     "sender not serving its relay route is share unavailability",
+			err:      &relayv2.RelayError{Code: v2.ErrorStarting, RetryAfter: 250 * time.Millisecond},
+			wantCode: FailureRelayNotFound,
+		},
+		{
+			name:     "initial join timeout maps sender not serving",
+			err:      errors.Join(relayset.ErrReceiverUnavailable, &relayv2.RelayError{Code: v2.ErrorStarting, RetryAfter: 250 * time.Millisecond}),
+			wantCode: FailureRelayNotFound,
+		},
+		{
 			name:     "initial join timeout maps relay not found",
 			err:      errors.Join(relayset.ErrReceiverUnavailable, &relayv2.RelayError{Code: v2.ErrorNotFound}),
 			wantCode: FailureRelayNotFound,
