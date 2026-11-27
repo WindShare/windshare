@@ -83,6 +83,7 @@ impl Render for SetupDialog {
 
 impl SetupDialog {
     fn progress_view(&self, theme: Theme, cx: &Context<Self>) -> Div {
+        let guest_disabled = self.guest_disabled(cx);
         let cancel_disabled = self.cancel_disabled(cx);
         setup_progress_panel(
             theme,
@@ -102,13 +103,8 @@ impl SetupDialog {
             |cx| {
                 Button::new("connect-as-guest", language(cx).text(Text::ConnectAsGuest))
                     .style(ButtonStyle::Quiet)
-                    .on_press(cx.listener(|this, (), _, cx| {
-                        if let super::dialog::SetupSource::Native { host, .. } = &this.source
-                            && let Some(context) = this.setup(cx).context()
-                        {
-                            host.read(cx).controller().guest_setup(&context.id);
-                        }
-                    }))
+                    .disabled(guest_disabled)
+                    .on_press(cx.listener(|this, (), _, cx| this.guest_setup(cx)))
             },
             |label, cx| {
                 Button::new("cancel-sharing-setup", language(cx).text(label))

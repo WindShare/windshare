@@ -118,6 +118,16 @@ impl Desktop {
         }
     }
 
+    fn setup_guest_disabled(&self, cx: &App) -> bool {
+        match &self.runtime {
+            Runtime::Native(session) => {
+                let store = session.host.read(cx);
+                store.selection_disabled() || !store.model().can_guest_current_setup()
+            }
+            Runtime::Preview(_) => true,
+        }
+    }
+
     pub fn community_paused_notice(&self, theme: Theme, cx: &Context<Self>) -> Option<Div> {
         if !self.community_notice.visible() {
             return None;
@@ -239,6 +249,7 @@ impl Desktop {
     }
 
     pub(super) fn setup_progress(&self, theme: Theme, setup: &Setup, cx: &Context<Self>) -> Div {
+        let guest_disabled = self.setup_guest_disabled(cx);
         let cancel_disabled = self.setup_cancel_disabled(cx);
         setup_progress_panel(
             theme,
@@ -258,12 +269,10 @@ impl Desktop {
             |cx| {
                 Button::new("connect-as-guest", language(cx).text(Text::ConnectAsGuest))
                     .style(ButtonStyle::Quiet)
+                    .disabled(guest_disabled)
                     .on_press(cx.listener(|this, (), _, cx| {
-                        if let Runtime::Native(session) = &this.runtime
-                            && let Some(context) = session.model(cx).setup.context()
-                        {
-                            session.controller(cx).guest_setup(&context.id);
-                        }
+                        this.guest_sharing_setup(cx);
+                        cx.notify();
                     }))
             },
             |label, cx| {

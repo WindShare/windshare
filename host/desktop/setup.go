@@ -171,7 +171,7 @@ func (a *Application) runSetup(ctx context.Context, input SetupInput) {
 		if progress.Stage == "frontend_saved" {
 			a.setup.FrontendSaved = true
 		}
-		if a.setup.State == "running" {
+		if a.setup.State == "running" && !a.setup.guestRequested {
 			a.setup.Stage = progress.Stage
 			if progress.VerificationURL != "" {
 				a.setup.GuestAvailable = progress.GuestAvailable

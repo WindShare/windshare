@@ -149,6 +149,7 @@ impl Setup {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SetupRequestKind {
     Configure,
+    Guest,
     Cancel { acknowledged: bool },
 }
 

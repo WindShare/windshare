@@ -338,10 +338,50 @@ impl Controller {
         id
     }
 
-    pub fn guest_setup(&self, setup_id: &str) {
-        self.command(Command::GuestSetup {
-            setup_id: setup_id.into(),
+    pub fn guest_setup(&self, setup_id: &str) -> bool {
+        let id = setup_id.to_owned();
+        let mut accepted = false;
+        let mut queued = false;
+        self.shared.update(|draft| {
+            let model = draft.read();
+            if !model.can_guest_setup(&id) {
+                tracing::debug!(
+                    event = "desktop.setup_guest_ignored",
+                    session_id = ?model.session_id,
+                    setup_id = %id,
+                    setup_state = model.setup.state_name(),
+                    current_setup_id = model.setup.context().map(|ctx| ctx.id.as_str()),
+                );
+                return;
+            }
+            accepted = true;
+            let operation_id = model
+                .setup
+                .context()
+                .filter(|ctx| ctx.id == id)
+                .map_or_default(|ctx| ctx.operation_id.clone());
+            let next = match self.enqueue(Command::GuestSetup {
+                setup_id: id.clone(),
+            }) {
+                Ok(()) => {
+                    queued = true;
+                    SetupRequest::Pending {
+                        id,
+                        operation_id,
+                        kind: SetupRequestKind::Guest,
+                    }
+                }
+                Err(message) => SetupRequest::Rejected {
+                    id,
+                    error: Failure::from(message),
+                },
+            };
+            draft.write().setup_request = next;
         });
+        if queued {
+            let _ = self.shared.wake.notify();
+        }
+        accepted
     }
 
     pub fn cancel_setup(&self, setup_id: &str) -> bool {
