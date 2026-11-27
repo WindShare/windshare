@@ -11,6 +11,7 @@ mkdir -p "$instance"
 python3 - "$1" "$bundle/node.example.json" "$instance" <<'PY'
 import ipaddress
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -63,14 +64,26 @@ else:
 path = Path(dest) / "node.json"
 endpoint = f"wss://{host}/v2/ws"
 if path.exists():
-    if json.loads(path.read_text()).get("endpoint") != endpoint:
+    existing = json.loads(path.read_text())
+    if existing.get("endpoint") != endpoint:
         sys.exit(f"{path} belongs to another endpoint.")
+    for field in ("database", "identity_file"):
+        value = existing.get(field)
+        if not isinstance(value, str) or not value.startswith("/"):
+            sys.exit(f"{path} must set an absolute container path for {field} (for example /state/...).")
 else:
     node = json.loads(Path(template).read_text())
     node["endpoint"] = endpoint
+    # Keep durable state on the writable /state volume because /config is mounted read-only.
+    node["database"] = "/state/relay.sqlite"
+    node["identity_file"] = "/state/identity.json"
     with path.open("x") as out:
         json.dump(node, out, indent=2)
         out.write("\n")
+# The relay container runs as UID 65532; ensure strict host umasks (0027/0077)
+# still permit traversing /config and reading node.json.
+os.chmod(dest, 0o755)
+os.chmod(path, 0o644)
 
 env_file = Path(dest) / ".env"
 sni = host.strip("[]")
@@ -84,7 +97,7 @@ else:
 PY
 compose() { docker compose --env-file "$instance/.env" -f "$bundle/compose.yaml" "$@"; }
 compose up --build -d
-python3 - "$instance/node.json" "$(compose ps -q relay)" <<'PY'
+python3 - "$instance/node.json" "$instance/.env" "$bundle/compose.yaml" <<'PY'
 import http.client
 import json
 from pathlib import Path
@@ -93,7 +106,8 @@ import sys
 import time
 from urllib.parse import urlsplit
 
-config = json.loads(Path(sys.argv[1]).read_text())
+config_path, env_file, compose_file = sys.argv[1:]
+config = json.loads(Path(config_path).read_text())
 origin = "https://" + urlsplit(config["endpoint"]).netloc
 listener = urlsplit("//" + config["listen"])
 deadline = time.monotonic() + 15
@@ -111,13 +125,42 @@ while time.monotonic() < deadline:
         print(f"Admin console: {origin}")
         break
     if state == "uninitialized":
-        logs = subprocess.run(["docker", "logs", sys.argv[2]], stdout=subprocess.PIPE, check=True, text=True)
+        # Resolve the live container only after /api/session responds so transient
+        # startup restarts cannot produce an empty container ID or traceback.
+        ps = subprocess.run(
+            ["docker", "compose", "--env-file", env_file, "-f", compose_file, "ps", "-q", "relay"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        containers = ps.stdout.strip().splitlines()
+        if ps.returncode != 0 or not containers:
+            detail = ps.stderr.strip()
+            suffix = f" ({detail})" if detail else ""
+            sys.exit(f"Could not inspect the relay container for {listener.netloc}.{suffix}")
+        # Capture stderr so wsrelay's JSON traces do not pollute terminal output,
+        # while still surfacing Docker errors if log retrieval fails.
+        logs = subprocess.run(
+            ["docker", "logs", containers[0]],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        if logs.returncode != 0:
+            detail = logs.stderr.strip()
+            suffix = f" ({detail})" if detail else ""
+            sys.exit(f"Could not read relay container logs.{suffix}")
         for line in reversed(logs.stdout.splitlines()):
             try:
                 event = json.loads(line)
             except ValueError:
                 continue
-            if isinstance(event, dict) and event.get("event") == "node_console_setup" and event["url"].startswith(origin + "/#initialize="):
+            if (
+                isinstance(event, dict)
+                and event.get("event") == "node_console_setup"
+                and isinstance(event.get("url"), str)
+                and event["url"].startswith(origin + "/#initialize=")
+            ):
                 print("Set your admin password:", event["url"])
                 sys.exit(0)
         sys.exit("The relay needs initialization. Restart the relay and open the setup URL in its logs.")
