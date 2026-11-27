@@ -45,12 +45,9 @@ func NewICEEndpointPool(entries []Endpoint) (ICEEndpointPool, error) {
 	if len(entries) > MaximumCatalogEndpoints {
 		return ICEEndpointPool{}, ErrConfiguration
 	}
-	seen := make(map[string]bool)
+	seen := make(map[string]bool, len(entries))
 	for _, endpoint := range entries {
-		if endpoint.ID == "" || seen[endpoint.ID] || !validEndpointURL(endpoint.URL) ||
-			(endpoint.Family != "ipv4" && endpoint.Family != "ipv6" && endpoint.Family != "any") ||
-			(endpoint.Trust != "reviewed" && endpoint.Trust != "local" && endpoint.Trust != "unreviewed" && endpoint.Trust != "community") ||
-			(endpoint.Enabled && endpoint.Trust == "unreviewed") || endpoint.Priority < 0 {
+		if _, ok := validateEndpoint(endpoint); !ok || seen[endpoint.ID] {
 			return ICEEndpointPool{}, ErrConfiguration
 		}
 		seen[endpoint.ID] = true
@@ -67,9 +64,30 @@ func ParseLocalConfiguration(data []byte) (ICEEndpointPool, error) {
 	return NewICEEndpointPool(entries)
 }
 
-func validEndpointURL(raw string) bool {
-	_, err := networkendpoint.NormalizeSTUN(raw)
-	return err == nil
+func validateEndpoint(endpoint Endpoint) (string, bool) {
+	if endpoint.ID == "" || endpoint.Priority < 0 {
+		return "", false
+	}
+	canonical, err := networkendpoint.NormalizeSTUN(endpoint.URL)
+	if err != nil {
+		return "", false
+	}
+	switch endpoint.Family {
+	case "ipv4", "ipv6", "any":
+	default:
+		return "", false
+	}
+	switch endpoint.Trust {
+	case "reviewed", "local", "community":
+		return canonical, true
+	case "unreviewed":
+		if endpoint.Enabled {
+			return "", false
+		}
+		return canonical, true
+	default:
+		return "", false
+	}
 }
 
 type SelectionRequest struct {

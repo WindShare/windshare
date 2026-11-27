@@ -39,26 +39,44 @@ func DefaultPool() ICEEndpointPool {
 	return pool
 }
 
+// WithCommunity appends valid, non-colliding community endpoints up to the
+// catalog limit. Invalid or colliding entries are skipped individually so a
+// single malformed peer record cannot discard healthy community STUN servers.
 func (pool ICEEndpointPool) WithCommunity(entries []Endpoint) ICEEndpointPool {
-	all := append([]Endpoint(nil), pool.endpoints...)
-	seen := map[string]bool{}
-	for _, e := range all {
-		seen[e.URL] = true
+	if len(entries) == 0 || len(pool.endpoints) >= MaximumCatalogEndpoints {
+		return pool
 	}
+	seenURL := make(map[string]bool, len(pool.endpoints))
+	seenID := make(map[string]bool, len(pool.endpoints))
+	for _, e := range pool.endpoints {
+		if canonical, ok := validateEndpoint(e); ok {
+			seenURL[canonical] = true
+		} else {
+			seenURL[e.URL] = true
+		}
+		seenID[e.ID] = true
+	}
+	all := make([]Endpoint, len(pool.endpoints), min(MaximumCatalogEndpoints, len(pool.endpoints)+len(entries)))
+	copy(all, pool.endpoints)
 	for _, e := range entries {
 		if len(all) >= MaximumCatalogEndpoints {
 			break
 		}
-		if !seen[e.URL] && e.Trust == "community" {
-			all = append(all, e)
-			seen[e.URL] = true
+		if e.Trust != "community" || seenID[e.ID] {
+			continue
 		}
+		canonical, ok := validateEndpoint(e)
+		if !ok || seenURL[canonical] {
+			continue
+		}
+		all = append(all, e)
+		seenURL[canonical] = true
+		seenID[e.ID] = true
 	}
-	next, err := NewICEEndpointPool(all)
-	if err != nil {
+	if len(all) == len(pool.endpoints) {
 		return pool
 	}
-	return next
+	return ICEEndpointPool{endpoints: all}
 }
 
 // DirectoryPool consumes only an application's currently trusted snapshot.
