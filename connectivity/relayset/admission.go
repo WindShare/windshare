@@ -24,8 +24,11 @@ type AttemptPermit interface {
 	ReleaseFailed()
 }
 
+const targetCommunityRegistrations = 1
+
 // NetworkAdmissions reserves the official pair and one independent community
-// admission. Explicitly configured endpoints own their own registration lifetimes.
+// admission within the remaining MaximumEndpoints budget. Explicitly configured
+// endpoints own their own registration lifetimes.
 type NetworkAdmissions struct {
 	mu              sync.Mutex
 	candidates      []relayplan.Candidate
@@ -33,6 +36,7 @@ type NetworkAdmissions struct {
 	states          []admissionState
 	changed         chan struct{}
 	primary         int
+	remaining       int
 	target          int
 	inflight        int
 	communityActive int
@@ -51,11 +55,13 @@ const (
 const (
 	AdmissionReasonPrimary         = "primary"
 	AdmissionReasonBackup          = "backup"
+	AdmissionReasonCommunity       = "community"
 	AdmissionReasonPermitReleased  = "permit_released"
 	AdmissionReasonTargetReached   = "target_reached"
 	AdmissionReasonBackupNotChosen = "backup_not_selected"
 	AdmissionReasonPrimaryLost     = "primary_lost"
 	AdmissionReasonBackupLost      = "backup_lost"
+	AdmissionReasonCommunityLost   = "community_lost"
 )
 
 type Admission struct {
@@ -77,7 +83,7 @@ func (a *NetworkAdmissions) record(index int, state, reason string) {
 	if a.primary >= 0 {
 		primary = a.candidates[a.primary].URL
 	}
-	a.observe(Admission{Endpoint: a.candidates[index].URL, Primary: primary, State: state, Reason: reason, Count: a.active})
+	a.observe(Admission{Endpoint: a.candidates[index].URL, Primary: primary, State: state, Reason: reason, Count: a.totalActive()})
 }
 
 type candidateHealth uint8
@@ -107,9 +113,10 @@ func NewNetworkAdmissions(plan relayplan.Plan, clock Clock, serverRetryAt func(s
 	if clock == nil {
 		clock = SystemClock{}
 	}
+	remaining := max(0, MaximumEndpoints-len(plan.Configured))
 	candidates := plan.NetworkCandidates()
 	a := &NetworkAdmissions{clock: clock, serverRetryAt: serverRetryAt, candidates: candidates, policy: plan.Policy,
-		target: min(relayplan.TargetNetworkRegistrations, MaximumEndpoints-len(plan.Configured)),
+		remaining: remaining, target: min(relayplan.TargetNetworkRegistrations, remaining),
 		states: make([]admissionState, len(candidates)), changed: make(chan struct{}), primary: -1}
 	for i, candidate := range a.candidates {
 		at := candidate.ServerRetryAt
@@ -192,7 +199,7 @@ func (c admissionControl) Unavailable() {
 	a.states[c.index].admitted = false
 	if a.candidates[c.index].Source == relayplan.Community {
 		a.communityActive--
-		a.record(c.index, AdmissionUnavailable, "community_lost")
+		a.record(c.index, AdmissionUnavailable, AdmissionReasonCommunityLost)
 		a.notify()
 		return
 	}
@@ -232,11 +239,11 @@ func (p *admissionPermit) Admit() bool {
 		}
 		a.communityActive++
 		a.states[index].admitted = true
-		a.record(index, AdmissionAdmitted, "community")
+		a.record(index, AdmissionAdmitted, AdmissionReasonCommunity)
 		a.notify()
 		return true
 	}
-	if a.active >= a.target {
+	if a.active >= a.target || a.totalActive() >= a.remaining {
 		a.record(index, AdmissionParked, AdmissionReasonTargetReached)
 		return false
 	}
@@ -273,7 +280,11 @@ func (p *admissionPermit) release(failed bool) {
 		if failed && !p.completed {
 			a.states[index].health = candidateHealthFailed
 		}
-		a.releaseSoftCooldown()
+		// Community admissions are isolated from the official pair, so a failed
+		// or parked community attempt must not thaw a soft-cooled official backup.
+		if a.candidates[index].Source != relayplan.Community {
+			a.releaseSoftCooldown()
+		}
 	}
 	a.states[index].eligible = false
 	a.notify()
@@ -316,9 +327,16 @@ func (a *NetworkAdmissions) candidateForBackup(index int) relayplan.Candidate {
 	}
 }
 
+func (a *NetworkAdmissions) totalActive() int {
+	return a.active + a.communityActive
+}
+
 func (a *NetworkAdmissions) canAdmit(index int) bool {
+	if a.totalActive() >= a.remaining {
+		return false
+	}
 	if a.candidates[index].Source == relayplan.Community {
-		return a.communityActive < 1
+		return a.communityActive < targetCommunityRegistrations
 	}
 	return a.active < a.target && (a.primary < 0 || a.backup() == index)
 }

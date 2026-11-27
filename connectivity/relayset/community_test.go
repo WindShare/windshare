@@ -7,6 +7,8 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/windshare/windshare/connectivity/relayplan"
 )
@@ -14,8 +16,8 @@ import (
 func TestCommunityAdmissionReservesBothOfficialSlots(t *testing.T) {
 	plan := relayplan.Plan{Network: []relayplan.Candidate{{URL: "cn", Source: relayplan.Official, Zone: "cn"}, {URL: "global", Source: relayplan.Official, Zone: "global"}, {URL: "community", Source: relayplan.Community, Verified: true}}}
 	a := NewNetworkAdmissions(plan, nil, nil)
-	var admitted []Admission
-	a.Observe(func(event Admission) { admitted = append(admitted, event) })
+	var events []Admission
+	a.Observe(func(event Admission) { events = append(events, event) })
 	for _, url := range []string{"community", "global", "cn"} {
 		permit, err := a.Control(url).Begin(t.Context())
 		if err != nil || !permit.Admit() {
@@ -23,9 +25,268 @@ func TestCommunityAdmissionReservesBothOfficialSlots(t *testing.T) {
 		}
 		permit.Release()
 	}
-	if len(admitted) != 3 || admitted[0].Primary != "" || admitted[1].Primary != "global" || admitted[2].Reason != AdmissionReasonBackup {
-		t.Fatal(admitted)
+	a.Control("community").Unavailable()
+	want := []Admission{
+		{Endpoint: "community", Primary: "", State: AdmissionAdmitted, Reason: AdmissionReasonCommunity, Count: 1},
+		{Endpoint: "global", Primary: "global", State: AdmissionAdmitted, Reason: AdmissionReasonPrimary, Count: 2},
+		{Endpoint: "cn", Primary: "global", State: AdmissionAdmitted, Reason: AdmissionReasonBackup, Count: 3},
+		{Endpoint: "community", Primary: "global", State: AdmissionUnavailable, Reason: AdmissionReasonCommunityLost, Count: 2},
 	}
+	if !slices.Equal(events, want) {
+		t.Fatalf("events = %+v, want %+v", events, want)
+	}
+}
+
+func TestCommunityPermitReleaseDoesNotThawCooledOfficialBackup(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		release func(AttemptPermit)
+	}{
+		{"failed", func(p AttemptPermit) { p.ReleaseFailed() }},
+		{"canceled", func(p AttemptPermit) { p.Release() }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				start := time.Now()
+				plan := relayplan.Plan{
+					Network: []relayplan.Candidate{
+						{URL: "cn", Source: relayplan.Official, Zone: "cn"},
+						{URL: "global", Source: relayplan.Official, Zone: "global", CooldownUntil: start.Add(time.Minute)},
+						{URL: "community", Source: relayplan.Community, Verified: true},
+					},
+				}
+				a := NewNetworkAdmissions(plan, nil, nil)
+				primary, err := a.Control("cn").Begin(t.Context())
+				if err != nil || !primary.Admit() {
+					t.Fatalf("primary admission failed: %v", err)
+				}
+				primary.Release()
+
+				backup := make(chan AttemptPermit, 1)
+				go func() {
+					p, _ := a.Control("global").Begin(t.Context())
+					backup <- p
+				}()
+				synctest.Wait()
+
+				community, err := a.Control("community").Begin(t.Context())
+				if err != nil {
+					t.Fatalf("community begin failed: %v", err)
+				}
+				tc.release(community)
+				synctest.Wait()
+
+				time.Sleep(time.Minute - time.Nanosecond)
+				synctest.Wait()
+				select {
+				case <-backup:
+					t.Fatal("community release thawed soft-cooled official backup early")
+				default:
+				}
+				time.Sleep(time.Nanosecond)
+				p := <-backup
+				if p == nil || !p.Admit() || time.Since(start) != time.Minute {
+					t.Fatalf("cooled official backup woke at %v, want %v", time.Since(start), time.Minute)
+				}
+				p.Release()
+			})
+		})
+	}
+}
+
+func TestNetworkAdmissionsBoundsCommunityByRemainingEndpointBudget(t *testing.T) {
+	configured := func(n int) []relayplan.Candidate {
+		out := make([]relayplan.Candidate, n)
+		for i := range n {
+			out[i] = relayplan.Candidate{URL: fmt.Sprintf("own-%d", i), Source: relayplan.Configured}
+		}
+		return out
+	}
+
+	t.Run("no remaining slots", func(t *testing.T) {
+		for _, count := range []int{MaximumEndpoints, MaximumEndpoints + 1} {
+			synctest.Test(t, func(t *testing.T) {
+				plan := relayplan.Plan{
+					Configured: configured(count),
+					Network: []relayplan.Candidate{
+						{URL: "cn", Source: relayplan.Official, Zone: "cn"},
+						{URL: "community", Source: relayplan.Community, Verified: true},
+					},
+				}
+				a := NewNetworkAdmissions(plan, nil, nil)
+				for _, url := range []string{"cn", "community"} {
+					ctx, cancel := context.WithCancel(t.Context())
+					done := make(chan error, 1)
+					go func() {
+						_, err := a.Control(url).Begin(ctx)
+						done <- err
+					}()
+					synctest.Wait()
+					select {
+					case err := <-done:
+						t.Fatalf("configured=%d url=%s admitted/exited early: %v", count, url, err)
+					default:
+					}
+					cancel()
+					if err := <-done; !errors.Is(err, context.Canceled) {
+						t.Fatalf("configured=%d url=%s err=%v, want context.Canceled", count, url, err)
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("single remaining slot shared across official and community", func(t *testing.T) {
+		for _, tc := range []struct {
+			name, first, second string
+			want                []Admission
+		}{
+			{
+				name:   "community then official",
+				first:  "community",
+				second: "cn",
+				want: []Admission{
+					{Endpoint: "community", Primary: "", State: AdmissionAdmitted, Reason: AdmissionReasonCommunity, Count: 1},
+					{Endpoint: "cn", Primary: "", State: AdmissionParked, Reason: AdmissionReasonTargetReached, Count: 1},
+					{Endpoint: "community", Primary: "", State: AdmissionUnavailable, Reason: AdmissionReasonCommunityLost, Count: 0},
+					{Endpoint: "cn", Primary: "cn", State: AdmissionAdmitted, Reason: AdmissionReasonPrimary, Count: 1},
+				},
+			},
+			{
+				name:   "official then community",
+				first:  "cn",
+				second: "community",
+				want: []Admission{
+					{Endpoint: "cn", Primary: "cn", State: AdmissionAdmitted, Reason: AdmissionReasonPrimary, Count: 1},
+					{Endpoint: "community", Primary: "cn", State: AdmissionParked, Reason: AdmissionReasonTargetReached, Count: 1},
+					{Endpoint: "cn", Primary: "", State: AdmissionUnavailable, Reason: AdmissionReasonPrimaryLost, Count: 0},
+					{Endpoint: "community", Primary: "", State: AdmissionAdmitted, Reason: AdmissionReasonCommunity, Count: 1},
+				},
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) {
+					plan := relayplan.Plan{
+						Configured: configured(MaximumEndpoints - 1),
+						Network: []relayplan.Candidate{
+							{URL: "cn", Source: relayplan.Official, Zone: "cn"},
+							{URL: "community", Source: relayplan.Community, Verified: true},
+						},
+					}
+					a := NewNetworkAdmissions(plan, nil, nil)
+					var events []Admission
+					a.Observe(func(event Admission) { events = append(events, event) })
+
+					first, err := a.Control(tc.first).Begin(t.Context())
+					if err != nil {
+						t.Fatal(err)
+					}
+					second, err := a.Control(tc.second).Begin(t.Context())
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !first.Admit() {
+						t.Fatalf("%s failed to claim single remaining slot", tc.first)
+					}
+					first.Release()
+					if second.Admit() {
+						t.Fatalf("%s exceeded remaining endpoint budget after %s admission", tc.second, tc.first)
+					}
+					second.Release()
+
+					waiting := make(chan AttemptPermit, 1)
+					go func() {
+						p, _ := a.Control(tc.second).Begin(t.Context())
+						waiting <- p
+					}()
+					synctest.Wait()
+					select {
+					case <-waiting:
+						t.Fatalf("%s started while remaining slot was occupied by %s", tc.second, tc.first)
+					default:
+					}
+
+					a.Control(tc.first).Unavailable()
+					p := <-waiting
+					if p == nil || !p.Admit() {
+						t.Fatalf("%s failed to claim slot after %s became unavailable", tc.second, tc.first)
+					}
+					p.Release()
+
+					if !slices.Equal(events, tc.want) {
+						t.Fatalf("events = %+v, want %+v", events, tc.want)
+					}
+				})
+			})
+		}
+	})
+
+	t.Run("two remaining slots cap combined admissions", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			plan := relayplan.Plan{
+				Configured: configured(MaximumEndpoints - 2),
+				Network: []relayplan.Candidate{
+					{URL: "cn", Source: relayplan.Official, Zone: "cn"},
+					{URL: "global", Source: relayplan.Official, Zone: "global"},
+					{URL: "community", Source: relayplan.Community, Verified: true},
+				},
+			}
+			a := NewNetworkAdmissions(plan, nil, nil)
+			comm, err := a.Control("community").Begin(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			cn, err := a.Control("cn").Begin(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			global, err := a.Control("global").Begin(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !comm.Admit() || !cn.Admit() {
+				t.Fatal("first two admissions should fit within remaining budget")
+			}
+			comm.Release()
+			cn.Release()
+			if global.Admit() {
+				t.Fatal("third network admission exceeded MaximumEndpoints")
+			}
+			global.Release()
+
+			a.Control("community").Unavailable()
+			recovered, err := a.Control("global").Begin(t.Context())
+			if err != nil || !recovered.Admit() {
+				t.Fatalf("backup failed to claim freed slot: %v", err)
+			}
+			recovered.Release()
+			if a.active != 2 || a.communityActive != 0 {
+				t.Fatalf("active=%d communityActive=%d, want 2, 0", a.active, a.communityActive)
+			}
+		})
+	})
+
+	t.Run("three remaining slots keep official pair and community independent", func(t *testing.T) {
+		plan := relayplan.Plan{
+			Configured: configured(MaximumEndpoints - 3),
+			Network: []relayplan.Candidate{
+				{URL: "cn", Source: relayplan.Official, Zone: "cn"},
+				{URL: "global", Source: relayplan.Official, Zone: "global"},
+				{URL: "community", Source: relayplan.Community, Verified: true},
+			},
+		}
+		a := NewNetworkAdmissions(plan, nil, nil)
+		for _, url := range []string{"community", "global", "cn"} {
+			permit, err := a.Control(url).Begin(t.Context())
+			if err != nil || !permit.Admit() {
+				t.Fatalf("%s failed to admit with 3 remaining slots: %v", url, err)
+			}
+			permit.Release()
+		}
+		if a.active != 2 || a.communityActive != 1 {
+			t.Fatalf("active=%d communityActive=%d, want 2, 1", a.active, a.communityActive)
+		}
+	})
 }
 
 func TestCommunityPublishesDuringOfficialAccountWait(t *testing.T) {
