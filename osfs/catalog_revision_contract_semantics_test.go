@@ -1,6 +1,7 @@
 package osfs
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -214,12 +215,27 @@ func TestSelectedCatalogSourceOmitsSymlinksWithoutPublishingAuthority(t *testing
 		t.Fatalf("symlink omission = %+v, children=%+v", result, children.items)
 	}
 
+	// Explicitly selecting the link grants exactly the authority of selecting its
+	// target: the kernel-resolved file, published under the typed name.
 	synthetic, _ := catalog.DirectoryIDFromBytes(identity16(36))
-	if leaked, err := NewSelectedCatalogSource(SelectedCatalogSourceConfig{
+	linked, err := NewSelectedCatalogSource(SelectedCatalogSourceConfig{
 		Paths: []string{filepath.Join(root, "link.bin")}, SyntheticRoot: synthetic,
-	}); err == nil {
-		_ = leaked.Close()
-		t.Fatal("selected symlink acquired catalog authority")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer linked.Close()
+	direct, err := NewSelectedCatalogSource(SelectedCatalogSourceConfig{
+		Paths: []string{filepath.Join(root, "target.bin")}, SyntheticRoot: synthetic,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer direct.Close()
+	linkedRoot, directRoot := linked.SelectedRoots()[0], direct.SelectedRoots()[0]
+	if _, file := linkedRoot.FileID(); !file || linkedRoot.Entry().Name() != "link.bin" ||
+		!bytes.Equal(linkedRoot.SourceIdentity().Bytes(), directRoot.SourceIdentity().Bytes()) {
+		t.Fatalf("selected link = %+v, want its target under the typed name", linkedRoot.Entry())
 	}
 }
 
