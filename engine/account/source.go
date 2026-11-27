@@ -53,6 +53,13 @@ func (service *Service) PrepareShareAuthorization(ctx context.Context) *ShareAut
 	if service == nil {
 		return nil
 	}
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	// Check service lifetime and register the worker under mu so Close cannot
+	// reach workers.Wait concurrently with workers.Go.
+	if service.ctx.Err() != nil {
+		return &ShareAuthorization{service: service, attribution: attributionClosed}
+	}
 	share := &ShareAuthorization{service: service, loading: make(chan struct{})}
 	service.workers.Go(func() {
 		share.loadSelection(ctx)
@@ -68,24 +75,40 @@ func (share *ShareAuthorization) loadSelection(ctx context.Context) {
 	service := share.service
 	bounded, cancel := context.WithTimeout(ctx, CacheLoadTimeout)
 	defer cancel()
-	_, err := service.syncSelection(bounded, service.load, share.bindSelectionLocked)
-	if err != nil {
+	stop := context.AfterFunc(service.ctx, cancel)
+	defer stop()
+	if service.ctx.Err() != nil {
 		service.mu.Lock()
-		if share.attribution == attributionClosed {
-			service.mu.Unlock()
-			return
-		}
-		share.selectionErr = fmt.Errorf("read selected account: %w", err)
-		if service.unconfirmedShares == nil {
-			service.unconfirmedShares = make(map[*ShareAuthorization]struct{})
-		}
-		service.unconfirmedShares[share] = struct{}{}
+		share.closeLocked()
 		service.mu.Unlock()
+		return
 	}
+	_, err := service.syncSelection(bounded, service.load, share.bindSelectionLocked)
+	if err == nil {
+		return
+	}
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if service.ctx.Err() != nil {
+		share.closeLocked()
+		return
+	}
+	if share.attribution == attributionClosed {
+		return
+	}
+	share.selectionErr = fmt.Errorf("read selected account: %w", err)
+	if service.unconfirmedShares == nil {
+		service.unconfirmedShares = make(map[*ShareAuthorization]struct{})
+	}
+	service.unconfirmedShares[share] = struct{}{}
 }
 
 func (share *ShareAuthorization) bindSelectionLocked(record Record) {
 	if share.attribution == attributionClosed {
+		return
+	}
+	if share.service.ctx.Err() != nil {
+		share.closeLocked()
 		return
 	}
 	share.credential = share.service.retainCredentialLocked(record)
@@ -99,15 +122,21 @@ func (share *ShareAuthorization) Close() {
 	service := share.service
 	service.mu.Lock()
 	defer service.mu.Unlock()
-	if share.attribution != attributionClosed {
-		share.attribution = attributionClosed
-		share.reservation = nil
-		delete(service.unconfirmedShares, share)
-		delete(service.officialShares, share)
-		share.releaseNodesLocked()
-		share.releaseCredentialLocked()
-		service.refreshDemandChangedLocked()
+	share.closeLocked()
+}
+
+func (share *ShareAuthorization) closeLocked() {
+	if share.attribution == attributionClosed {
+		return
 	}
+	service := share.service
+	share.attribution = attributionClosed
+	share.reservation = nil
+	delete(service.unconfirmedShares, share)
+	delete(service.officialShares, share)
+	share.releaseNodesLocked()
+	share.releaseCredentialLocked()
+	service.refreshDemandChangedLocked()
 }
 
 type Source struct {
