@@ -361,3 +361,88 @@ func TestReceiveSettlementRejectsInvalidFileInterruption(t *testing.T) {
 		t.Fatalf("invalid file interruption err = %v, want ErrInvalidResult", err)
 	}
 }
+
+func TestReceiveSettlementNamesExpiredWaitTimeout(t *testing.T) {
+	sessionTerminal, err := transferfault.NewSession(transferfault.ScopeSessionTerminal, transferfault.SessionTransport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outputIO, err := transferfault.NewOutput(transferfault.ScopeOutputPause, transferfault.OutputStateIO)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionProtocol, err := transferfault.NewSession(transferfault.ScopeSessionTerminal, transferfault.SessionProtocol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionDependency, err := transferfault.NewSession(transferfault.ScopeSessionTerminal, transferfault.SessionDependencyContract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiry := errors.Join(relayset.ErrReceiverWaitExpired, &relayv2.WebSocketDialError{})
+	peerStop := peerSessionTerminalError(t, session.SessionStoppedCode)
+	tests := []struct {
+		name         string
+		mutate       func(*SettlementInput)
+		wantFault    transferfault.Fault
+		wantDeadline bool
+		wantStop     ShareStopSource
+		// wantExpiryDiag: the expiry must remain in the error tree.
+		wantExpiryDiag bool
+	}{
+		{"expired replacement wait", func(input *SettlementInput) {
+			input.Result.TerminationCause = transferfault.Wrap(sessionTerminal, expiry)
+		}, transferfault.Fault{}, true, ShareStopUnconfirmed, true},
+		{"expiry reported by the connection", func(input *SettlementInput) {
+			input.ConnectionError = expiry
+		}, transferfault.Fault{}, true, ShareStopUnconfirmed, true},
+		{"session fault without expiry", func(input *SettlementInput) {
+			input.Result.TerminationCause = transferfault.Wrap(sessionTerminal, &relayv2.WebSocketDialError{})
+		}, sessionTerminal, false, ShareStopUnconfirmed, false},
+		{"output fault keeps precedence", func(input *SettlementInput) {
+			input.Result.TerminationFault = outputIO
+			input.Result.TerminationCause = expiry
+		}, outputIO, false, ShareStopUnconfirmed, true},
+		{"stopped share keeps precedence", func(input *SettlementInput) {
+			input.Result.TerminationCause = expiry
+			input.RuntimeError = peerStop
+		}, transferfault.Fault{}, false, ShareStopSender, true},
+		{"protocol fault with expiry is not replaced", func(input *SettlementInput) {
+			input.Result.TerminationFault = sessionProtocol
+			input.Result.TerminationCause = transferfault.Wrap(sessionProtocol, expiry)
+		}, sessionProtocol, false, ShareStopUnconfirmed, true},
+		{"dependency fault with expiry is not replaced", func(input *SettlementInput) {
+			input.Result.TerminationFault = sessionDependency
+			input.Result.TerminationCause = transferfault.Wrap(sessionDependency, expiry)
+		}, sessionDependency, false, ShareStopUnconfirmed, true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			input := SettlementInput{Result: successfulJobResult(t)}
+			input.Result.Outcome = transfer.DirectTreeOutcomePaused
+			input.Result.TerminationFault = sessionTerminal
+			test.mutate(&input)
+			result, err := Settle(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			failure, ok := errors.AsType[Failure](result.Err)
+			if !ok || failure.Fault != test.wantFault ||
+				(failure.Interruption == transfer.TransferInterruptionDeadline) != test.wantDeadline {
+				t.Fatalf("failure = %+v, want fault %v deadline %t", failure, test.wantFault, test.wantDeadline)
+			}
+			if result.Value.Recovery.ShareStop != test.wantStop {
+				t.Fatalf("share stop = %v, want %v", result.Value.Recovery.ShareStop, test.wantStop)
+			}
+			if test.wantDeadline && result.Value.Recovery.Reason != RecoveryTransferFailure {
+				t.Fatalf("recovery reason = %v, want %v", result.Value.Recovery.Reason, RecoveryTransferFailure)
+			}
+			if test.wantDeadline && (result.Outcome != task.OutcomePaused || !result.Value.Recovery.Retryable()) {
+				t.Fatalf("expired wait must stay a resumable pause: outcome=%d recovery=%+v", result.Outcome, result.Value.Recovery)
+			}
+			if test.wantExpiryDiag && !errors.Is(result.Err, relayset.ErrReceiverWaitExpired) {
+				t.Fatal("settlement dropped the expiry diagnostic")
+			}
+		})
+	}
+}

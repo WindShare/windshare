@@ -180,6 +180,7 @@ func Settle(input SettlementInput) (task.Completion[Result], error) {
 				result.Outcome = task.OutcomeFailed
 			}
 		}
+		failure = waitExpiredFailure(input, failure)
 		result.Value.Recovery = RecoveryOutcome{
 			Reason:         recoveryReason(class, failure, r, input.CleanupError),
 			ShareStop:      stop,
@@ -248,6 +249,26 @@ func stoppedShareFailure(input SettlementInput, primary Failure, class task.Fail
 		return Failure{Code: FailureShareStopped}, task.FailureNetwork
 	}
 	return primary, class
+}
+
+// waitExpiredFailure names the caller's --wait-timeout as the reason a paused
+// download ended. Replacement exhaustion reaches the job as a terminal session
+// fault whose cause chain still carries the expiry; leaving the fault primary
+// reports an ordinary session failure although the relay merely stayed away
+// longer than the user allowed. Only a transport fault is replaced, so a confirmed
+// stop (already substituted by the caller) and independent output, source and
+// usage reasons keep their precedence.
+func waitExpiredFailure(input SettlementInput, primary Failure) Failure {
+	// Only a transport fault can be explained by the relay staying away; a
+	// protocol or dependency-contract fault is not a timeout and keeps its
+	// own recovery reason.
+	code, ok := primary.Fault.SessionCode()
+	if primary.Fault.Domain() != transferfault.DomainSession || primary.Fault.Scope() != transferfault.ScopeSessionTerminal ||
+		!ok || code != transferfault.SessionTransport ||
+		!errors.Is(input.diagnosticCauses(), relayset.ErrReceiverWaitExpired) {
+		return primary
+	}
+	return Failure{Interruption: transfer.TransferInterruptionDeadline}
 }
 
 func resultFailure(input SettlementInput, class task.FailureClass) Failure {
