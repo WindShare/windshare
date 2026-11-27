@@ -171,14 +171,12 @@ func TestGetSessionReplacementPreservesRecoveryFailureEndToEnd(t *testing.T) {
 							closePeer:       receiverWire.Close,
 							dropAfterFrames: stage.dropAfterFrames,
 						}
-						accepted.Add(1)
-						go func() {
-							defer accepted.Done()
+						accepted.Go(func() {
 							if runtime, acceptErr := factory.Accept(ctx, dropWire); acceptErr == nil && runtime != nil {
 								<-runtime.Done()
 								runtime.Close()
 							}
-						}()
+						})
 						return &inMemoryReceiveConnection{
 							descriptor: sender.Registration().Descriptor,
 							channel:    receiverWire,
