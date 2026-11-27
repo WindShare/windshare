@@ -219,14 +219,7 @@ func Build(input Input) (Plan, error) {
 		}
 		candidate := Candidate{Source: Official, URL: node.Relay, Identity: endpoint.IdentityURL, Alias: node.Alias, Zone: node.Zone,
 			Region: node.Region, Provider: node.Provider, Operator: node.Operator, CapacityMbps: node.CapacityMbps, Canary: node.Status == nodedirectory.Canary}
-		fact, measured := order.facts[candidate.Identity]
-		if measured {
-			candidate.history = recentlyFailed
-			if fact.Admitted {
-				candidate.history = recentlyAdmitted
-				candidate.ObservedDuration = max(fact.Duration, 0)
-			}
-		}
+		fact := order.applyHistory(&candidate)
 		if !fact.CooldownUntil.IsZero() || !fact.ServerRetryAt.IsZero() {
 			candidate.CooldownUntil, candidate.ServerRetryAt = fact.CooldownUntil, fact.ServerRetryAt
 			cooled = append(cooled, candidate)

@@ -38,7 +38,7 @@ func (p *Plan) addCommunity(peers []Candidate, limit int, seen map[string]bool, 
 		}
 		seen[ep.IdentityURL] = true
 		c.Identity = ep.IdentityURL
-		fact := order.facts[c.Identity]
+		fact := order.applyHistory(&c)
 		if !fact.CooldownUntil.IsZero() || !fact.ServerRetryAt.IsZero() {
 			p.Decision.Filters = append(p.Decision.Filters, Filter{c.URL, "community_cooldown"})
 			continue
@@ -93,16 +93,17 @@ func (order selectionOrder) rankCommunity(group []Candidate) {
 		if a.Verified != b.Verified {
 			return a.Verified
 		}
-		af, bf := order.facts[a.Identity], order.facts[b.Identity]
-		if af.Admitted != bf.Admitted {
-			return af.Admitted
+		if a.history != b.history {
+			return a.history > b.history
 		}
-		if af.Admitted && af.Duration/DurationBucket != bf.Duration/DurationBucket {
-			return af.Duration/DurationBucket < bf.Duration/DurationBucket
+		if a.history == recentlyAdmitted {
+			if l, r := max(a.ObservedDuration, 0)/DurationBucket, max(b.ObservedDuration, 0)/DurationBucket; l != r {
+				return l < r
+			}
 		}
 		if a.CapacityMbps != b.CapacityMbps {
 			return a.CapacityMbps > b.CapacityMbps
 		}
-		return a.Identity < b.Identity
+		return order.tieBreak(a, b)
 	})
 }

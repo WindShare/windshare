@@ -1,6 +1,7 @@
 package relayplan
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -55,5 +56,150 @@ func TestCommunityFallbackRunsBeforeOfficialServerDeadlines(t *testing.T) {
 	plan := selected(t, in)
 	if !plan.Decision.CooldownFallback || len(plan.Network) != 1 || plan.Network[0].URL != peer.URL || len(plan.Standby) != MaximumNetworkCandidates {
 		t.Fatal(plan)
+	}
+}
+
+func communityObservation(t *testing.T, input Input, rawURL string) Observation {
+	t.Helper()
+	ep, err := networkendpoint.NormalizeRelay(rawURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return Observation{Identity: ep.IdentityURL, At: input.Now, NetworkGeneration: input.NetworkGeneration}
+}
+
+func TestCommunityRankingOrdersHistoryAndClampsDuration(t *testing.T) {
+	now := time.Now()
+	peer := func(host string, verified bool, capacity uint32) Candidate {
+		return Candidate{URL: "https://" + host, Source: Community, Verified: verified, CapacityMbps: capacity, ObservedDuration: time.Hour}
+	}
+
+	// A recently failed high-capacity peer must rank behind a healthy unmeasured peer,
+	// while admitted peers rank first and expose their observation state and clamped duration.
+	failed := peer("a-failed.example", true, 10000)
+	unmeasured := peer("b-unmeasured.example", true, 25)
+	admitted := peer("c-admitted.example", true, 25)
+	in := Input{Now: now, NetworkGeneration: "1", Community: []Candidate{failed, unmeasured, admitted}}
+	failFact := communityObservation(t, in, failed.URL)
+	failFact.Duration = 500 * time.Millisecond
+	okFact := communityObservation(t, in, admitted.URL)
+	okFact.Admitted = true
+	okFact.Duration = 145 * time.Millisecond
+	in.Observations = []Observation{failFact, okFact}
+
+	plan := selected(t, in)
+	if len(plan.Network) != 2 || plan.Network[0].URL != admitted.URL || plan.Network[1].URL != unmeasured.URL {
+		t.Fatalf("community history order = %+v, want [%s, %s]", plan.Network, admitted.URL, unmeasured.URL)
+	}
+	if d, ok := plan.Network[0].ObservedHandshake(); !ok || d != 145*time.Millisecond || plan.Network[0].HistoryState() != "admitted" {
+		t.Fatalf("admitted community candidate = %+v (%v, %t)", plan.Network[0], d, ok)
+	}
+	if _, ok := plan.Network[1].ObservedHandshake(); ok || plan.Network[1].HistoryState() != "unmeasured" {
+		t.Fatalf("unmeasured community candidate exposed handshake: %+v", plan.Network[1])
+	}
+
+	// Expired cooldown still leaves Admitted=false within ObservationAge; keep demoted behind unmeasured.
+	failFact.CooldownUntil = now.Add(-time.Second)
+	failFact.CooldownReason = CooldownServerBackoff
+	in.Community = []Candidate{failed, unmeasured}
+	in.Observations = []Observation{failFact}
+	plan = selected(t, in)
+	if len(plan.Network) != 2 || plan.Network[0].URL != unmeasured.URL || plan.Network[1].URL != failed.URL {
+		t.Fatalf("expired-cooldown demotion = %+v, want [%s, %s]", plan.Network, unmeasured.URL, failed.URL)
+	}
+	if _, ok := plan.Network[1].ObservedHandshake(); ok || plan.Network[1].HistoryState() != "failed" {
+		t.Fatalf("failed community candidate = %+v", plan.Network[1])
+	}
+
+	// Negative duration clamps to bucket 0 so higher capacity wins the same bucket; faster bucket beats capacity.
+	slow, fast := peer("a-slow.example", true, 200), peer("b-fast.example", true, 100)
+	in = Input{Now: now, NetworkGeneration: "1", Community: []Candidate{slow, fast}}
+	slowFact, fastFact := communityObservation(t, in, slow.URL), communityObservation(t, in, fast.URL)
+	slowFact.Admitted, fastFact.Admitted = true, true
+	for _, tc := range []struct {
+		slowDur, fastDur time.Duration
+		winner           string
+		wantDur          time.Duration
+	}{
+		{950 * time.Millisecond, 130 * time.Millisecond, fast.URL, 130 * time.Millisecond},
+		{90 * time.Millisecond, -time.Second, slow.URL, 90 * time.Millisecond},
+		{-time.Second, 90 * time.Millisecond, slow.URL, 0},
+	} {
+		slowFact.Duration, fastFact.Duration = tc.slowDur, tc.fastDur
+		in.Observations = []Observation{slowFact, fastFact}
+		got := selected(t, in).Network[0]
+		if got.URL != tc.winner {
+			t.Fatalf("bucket test %+v picked %s, want %s", tc, got.URL, tc.winner)
+		}
+		if d, ok := got.ObservedHandshake(); !ok || d != tc.wantDur {
+			t.Fatalf("bucket test %+v observed duration = (%v, %t), want (%v, true)", tc, d, ok, tc.wantDur)
+		}
+	}
+
+	// Verified must remain ahead of history so a single transient failure on the sole verified peer
+	// does not let an unverified peer displace the supplemental verified slot.
+	verifiedFailed := peer("z-verified.example", true, 25)
+	unverified := peer("a-unverified.example", false, 1000)
+	in = Input{
+		Now:               now,
+		NetworkGeneration: "1",
+		Directory:         nodedirectory.Payload{Nodes: []nodedirectory.Node{planNode(0, "global"), planNode(1, "cn")}},
+		Community:         []Candidate{unverified, verifiedFailed},
+		Observations:      []Observation{communityObservation(t, Input{Now: now, NetworkGeneration: "1"}, verifiedFailed.URL)},
+	}
+	plan = selected(t, in)
+	if len(plan.Network) != 3 || plan.Network[2].URL != verifiedFailed.URL || plan.Network[2].HistoryState() != "failed" {
+		t.Fatalf("verified supplemental slot = %+v", plan.Network)
+	}
+}
+
+func TestCommunityColdStartSeedSpreadsEqualCapacityPeers(t *testing.T) {
+	now := time.Now()
+	peers := make([]Candidate, 0, 12)
+	for i := range 12 {
+		peers = append(peers, Candidate{
+			URL:          fmt.Sprintf("https://peer%02d.example", i),
+			Source:       Community,
+			Verified:     true,
+			CapacityMbps: 25,
+		})
+	}
+
+	// Empty seed preserves deterministic Identity order.
+	base := Input{Now: now, NetworkGeneration: "1", Community: slices.Clone(peers)}
+	if got := selected(t, base).Network[0].URL; got != peers[0].URL {
+		t.Fatalf("empty seed picked %q, want %q", got, peers[0].URL)
+	}
+
+	// Fallback mode: distinct seeds spread selections across peers and ignore input order.
+	fallbackVisited := map[string]bool{}
+	for i := range 16 {
+		in := Input{Now: now, NetworkGeneration: "1", SelectionSeed: fmt.Sprint(i), Community: slices.Clone(peers)}
+		plan := selected(t, in)
+		slices.Reverse(in.Community)
+		if !slices.Equal(plan.Decision.Candidates, selected(t, in).Decision.Candidates) {
+			t.Fatalf("fallback tie depended on input order for seed %d", i)
+		}
+		for _, c := range plan.Network {
+			fallbackVisited[c.Identity] = true
+		}
+	}
+	if len(fallbackVisited) <= TargetNetworkRegistrations {
+		t.Fatalf("seed failed to spread fallback community picks: %v", fallbackVisited)
+	}
+
+	// Supplemental slot alongside healthy official pair also spreads across verified peers.
+	supplementalVisited := map[string]bool{}
+	dir := nodedirectory.Payload{Nodes: []nodedirectory.Node{planNode(0, "global"), planNode(1, "cn")}}
+	for i := range 16 {
+		in := Input{Now: now, NetworkGeneration: "1", SelectionSeed: fmt.Sprint(i), Directory: dir, Community: slices.Clone(peers)}
+		plan := selected(t, in)
+		if len(plan.Network) != 3 || plan.Network[2].Source != Community {
+			t.Fatalf("unexpected supplemental plan: %+v", plan.Network)
+		}
+		supplementalVisited[plan.Network[2].Identity] = true
+	}
+	if len(supplementalVisited) < 2 {
+		t.Fatalf("seed failed to spread supplemental community pick: %v", supplementalVisited)
 	}
 }

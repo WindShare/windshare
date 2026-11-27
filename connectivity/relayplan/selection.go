@@ -33,24 +33,21 @@ func newSelectionOrder(input Input) selectionOrder {
 	return order
 }
 
-func (o selectionOrder) less(a, b Candidate) bool {
-	if a.history != b.history {
-		return a.history > b.history
-	}
-	if a.Canary != b.Canary {
-		return !a.Canary
-	}
-	if l, r := a.CapacityMbps >= BulkCapacityThresholdMbps, b.CapacityMbps >= BulkCapacityThresholdMbps; l != r {
-		return l
-	}
-	if left, right := o.facts[a.Identity], o.facts[b.Identity]; left.Admitted && right.Admitted {
-		if l, r := max(left.Duration, 0)/DurationBucket, max(right.Duration, 0)/DurationBucket; l != r {
-			return l < r
+func (o selectionOrder) applyHistory(candidate *Candidate) Observation {
+	candidate.history = unmeasured
+	candidate.ObservedDuration = 0
+	fact, measured := o.facts[candidate.Identity]
+	if measured {
+		candidate.history = recentlyFailed
+		if fact.Admitted {
+			candidate.history = recentlyAdmitted
+			candidate.ObservedDuration = max(fact.Duration, 0)
 		}
 	}
-	if a.CapacityMbps != b.CapacityMbps {
-		return a.CapacityMbps > b.CapacityMbps
-	}
+	return fact
+}
+
+func (o selectionOrder) tieBreak(a, b Candidate) bool {
 	if o.seedPrefix != "" {
 		hash := func(identity string) uint32 {
 			h := fnv.New32a()
@@ -62,6 +59,27 @@ func (o selectionOrder) less(a, b Candidate) bool {
 		}
 	}
 	return a.Identity < b.Identity
+}
+
+func (o selectionOrder) less(a, b Candidate) bool {
+	if a.history != b.history {
+		return a.history > b.history
+	}
+	if a.Canary != b.Canary {
+		return !a.Canary
+	}
+	if l, r := a.CapacityMbps >= BulkCapacityThresholdMbps, b.CapacityMbps >= BulkCapacityThresholdMbps; l != r {
+		return l
+	}
+	if a.history == recentlyAdmitted {
+		if l, r := max(a.ObservedDuration, 0)/DurationBucket, max(b.ObservedDuration, 0)/DurationBucket; l != r {
+			return l < r
+		}
+	}
+	if a.CapacityMbps != b.CapacityMbps {
+		return a.CapacityMbps > b.CapacityMbps
+	}
+	return o.tieBreak(a, b)
 }
 
 // A diversity reservation may break a tie within one retry priority. It must
