@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -31,6 +32,7 @@ import (
 	"github.com/windshare/windshare/core/serviceauthority"
 	"github.com/windshare/windshare/engine/internal/community"
 	"github.com/windshare/windshare/engine/internal/statefile"
+	"github.com/windshare/windshare/engine/networkconfig"
 	"github.com/windshare/windshare/engine/networkdirectory"
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relayprofile"
@@ -581,5 +583,202 @@ func TestSeedsOrderUsableDirectoryAheadOfEmbeddedAndRetainExpiredFallback(t *tes
 		len(gotExpired.Active) != 0 ||
 		!slices.Equal(gotExpired.Fallback, []string{"https://community-seed.example", "https://jp1.example"}) {
 		t.Fatalf("expired directory seeds = %+v", gotExpired)
+	}
+}
+
+func TestCommunityVerifyFailureBackoffUnblocksSubsequentFallbackPlans(t *testing.T) {
+	r := fixtureRuntime(t)
+	now := r.now()
+	r.directory.Close()
+	r.directory = nil
+
+	const altFrontend = "https://alt-front.example"
+	var broken503Recover atomic.Bool
+
+	sign := func(seedByte byte, endpoint, domain string, state serviceauthority.PublicRelay, capBS uint64) json.RawMessage {
+		t.Helper()
+		key := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{seedByte}, ed25519.SeedSize))
+		pub := key.Public().(ed25519.PublicKey)
+		digest := sha256.Sum256(append([]byte("windshare/node-identity/v1\x00"), pub...))
+		enc := base64.RawURLEncoding.EncodeToString
+		lifetime := 24 * time.Hour
+		if domain == serviceauthority.DescriptorDomain {
+			lifetime = 5 * time.Minute
+		}
+		payload, err := json.Marshal(map[string]any{
+			"version":                          2,
+			"platform":                         "native",
+			"node_id":                          enc(digest[:]),
+			"node_key":                         enc(pub),
+			"relay_endpoint":                   endpoint,
+			"services":                         map[string]bool{"relay": true, "stun": false},
+			"public_relay":                     state,
+			"public_capacity_bytes_per_second": capBS,
+			"issued_at":                        now.Unix(),
+			"expires_at":                       now.Add(lifetime).Unix(),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sig := ed25519.Sign(key, append([]byte(domain), payload...))
+		raw, err := json.Marshal(map[string]any{"version": 2, "descriptor": enc(payload), "signature": enc(sig)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+
+	type peerSpec struct {
+		host     string
+		seedByte byte
+		capBS    uint64
+		live     serviceauthority.PublicRelay
+	}
+	specs := []peerSpec{
+		{host: "a-sybil-403.example.com", seedByte: 51, capBS: math.MaxUint64, live: serviceauthority.RelayAnonymous},
+		{host: "b-sybil-budget.example.com", seedByte: 52, capBS: math.MaxUint64, live: serviceauthority.RelayBudgetExhausted},
+		{host: "c-broken-503.example.com", seedByte: 53, capBS: 125_000_000, live: serviceauthority.RelayAnonymous},
+		{host: "d-healthy-1.example.com", seedByte: 54, capBS: 3_125_000, live: serviceauthority.RelayAnonymous},
+		{host: "e-healthy-2.example.com", seedByte: 55, capBS: 3_125_000, live: serviceauthority.RelayAnonymous},
+	}
+
+	var port string
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		host, _, _ := net.SplitHostPort(req.Host)
+		var spec peerSpec
+		found := false
+		for _, candidate := range specs {
+			if candidate.host == host {
+				spec, found = candidate, true
+				break
+			}
+		}
+		if !found {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		endpoint := "wss://" + spec.host + ":" + port + "/v2/ws"
+		switch req.URL.Path {
+		case "/.well-known/windshare":
+			if spec.host == "c-broken-503.example.com" && !broken503Recover.Load() {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			_, _ = w.Write(sign(spec.seedByte, endpoint, serviceauthority.DescriptorDomain, spec.live, spec.capBS))
+		case "/v2/ws":
+			if spec.host == "a-sybil-403.example.com" && req.Header.Get("Origin") != altFrontend {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			ws, err := websocket.Accept(w, req, &websocket.AcceptOptions{InsecureSkipVerify: true})
+			if err != nil {
+				return
+			}
+			_ = ws.CloseNow()
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	_, port, _ = net.SplitHostPort(strings.TrimPrefix(srv.URL, "https://"))
+
+	p := filepath.Join(t.TempDir(), "config.json")
+	envelopes := make([]json.RawMessage, 0, len(specs))
+	for _, spec := range specs {
+		envelopes = append(envelopes, sign(spec.seedByte, "wss://"+spec.host+":"+port+"/v2/ws", serviceauthority.GossipDomain, serviceauthority.RelayAnonymous, spec.capBS))
+	}
+	raw, err := json.Marshal(envelopes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := statefile.Write(t.Context(), filepath.Join(statefile.StateDirectory(p), "community-peers.json"), raw); err != nil {
+		t.Fatal(err)
+	}
+	local := netip.MustParseAddr("127.0.0.1")
+	r.community = community.New(p, publicdial.Policy{
+		Permit:          func(a netip.Addr) bool { return a == local },
+		Lookup:          func(context.Context, string, string) ([]netip.Addr, error) { return []netip.Addr{local}, nil },
+		TLSClientConfig: srv.Client().Transport.(*http.Transport).TLSClientConfig,
+	}, r.now, diagnostics.Sink{})
+	r.config.CommunitySettingsPath = p
+
+	urlFor := func(host string) string { return "https://" + host + ":" + port }
+
+	// Plan 1: the two MaxUint64 Sybil nodes win cold slots, then both fail route.Check.
+	sel1, err := r.Plan(t.Context(), relayprofile.Plan(nil), "")
+	if err != nil || len(sel1.Relays) != 2 || sel1.Relays[0].PublicURL != urlFor("a-sybil-403.example.com") || sel1.Relays[1].PublicURL != urlFor("b-sybil-budget.example.com") {
+		t.Fatalf("plan 1 = (%+v, %v)", sel1.Relays, err)
+	}
+	for _, reg := range sel1.Relays {
+		if err := reg.Community.Check(t.Context()); err == nil {
+			t.Fatalf("expected Check failure for %s", reg.PublicURL)
+		}
+	}
+
+	// Plan 2: both rejected/budget-exhausted Sybils are suppressed; broken-503 and healthy-1 surface.
+	sel2, err := r.Plan(t.Context(), relayprofile.Plan(nil), "")
+	if err != nil || len(sel2.Relays) != 2 || sel2.Relays[0].PublicURL != urlFor("c-broken-503.example.com") || sel2.Relays[1].PublicURL != urlFor("d-healthy-1.example.com") {
+		t.Fatalf("plan 2 = (%+v, %v)", sel2.Relays, err)
+	}
+	if err := sel2.Relays[0].Community.Check(t.Context()); err == nil {
+		t.Fatal("expected 503 Check failure")
+	}
+	if err := sel2.Relays[1].Community.Check(t.Context()); err != nil {
+		t.Fatalf("expected healthy-1 Check success, got %v", err)
+	}
+
+	// Plan 3: broken-503 is filtered via community_cooldown and both healthy peers take the slots.
+	sel3, err := r.Plan(t.Context(), relayprofile.Plan(nil), "")
+	if err != nil || len(sel3.Relays) != 2 || sel3.Relays[0].PublicURL != urlFor("d-healthy-1.example.com") || sel3.Relays[1].PublicURL != urlFor("e-healthy-2.example.com") {
+		t.Fatalf("plan 3 = (%+v, %v)", sel3.Relays, err)
+	}
+	if !slices.ContainsFunc(sel3.Decision.Filters, func(f networkconfig.Filter) bool {
+		return f.Endpoint == urlFor("c-broken-503.example.com") && f.Reason == "community_cooldown"
+	}) {
+		t.Fatalf("missing community_cooldown filter for broken-503: %+v", sel3.Decision.Filters)
+	}
+
+	// Switching to an allowed alternate frontend still lets a-sybil-403 verify (Origin isolation).
+	selAlt, err := r.Plan(t.Context(), relayprofile.Plan(nil), altFrontend)
+	if err != nil || len(selAlt.Relays) == 0 || selAlt.Relays[0].PublicURL != urlFor("a-sybil-403.example.com") {
+		t.Fatalf("alt-frontend plan = (%+v, %v)", selAlt.Relays, err)
+	}
+	if err := selAlt.Relays[0].Community.Check(t.Context()); err != nil {
+		t.Fatalf("a-sybil-403 should succeed on allowed alt frontend: %v", err)
+	}
+
+	// Sole transiently-failed community peer remains retryable via CooldownFallback (no NoRelayCandidates lockout).
+	r.community.Close()
+	soloPath := filepath.Join(t.TempDir(), "config.json")
+	soloRaw, err := json.Marshal([]json.RawMessage{
+		sign(53, "wss://c-broken-503.example.com:"+port+"/v2/ws", serviceauthority.GossipDomain, serviceauthority.RelayAnonymous, 125_000_000),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := statefile.Write(t.Context(), filepath.Join(statefile.StateDirectory(soloPath), "community-peers.json"), soloRaw); err != nil {
+		t.Fatal(err)
+	}
+	r.community = community.New(soloPath, publicdial.Policy{
+		Permit:          func(a netip.Addr) bool { return a == local },
+		Lookup:          func(context.Context, string, string) ([]netip.Addr, error) { return []netip.Addr{local}, nil },
+		TLSClientConfig: srv.Client().Transport.(*http.Transport).TLSClientConfig,
+	}, r.now, diagnostics.Sink{})
+	r.config.CommunitySettingsPath = soloPath
+
+	solo1, err := r.Plan(t.Context(), relayprofile.Plan(nil), "")
+	if err != nil || len(solo1.Relays) != 1 {
+		t.Fatalf("solo plan 1 = (%+v, %v)", solo1.Relays, err)
+	}
+	if err := solo1.Relays[0].Community.Check(t.Context()); err == nil {
+		t.Fatal("expected initial solo 503 failure")
+	}
+	broken503Recover.Store(true)
+	solo2, err := r.Plan(t.Context(), relayprofile.Plan(nil), "")
+	if err != nil || !solo2.Decision.CooldownFallback || len(solo2.Relays) != 1 {
+		t.Fatalf("solo retry must fall back instead of returning NoRelayCandidates: (%+v, %v)", solo2, err)
+	}
+	if err := solo2.Relays[0].Community.Check(t.Context()); err != nil {
+		t.Fatalf("solo retry failed after recovery: %v", err)
 	}
 }

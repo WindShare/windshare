@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -49,9 +50,12 @@ type observation struct {
 	stun  []string
 }
 type peer struct {
-	raw  json.RawMessage
-	d    serviceauthority.GossipDescriptor
-	live observation
+	raw                     json.RawMessage
+	d                       serviceauthority.GossipDescriptor
+	live                    observation
+	relaySuppressedUntil    time.Time
+	relaySuppressedIssuedAt uint64
+	failures                map[Scope]probeBackoff
 }
 type Pool struct {
 	policy         publicdial.Policy
@@ -171,8 +175,20 @@ func (p *Pool) accept(raw json.RawMessage, source string) bool {
 	}
 	if old.d.NodeKey != d.NodeKey || old.d.PublicRelay != d.PublicRelay || old.d.Services != d.Services {
 		old.live = observation{}
+		old.relaySuppressedUntil = time.Time{}
+		old.relaySuppressedIssuedAt = 0
+		old.failures = nil
 	}
-	p.peers[key] = peer{raw: bytes.Clone(raw), d: d, live: old.live}
+	// Preserve live relay suppression and scoped probe backoff across same-key
+	// gossip refreshes so broken or Sybil peers cannot reset cooldowns by re-signing.
+	p.peers[key] = peer{
+		raw:                     bytes.Clone(raw),
+		d:                       d,
+		live:                    old.live,
+		relaySuppressedUntil:    old.relaySuppressedUntil,
+		relaySuppressedIssuedAt: old.relaySuppressedIssuedAt,
+		failures:                old.failures,
+	}
 	p.trace("community_descriptor_accepted", source, key)
 	return true
 }
@@ -185,6 +201,7 @@ func (p *Pool) records() []peer {
 		if int64(v.d.ExpiresAt) <= p.now().Unix() {
 			delete(p.peers, k)
 		} else {
+			v.failures = maps.Clone(v.failures)
 			out = append(out, v)
 		}
 	}
@@ -196,11 +213,23 @@ func (p *Pool) Candidates(scope Scope) []relayplan.Candidate {
 	if p == nil {
 		return nil
 	}
+	now := p.now()
 	var result []relayplan.Candidate
-	for _, peer := range p.records() {
-		d := peer.d
+	for _, entry := range p.records() {
+		d := entry.d
 		if d.Authority != nil || d.PublicRelay != serviceauthority.RelayAnonymous || !d.Services.Relay {
 			continue
+		}
+		if entry.relaySuppressed(now) {
+			continue
+		}
+		var cooldownUntil time.Time
+		failure, recentFailure := entry.failureState(scope, now)
+		if recentFailure && failure.until.After(now) {
+			if failure.kind == probeFailureRejected {
+				continue
+			}
+			cooldownUntil = failure.until
 		}
 		u, _ := url.Parse(d.RelayEndpoint)
 		_, err := netip.ParseAddr(u.Hostname())
@@ -208,7 +237,16 @@ func (p *Pool) Candidates(scope Scope) []relayplan.Candidate {
 		if d.PublicCapacity != nil {
 			cap = uint32(min(*d.PublicCapacity/125000, uint64(^uint32(0))))
 		}
-		result = append(result, relayplan.Candidate{Source: relayplan.Community, URL: d.RelayBaseURL(), Identity: d.RelayEndpoint, Verified: peer.live.relay && scope == peer.live.scope && peer.live.until.After(p.now()), IPLiteral: err == nil, CapacityMbps: cap})
+		result = append(result, relayplan.Candidate{
+			Source:        relayplan.Community,
+			URL:           d.RelayBaseURL(),
+			Identity:      d.RelayEndpoint,
+			Verified:      entry.live.relay && scope == entry.live.scope && entry.live.until.After(now),
+			IPLiteral:     err == nil,
+			CapacityMbps:  cap,
+			CooldownUntil: cooldownUntil,
+			ProbeFailed:   recentFailure,
+		})
 	}
 	return result
 }

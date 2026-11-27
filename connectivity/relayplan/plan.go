@@ -43,6 +43,9 @@ type Candidate struct {
 	Source           Source
 	Verified         bool
 	IPLiteral        bool
+	// ProbeFailed marks a community candidate whose scoped live probe failed
+	// recently, keeping it behind unmeasured peers even after short backoff expires.
+	ProbeFailed      bool
 	CooldownUntil    time.Time
 	ServerRetryAt    time.Time
 }

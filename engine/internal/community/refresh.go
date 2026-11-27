@@ -302,7 +302,7 @@ func (p *Pool) warm(ctx context.Context, scope Scope, cursor, limit int, exclude
 	var candidates []peer
 	for i := range records {
 		entry := records[(cursor+i)%len(records)]
-		if !warmEligible(entry) {
+		if !warmEligible(entry) || entry.warmBlocked(scope, now) {
 			continue
 		}
 		if exclude != nil {
@@ -342,9 +342,7 @@ func (p *Pool) warm(ctx context.Context, scope Scope, cursor, limit int, exclude
 	for _, entry := range selected {
 		attempted = append(attempted, entry.d.RelayEndpoint)
 		workers.Go(func() {
-			if err := p.check(ctx, scope, entry.d.RelayEndpoint, RefreshInterval); err != nil && ctx.Err() == nil {
-				p.trace("community_probe_failed", entry.d.RelayEndpoint, err.Error())
-			}
+			_ = p.check(ctx, scope, entry.d.RelayEndpoint, RefreshInterval)
 		})
 	}
 	workers.Wait()
@@ -392,14 +390,27 @@ func (p *Pool) check(ctx context.Context, scope Scope, identity string, minValid
 		p.mu.Unlock()
 		return p.ctx.Err()
 	}
+	now := p.now()
 	entry, ok := p.peers[identity]
-	if !ok || int64(entry.d.ExpiresAt) <= p.now().Unix() {
+	if !ok || int64(entry.d.ExpiresAt) <= now.Unix() {
 		p.mu.Unlock()
 		return serviceauthority.ErrExpired
 	}
-	if entry.live.scope == scope && entry.live.until.After(p.now().Add(minValidity)) && (entry.d.PublicRelay != serviceauthority.RelayAnonymous || entry.live.relay) {
+	if entry.live.scope == scope && entry.live.until.After(now.Add(minValidity)) && (entry.d.PublicRelay != serviceauthority.RelayAnonymous || entry.live.relay) {
 		p.mu.Unlock()
 		return nil
+	}
+	// Fast-fail policy refusals and live-signed relay unavailability so concurrent
+	// plans do not re-dial a node that already refused this scope. Transient
+	// errors still allow an explicit Verify when relayplan falls back to the sole
+	// remaining candidate.
+	if entry.d.PublicRelay == serviceauthority.RelayAnonymous && entry.relaySuppressed(now) {
+		p.mu.Unlock()
+		return errors.New("anonymous relay unavailable")
+	}
+	if b, failed := entry.failureState(scope, now); failed && b.kind == probeFailureRejected && b.until.After(now) {
+		p.mu.Unlock()
+		return errors.New("community verification backed off")
 	}
 	running := p.inflight[job]
 	if running == nil {
@@ -432,10 +443,7 @@ func (p *Pool) runProbe(job probeKey, entry peer, running *probe) {
 	}
 	p.mu.Lock()
 	if running.err != nil && p.ctx.Err() == nil {
-		if latest, ok := p.peers[job.identity]; ok && latest.d.NodeKey == entry.d.NodeKey && latest.live.scope == job.scope {
-			latest.live = observation{}
-			p.peers[job.identity] = latest
-		}
+		p.recordProbeFailureLocked(job.identity, job.scope, entry.d, running.err, p.now())
 	}
 	delete(p.inflight, job)
 	close(running.done)

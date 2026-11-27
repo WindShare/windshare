@@ -15,10 +15,11 @@ const (
 type selectionOrder struct {
 	facts      map[string]Observation
 	seedPrefix string
+	now        time.Time
 }
 
 func newSelectionOrder(input Input) selectionOrder {
-	order := selectionOrder{facts: make(map[string]Observation)}
+	order := selectionOrder{facts: make(map[string]Observation), now: input.Now}
 	if input.SelectionSeed != "" {
 		order.seedPrefix = input.SelectionSeed + "|" + input.NetworkGeneration + "|"
 	}

@@ -203,3 +203,49 @@ func TestCommunityColdStartSeedSpreadsEqualCapacityPeers(t *testing.T) {
 		t.Fatalf("seed failed to spread supplemental community pick: %v", supplementalVisited)
 	}
 }
+
+func TestCommunityProbeCooldownDemotionAndSingleNodeFallback(t *testing.T) {
+	now := time.Now()
+	sybil1 := Candidate{URL: "https://sybil1.example", Source: Community, CapacityMbps: ^uint32(0), CooldownUntil: now.Add(15 * time.Second), ProbeFailed: true}
+	sybil2 := Candidate{URL: "https://sybil2.example", Source: Community, CapacityMbps: ^uint32(0), CooldownUntil: now.Add(30 * time.Second), ProbeFailed: true}
+	good1 := Candidate{URL: "https://good1.example", Source: Community, CapacityMbps: 25}
+	good2 := Candidate{URL: "https://good2.example", Source: Community, CapacityMbps: 25}
+
+	// Active probe cooldown filters broken/Sybil high-capacity peers and surfaces healthy peers.
+	plan := selected(t, Input{Now: now, NetworkGeneration: "1", Community: []Candidate{sybil1, sybil2, good1, good2}})
+	if plan.Decision.CooldownFallback || len(plan.Network) != 2 || plan.Network[0].URL != good1.URL || plan.Network[1].URL != good2.URL {
+		t.Fatalf("cooled sybils displaced healthy peers: %+v", plan)
+	}
+	if len(plan.Decision.Filters) != 2 || plan.Decision.Filters[0].Reason != "community_cooldown" || plan.Decision.Filters[1].Reason != "community_cooldown" {
+		t.Fatalf("expected community_cooldown filters, got %+v", plan.Decision.Filters)
+	}
+
+	// After CooldownUntil expires, ProbeFailed keeps the high-capacity peer behind unmeasured peers
+	// and reports HistoryState() == "failed".
+	expired := sybil1
+	expired.CooldownUntil = now.Add(-time.Second)
+	plan = selected(t, Input{Now: now, NetworkGeneration: "1", Community: []Candidate{expired, good1, good2}})
+	if len(plan.Network) != 2 || plan.Network[0].URL != good1.URL || plan.Network[1].URL != good2.URL || len(plan.Decision.Filters) != 0 {
+		t.Fatalf("expired-cooldown ProbeFailed peer jumped ahead of unmeasured peers: %+v", plan)
+	}
+	plan = selected(t, Input{Now: now, NetworkGeneration: "1", Community: []Candidate{expired, good1}})
+	if len(plan.Network) != 2 || plan.Network[0].URL != good1.URL || plan.Network[1].URL != expired.URL || plan.Network[1].HistoryState() != "failed" {
+		t.Fatalf("ProbeFailed history projection = %+v", plan.Network)
+	}
+
+	// When NO configured, official, or uncooled community route exists, fall back to the
+	// earliest-expiring cooled community peer instead of returning an empty plan.
+	ipCooled := Candidate{URL: "https://1.1.1.1", Source: Community, CooldownUntil: now.Add(5 * time.Second), ProbeFailed: true}
+	plan = selected(t, Input{Now: now, NetworkGeneration: "1", Community: []Candidate{sybil2, sybil1, ipCooled}})
+	if !plan.Decision.CooldownFallback || len(plan.Decision.Filters) != 0 ||
+		len(plan.Network) != 2 || plan.Network[0].URL != sybil1.URL || plan.Network[1].URL != sybil2.URL ||
+		len(plan.Standby) != 1 || plan.Standby[0].URL != ipCooled.URL {
+		t.Fatalf("sole cooled community fallback = %+v", plan)
+	}
+
+	// When an official or configured route exists, cooled community peers stay filtered.
+	plan = selected(t, Input{Now: now, NetworkGeneration: "1", Configured: []string{"https://own.example"}, Community: []Candidate{sybil1}})
+	if plan.Decision.CooldownFallback || len(plan.Network) != 0 || len(plan.Decision.Filters) != 1 || plan.Decision.Filters[0].Reason != "community_cooldown" {
+		t.Fatalf("configured plan unexpectedly fell back to cooled community peer: %+v", plan)
+	}
+}

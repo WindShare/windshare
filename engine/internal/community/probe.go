@@ -28,12 +28,12 @@ func (p *Pool) verify(ctx context.Context, scope Scope, entry peer) error {
 	d := entry.d
 	base, err := p.policy.RelayOrigin(d.RelayBaseURL())
 	if err != nil {
-		return err
+		return &probeError{kind: probeFailureRejected, reason: "invalid_origin", cause: err}
 	}
 	var ip netip.Addr
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base.JoinPath("/.well-known/windshare").String(), nil)
 	if err != nil {
-		return err
+		return &probeError{kind: probeFailureRejected, reason: "invalid_request", cause: err}
 	}
 	req = req.WithContext(httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{GotConn: func(info httptrace.GotConnInfo) {
 		if addr, ok := info.Conn.RemoteAddr().(*net.TCPAddr); ok {
@@ -42,30 +42,49 @@ func (p *Pool) verify(ctx context.Context, scope Scope, entry peer) error {
 	}}))
 	resp, err := p.http.Do(req)
 	if err != nil {
-		return err
+		return &probeError{kind: probeFailureTransient, reason: "descriptor_fetch_failed", cause: err}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return errors.New(resp.Status)
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= http.StatusInternalServerError {
+			return &probeError{kind: probeFailureTransient, reason: "descriptor_http_transient", cause: errors.New(resp.Status)}
+		}
+		return &probeError{kind: probeFailureRejected, reason: "descriptor_http_rejected", cause: errors.New(resp.Status)}
 	}
 	raw, err := readBounded(resp.Body, serviceauthority.MaximumDescriptorBytes)
 	if err != nil {
-		return err
+		if errors.Is(err, serviceauthority.ErrFormat) {
+			return &probeError{kind: probeFailureRejected, reason: "descriptor_oversized", cause: err}
+		}
+		return &probeError{kind: probeFailureTransient, reason: "descriptor_read_failed", cause: err}
 	}
 	key, err := serviceauthority.PublicKey(d.NodeKey)
 	if err != nil {
-		return err
+		return &probeError{kind: probeFailureRejected, reason: "descriptor_key_invalid", cause: err}
 	}
 	live, err := serviceauthority.VerifyDescriptor(raw, key, p.now())
 	if err != nil {
-		return err
+		return &probeError{kind: probeFailureRejected, reason: "descriptor_invalid", cause: err}
 	}
-	if live.Authority != nil || live.PublicRelay == serviceauthority.RelayDisabled || live.RelayEndpoint != d.RelayEndpoint || !p.policy.Permits(ip) {
-		return serviceauthority.ErrFormat
+	if live.RelayEndpoint != d.RelayEndpoint || !p.policy.Permits(ip) {
+		return &probeError{kind: probeFailureRejected, reason: "descriptor_endpoint_or_policy", cause: serviceauthority.ErrFormat}
+	}
+	if live.Authority != nil || live.PublicRelay == serviceauthority.RelayDisabled {
+		reason := "live_disabled"
+		if live.Authority != nil {
+			reason = "live_authority"
+		}
+		return &probeError{kind: probeFailureEvict, reason: reason, issuedAt: live.IssuedAt, cause: serviceauthority.ErrFormat}
 	}
 	if d.Services.Relay && d.PublicRelay == serviceauthority.RelayAnonymous {
 		if !live.Services.Relay || live.PublicRelay != serviceauthority.RelayAnonymous {
-			return errors.New("anonymous relay unavailable")
+			return &probeError{
+				kind:     probeFailureRelayUnavailable,
+				reason:   liveRelayReason(live),
+				until:    time.Unix(int64(live.ExpiresAt), 0),
+				issuedAt: live.IssuedAt,
+				cause:    errors.New("anonymous relay unavailable"),
+			}
 		}
 		if err := p.verifyRelayOrigin(ctx, live.RelayBaseURL(), scope.Origin); err != nil {
 			return err
@@ -81,11 +100,21 @@ func (p *Pool) verifyRelayOrigin(ctx context.Context, endpoint, origin string) e
 	rand.Read(id[:])
 	ep, err := v2.RelayEndpointForShare(endpoint, id)
 	if err != nil {
-		return err
+		return &probeError{kind: probeFailureRejected, reason: "invalid_relay_endpoint", cause: err}
 	}
-	ws, _, err := websocket.Dial(ctx, ep.DialURL, &websocket.DialOptions{HTTPClient: p.http, HTTPHeader: http.Header{"Origin": {origin}}}) //nolint:bodyclose
+	ws, resp, err := websocket.Dial(ctx, ep.DialURL, &websocket.DialOptions{HTTPClient: p.http, HTTPHeader: http.Header{"Origin": {origin}}}) //nolint:bodyclose
 	if err != nil {
-		return err
+		if resp != nil {
+			switch {
+			case resp.StatusCode == http.StatusForbidden:
+				return &probeError{kind: probeFailureRejected, reason: "origin_forbidden", cause: err}
+			case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= http.StatusInternalServerError:
+				return &probeError{kind: probeFailureTransient, reason: "relay_upgrade_transient", cause: err}
+			case resp.StatusCode >= http.StatusBadRequest && resp.StatusCode < http.StatusInternalServerError:
+				return &probeError{kind: probeFailureRejected, reason: "relay_upgrade_rejected", cause: err}
+			}
+		}
+		return &probeError{kind: probeFailureTransient, reason: "relay_upgrade_failed", cause: err}
 	}
 	_ = ws.CloseNow()
 	return nil
@@ -134,9 +163,10 @@ func (p *Pool) remember(d serviceauthority.GossipDescriptor, reach observation) 
 		}
 	}
 	if sameIP >= maxPeersPerIP || samePrefix >= maxPeersPerPrefix {
-		return errors.New("verified community address quota")
+		return &probeError{kind: probeFailureRejected, reason: "address_quota", cause: errors.New("verified community address quota")}
 	}
 	latest.live = reach
+	latest.clearFailure(reach.scope)
 	p.peers[d.RelayEndpoint] = latest
 	return nil
 }

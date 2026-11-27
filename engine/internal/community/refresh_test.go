@@ -144,8 +144,11 @@ func TestPullWarmRestartAndOriginPolicy(t *testing.T) {
 		t.Fatal(stun)
 	}
 	other := Scope{Origin: "https://other.example", Generation: 1}
-	if err := pool.Verify(t.Context(), other, identity); err == nil || pool.Candidates(other)[0].Verified {
-		t.Fatal("a rejected browser origin was admitted", err)
+	if err := pool.Verify(t.Context(), other, identity); err == nil || len(pool.Candidates(other)) != 0 {
+		t.Fatal("a rejected browser origin was admitted", err, pool.Candidates(other))
+	}
+	if got := pool.Candidates(scope); len(got) != 1 || !got[0].Verified {
+		t.Fatal("rejected origin must not invalidate verified origin", got)
 	}
 	pool.Close()
 	restored := open()
