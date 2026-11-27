@@ -363,14 +363,14 @@ fn headless_contribution_is_durable_and_independent_of_the_host_uplink() {
         bytes_per_second: 2_000_000,
         ..Policy::default()
     };
-    let control = node.local_contribution.get().unwrap();
-    assert!(control.set(policy).unwrap());
-    assert!(!control.set(policy).unwrap());
-    node.refresh_settings(None, now()).unwrap();
+    let changes = node.access.changes();
+    assert!(node.set_contribution(policy, now()).unwrap());
+    assert!(changes.has_changed().unwrap());
     assert_eq!(
         describe(&node, &endpoint)["public_relay"]["state"],
         "disabled"
     );
+    assert!(!node.set_contribution(policy, now()).unwrap());
     drop(node);
     let node = open();
     assert_eq!(
@@ -382,18 +382,111 @@ fn headless_contribution_is_durable_and_independent_of_the_host_uplink() {
         2_000_000
     );
     assert_eq!(node.access.public_connections(), 3);
-    node.local_contribution
-        .get()
-        .unwrap()
-        .set(Policy {
-            enabled: true,
-            daily_bytes: 0,
-            ..policy
-        })
-        .unwrap();
-    node.refresh_settings(None, now()).unwrap();
+    assert!(
+        !node
+            .set_contribution(
+                Policy {
+                    enabled: true,
+                    daily_bytes: 0,
+                    ..policy
+                },
+                now(),
+            )
+            .unwrap()
+    );
     assert_eq!(
         describe(&node, &endpoint)["public_relay"]["state"],
         "budget_exhausted"
+    );
+}
+
+#[test]
+fn contribution_updates_apply_synchronously_even_when_config_file_is_broken() {
+    use crate::node::{Ceiling, contribution::Policy};
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("node.sqlite");
+    let config_path = dir.path().join("node.json");
+    let endpoint = Endpoint::parse("wss://node.example/v2/ws").unwrap();
+    let initial = Settings {
+        ceiling: Ceiling {
+            bytes_per_second: Some(5_000_000),
+            connections: Some(8),
+            ..Default::default()
+        },
+        relay_budget: Some(MonthlyBudget {
+            bytes: QUOTA as u64,
+            reset_day_utc: 1,
+        }),
+        ..Settings::default()
+    };
+    let node = Runtime::default();
+    node.identify(Identity::generate().unwrap()).unwrap();
+    node.configure(
+        initial.clone(),
+        Database::open(&db_path, endpoint.identity).unwrap(),
+    )
+    .unwrap();
+
+    // Corrupt node.json before saving contribution limits: console updates must still apply.
+    std::fs::write(&config_path, b"{not valid json").unwrap();
+    assert!(node.refresh_settings(Some(&config_path), now()).is_err());
+
+    let updated = Policy {
+        enabled: false,
+        daily_bytes: 4_096,
+        bytes_per_second: 10_000_000,
+        connections: 32,
+        host_uplink: Some(25_000_000),
+    };
+    assert!(node.set_contribution(updated, now()).unwrap());
+    let descriptor = describe(&node, &endpoint);
+    assert_eq!(descriptor["public_relay"]["state"], "disabled");
+    assert_eq!(descriptor["public_capacity_bytes_per_second"], 5_000_000);
+    assert_eq!(node.access.public_connections(), 8);
+
+    // A rejected node.json reload must not overwrite the ceiling reported to the console.
+    let mut rejected = initial.clone();
+    rejected.ceiling.connections = Some(2);
+    rejected.relay_budget.as_mut().unwrap().reset_day_utc = 15;
+    std::fs::write(
+        &config_path,
+        serde_json::to_vec(&serde_json::json!({
+            "listen": "127.0.0.1:8484",
+            "database": "node.sqlite",
+            "identity_file": "identity",
+            "node": rejected,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(node.refresh_settings(Some(&config_path), now()).is_err());
+    assert_eq!(
+        node.contribution_view().unwrap()["ceiling"]["connections"],
+        8
+    );
+
+    // Once node.json recovers with a tighter ceiling, the saved contribution policy survives.
+    let mut recovered = initial;
+    recovered.ceiling.bytes_per_second = Some(1_500_000);
+    recovered.ceiling.connections = Some(4);
+    std::fs::write(
+        &config_path,
+        serde_json::to_vec(&serde_json::json!({
+            "listen": "127.0.0.1:8484",
+            "database": "node.sqlite",
+            "identity_file": "identity",
+            "node": recovered,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    node.refresh_settings(Some(&config_path), now()).unwrap();
+    let descriptor = describe(&node, &endpoint);
+    assert_eq!(descriptor["public_relay"]["state"], "disabled");
+    assert_eq!(descriptor["public_capacity_bytes_per_second"], 1_500_000);
+    assert_eq!(node.access.public_connections(), 4);
+    assert_eq!(
+        node.contribution_view().unwrap()["ceiling"]["connections"],
+        4
     );
 }

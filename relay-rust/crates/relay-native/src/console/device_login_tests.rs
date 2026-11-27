@@ -45,7 +45,7 @@ fn open_console(
             }),
         })
         .unwrap();
-    let console = Console::open(endpoint, db, access.clone(), identity, Some(service), None)
+    let console = Console::open(endpoint, db, access.clone(), identity, Some(service))
         .unwrap()
         .unwrap();
     assert!(console.login_page(10).is_none());
@@ -83,7 +83,7 @@ fn service_approval_installs_an_account_key_and_node_revocation_survives_restart
     let console = setup();
     let post = |path, body: &Value| {
         console
-            .dispatch(&Method::POST, path, body, "", 10000)
+            .dispatch(&Method::POST, path, body, "", 10000, None)
             .unwrap()
     };
     let secret = [9; 32];
@@ -142,6 +142,7 @@ fn service_approval_installs_an_account_key_and_node_revocation_survives_restart
             &json!({"token":identity.initialization_token(),"password":"owner-only-password"}),
             "",
             11000,
+            None,
         )
         .unwrap()
         .cookie
@@ -153,6 +154,7 @@ fn service_approval_installs_an_account_key_and_node_revocation_survives_restart
             &json!({"credential_id":text_id(&invite.enrollment)}),
             &admin,
             11000,
+            None,
         )
         .unwrap();
     assert!(!restored.0.access.allowed(share, attribution));

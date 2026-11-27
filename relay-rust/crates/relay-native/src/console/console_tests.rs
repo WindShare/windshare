@@ -13,14 +13,14 @@ fn open(path: &Path, identity: &Identity, policy: &Policy) -> Console {
     let db = Database::open(path, endpoint.identity).unwrap();
     let access = Service::default();
     access.configure(policy.clone()).unwrap();
-    Console::open(&endpoint, &db, access, identity, None, None)
+    Console::open(&endpoint, &db, access, identity, None)
         .unwrap()
         .unwrap()
 }
 
 fn post(console: &Console, path: &str, body: &Value, session: &str) -> Reply {
     console
-        .dispatch(&Method::POST, path, body, session, 100)
+        .dispatch(&Method::POST, path, body, session, 100, None)
         .unwrap()
 }
 
@@ -109,7 +109,7 @@ fn revoking_a_credential_makes_room_for_a_new_device() {
     }
     let get = |path: &str| {
         console
-            .dispatch(&Method::GET, path, &json!({}), &session, 100)
+            .dispatch(&Method::GET, path, &json!({}), &session, 100, None)
             .unwrap()
     };
     let active = get("/api/credentials");
@@ -257,7 +257,7 @@ fn password_change_rotates_sessions_and_advertises_capability() {
     .cookie
     .unwrap();
     let session_info = console
-        .dispatch(&Method::GET, "/api/session", &json!({}), &first, 100)
+        .dispatch(&Method::GET, "/api/session", &json!({}), &first, 100, None)
         .unwrap();
     assert_eq!(session_info.body["capabilities"]["password_change"], true);
     assert_eq!(
@@ -291,7 +291,7 @@ fn password_change_rotates_sessions_and_advertises_capability() {
     for stale in [&first, &second] {
         assert_eq!(
             console
-                .dispatch(&Method::GET, "/api/session", &json!({}), stale, 100)
+                .dispatch(&Method::GET, "/api/session", &json!({}), stale, 100, None)
                 .unwrap()
                 .status,
             StatusCode::UNAUTHORIZED
@@ -299,7 +299,14 @@ fn password_change_rotates_sessions_and_advertises_capability() {
     }
     assert_eq!(
         console
-            .dispatch(&Method::GET, "/api/session", &json!({}), &replacement, 100)
+            .dispatch(
+                &Method::GET,
+                "/api/session",
+                &json!({}),
+                &replacement,
+                100,
+                None,
+            )
             .unwrap()
             .status,
         StatusCode::OK
@@ -358,6 +365,7 @@ fn admin_session_cookie_and_lifetime_match_shared_console_policy() {
                 &json!({}),
                 &session,
                 100 + ADMIN_SESSION_LIFETIME_MS - 1,
+                None,
             )
             .unwrap()
             .status,
@@ -370,6 +378,7 @@ fn admin_session_cookie_and_lifetime_match_shared_console_policy() {
             &json!({}),
             &session,
             100 + ADMIN_SESSION_LIFETIME_MS - 1,
+            None,
         )
         .unwrap();
     assert_eq!(logged_out.status, StatusCode::OK);
@@ -397,6 +406,7 @@ fn admin_session_cookie_and_lifetime_match_shared_console_policy() {
                 &json!({}),
                 &next_session,
                 100 + ADMIN_SESSION_LIFETIME_MS,
+                None,
             )
             .unwrap()
             .status,
@@ -436,7 +446,14 @@ fn native_console_aligns_error_codes_and_enrollment_payload_contract() {
     );
     assert_eq!(enrolled.status, StatusCode::OK);
     let pending = console
-        .dispatch(&Method::GET, "/api/enrollments", &json!({}), &session, 100)
+        .dispatch(
+            &Method::GET,
+            "/api/enrollments",
+            &json!({}),
+            &session,
+            100,
+            None,
+        )
         .unwrap();
     assert_eq!(pending.body["enrollments"][0]["created_at"], 100);
 
@@ -451,7 +468,14 @@ fn native_console_aligns_error_codes_and_enrollment_payload_contract() {
         StatusCode::OK
     );
     let after_approve = console
-        .dispatch(&Method::GET, "/api/enrollments", &json!({}), &session, 100)
+        .dispatch(
+            &Method::GET,
+            "/api/enrollments",
+            &json!({}),
+            &session,
+            100,
+            None,
+        )
         .unwrap();
     assert_eq!(after_approve.body, json!({"enrollments": []}));
     let claim_body = json!({
@@ -480,7 +504,14 @@ fn native_console_aligns_error_codes_and_enrollment_payload_contract() {
     );
     assert_eq!(next_enrolled.status, StatusCode::OK);
     let visible = console
-        .dispatch(&Method::GET, "/api/enrollments", &json!({}), &session, 100)
+        .dispatch(
+            &Method::GET,
+            "/api/enrollments",
+            &json!({}),
+            &session,
+            100,
+            None,
+        )
         .unwrap();
     assert_eq!(visible.body["enrollments"].as_array().unwrap().len(), 1);
     assert_eq!(

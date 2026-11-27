@@ -32,6 +32,57 @@ impl Runtime {
         result
     }
 
+    pub(crate) fn has_local_contribution(&self) -> bool {
+        self.local_contribution.get().is_some()
+    }
+
+    pub(crate) fn contribution_view(&self) -> Result<serde_json::Value> {
+        self.local_contribution
+            .get()
+            .ok_or_else(|| anyhow!("local contribution policy is unavailable"))?
+            .view()
+    }
+
+    /// Persists and immediately publishes a self-hosted contribution policy,
+    /// serialized against `node.json` reloads without re-reading the file.
+    pub(crate) fn set_contribution(
+        &self,
+        policy: super::contribution::Policy,
+        timestamp: i64,
+    ) -> Result<bool> {
+        policy.validate()?;
+        ensure!(
+            self.local_contribution.get().is_some(),
+            "local contribution policy is unavailable"
+        );
+        let writer = self.lock_control()?;
+        let mut settings = self
+            .state
+            .lock()
+            .map_err(|_| anyhow!("node state poisoned"))?
+            .settings
+            .clone();
+        ensure!(
+            settings.authority.is_none(),
+            "local contribution policy is unavailable with an accounting authority"
+        );
+        policy.apply_to(&mut settings);
+        let generations = settings.validate()?;
+        let disabled = self.commit_settings(settings, &generations, Some(policy), timestamp)?;
+        drop(writer);
+        tracing::info!(
+            event = "contribution_policy_changed",
+            timestamp,
+            enabled = policy.enabled,
+            daily_bytes = policy.daily_bytes,
+            connections = policy.connections,
+            public_bytes_per_second = policy.bytes_per_second,
+            host_uplink = policy.host_uplink,
+            disabled_notice = disabled,
+        );
+        Ok(disabled)
+    }
+
     // The caller holds the control writer until publication, so quota reservations
     // and authority responses cannot supersede either half of this transition.
     pub(super) fn apply_settings(
@@ -40,12 +91,6 @@ impl Runtime {
         generations: &[Generation],
         timestamp: i64,
     ) -> Result<()> {
-        ensure!(
-            self.reporting_authority
-                .get()
-                .is_none_or(|authority| *authority == settings.authority),
-            "changing the accounting authority requires a node restart"
-        );
         if settings.authority.is_none()
             && let Some(local) = self.local_contribution.get()
         {
@@ -55,6 +100,23 @@ impl Runtime {
             settings.contribution.daily_bytes = settings.ceiling.daily_bytes;
             settings.access.public_connections = settings.ceiling.connections.unwrap_or(usize::MAX);
         }
+        self.commit_settings(settings, generations, None, timestamp)?;
+        Ok(())
+    }
+
+    fn commit_settings(
+        &self,
+        settings: Settings,
+        generations: &[Generation],
+        contribution: Option<super::contribution::Policy>,
+        timestamp: i64,
+    ) -> Result<bool> {
+        ensure!(
+            self.reporting_authority
+                .get()
+                .is_none_or(|authority| *authority == settings.authority),
+            "changing the accounting authority requires a node restart"
+        );
         let controller = settings
             .authority
             .as_ref()
@@ -67,7 +129,7 @@ impl Runtime {
             .map_err(|_| anyhow!("node state poisoned"))?;
         let budgets = state.budgets.rollover(&settings, timestamp)?;
         ensure!(
-            budgets.is_empty() || state.control.is_some(),
+            (budgets.is_empty() && contribution.is_none()) || state.control.is_some(),
             "missing persistent relay ledger"
         );
         let store = state.control.clone();
@@ -86,11 +148,14 @@ impl Runtime {
                 .map(|policy| self.access.prepare_policy(policy, records))
                 .transpose()
         };
-        let access = match store {
+        let (access, disabled) = match store {
             Some(store) => store
-                .persist_node_settings(budgets, generations, prepare_access)
+                .persist_node_settings(budgets, generations, contribution, prepare_access)
                 .context("persisting node settings")?,
-            None => prepare_access(generations.iter().copied().map(Into::into).collect())?,
+            None => (
+                prepare_access(generations.iter().copied().map(Into::into).collect())?,
+                false,
+            ),
         };
 
         self.publish_settings(
@@ -102,7 +167,7 @@ impl Runtime {
             },
             timestamp,
         );
-        Ok(())
+        Ok(disabled)
     }
 
     fn publish_settings(&self, prepared: PreparedSettings<'_>, timestamp: i64) {
@@ -166,8 +231,12 @@ impl Runtime {
                 state.settings.zone.clone(),
             )
         });
+        let ceiling = state.settings.ceiling;
         state.unpaced_relay_warned = unpaced_relay;
         drop(state);
+        if let Some(local) = self.local_contribution.get() {
+            local.record_ceiling(ceiling);
+        }
         if let Some((node_id, zone)) = unpaced_warning {
             tracing::warn!(
                 event = "relay_pacing_disabled",
@@ -225,7 +294,7 @@ impl Runtime {
         };
         if let Some(store) = store {
             store
-                .persist_node_settings(budgets, &[], |_| Ok(()))
+                .persist_node_settings(budgets, &[], None, |_| Ok(()))
                 .context("persisting rolled-over relay budgets")?;
         }
         let mut state = self.state.lock().expect("node state");
@@ -247,27 +316,7 @@ impl Runtime {
     }
 
     fn refresh_settings(&self, path: Option<&Path>, timestamp: i64) -> Result<()> {
-        let revision = self
-            .local_contribution
-            .get()
-            .map_or(0, super::contribution::Control::revision);
         let Some(path) = path else {
-            let published = self
-                .last_config_bytes
-                .lock()
-                .expect("config cache")
-                .as_ref()
-                .map_or(0, |config| config.policy_revision);
-            if published != revision {
-                let settings = self.state.lock().expect("node state").settings.clone();
-                self.update(settings, timestamp)?;
-                *self.last_config_bytes.lock().expect("config cache") =
-                    Some(super::PublishedConfig {
-                        bytes: Vec::new(),
-                        policy_revision: revision,
-                    });
-                return Ok(());
-            }
             return self.rollover_budgets(timestamp);
         };
         let raw = match std::fs::read(path) {
@@ -283,18 +332,15 @@ impl Runtime {
             .last_config_bytes
             .lock()
             .expect("config cache")
-            .as_ref()
-            .is_some_and(|config| config.policy_revision == revision && config.bytes == raw);
+            .as_deref()
+            == Some(raw.as_slice());
         if unchanged {
             return self.rollover_budgets(timestamp);
         }
         let result = Configuration::read_bytes(path, &raw)
             .and_then(|config| self.update(config.node, timestamp));
         if result.is_ok() {
-            *self.last_config_bytes.lock().expect("config cache") = Some(super::PublishedConfig {
-                bytes: raw,
-                policy_revision: revision,
-            });
+            *self.last_config_bytes.lock().expect("config cache") = Some(raw);
             return Ok(());
         }
         // A rejected file must not freeze the active ledger at the end of its month.

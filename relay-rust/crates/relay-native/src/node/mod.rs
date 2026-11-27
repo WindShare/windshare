@@ -48,11 +48,6 @@ struct State {
     unpaced_relay_warned: bool,
 }
 
-struct PublishedConfig {
-    bytes: Vec<u8>,
-    policy_revision: u64,
-}
-
 #[derive(Clone)]
 pub struct Runtime {
     pub(crate) access: access::Service,
@@ -69,7 +64,7 @@ pub struct Runtime {
     unavailable: Arc<AtomicBool>,
     has_budgets: Arc<AtomicBool>,
     next_rollover: Arc<AtomicI64>,
-    last_config_bytes: Arc<Mutex<Option<PublishedConfig>>>,
+    last_config_bytes: Arc<Mutex<Option<Vec<u8>>>>,
     pub(crate) metrics: Metrics,
     pub(crate) usage: usage::Collector,
 }

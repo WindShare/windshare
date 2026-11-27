@@ -2,10 +2,7 @@ use super::{ContributionLimits, Settings, settings::Ceiling};
 use crate::Database;
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
-use std::sync::{
-    Arc, RwLock,
-    atomic::{AtomicU64, Ordering},
-};
+use std::sync::{Arc, RwLock};
 
 const DEFAULT_DAILY_BYTES: u64 = 10 * 1024 * 1024 * 1024;
 const DEFAULT_PUBLIC_RATE: u64 = 3_125_000;
@@ -42,67 +39,51 @@ impl Policy {
         );
         Ok(())
     }
+
+    pub(super) fn apply_to(self, settings: &mut Settings) {
+        let limit = settings.ceiling;
+        settings.contribution = ContributionLimits {
+            daily_bytes: Some(limit.daily_bytes.unwrap_or(u64::MAX).min(self.daily_bytes)),
+            bytes_per_second: Some(
+                limit
+                    .bytes_per_second
+                    .unwrap_or(u64::MAX)
+                    .min(self.bytes_per_second),
+            ),
+        };
+        settings.host_uplink = self.host_uplink;
+        settings.access.contributing = self.enabled;
+        settings.access.public_connections = limit
+            .connections
+            .unwrap_or(usize::MAX)
+            .min(self.connections);
+    }
 }
 
 #[derive(Clone)]
 pub struct Control {
     store: Database,
     ceiling: Arc<RwLock<Ceiling>>,
-    revision: Arc<AtomicU64>,
 }
 impl Control {
     pub fn new(store: Database) -> Self {
         Self {
             store,
             ceiling: Arc::default(),
-            revision: Arc::default(),
         }
-    }
-    pub fn revision(&self) -> u64 {
-        self.revision.load(Ordering::Acquire)
     }
     pub fn view(&self) -> Result<serde_json::Value> {
         let policy = self.store.contribution_policy()?;
         let ceiling = *self.ceiling.read().expect("contribution ceiling");
-        Ok(serde_json::json!({"policy":policy,"ceiling":ceiling}))
-    }
-    pub fn set(&self, policy: Policy) -> Result<bool> {
-        policy.validate()?;
-        let disabled = self.store.replace_contribution(policy)?;
-        self.revision.fetch_add(1, Ordering::Release);
-        tracing::info!(
-            event = "contribution_policy_changed",
-            enabled = policy.enabled,
-            connections = policy.connections,
-            public_bytes_per_second = policy.bytes_per_second
-        );
-        Ok(disabled)
+        Ok(serde_json::json!({"policy": policy, "ceiling": ceiling}))
     }
     pub fn apply(&self, settings: &mut Settings) -> Result<()> {
         let policy = self.store.contribution_policy()?;
         policy.validate()?;
-        let limit = settings.ceiling;
-        *self.ceiling.write().expect("contribution ceiling") = limit;
-        settings.contribution = ContributionLimits {
-            daily_bytes: Some(
-                limit
-                    .daily_bytes
-                    .unwrap_or(u64::MAX)
-                    .min(policy.daily_bytes),
-            ),
-            bytes_per_second: Some(
-                limit
-                    .bytes_per_second
-                    .unwrap_or(u64::MAX)
-                    .min(policy.bytes_per_second),
-            ),
-        };
-        settings.host_uplink = policy.host_uplink;
-        settings.access.contributing = policy.enabled;
-        settings.access.public_connections = limit
-            .connections
-            .unwrap_or(usize::MAX)
-            .min(policy.connections);
+        policy.apply_to(settings);
         Ok(())
+    }
+    pub(super) fn record_ceiling(&self, ceiling: Ceiling) {
+        *self.ceiling.write().expect("contribution ceiling") = ceiling;
     }
 }

@@ -92,7 +92,6 @@ impl Runtime {
             self.access.clone(),
             identity.raw(),
             authority,
-            self.local_contribution.get().cloned(),
         )? {
             self.console
                 .set(console)

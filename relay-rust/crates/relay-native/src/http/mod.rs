@@ -265,7 +265,7 @@ impl RequestService<'_> {
             && path != self.ingress.endpoint.path
             && crate::console::Console::handles(path)
         {
-            return Ok(console.handle(request).await);
+            return Ok(console.handle(request, &self.ingress.node).await);
         }
         let response = match self.ingress.route(&request) {
             Route::Reply(response) => response,
