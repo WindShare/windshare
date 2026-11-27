@@ -58,6 +58,7 @@ func TestDescribeFailureCoversDomainCategoriesAndContext(t *testing.T) {
 		{"selection missing", &catalog.SelectionError{Label: "a.txt", Cause: &catalog.SourceError{Failure: catalog.SourceFailureMissing}}, FailureSourceMissing},
 		{"source access", &catalog.SourceError{Failure: catalog.SourceFailureAccessDenied}, FailureSourceAccessDenied},
 		{"source unsupported", &catalog.SourceError{Failure: catalog.SourceFailureUnsupported}, FailureSourceUnsupported},
+		{"selected symbolic link", &catalog.SelectionError{Label: "photos", Cause: &catalog.SourceError{Failure: catalog.SourceFailureSymbolicLink}}, FailureSourceSymbolicLink},
 		{"source cloud placeholder", &catalog.SelectionError{Label: "cloud.docx", Cause: &catalog.SourceError{Failure: catalog.SourceFailureCloudPlaceholder}}, FailureSourceCloudPlaceholder},
 		{"source stale", &catalog.SourceError{Failure: catalog.SourceFailureStale}, FailureSourceChanged},
 		{"source unavailable", &catalog.SourceError{Failure: catalog.SourceFailureUnavailable}, FailureSourceUnavailable},

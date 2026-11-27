@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -83,7 +84,8 @@ func TestSelectionResolvingThroughAFinalLinkSharesTheDirectory(t *testing.T) {
 }
 
 // A path naming a link keeps the documented no-follow boundary: a glob match, a
-// script's "$HOME/link" or a desktop selection never reaches outside it.
+// script's "$HOME/link" or a desktop selection never reaches outside it. A link
+// to a file or directory gets its own reason so the user can select the target.
 func TestSelectionNamingALinkStaysRefused(t *testing.T) {
 	fixture := newLinkedSelectionFixture(t)
 	chain := filepath.Join(fixture.parent, "chain")
@@ -106,10 +108,38 @@ func TestSelectionNamingALinkStaysRefused(t *testing.T) {
 			source, err := NewSelectedFileSource(context.Background(), SelectedCatalogSourceConfig{
 				Paths: paths, SyntheticRoot: catalog.DirectoryID{1},
 			})
-			if source != nil || !errors.Is(err, content.ErrUnsupportedStability) {
+			selected, labelled := errors.AsType[*catalog.SelectionError](err)
+			failure, classified := errors.AsType[*catalog.SourceError](err)
+			if source != nil || !errors.Is(err, errSelectedSymbolicLink) || !labelled || selected.Label != paths[len(paths)-1] ||
+				!classified || failure.Failure != catalog.SourceFailureSymbolicLink {
 				t.Fatalf("selection %q = %v, %v", paths, source, err)
 			}
 		})
+	}
+}
+
+// A named link that cannot reach a file or directory keeps main's reasons: the
+// kernel's own refusal, or the generic unsupported source for special files
+// such as a process-substitution pipe.
+func TestSelectionNamingAnUnusableLinkKeepsItsReason(t *testing.T) {
+	fixture := newLinkedSelectionFixture(t)
+	dangling := filepath.Join(fixture.parent, "dangling")
+	if err := os.Symlink(filepath.Join(fixture.parent, "missing"), dangling); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := openSelection(t, dangling, nil); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("dangling link = %v", err)
+	}
+	if runtime.GOOS == "windows" {
+		return
+	}
+	device := filepath.Join(fixture.parent, "device")
+	if err := os.Symlink(os.DevNull, device); err != nil {
+		t.Fatal(err)
+	}
+	failure, _ := errors.AsType[*catalog.SourceError](func() error { _, err := openSelection(t, device, nil); return err }())
+	if failure == nil || failure.Failure != catalog.SourceFailureUnsupported {
+		t.Fatalf("link to a special file = %+v", failure)
 	}
 }
 

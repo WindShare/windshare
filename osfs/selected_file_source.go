@@ -95,6 +95,8 @@ func classifySourceError(operation string, reference catalog.SourceReference, ca
 	}
 	failure := catalog.SourceFailureUnavailable
 	switch {
+	case errors.Is(cause, errSelectedSymbolicLink):
+		failure = catalog.SourceFailureSymbolicLink
 	case errors.Is(cause, os.ErrPermission):
 		failure = catalog.SourceFailureAccessDenied
 	case errors.Is(cause, os.ErrNotExist), errors.Is(cause, content.ErrRevisionNotFound):

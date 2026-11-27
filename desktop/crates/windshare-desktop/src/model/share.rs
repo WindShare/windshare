@@ -45,7 +45,8 @@ impl ShareError {
             Some("source_cloud_placeholder") => Self::CloudPlaceholder {
                 path: source_path(),
             },
-            Some("source_unsupported") => Self::SourceUnsupported {
+            // The desktop wording already asks for the target instead of a link.
+            Some("source_unsupported" | "source_symbolic_link") => Self::SourceUnsupported {
                 path: source_path(),
             },
             Some("source_missing") => Self::SourceMissing {

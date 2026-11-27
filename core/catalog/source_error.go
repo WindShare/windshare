@@ -13,6 +13,9 @@ const (
 	SourceFailureUnsupported
 	SourceFailureCloudPlaceholder
 	SourceFailureStale
+	// SourceFailureSymbolicLink is a selected path naming a link to a file or
+	// directory; the no-follow boundary refuses it, but its target can be selected.
+	SourceFailureSymbolicLink
 )
 
 type SourceError struct {

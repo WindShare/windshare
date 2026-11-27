@@ -206,7 +206,7 @@ func failureCause(failure engine.Failure) string {
 	case engine.FailureDirectAdmission:
 		return "The direct channel could not be admitted."
 	case engine.FailureSourceUnavailable, engine.FailureSourceMissing, engine.FailureSourceAccessDenied,
-		engine.FailureSourceUnsupported, engine.FailureSourceCloudPlaceholder,
+		engine.FailureSourceUnsupported, engine.FailureSourceCloudPlaceholder, engine.FailureSourceSymbolicLink,
 		engine.FailureSourceOmitted, engine.FailureSourceChanged:
 		return sourceFailureMessage(failure)
 	case engine.FailureCatalogUnavailable:
@@ -289,6 +289,8 @@ func sourceFailureMessage(failure engine.Failure) string {
 		return "Permission denied while opening the source. Check read access to the source and its parent directory."
 	case engine.FailureSourceUnsupported:
 		return "This source cannot be shared safely. Select a regular file or directory on a supported filesystem; symbolic links are not supported."
+	case engine.FailureSourceSymbolicLink:
+		return "Symbolic links are not followed. Select the target instead, or add a trailing slash to share the folder a link points to."
 	case engine.FailureSourceCloudPlaceholder:
 		return "This item is stored in the cloud and not fully available on this device. Make this item available on this device, then share it again."
 	case engine.FailureSourceOmitted:

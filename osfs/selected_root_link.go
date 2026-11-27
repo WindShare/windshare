@@ -13,6 +13,8 @@ import (
 	"github.com/windshare/windshare/osfs/internal/pathfailure"
 )
 
+var errSelectedSymbolicLink = errors.New("osfs: selected path is a symbolic link")
+
 // selectedRoot separates the user's spelling of a selection from the object the
 // kernel resolves it to.
 type selectedRoot struct {
@@ -37,17 +39,22 @@ func resolveSelectedRoot(selectedPath string, follow func(string) (fs.FileInfo, 
 	if leaf, err := os.Lstat(absolute); err != nil || leaf.Mode()&fs.ModeSymlink == 0 {
 		return selection, nil
 	}
-	if typed, err := os.Lstat(selectedPath); err != nil || !typed.IsDir() {
-		if err != nil && !errors.Is(err, syscall.ENOTDIR) {
-			return selectedRoot{}, pathfailure.Filesystem("inspect selected root", absolute, err)
-		}
-		// The typed path names the link itself (or a non-directory through it):
-		// inspection refuses it exactly as any other selected link.
-		return selection, nil
+	typed, err := os.Lstat(selectedPath)
+	// ENOTDIR is `file-link/`: a non-directory reached through the named link.
+	namesLink := errors.Is(err, syscall.ENOTDIR) || (err == nil && !typed.IsDir())
+	if err != nil && !namesLink {
+		return selectedRoot{}, pathfailure.Filesystem("inspect selected root", absolute, err)
 	}
-	followed, err := follow(selectedPath)
+	followPath := selectedPath
+	if err != nil {
+		followPath = absolute
+	}
+	followed, err := follow(followPath)
 	if err != nil {
 		return selectedRoot{}, pathfailure.Filesystem("follow selected root", absolute, err)
+	}
+	if namesLink {
+		return namedLinkSelection(selection, followed)
 	}
 	resolved, err := filepath.EvalSymlinks(absolute)
 	if err != nil {
@@ -61,6 +68,17 @@ func resolveSelectedRoot(selectedPath string, follow func(string) (fs.FileInfo, 
 		return selectedRoot{}, fmt.Errorf("osfs: selected root %q does not resolve to the directory the system opens: %w", absolute, content.ErrUnsupportedStability)
 	}
 	selection.inspect, selection.followed = resolved, followed
+	return selection, nil
+}
+
+// namedLinkSelection keeps the no-follow boundary for a path naming a link (or
+// a non-directory through one). A link to a file or directory is refused with
+// its own reason so the user learns the target can be selected; anything else
+// (such as a process-substitution pipe) is refused by inspection as before.
+func namedLinkSelection(selection selectedRoot, followed fs.FileInfo) (selectedRoot, error) {
+	if followed.IsDir() || followed.Mode().IsRegular() {
+		return selectedRoot{}, fmt.Errorf("osfs: selected root %q: %w", selection.absolute, errSelectedSymbolicLink)
+	}
 	return selection, nil
 }
 

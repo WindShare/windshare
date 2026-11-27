@@ -17,6 +17,7 @@ func TestSourceFailuresRenderTheirSelectedPathWithoutTerminalControls(t *testing
 		engine.FailureSourceAccessDenied,
 		engine.FailureSourceUnsupported,
 		engine.FailureSourceCloudPlaceholder,
+		engine.FailureSourceSymbolicLink,
 		engine.FailureSourceUnavailable,
 		engine.FailureSourceChanged,
 	} {

@@ -72,7 +72,7 @@ func TestFailureMessagesCoverClosedVocabulary(t *testing.T) {
 		engine.FailureRelayRouteNotFound, engine.FailureShareNotReady, engine.FailureShareStopped, engine.FailureDirectUnavailable,
 		engine.FailureDirectPolicy, engine.FailureDirectBusy, engine.FailureDirectAdmission,
 		engine.FailureSourceUnavailable, engine.FailureSourceChanged, engine.FailureSourceMissing,
-		engine.FailureSourceAccessDenied, engine.FailureSourceUnsupported, engine.FailureSourceOmitted,
+		engine.FailureSourceAccessDenied, engine.FailureSourceUnsupported, engine.FailureSourceSymbolicLink, engine.FailureSourceOmitted,
 		engine.FailureCatalogUnavailable, engine.FailureSessionFailed, engine.FailureOutputFailed,
 		engine.FailureOutputBusy, engine.FailureOutputOperationAlreadyRunning,
 		engine.FailureOutputNeedsAttention, engine.FailureRetainedOutputMissing, engine.FailureDestinationCollision,

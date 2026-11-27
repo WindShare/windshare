@@ -60,6 +60,7 @@ const (
 	FailureSourceAccessDenied            FailureCode = "source_access_denied"
 	FailureSourceUnsupported             FailureCode = "source_unsupported"
 	FailureSourceCloudPlaceholder        FailureCode = "source_cloud_placeholder"
+	FailureSourceSymbolicLink            FailureCode = "source_symbolic_link"
 	FailureSourceOmitted                 FailureCode = "source_omitted"
 	FailureCatalogUnavailable            FailureCode = "catalog_unavailable"
 	FailureSessionFailed                 FailureCode = "session_failed"
@@ -298,7 +299,7 @@ func classifyNetworkSentinelError(cause error) (Failure, bool) {
 func isSourcePathFailureCode(code FailureCode) bool {
 	switch code {
 	case FailureSourceMissing, FailureSourceAccessDenied, FailureSourceUnsupported,
-		FailureSourceCloudPlaceholder, FailureSourceUnavailable, FailureSourceChanged:
+		FailureSourceCloudPlaceholder, FailureSourceSymbolicLink, FailureSourceUnavailable, FailureSourceChanged:
 		return true
 	default:
 		return false
@@ -315,6 +316,8 @@ func classifySourceFailure(reason catalog.SourceFailure) (Failure, bool) {
 		return Failure{Code: FailureSourceUnsupported}, true
 	case catalog.SourceFailureCloudPlaceholder:
 		return Failure{Code: FailureSourceCloudPlaceholder}, true
+	case catalog.SourceFailureSymbolicLink:
+		return Failure{Code: FailureSourceSymbolicLink}, true
 	case catalog.SourceFailureStale:
 		return Failure{Code: FailureSourceChanged}, true
 	case catalog.SourceFailureUnavailable:

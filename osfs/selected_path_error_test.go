@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/content"
 )
 
 func TestSelectionFailureIdentifiesFailedRootAndReleasesEarlierRoots(t *testing.T) {
@@ -37,7 +36,7 @@ func TestSelectionFailureIdentifiesFailedRootAndReleasesEarlierRoots(t *testing.
 	}
 }
 
-func TestSelectedSymbolicLinkIsAnUnsupportedSource(t *testing.T) {
+func TestSelectedSymbolicLinkIsRefusedWithItsOwnReason(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "target")
 	if err := os.WriteFile(target, []byte("content"), 0600); err != nil {
@@ -50,13 +49,13 @@ func TestSelectedSymbolicLinkIsAnUnsupportedSource(t *testing.T) {
 	source, err := NewSelectedFileSource(context.Background(), SelectedCatalogSourceConfig{
 		Paths: []string{selected}, SyntheticRoot: catalog.DirectoryID{1},
 	})
-	if source != nil || !errors.Is(err, content.ErrUnsupportedStability) {
+	if source != nil || !errors.Is(err, errSelectedSymbolicLink) {
 		t.Fatalf("selected symbolic link = %v, %v", source, err)
 	}
 	path, pathOK := errors.AsType[*catalog.SelectionError](err)
 	failure, failureOK := errors.AsType[*catalog.SourceError](err)
-	if !pathOK || path.Label != selected || !failureOK || failure.Failure != catalog.SourceFailureUnsupported {
-		t.Fatalf("unsupported selection lost its identity: %+v, %+v", path, failure)
+	if !pathOK || path.Label != selected || !failureOK || failure.Failure != catalog.SourceFailureSymbolicLink {
+		t.Fatalf("selected link lost its identity: %+v, %+v", path, failure)
 	}
 }
 
