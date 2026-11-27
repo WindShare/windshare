@@ -36,6 +36,13 @@ func newLinkedSelectionFixture(t *testing.T) linkedSelectionFixture {
 	return fixture
 }
 
+// followingSpelling is "link/./": a final "." that resolves the link on every
+// platform (Windows Lstat follows only with a trailing separator).
+func followingSpelling(link string) string {
+	separator := string(filepath.Separator)
+	return link + separator + "." + separator
+}
+
 func openSelection(t *testing.T, selection string, omissions catalog.SourceOmissionObserver) (*SelectedFileSource, error) {
 	t.Helper()
 	source, err := NewSelectedFileSource(context.Background(), SelectedCatalogSourceConfig{
@@ -47,32 +54,35 @@ func openSelection(t *testing.T, selection string, omissions catalog.SourceOmiss
 	return source, err
 }
 
-// filepath.Abs reports "." as a shell's logical $PWD and drops a trailing "/" or
-// "/.". Such spellings name the directory the kernel reaches, not the link.
-// Windows resolves the final link only for a trailing separator: "." and ".."
-// are cleaned lexically and Lstat follows a final link only when the name ends
-// in a separator (os/stat_windows.go), so the POSIX-only spellings name the
-// link there and stay refused.
+// filepath.Abs reports "." as a shell's logical $PWD and drops a final "/.".
+// A final "." or ".." element names the directory the kernel reaches, not the
+// link. Windows resolves the final link only for a trailing separator: "." and
+// ".." are cleaned lexically and Lstat follows a final link only when the name
+// ends in a separator (os/stat_windows.go), so the POSIX-only spellings name
+// the link there and stay refused.
 func TestSelectionResolvingThroughAFinalLinkSharesTheDirectory(t *testing.T) {
 	fixture := newLinkedSelectionFixture(t)
 	chain := filepath.Join(fixture.parent, "chain")
 	if err := os.Symlink(fixture.link, chain); err != nil {
 		t.Fatal(err)
 	}
-	t.Chdir(fixture.link)
+	inside := filepath.Join(fixture.link, "inner")
 	separator := string(filepath.Separator)
 	for name, test := range map[string]struct {
-		selection, root string
-		posixOnly       bool
+		cwd, selection, root string
+		posixOnly            bool
 	}{
-		"dot in linked cwd":      {".", "link", true},
-		"dot with a separator":   {"." + separator, "link", false},
-		"trailing separator":     {fixture.link + separator, "link", false},
-		"trailing dot":           {fixture.link + separator + ".", "link", true},
-		"parent of a child":      {"inner" + separator + "..", "link", true},
-		"chain with a separator": {chain + separator, "chain", false},
+		"dot in linked cwd":           {fixture.link, ".", "link", true},
+		"dot with a separator":        {fixture.link, "." + separator, "link", false},
+		"parent from inside the link": {inside, "..", "link", true},
+		"parent with a separator":     {inside, ".." + separator, "link", false},
+		"trailing dot":                {fixture.link, fixture.link + separator + ".", "link", true},
+		"trailing dot and separator":  {fixture.link, fixture.link + separator + "." + separator, "link", false},
+		"parent of a child":           {fixture.link, "inner" + separator + "..", "link", true},
+		"chain with a trailing dot":   {fixture.link, chain + separator + "." + separator, "chain", false},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Chdir(test.cwd)
 			source, err := openSelection(t, test.selection, nil)
 			if test.posixOnly && runtime.GOOS == "windows" {
 				if source != nil || !errors.Is(err, errSelectedSymbolicLink) {
@@ -97,9 +107,10 @@ func TestSelectionResolvingThroughAFinalLinkSharesTheDirectory(t *testing.T) {
 	}
 }
 
-// A path naming a link keeps the documented no-follow boundary: a glob match, a
-// script's "$HOME/link" or a desktop selection never reaches outside it. A link
-// to a file or directory gets its own reason so the user can select the target.
+// A path naming a link keeps the documented no-follow boundary: a glob match
+// (including `dir/*/`, which spells linked directories as `link/`), a script's
+// "$HOME/link" or a desktop selection never reaches outside it. A link to a
+// file or directory gets its own reason so the user can select the target.
 func TestSelectionNamingALinkStaysRefused(t *testing.T) {
 	fixture := newLinkedSelectionFixture(t)
 	chain := filepath.Join(fixture.parent, "chain")
@@ -113,7 +124,10 @@ func TestSelectionNamingALinkStaysRefused(t *testing.T) {
 	separator := string(filepath.Separator)
 	for name, paths := range map[string][]string{
 		"directory link":                   {fixture.link},
+		"directory link with separator":    {fixture.link + separator},
 		"chain":                            {chain},
+		"chain with separator":             {chain + separator},
+		"directory glob with a link":       {filepath.Join(fixture.target, "inner") + separator, fixture.link + separator},
 		"file link":                        {fileLink},
 		"file link with separator":         {fileLink + separator},
 		"file link with separator and dot": {fileLink + separator + "."},
@@ -183,7 +197,7 @@ func TestSelectedLinkOmissionsKeepTheTypedPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	var reports []catalog.SourceOmissions
-	source, err := openSelection(t, fixture.link+string(filepath.Separator), catalog.SourceOmissionObserverFunc(func(value catalog.SourceOmissions) {
+	source, err := openSelection(t, followingSpelling(fixture.link), catalog.SourceOmissionObserverFunc(func(value catalog.SourceOmissions) {
 		reports = append(reports, value)
 	}))
 	if err != nil {
@@ -247,7 +261,7 @@ func TestSelectionThroughAFinalLinkKeepsKernelRefusals(t *testing.T) {
 // follow even though user-space EvalSymlinks would resolve it.
 func TestSelectionTheKernelRefusesToFollowReportsAccessDenied(t *testing.T) {
 	fixture := newLinkedSelectionFixture(t)
-	selection := fixture.link + string(filepath.Separator)
+	selection := followingSpelling(fixture.link)
 	refuse := func(string) (fs.FileInfo, error) {
 		return nil, &fs.PathError{Op: "stat", Path: selection, Err: fs.ErrPermission}
 	}
@@ -264,7 +278,7 @@ func TestSelectionTheKernelRefusesToFollowReportsAccessDenied(t *testing.T) {
 
 func TestSelectedLinkRootMustOpenTheKernelResolvedObject(t *testing.T) {
 	fixture := newLinkedSelectionFixture(t)
-	selection, err := resolveSelectedRoot(fixture.link+string(filepath.Separator), os.Stat)
+	selection, err := resolveSelectedRoot(followingSpelling(fixture.link), os.Stat)
 	if err != nil || selection.followed == nil {
 		t.Fatalf("selection = %+v, %v", selection, err)
 	}

@@ -25,11 +25,13 @@ type selectedRoot struct {
 
 // resolveSelectedRoot keeps the no-follow boundary for a path that names a link,
 // but filepath.Abs can manufacture one: it reports "." as a shell's logical $PWD
-// and drops a trailing "/" or "/.", after which POSIX resolves the final link.
-// Only when the kernel's own no-follow view of the typed path is a directory
-// (`.`, `..`, `link/`, `link/.`) is the final link of the absolute spelling
-// followed, and only if the kernel and the lexical resolution agree. Kernel
-// refusals of such a path keep their own cause.
+// and drops a final "/." after which the kernel resolves the final link. Only a
+// spelling whose final element is "." or ".." (`.`, `./`, `..`, `link/.`,
+// `inner/..`) can follow, and only when the kernel's no-follow view of the typed
+// path is a directory and the kernel and the lexical resolution agree. A bare
+// trailing separator (`link/`) names the link: a shell glob such as `dir/*/`
+// produces that spelling for linked directories too. Kernel refusals of a
+// following spelling keep their own cause.
 func resolveSelectedRoot(selectedPath string, follow func(string) (fs.FileInfo, error)) (selectedRoot, error) {
 	absolute, err := filepath.Abs(selectedPath)
 	if err != nil {
@@ -39,7 +41,7 @@ func resolveSelectedRoot(selectedPath string, follow func(string) (fs.FileInfo, 
 	if leaf, err := os.Lstat(absolute); err != nil || leaf.Mode()&fs.ModeSymlink == 0 {
 		return selection, nil
 	}
-	namesLink := typedPathNamesLink(selectedPath)
+	namesLink := !spellsDotElement(selectedPath) || typedPathNamesLink(selectedPath)
 	// The absolute spelling of a named link is the link itself; otherwise the
 	// typed path is followed so the kernel, not lexical cleaning, resolves "..".
 	followPath := selectedPath
@@ -73,15 +75,23 @@ func resolveSelectedRoot(selectedPath string, follow func(string) (fs.FileInfo, 
 	return selection, nil
 }
 
+// spellsDotElement reports whether the final element of the typed path,
+// ignoring trailing separators, is "." or "..": the user asked for the
+// directory itself (or its parent), which the kernel reaches through a link.
+func spellsDotElement(selectedPath string) bool {
+	base := filepath.Base(selectedPath)
+	return selectedPath != "" && (base == "." || base == "..")
+}
+
 // typedPathNamesLink reports whether the user named the link itself rather
 // than a directory the kernel reaches through it: anything but a successful
 // no-follow Lstat of the typed path that yields a directory. POSIX resolves a
-// final link for ".", "..", "link/" and "link/."; Windows Lstat resolves it only
-// for a trailing separator, because "." and ".." are cleaned lexically there, so
-// those spellings name the link on Windows. A failing Lstat (`file-link/`,
-// `file-link/.`, `loop/.`, `dangling/`, with platform-specific errors) never
-// follows: the named link's own reason, or the kernel's refusal to follow it,
-// is reported instead.
+// final link for ".", "..", "link/." and "inner/.."; Windows Lstat resolves it
+// only when the name ends in a separator (os/stat_windows.go) because "." and
+// ".." are cleaned lexically there, so on Windows only `.\`, `..\`, `link\.\`
+// and the like follow. A failing Lstat (`file-link/.`, `loop/.`, with
+// platform-specific errors) never follows: the named link's own reason, or the
+// kernel's refusal to follow it, is reported instead.
 func typedPathNamesLink(selectedPath string) bool {
 	typed, err := os.Lstat(selectedPath)
 	return err != nil || !typed.IsDir()
