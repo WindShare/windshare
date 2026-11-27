@@ -12,11 +12,14 @@ import (
 )
 
 const (
+	descriptorVersion  = 2
 	descriptorLifetime = 300
 	GossipLifetime     = 24 * 60 * 60
 	GossipDomain       = "windshare/node-gossip/v1\x00"
+	MaximumSTUNURLs    = 4
+	nodeIdentityDomain = "windshare/node-identity/v1\x00"
+	nodePlatformNative = "native"
 )
-const nodeIdentityDomain = "windshare/node-identity/v1\x00"
 
 type Descriptor struct {
 	Version       int    `json:"version"`
@@ -67,7 +70,7 @@ func InspectGossip(data []byte, now time.Time) (GossipDescriptor, error) {
 
 func inspect(data []byte, now time.Time, domain string, lifetime uint64) (Descriptor, error) {
 	var envelope descriptorEnvelope
-	if len(data) > MaximumDescriptorBytes || json.Unmarshal(data, &envelope) != nil || envelope.Version != 2 {
+	if len(data) > MaximumDescriptorBytes || json.Unmarshal(data, &envelope) != nil || envelope.Version != descriptorVersion {
 		return Descriptor{}, ErrFormat
 	}
 	payload, err := DecodeBase64(envelope.Descriptor, MaximumDescriptorBytes)
@@ -115,7 +118,7 @@ func VerifyDescriptor(data []byte, key [32]byte, now time.Time) (Descriptor, err
 
 func verify(data []byte, key [32]byte, now time.Time, domain string, lifetime uint64) (Descriptor, error) {
 	var envelope descriptorEnvelope
-	if len(data) > MaximumDescriptorBytes || json.Unmarshal(data, &envelope) != nil || envelope.Version != 2 {
+	if len(data) > MaximumDescriptorBytes || json.Unmarshal(data, &envelope) != nil || envelope.Version != descriptorVersion {
 		return Descriptor{}, ErrFormat
 	}
 	payload, err := DecodeBase64(envelope.Descriptor, MaximumDescriptorBytes)
@@ -128,7 +131,7 @@ func verify(data []byte, key [32]byte, now time.Time, domain string, lifetime ui
 	}
 	var descriptor Descriptor
 	digest := sha256.Sum256(append([]byte(nodeIdentityDomain), key[:]...))
-	if json.Unmarshal(payload, &descriptor) != nil || descriptor.Version != 2 || descriptor.Platform != "native" || descriptor.PublicRelay == RelayUnknown ||
+	if json.Unmarshal(payload, &descriptor) != nil || descriptor.Version != descriptorVersion || descriptor.Platform != nodePlatformNative || descriptor.PublicRelay == RelayUnknown ||
 		descriptor.NodeKey != base64.RawURLEncoding.EncodeToString(key[:]) ||
 		descriptor.NodeID != base64.RawURLEncoding.EncodeToString(digest[:]) ||
 		descriptor.ExpiresAt <= descriptor.IssuedAt || descriptor.ExpiresAt-descriptor.IssuedAt > lifetime {
@@ -139,7 +142,7 @@ func verify(data []byte, key [32]byte, now time.Time, domain string, lifetime ui
 			return Descriptor{}, ErrFormat
 		}
 	}
-	if len(descriptor.STUN) > 4 || descriptor.Services.STUN && len(descriptor.STUN) == 0 {
+	if len(descriptor.STUN) > MaximumSTUNURLs || descriptor.Services.STUN && len(descriptor.STUN) == 0 {
 		return Descriptor{}, ErrFormat
 	}
 	endpoint, endpointErr := networkendpoint.NormalizeRelay(descriptor.RelayBaseURL())

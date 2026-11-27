@@ -9,6 +9,7 @@ import (
 	"github.com/windshare/windshare/core/serviceauthority"
 	"github.com/windshare/windshare/engine/internal/statefile"
 	"github.com/windshare/windshare/engine/relayconfig"
+	"github.com/windshare/windshare/engine/relayprofile"
 )
 
 // Snapshot is a setup transaction's view, never a configuration document.
@@ -79,7 +80,7 @@ func (store FileStore) Update(ctx context.Context, change func(*Snapshot) error)
 		}
 		if revision != current.SettingsRevision() {
 			var observed map[string]serviceauthority.PublicRelay
-			if before != nil && current.Pending == nil && before.credential().Role == "owner" {
+			if before != nil && current.Pending == nil && before.credential().Role == relayprofile.Owner {
 				observed = map[string]serviceauthority.PublicRelay{before.Node.NodeKey: before.PublicRelay}
 			}
 			if _, err := relayconfig.ReconcileEligibility(tx, current.Config, observed); err != nil {

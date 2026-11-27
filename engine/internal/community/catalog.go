@@ -36,6 +36,7 @@ const (
 	RefreshInterval       = 2 * time.Minute
 	requestTimeout        = 4 * time.Second
 	exchangePath          = "/discovery/v1/peers"
+	bytesPerMbps          = 125_000
 )
 
 type Scope struct {
@@ -241,7 +242,7 @@ func (p *Pool) Candidates(scope Scope) []relayplan.Candidate {
 		_, err := netip.ParseAddr(u.Hostname())
 		cap := uint32(0)
 		if d.PublicCapacity != nil {
-			cap = uint32(min(*d.PublicCapacity/125000, uint64(^uint32(0))))
+			cap = uint32(min(*d.PublicCapacity/bytesPerMbps, uint64(^uint32(0))))
 		}
 		result = append(result, relayplan.Candidate{
 			Source:        relayplan.Community,

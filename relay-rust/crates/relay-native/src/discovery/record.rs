@@ -1,6 +1,7 @@
 use super::transport;
 use anyhow::{Context, Result, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as B64};
+use ed25519_dalek::SIGNATURE_LENGTH;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use url::Url;
@@ -111,7 +112,8 @@ impl Envelope {
         let verified = trust::verify(purpose.domain(), &bytes, &key)
             .map_err(|_| anyhow::anyhow!("invalid signature"))?;
         ensure!(
-            verified.len() + 64 == bytes.len() && self.signature.len() == SIGNATURE_B64_LEN,
+            verified.len() + SIGNATURE_LENGTH == bytes.len()
+                && self.signature.len() == SIGNATURE_B64_LEN,
             "invalid signature width"
         );
         ensure!(

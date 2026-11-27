@@ -4,9 +4,10 @@ use ed25519_dalek::SigningKey;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use std::{fs::OpenOptions, io::Write, path::Path};
-use windshare_relay_access::{Credential, CredentialState, Digest};
+use windshare_relay_access::{
+    Credential, CredentialState, Digest, descriptor::NODE_IDENTITY_DOMAIN,
+};
 
-const NODE_ID_DOMAIN: &[u8] = b"windshare/node-identity/v1\0";
 const IDENTITY_FORMAT: u8 = 1;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -148,7 +149,7 @@ mod tests;
 pub(super) fn node_id(verifying_key: &[u8; 32]) -> String {
     URL_SAFE_NO_PAD.encode(
         Sha256::new()
-            .chain_update(NODE_ID_DOMAIN)
+            .chain_update(NODE_IDENTITY_DOMAIN)
             .chain_update(verifying_key)
             .finalize(),
     )

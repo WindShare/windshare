@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 use windshare_relay_access::{Credential, trust};
 
 use windshare_relay_access::descriptor::{
-    DESCRIPTOR_VERSION, PublicRelay, Purpose, offers_community_service,
+    DESCRIPTOR_VERSION, NODE_PLATFORM_NATIVE, PublicRelay, Purpose, offers_community_service,
 };
 
 // Re-sign self gossip envelopes at a cadence shorter than Discovery's 10m
@@ -339,7 +339,7 @@ impl Runtime {
             "public_capacity_bytes_per_second": snapshot.capacity_bytes_per_second,
             "operator": snapshot.operator,
             "provider": snapshot.provider,
-            "platform": "native",
+            "platform": NODE_PLATFORM_NATIVE,
             "classes": ["owner", "standard", "lowest"],
             "issued_at": now,
             "expires_at": now + purpose.lifetime(),

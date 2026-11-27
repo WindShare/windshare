@@ -19,9 +19,10 @@ import (
 )
 
 const (
-	PathEnvironment = "WINDSHARE_CONFIG"
-	maxConfigBytes  = 64 * 1024
-	MaximumProfiles = 64
+	PathEnvironment       = "WINDSHARE_CONFIG"
+	maxConfigBytes        = 64 * 1024
+	MaximumProfiles       = 64
+	MaximumBootstrapNodes = 16
 )
 
 var (
@@ -139,7 +140,7 @@ func (config Config) Validate() error {
 }
 
 func (config Config) validateFields() error {
-	if len(config.BootstrapNodes) > 16 {
+	if len(config.BootstrapNodes) > MaximumBootstrapNodes {
 		return fmt.Errorf("%w: too many bootstrap nodes", ErrConfig)
 	}
 	for _, seed := range config.BootstrapNodes {
