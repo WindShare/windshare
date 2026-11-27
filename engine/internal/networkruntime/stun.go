@@ -9,7 +9,7 @@ func (r *Runtime) ICEPool() icepolicy.ICEEndpointPool {
 			pool = icepolicy.DirectoryPool(snapshot.Payload())
 		}
 	}
-	if c, allowed := r.communitySettings(); allowed {
+	if c, allowed := r.communitySettings(r.ctx); allowed {
 		pool = pool.WithCommunity(r.community.STUN(r.scope(r.frontend(c.FrontURL).primary)))
 	}
 	return pool

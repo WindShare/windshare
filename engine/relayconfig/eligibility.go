@@ -40,32 +40,42 @@ func ReadEligibility(tx *statefile.Transaction) (Eligibility, error) {
 	return e, err
 }
 
-// Only an explicit signed refusal is sticky across offline periods. A later
+// EvaluateEligibility derives current community eligibility from previously
+// recorded refusals, the active configuration, and any fresh owner observations.
+// Only an explicit signed refusal is sticky across offline periods; a later
 // reachable observation in any other state releases the refusal and its notice.
+func EvaluateEligibility(current Eligibility, c Config, observed map[string]serviceauthority.PublicRelay) Eligibility {
+	disabled := map[string]bool{}
+	owned := c.OwnedNative()
+	for _, p := range owned {
+		k := p.Node.NodeKey
+		if s := observed[k]; s == serviceauthority.RelayDisabled || s == serviceauthority.RelayUnknown && current.Disabled[k] {
+			disabled[k] = true
+		}
+	}
+	next := Eligibility{
+		Disabled: disabled,
+		Paused:   len(owned) > 0,
+		Notified: current.Notified,
+	}
+	for _, p := range owned {
+		if !disabled[p.Node.NodeKey] {
+			next.Paused = false
+		}
+	}
+	if !next.Paused {
+		next.Notified = false
+	}
+	return next
+}
+
 func ReconcileEligibility(tx *statefile.Transaction, c Config, observed map[string]serviceauthority.PublicRelay) (Eligibility, error) {
 	e, err := ReadEligibility(tx)
 	if err != nil {
 		return e, err
 	}
 	previous, _ := json.Marshal(e)
-	disabled := map[string]bool{}
-	owned := c.OwnedNative()
-	for _, p := range owned {
-		k := p.Node.NodeKey
-		if s := observed[k]; s == serviceauthority.RelayDisabled || s == serviceauthority.RelayUnknown && e.Disabled[k] {
-			disabled[k] = true
-		}
-	}
-	e.Disabled = disabled
-	e.Paused = len(owned) > 0
-	for _, p := range owned {
-		if !disabled[p.Node.NodeKey] {
-			e.Paused = false
-		}
-	}
-	if !e.Paused {
-		e.Notified = false
-	}
+	e = EvaluateEligibility(e, c, observed)
 	next, _ := json.Marshal(e)
 	if string(next) != string(previous) {
 		err = tx.Put(statefile.CommunityEligibility, next)
@@ -73,7 +83,37 @@ func ReconcileEligibility(tx *statefile.Transaction, c Config, observed map[stri
 	return e, err
 }
 
+// ReadCommunityState reads saved settings and derives current community
+// eligibility without acquiring a write lock unless commit recovery is pending.
+func (s FileStore) ReadCommunityState(ctx context.Context) (Config, Eligibility, error) {
+	path, err := s.Location()
+	if err != nil {
+		return Config{}, Eligibility{}, err
+	}
+	var c Config
+	var e Eligibility
+	err = statefile.Read(ctx, path, func(tx *statefile.Transaction) error {
+		var err error
+		c, err = ReadSettings(tx)
+		if err != nil {
+			return err
+		}
+		stored, err := ReadEligibility(tx)
+		if err != nil {
+			return err
+		}
+		e = EvaluateEligibility(stored, c, nil)
+		return nil
+	})
+	return c, e, err
+}
+
 func (s FileStore) TakeCommunityNotice(ctx context.Context) (bool, error) {
+	// Avoid opening or locking config.json.lock when there is no undelivered notice.
+	_, current, err := s.ReadCommunityState(ctx)
+	if err != nil || !current.Paused || current.Notified {
+		return false, err
+	}
 	path, err := s.Location()
 	if err != nil {
 		return false, err

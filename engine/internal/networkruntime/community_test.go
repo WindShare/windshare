@@ -2,6 +2,7 @@ package networkruntime
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
@@ -170,5 +171,87 @@ func TestCommunityObservationDiagnosticsAndFirstFailureDemotion(t *testing.T) {
 	if len(got) != 2 || got[0].Endpoint != defaultURL || got[0].Observation != "unmeasured" ||
 		got[1].Endpoint != highURL || got[1].Observation != "failed" || got[1].ObservedHandshakeMS != "" {
 		t.Fatalf("post-failure community diagnostics = %+v", got)
+	}
+}
+
+func TestCommunityReadsStayLockFreeAndPlanHonorsCancelOnPendingRecovery(t *testing.T) {
+	r := fixtureRuntime(t)
+	p := writeCachedCommunityPool(t, r, cachedCommunityPeer{host: "lockfree.example", seedByte: 46})
+	r.directory.Close()
+	r.directory = nil
+	if err := statefile.Write(t.Context(), p, []byte(`{"profiles":[]}`)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Ordinary Plan, Unavailability, and ICEPool reads must not create config.json.lock.
+	if selection, err := r.Plan(t.Context(), relayprofile.Plan(nil), ""); err != nil || len(selection.Relays) != 1 {
+		t.Fatalf("lock-free Plan=(%+v, %v)", selection, err)
+	}
+	if failure := r.Unavailability(); failure != nil {
+		t.Fatalf("lock-free Unavailability=%v", failure)
+	}
+	_ = r.ICEPool()
+	if _, err := os.Stat(p + ".lock"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ordinary community reads created lock file: err=%v", err)
+	}
+
+	// Placing an unwritable barrier at config.json.lock simulates read-only lock failure.
+	if err := os.Mkdir(p+".lock", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, allowed := r.communitySettings(t.Context()); !allowed {
+		t.Fatal("read-only lock barrier disabled communitySettings")
+	}
+	if selection, err := r.Plan(t.Context(), relayprofile.Plan(nil), ""); err != nil || len(selection.Relays) != 1 {
+		t.Fatalf("read-only Plan=(%+v, %v)", selection, err)
+	}
+	if failure := r.Unavailability(); failure != nil {
+		t.Fatalf("read-only Unavailability=%v", failure)
+	}
+	_ = r.ICEPool()
+	if err := os.Remove(p + ".lock"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Under external lock contention with no commit.json, reads still proceed without blocking.
+	locked := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- statefile.WithLock(t.Context(), p, func() error {
+			close(locked)
+			<-release
+			return nil
+		})
+	}()
+	<-locked
+	if selection, err := r.Plan(t.Context(), relayprofile.Plan(nil), ""); err != nil || len(selection.Relays) != 1 {
+		close(release)
+		t.Fatalf("contended lock-free Plan=(%+v, %v)", selection, err)
+	}
+	if failure := r.Unavailability(); failure != nil {
+		close(release)
+		t.Fatalf("contended lock-free Unavailability=%v", failure)
+	}
+	_ = r.ICEPool()
+
+	// When commit.json recovery is pending under lock contention, Plan honors caller ctx cancellation.
+	commitPayload := `[{"name":"settings","data":"eyJwcm9maWxlcyI6W119"},{"name":"community-eligibility.json","data":"e30="}]`
+	if err := statefile.Write(t.Context(), filepath.Join(statefile.StateDirectory(p), "commit.json"), []byte(commitPayload)); err != nil {
+		close(release)
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
+	defer cancel()
+	if _, err := r.Plan(ctx, relayprofile.Plan(nil), ""); !errors.Is(err, context.DeadlineExceeded) {
+		close(release)
+		t.Fatalf("contended recovery Plan err=%v, want context.DeadlineExceeded", err)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if selection, err := r.Plan(t.Context(), relayprofile.Plan(nil), ""); err != nil || len(selection.Relays) != 1 {
+		t.Fatalf("post-recovery Plan=(%+v, %v)", selection, err)
 	}
 }

@@ -38,15 +38,30 @@ func StateDirectory(path string) string { return path + ".state" }
 // SettingsPath lets configuration errors identify the same file held by the transaction.
 func (tx *Transaction) SettingsPath() string { return tx.path }
 
+// Read observes local state without requiring a writable directory or lock
+// when no multi-file commit is awaiting recovery. A pending commit is
+// recovered first via Transact so readers never observe a partial commit.
+func Read(ctx context.Context, path string, action func(*Transaction) error) error {
+	if path == "" {
+		return os.ErrInvalid
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, err := os.Stat(filepath.Join(StateDirectory(path), commitName)); errors.Is(err, os.ErrNotExist) {
+		return action(&Transaction{path: path})
+	}
+	return Transact(ctx, path, func(tx *Transaction) error {
+		return action(&Transaction{path: tx.path})
+	})
+}
+
 // ReadSettings needs no writable directory in the ordinary sharing path. A
 // pending multi-file commit is recovered first; otherwise atomic replacement
 // guarantees that a concurrent writer exposes either complete settings version.
 func ReadSettings(ctx context.Context, path string) ([]byte, error) {
-	if _, err := os.Stat(filepath.Join(StateDirectory(path), commitName)); errors.Is(err, os.ErrNotExist) {
-		return (&Transaction{path: path}).Read(Settings)
-	}
 	var result []byte
-	err := Transact(ctx, path, func(tx *Transaction) error {
+	err := Read(ctx, path, func(tx *Transaction) error {
 		var err error
 		result, err = tx.Read(Settings)
 		return err
@@ -122,6 +137,9 @@ func (tx *Transaction) Operations() ([]string, error) {
 }
 
 func (tx *Transaction) Put(name string, data []byte) error {
+	if tx.changes == nil {
+		return errors.New("state transaction is read-only")
+	}
 	if _, err := tx.location(name); err != nil {
 		return err
 	}
@@ -130,6 +148,9 @@ func (tx *Transaction) Put(name string, data []byte) error {
 }
 
 func (tx *Transaction) Delete(name string) error {
+	if tx.changes == nil {
+		return errors.New("state transaction is read-only")
+	}
 	if name == Settings {
 		return errors.New("settings cannot be deleted by an operation")
 	}

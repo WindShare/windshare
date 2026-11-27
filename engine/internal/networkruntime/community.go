@@ -32,7 +32,7 @@ func (r *Runtime) startCommunity() {
 		defer tick.Stop()
 		cursor := 0
 		for {
-			settings, allowed := r.communitySettings()
+			settings, allowed := r.communitySettings(r.ctx)
 			r.deliverCommunityNotice(r.ctx)
 			if owned := settings.OwnedNative(); len(owned) > 0 {
 				observed := map[string]serviceauthority.PublicRelay{}
@@ -101,7 +101,7 @@ func (r *Runtime) RelaySettingsChanged(ctx context.Context) {
 	}
 }
 
-func (r *Runtime) communitySettings() (relayconfig.Config, bool) {
+func (r *Runtime) communitySettings(ctx context.Context) (relayconfig.Config, bool) {
 	if r.community == nil {
 		return relayconfig.Config{}, false
 	}
@@ -109,19 +109,14 @@ func (r *Runtime) communitySettings() (relayconfig.Config, bool) {
 	if path == "" {
 		return relayconfig.Config{}, true
 	}
-	var c relayconfig.Config
-	allowed := false
-	err := statefile.Transact(r.ctx, path, func(tx *statefile.Transaction) error {
-		var err error
-		c, err = relayconfig.ReadSettings(tx)
-		if err != nil {
-			return err
-		}
-		e, err := relayconfig.ReconcileEligibility(tx, c, nil)
-		allowed = c.CommunityEnabled() && !c.ConfiguredOnly && !e.Paused
-		return err
-	})
-	return c, allowed && err == nil
+	if ctx == nil {
+		ctx = r.ctx
+	}
+	c, e, err := (relayconfig.FileStore{Path: path}).ReadCommunityState(ctx)
+	if err != nil {
+		return relayconfig.Config{}, false
+	}
+	return c, c.CommunityEnabled() && !c.ConfiguredOnly && !e.Paused
 }
 
 func (r *Runtime) updateEligibility(observed map[string]serviceauthority.PublicRelay) bool {

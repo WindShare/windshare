@@ -42,6 +42,9 @@ func (store FileStore) Update(ctx context.Context, change func(*Config) error) (
 		if err := tx.Put(statefile.Settings, data); err != nil {
 			return err
 		}
+		if _, err := ReconcileEligibility(tx, current, nil); err != nil {
+			return err
+		}
 		committed = current
 		return nil
 	})
@@ -58,7 +61,11 @@ func (store FileStore) save(config Config) error {
 		return err
 	}
 	return statefile.Transact(context.Background(), path, func(tx *statefile.Transaction) error {
-		return tx.Put(statefile.Settings, data)
+		if err := tx.Put(statefile.Settings, data); err != nil {
+			return err
+		}
+		_, err := ReconcileEligibility(tx, config, nil)
+		return err
 	})
 }
 

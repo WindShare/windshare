@@ -1,6 +1,8 @@
 package relayconfig
 
 import (
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -68,4 +70,90 @@ func TestEligibilityOnlyTracksEnrolledNativeOwnersAndNotifiesOnce(t *testing.T) 
 	}
 	observe(serviceauthority.RelayDisabled, true)
 	notice(true)
+}
+
+func TestConfigWritesReconcileEligibilityAndReadsStayLockFree(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	store := FileStore{Path: path}
+	owner := relayprofile.Candidate{
+		PublicURL: "https://owner.example",
+		AccessKey: "owner-key",
+		Role:      relayprofile.Owner,
+		Node:      relayprofile.NodeIdentity{Platform: "native", NodeKey: "test-node"},
+	}
+	readStored := func() Eligibility {
+		t.Helper()
+		raw, err := os.ReadFile(filepath.Join(statefile.StateDirectory(path), statefile.CommunityEligibility))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var e Eligibility
+		if err := json.Unmarshal(raw, &e); err != nil {
+			t.Fatal(err)
+		}
+		return e
+	}
+	pauseOwner := func() {
+		t.Helper()
+		cfg := emptyConfig()
+		cfg.Profiles = []relayprofile.Candidate{owner}
+		if err := store.Save(cfg); err != nil {
+			t.Fatal(err)
+		}
+		if err := statefile.Transact(t.Context(), path, func(tx *statefile.Transaction) error {
+			e, err := ReconcileEligibility(tx, cfg, map[string]serviceauthority.PublicRelay{owner.Node.NodeKey: serviceauthority.RelayDisabled})
+			if err != nil || !e.Paused {
+				t.Fatalf("pause reconcile=(%+v, %v)", e, err)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if show, err := store.TakeCommunityNotice(t.Context()); err != nil || !show {
+			t.Fatalf("notice=(%t, %v)", show, err)
+		}
+	}
+
+	// FileStore.Update must reconcile disk eligibility when removing the sole disabled owner.
+	pauseOwner()
+	if _, err := store.Update(t.Context(), func(c *Config) error {
+		return c.RemoveRelay(owner.PublicURL)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if stored := readStored(); stored.Paused || stored.Notified || len(stored.Disabled) != 0 {
+		t.Fatalf("Update left stale disk eligibility: %+v", stored)
+	}
+
+	// FileStore.Save must also reconcile disk eligibility on full config replacement.
+	pauseOwner()
+	if err := store.Save(emptyConfig()); err != nil {
+		t.Fatal(err)
+	}
+	if stored := readStored(); stored.Paused || stored.Notified || len(stored.Disabled) != 0 {
+		t.Fatalf("Save left stale disk eligibility: %+v", stored)
+	}
+
+	// Manual out-of-band edit of config.json still evaluates accurately on lock-free read.
+	pauseOwner()
+	rawEmpty, err := Encode(emptyConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, rawEmpty, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path + ".lock"); err != nil {
+		t.Fatal(err)
+	}
+	_, e, err := store.ReadCommunityState(t.Context())
+	if err != nil || e.Paused {
+		t.Fatalf("ReadCommunityState after manual edit=(%+v, %v)", e, err)
+	}
+	if show, err := store.TakeCommunityNotice(t.Context()); err != nil || show {
+		t.Fatalf("TakeCommunityNotice after manual edit=(%t, %v)", show, err)
+	}
+	if _, err := os.Stat(path + ".lock"); !os.IsNotExist(err) {
+		t.Fatalf("lock-free reads recreated lock file: err=%v", err)
+	}
 }

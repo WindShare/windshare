@@ -145,7 +145,10 @@ func (r *Runtime) Plan(ctx context.Context, intent relayprofile.Intent, frontend
 	var allowed bool
 	var settings relayconfig.Config
 	if !only && intent.CommunityAllowed() && scope.Origin != "" {
-		settings, allowed = r.communitySettings()
+		settings, allowed = r.communitySettings(ctx)
+		if err := ctx.Err(); err != nil {
+			return Selection{}, err
+		}
 	}
 	build := func() (relayplan.Plan, error) { return r.planFor(urls, only, scope, allowed) }
 	plan, err := build()
@@ -200,7 +203,7 @@ func (r *Runtime) Plan(ctx context.Context, intent relayprofile.Intent, frontend
 
 func (r *Runtime) buildPlan(configured []string, only bool) (relayplan.Plan, error) {
 	front := r.frontend("").primary
-	_, allowed := r.communitySettings()
+	_, allowed := r.communitySettings(r.ctx)
 	return r.planFor(configured, only, r.scope(front), allowed)
 }
 
