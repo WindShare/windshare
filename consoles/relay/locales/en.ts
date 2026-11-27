@@ -87,4 +87,5 @@ export const en = {
   alreadyCompleted: 'This request has already been completed. Check progress on the device.',
   credentialLimit: 'This node has reached its credential limit.',
   invalidName: 'Enter a short, descriptive name.',
+  invalidValues: 'This node could not accept these values. Check the form and try again.',
 }

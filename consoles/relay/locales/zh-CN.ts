@@ -89,4 +89,5 @@ export const zhCN = {
   alreadyCompleted: '此请求已完成，请在设备上查看进度。',
   credentialLimit: '此节点的凭据数量已达上限。',
   invalidName: '请输入一个简短、易于识别的名称。',
+  invalidValues: '此节点无法接受提交的值，请检查表单后重试。',
 } satisfies typeof en

@@ -16,16 +16,46 @@ import re
 import sys
 
 host, template, dest = sys.argv[1:]
-try:
-    ip = ipaddress.ip_address(host.strip("[]"))
-except ValueError:
-    host = host.lower().rstrip(".")
+RESERVED_TLDS = frozenset({"localhost", "local", "internal", "invalid", "onion", "arpa"})
+if host.startswith("[") or host.endswith("]"):
+    if not (host.startswith("[") and host.endswith("]")):
+        sys.exit("Enter a public DNS name or a global-unicast IP.")
+    try:
+        ip = ipaddress.ip_address(host[1:-1])
+    except ValueError:
+        sys.exit("Enter a public DNS name or a global-unicast IP.")
+    if ip.version != 6:
+        sys.exit("Enter a public DNS name or a global-unicast IP.")
+else:
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = None
+
+if ip is None:
+    host = host.lower()
+    if host.endswith("."):
+        host = host[:-1]
     label = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
-    if len(host) > 253 or not re.fullmatch(rf"{label}(?:\.{label})+", host) or host.rsplit(".", 1)[1].isdigit():
+    if (
+        len(host) > 253
+        or not re.fullmatch(rf"{label}(?:\.{label})+", host)
+        or host.rsplit(".", 1)[1].isdigit()
+        or host.rsplit(".", 1)[1] in RESERVED_TLDS
+    ):
         sys.exit("Enter a public DNS name or a global-unicast IP.")
     cert = "domain_cert"
 else:
-    if not ip.is_global or ip.is_multicast or ip.is_reserved or ip.is_link_local:
+    # Reject IPv6 zone IDs (which can smuggle newlines into .env) and IPv4-mapped
+    # IPv6 addresses (rejected by ACME IP certificate issuance).
+    if (
+        getattr(ip, "scope_id", None) is not None
+        or getattr(ip, "ipv4_mapped", None) is not None
+        or not ip.is_global
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_link_local
+    ):
         sys.exit("The certificate requires a publicly routable IP.")
     host = f"[{ip}]" if ip.version == 6 else str(ip)
     cert = "ip_cert"

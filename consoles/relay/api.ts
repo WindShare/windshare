@@ -42,6 +42,7 @@ const messages = {
   already_completed: message(relayCopy, 'alreadyCompleted'),
   credential_capacity: message(relayCopy, 'credentialLimit'),
   invalid_name: message(relayCopy, 'invalidName'),
+  invalid_request: message(relayCopy, 'invalidValues'),
 }
 
 export class RelayClient {
