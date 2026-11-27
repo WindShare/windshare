@@ -25,38 +25,16 @@ func (r *Runtime) startCommunity() {
 	if r.config.CommunitySettingsPath == "" && len(r.config.BootstrapNodes) == 0 {
 		return
 	}
-	r.community = community.New(r.config.CommunitySettingsPath, publicdial.Policy{}, r.now, r.diagnostics)
+	if r.community == nil {
+		r.community = community.New(r.config.CommunitySettingsPath, publicdial.Policy{}, r.now, r.diagnostics)
+	}
 	r.communityKick = make(chan struct{}, 1)
 	r.communityWorkers.Go(func() {
 		tick := time.NewTicker(community.RefreshInterval)
 		defer tick.Stop()
 		cursor := 0
 		for {
-			settings, allowed := r.communitySettings(r.ctx)
-			r.deliverCommunityNotice(r.ctx)
-			if owned := settings.OwnedNative(); len(owned) > 0 {
-				observed := map[string]serviceauthority.PublicRelay{}
-				for i := 0; i < min(2, len(owned)); i++ {
-					p := owned[(cursor+i)%len(owned)]
-					if state, ok := r.observeOwner(p); ok {
-						observed[p.Node.NodeKey] = state
-					}
-				}
-				cursor += 2
-				if len(observed) > 0 {
-					allowed = r.updateEligibility(observed)
-					r.deliverCommunityNotice(r.ctx)
-				}
-			}
-			if allowed {
-				r.mu.Lock()
-				origin := r.communityOrigin
-				r.mu.Unlock()
-				if origin == "" {
-					origin = r.frontend(settings.FrontURL).primary
-				}
-				r.community.Refresh(r.ctx, r.scope(origin), r.seeds(settings))
-			}
+			r.maintainCommunity(&cursor)
 			select {
 			case <-r.ctx.Done():
 				return
@@ -65,6 +43,34 @@ func (r *Runtime) startCommunity() {
 			}
 		}
 	})
+}
+
+func (r *Runtime) maintainCommunity(cursor *int) {
+	settings, allowed := r.communitySettings(r.ctx)
+	r.deliverCommunityNotice(r.ctx)
+	if owned := settings.OwnedNative(); len(owned) > 0 {
+		observed := map[string]serviceauthority.PublicRelay{}
+		for i := 0; i < min(2, len(owned)); i++ {
+			p := owned[(*cursor+i)%len(owned)]
+			if state, ok := r.observeOwner(p); ok {
+				observed[p.Node.NodeKey] = state
+			}
+		}
+		*cursor += 2
+		if len(observed) > 0 {
+			allowed = r.updateEligibility(observed)
+			r.deliverCommunityNotice(r.ctx)
+		}
+	}
+	if allowed {
+		r.mu.Lock()
+		origin := r.communityOrigin
+		r.mu.Unlock()
+		if origin == "" {
+			origin = r.frontend(settings.FrontURL).primary
+		}
+		r.community.Refresh(r.ctx, r.scope(origin), r.seeds(settings))
+	}
 }
 
 func (r *Runtime) noteOrigin(origin string) {
@@ -91,9 +97,17 @@ func (r *Runtime) deliverCommunityNotice(ctx context.Context) {
 }
 
 func (r *Runtime) RelaySettingsChanged(ctx context.Context) {
-	if r.community == nil {
+	if r.community == nil || r.ctx.Err() != nil {
 		return
 	}
+	if ctx == nil {
+		ctx = r.ctx
+	}
+	// Reset any share-cached origin so preference edits (including front_url)
+	// re-derive the warming origin from the updated settings immediately.
+	r.mu.Lock()
+	r.communityOrigin = ""
+	r.mu.Unlock()
 	r.deliverCommunityNotice(ctx)
 	select {
 	case r.communityKick <- struct{}{}:

@@ -104,6 +104,35 @@ pub fn relay_removed_toast(previous: &Model, current: &Model) -> Option<Text> {
     (!already_shown).then_some(Text::RelayRemoved)
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CommunityNoticeState {
+    seen: u64,
+    visible: bool,
+}
+
+impl CommunityNoticeState {
+    /// Tracks host notice counters starting from 0 so a notice already latched
+    /// in the initial host model before `ModelCursor` attaches still surfaces.
+    pub const fn observe(&mut self, notice: u64) -> bool {
+        if notice > self.seen {
+            self.seen = notice;
+            self.visible = true;
+            return true;
+        }
+        false
+    }
+
+    pub const fn visible(self) -> bool {
+        self.visible
+    }
+
+    pub const fn dismiss(&mut self) -> bool {
+        let was_visible = self.visible;
+        self.visible = false;
+        was_visible
+    }
+}
+
 #[derive(Default)]
 pub struct NetworkSettingsState {
     pub expanded_relay: Option<String>,

@@ -35,6 +35,21 @@ func (engine *Engine) CancelRelaySetup(ctx context.Context, address string) erro
 	return errors.Join(err, result.Err)
 }
 
+// NotifyRelaySettingsChanged delivers any newly pending community eligibility
+// notice and wakes background community discovery after direct relayconfig edits.
+func (engine *Engine) NotifyRelaySettingsChanged(ctx context.Context) {
+	engine.mu.Lock()
+	closing := engine.closing
+	engine.mu.Unlock()
+	if closing {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	engine.network.RelaySettingsChanged(ctx)
+}
+
 func relaySetupSettlement(ctx context.Context, err error) task.Settlement {
 	if err == nil {
 		return task.Settlement{Outcome: task.OutcomeSuccess}

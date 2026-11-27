@@ -182,8 +182,10 @@ func (a *Application) runSetup(ctx context.Context, input SetupInput) {
 	})
 	preferences, preferencesErr := a.deps.load()
 	a.mu.Lock()
-	if a.setup.guestRequested && !a.closing {
-		a.setup.guestRequested = false
+	guestRequested := a.setup.guestRequested
+	a.setup.guestRequested = false
+	ownerCommitted := err == nil && result.RelaySaved
+	if guestRequested && !ownerCommitted && !a.closing {
 		a.setup.State, a.setup.Stage = "running", "guest"
 		next, cancel := context.WithCancel(context.Background())
 		a.interruptSetup = cancel
@@ -199,7 +201,11 @@ func (a *Application) runSetup(ctx context.Context, input SetupInput) {
 	}
 	a.setup.FrontendSaved, a.setup.RelaySaved, a.setup.RelayRemoved = a.setup.FrontendSaved || result.FrontendSaved, result.RelaySaved, result.RelayRemoved
 	a.setup.RelayURL = result.RelayURL
-	cancelled := ctx.Err() != nil || a.closing
+	// guestSetup interrupts ctx to switch to anonymous access, not to cancel
+	// setup. If owner approval already committed before the interrupt took
+	// effect, keep the saved owner credential and finish normally.
+	guestSuperseded := guestRequested && ownerCommitted
+	cancelled := (ctx.Err() != nil && !guestSuperseded) || a.closing
 	a.interruptSetup()
 	a.interruptSetup = nil
 	a.setup.clearApproval()
@@ -212,6 +218,13 @@ func (a *Application) runSetup(ctx context.Context, input SetupInput) {
 		return
 	}
 	defer a.mu.Unlock()
+	if guestSuperseded {
+		a.deps.log("host.setup_guest_superseded", map[string]any{
+			"setup_id":     a.setup.ID,
+			"operation_id": a.setup.OperationID,
+			"relay_origin": endpointOrigin(result.RelayURL),
+		})
+	}
 	if err != nil {
 		a.setup.State = "failed"
 		a.setup.Recovery = setupRecovery(result, err)

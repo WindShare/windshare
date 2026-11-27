@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/engine"
+	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relaysetup"
 )
 
@@ -310,4 +311,165 @@ func TestCancelledSetupWithoutRelayReceiptSkipsCleanupAndOmitsRecovery(t *testin
 	if settled.State != "cancelled" || settled.Recovery != "" {
 		t.Fatalf("cancelled setup did not settle cleanly: %+v", settled)
 	}
+}
+
+func TestGuestOptInRacePreservesCommittedOwnerAndNormalGuestSwitchStillWorks(t *testing.T) {
+	t.Run("owner_approval_wins_race", func(t *testing.T) {
+		a, _, starts := fixture(t)
+		var saved atomic.Bool
+		start := a.deps.start
+		a.deps.start = func(ctx context.Context, request engine.ShareRequest) (shareTask, error) {
+			if !saved.Load() {
+				return nil, engine.ErrNetworkUnavailable
+			}
+			return start(ctx, request)
+		}
+		var setupCalls atomic.Int32
+		var racePending atomic.Bool
+		var supersededLogged atomic.Bool
+		a.deps.log = func(event string, fields any) {
+			if event == "host.setup_guest_superseded" {
+				if payload, ok := fields.(map[string]any); ok && payload["relay_origin"] == "https://chosen.example" {
+					supersededLogged.Store(true)
+				}
+			}
+		}
+		a.deps.setup = func(_ context.Context, input SetupInput, progress func(relaysetup.Progress)) (SetupResult, error) {
+			setupCalls.Add(1)
+			if input.Anonymous {
+				t.Error("guest retry overwrote committed owner credential")
+			}
+			progress(relaysetup.Progress{
+				Stage:           "approval_required",
+				GuestAvailable:  true,
+				VerificationURL: "https://console.example/approve",
+				UserCode:        "ABCD-EFGH",
+			})
+			saved.Store(true)
+			racePending.Store(true)
+			return SetupResult{RelayURL: input.RelayURL, RelaySaved: true}, nil
+		}
+		a.deps.cancelSetup = func(context.Context, string) error {
+			t.Error("cleanup should not run when owner approval already committed")
+			return nil
+		}
+		a.deps.load = func() (relayconfig.Config, error) {
+			// Simulate clicking "Connect as guest" right after owner enrollment
+			// commits on disk, before runSetup acquires a.mu.
+			if racePending.CompareAndSwap(true, false) {
+				if reply := a.execute(Request{Command: "guest_setup", SetupID: "setup:1"}); reply.Error != nil {
+					t.Errorf("guest_setup rejected during race window: %+v", reply.Error)
+				}
+			}
+			return configured(), nil
+		}
+
+		a.execute(createRequest())
+		awaitShare(t, a, "operation", func(s Share) bool { return s.State == AwaitingNetwork })
+		if reply := a.execute(setupRequest()); reply.Error != nil {
+			t.Fatal(reply.Error)
+		}
+		admitted(t, a)
+		a.work.Wait()
+
+		view := a.snapshot().Setup
+		if view.State != "finished" || !view.RelaySaved || view.Error != nil || setupCalls.Load() != 1 || starts.Load() != 1 || !supersededLogged.Load() {
+			t.Fatalf("owner race did not finish cleanly: setup=%+v calls=%d starts=%d logged=%v", view, setupCalls.Load(), starts.Load(), supersededLogged.Load())
+		}
+	})
+
+	t.Run("guest_opt_in_interrupts_pending_approval", func(t *testing.T) {
+		a, _, starts := fixture(t)
+		var saved atomic.Bool
+		start := a.deps.start
+		a.deps.start = func(ctx context.Context, request engine.ShareRequest) (shareTask, error) {
+			if !saved.Load() {
+				return nil, engine.ErrNetworkUnavailable
+			}
+			return start(ctx, request)
+		}
+		approvalReady := make(chan struct{})
+		var anonymousSeen atomic.Bool
+		a.deps.setup = func(ctx context.Context, input SetupInput, progress func(relaysetup.Progress)) (SetupResult, error) {
+			if !input.Anonymous {
+				progress(relaysetup.Progress{
+					Stage:           "approval_required",
+					GuestAvailable:  true,
+					VerificationURL: "https://console.example/approve",
+					UserCode:        "ABCD-EFGH",
+				})
+				close(approvalReady)
+				<-ctx.Done()
+				return SetupResult{RelayURL: input.RelayURL}, ctx.Err()
+			}
+			if input.FrontURL != "" {
+				t.Errorf("guest retry re-sent front_url: %q", input.FrontURL)
+			}
+			anonymousSeen.Store(true)
+			saved.Store(true)
+			return SetupResult{RelayURL: input.RelayURL, RelaySaved: true}, nil
+		}
+
+		a.execute(createRequest())
+		awaitShare(t, a, "operation", func(s Share) bool { return s.State == AwaitingNetwork })
+		if reply := a.execute(setupRequest()); reply.Error != nil {
+			t.Fatal(reply.Error)
+		}
+		<-approvalReady
+		if reply := a.execute(Request{Command: "guest_setup", SetupID: "setup:1"}); reply.Error != nil {
+			t.Fatalf("guest_setup failed: %+v", reply.Error)
+		}
+		admitted(t, a)
+		a.work.Wait()
+
+		view := a.snapshot().Setup
+		if view.State != "finished" || !view.RelaySaved || !anonymousSeen.Load() || starts.Load() != 1 {
+			t.Fatalf("guest opt-in did not complete cleanly: setup=%+v anon=%v starts=%d", view, anonymousSeen.Load(), starts.Load())
+		}
+	})
+
+	t.Run("explicit_cancel_after_guest_request_still_cancels", func(t *testing.T) {
+		a, _, starts := fixture(t)
+		a.deps.start = func(context.Context, engine.ShareRequest) (shareTask, error) {
+			return nil, engine.ErrNetworkUnavailable
+		}
+		var racePending atomic.Bool
+		a.deps.setup = func(_ context.Context, input SetupInput, progress func(relaysetup.Progress)) (SetupResult, error) {
+			progress(relaysetup.Progress{
+				Stage:           "approval_required",
+				GuestAvailable:  true,
+				VerificationURL: "https://console.example/approve",
+				UserCode:        "ABCD-EFGH",
+			})
+			racePending.Store(true)
+			return SetupResult{RelayURL: input.RelayURL, RelaySaved: true}, nil
+		}
+		a.deps.cancelSetup = func(context.Context, string) error {
+			t.Error("cleanup should not revoke a committed relay")
+			return nil
+		}
+		a.deps.load = func() (relayconfig.Config, error) {
+			if racePending.CompareAndSwap(true, false) {
+				if reply := a.execute(Request{Command: "guest_setup", SetupID: "setup:1"}); reply.Error != nil {
+					t.Errorf("guest_setup failed: %+v", reply.Error)
+				}
+				if reply := a.execute(Request{Command: "cancel_setup", SetupID: "setup:1"}); reply.Error != nil {
+					t.Errorf("cancel_setup failed: %+v", reply.Error)
+				}
+			}
+			return configured(), nil
+		}
+
+		a.execute(createRequest())
+		awaitShare(t, a, "operation", func(s Share) bool { return s.State == AwaitingNetwork })
+		if reply := a.execute(setupRequest()); reply.Error != nil {
+			t.Fatal(reply.Error)
+		}
+		a.work.Wait()
+
+		view := a.snapshot().Setup
+		if view.State != "cancelled" || starts.Load() != 0 {
+			t.Fatalf("explicit cancel after guest_setup did not cancel without admitting: setup=%+v starts=%d", view, starts.Load())
+		}
+	})
 }

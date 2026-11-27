@@ -201,3 +201,76 @@ func TestNativeRemoveRelayPreferencePersistsCleanConfig(t *testing.T) {
 		t.Fatalf("unexpected saved config: %+v err=%v", saved, err)
 	}
 }
+
+type recordingSetupEngine struct {
+	startErr error
+	notified atomic.Int32
+}
+
+func (e *recordingSetupEngine) StartRelaySetup(context.Context, engine.RelaySetupRequest) (*engine.Task[engine.RelaySetupResult], error) {
+	return nil, e.startErr
+}
+
+func (e *recordingSetupEngine) CancelRelaySetup(context.Context, string) error { return nil }
+
+func (e *recordingSetupEngine) NotifyRelaySettingsChanged(context.Context) { e.notified.Add(1) }
+
+func TestNativeSetupNotifiesEngineAfterSettingsUpdates(t *testing.T) {
+	store := relayconfig.FileStore{Path: filepath.Join(t.TempDir(), "settings.json")}
+	initial := relayconfig.Config{
+		Profiles:     []relayprofile.Candidate{{PublicURL: "https://one.example", AccessKey: "k"}},
+		ActiveRelays: []string{"https://one.example"},
+	}
+	if err := store.Save(initial); err != nil {
+		t.Fatal(err)
+	}
+	mock := &recordingSetupEngine{startErr: errors.New("relay start failed")}
+	setup := newNativeSetup(store, mock)
+
+	// Preference edits notify only when settings.Update commits.
+	for _, edit := range []relayconfig.PreferenceEdit{
+		{Action: "community_nodes", Value: "off"},
+		{Action: "mode", Value: "selected"},
+		{Action: "frontend", Value: "https://front.example"},
+		{Action: "remove", Value: "https://one.example"},
+	} {
+		before := mock.notified.Load()
+		if _, err := setup.run(t.Context(), SetupInput{Preference: &edit}, nil); err != nil {
+			t.Fatalf("preference %+v failed: %v", edit, err)
+		}
+		if mock.notified.Load() != before+1 {
+			t.Fatalf("preference %+v did not notify engine", edit)
+		}
+	}
+
+	// Failed preference edits must not notify.
+	beforeFail := mock.notified.Load()
+	if _, err := setup.run(t.Context(), SetupInput{
+		Preference: &relayconfig.PreferenceEdit{Action: "remove", Value: "https://missing.example"},
+	}, nil); err == nil {
+		t.Fatal("expected missing remove error")
+	}
+	if mock.notified.Load() != beforeFail {
+		t.Fatalf("failed preference edit notified engine: before=%d after=%d", beforeFail, mock.notified.Load())
+	}
+
+	// Direct FrontURL edit notifies both standalone and when subsequent relay setup fails.
+	beforeFrontOnly := mock.notified.Load()
+	if result, err := setup.run(t.Context(), SetupInput{FrontURL: "https://front-only.example"}, nil); err != nil || !result.FrontendSaved {
+		t.Fatalf("front-only edit = (%+v, %v)", result, err)
+	}
+	if mock.notified.Load() != beforeFrontOnly+1 {
+		t.Fatalf("front-only edit did not notify engine")
+	}
+
+	beforeFrontWithFailingRelay := mock.notified.Load()
+	result, err := setup.run(t.Context(), SetupInput{
+		FrontURL: "https://front-with-relay.example", RelayURL: "https://relay.example", RelayOperation: relaysetup.AddProfile,
+	}, nil)
+	if !result.FrontendSaved || err == nil {
+		t.Fatalf("front+failing relay = (%+v, %v)", result, err)
+	}
+	if mock.notified.Load() != beforeFrontWithFailingRelay+1 {
+		t.Fatalf("committed front_url did not notify engine when relay setup failed")
+	}
+}

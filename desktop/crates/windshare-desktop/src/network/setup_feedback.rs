@@ -118,6 +118,55 @@ impl Desktop {
         }
     }
 
+    pub fn community_paused_notice(&self, theme: Theme, cx: &Context<Self>) -> Option<Div> {
+        if !self.community_notice.visible() {
+            return None;
+        }
+        let locale = language(cx);
+        Some(
+            theme
+                .card()
+                .px(px(18.))
+                .py(px(14.))
+                .border_color(Tone::Peach.accent(theme).opacity(0.45))
+                .child(
+                    row()
+                        .gap(px(12.))
+                        .justify_between()
+                        .child(
+                            row()
+                                .flex_1()
+                                .min_w_0()
+                                .gap(px(10.))
+                                .child(theme.dot(Tone::Peach))
+                                .child(
+                                    theme
+                                        .label(locale.text(Text::CommunityPaused), 14.)
+                                        .flex_1()
+                                        .min_w_0(),
+                                ),
+                        )
+                        .child(
+                            Button::new(
+                                "dismiss-community-paused-notice",
+                                locale.text(Text::GotIt),
+                            )
+                            .style(ButtonStyle::Quiet)
+                            .compact()
+                            .on_press(cx.listener(
+                                |this, (), window, cx| {
+                                    this.dispatch(
+                                        crate::model::Action::DismissCommunityNotice,
+                                        window,
+                                        cx,
+                                    );
+                                },
+                            )),
+                        ),
+                ),
+        )
+    }
+
     pub fn setup_cancellation_notice(&self, theme: Theme, error: &str, cx: &Context<Self>) -> Div {
         theme
             .card()
