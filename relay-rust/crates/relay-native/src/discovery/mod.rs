@@ -10,6 +10,7 @@ use http_body_util::{BodyExt, Full, Limited};
 use hyper::{
     Method, Request, Response, StatusCode,
     body::{Bytes, Incoming},
+    header,
 };
 use record::{Envelope, MAX_RECORD, Record};
 use std::{
@@ -36,27 +37,54 @@ enum SelfGossip {
 }
 
 fn self_gossip(node: &crate::node::Runtime, endpoint: &crate::Endpoint) -> SelfGossip {
-    if transport::origin(endpoint.relay_url()).is_err() {
+    if transport::relay_origin(endpoint.relay_url()).is_err() {
         return SelfGossip::LocalOnly;
     }
     match node.gossip_descriptor(endpoint) {
         Ok(crate::node::GossipDescriptor::OptedOut) => SelfGossip::OptedOut,
-        Ok(crate::node::GossipDescriptor::Advertise(value)) => {
-            serde_json::from_value(value).map_or(SelfGossip::ObserverOnly, SelfGossip::Advertise)
+        Ok(crate::node::GossipDescriptor::Advertise(envelope)) => {
+            SelfGossip::Advertise(envelope.into())
         }
         Ok(crate::node::GossipDescriptor::ObserverOnly) | Err(_) => SelfGossip::ObserverOnly,
     }
 }
 
+struct InFlightGuard {
+    book: Arc<Mutex<Book>>,
+    key: String,
+}
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        if let Ok(mut book) = self.book.lock() {
+            book.finish_probe(&self.key);
+        }
+    }
+}
+
+pub struct QueuedProbe {
+    pub(super) record: Record,
+    guard: InFlightGuard,
+}
+
+enum QueueOutcome {
+    Queued,
+    Skipped,
+}
+
+enum QueueError {
+    Full,
+}
+
 #[derive(Clone)]
 pub struct Discovery {
     book: Arc<Mutex<Book>>,
-    sender: mpsc::Sender<Record>,
+    sender: mpsc::Sender<QueuedProbe>,
     dirty: Arc<tokio::sync::Notify>,
 }
 
 impl Discovery {
-    pub fn new() -> (Self, mpsc::Receiver<Record>) {
+    pub fn new() -> (Self, mpsc::Receiver<QueuedProbe>) {
         let (sender, receiver) = mpsc::channel(QUEUE);
         (
             Self {
@@ -118,7 +146,7 @@ impl Discovery {
                     .expect("discovery ingress")
                     .allow(source, now)
                 {
-                    let result = async {
+                    let parsed = async {
                         let body = Limited::new(request.into_body(), MAX_RECORD)
                             .collect()
                             .await
@@ -130,11 +158,25 @@ impl Discovery {
                             record.offers_community_service(),
                             "peer does not offer community service"
                         );
-                        self.queue(record, source)
+                        Ok::<_, anyhow::Error>(record)
                     }
                     .await;
-                    match result {
-                        Ok(()) => (StatusCode::ACCEPTED, Vec::new()),
+                    match parsed {
+                        Ok(record) => {
+                            match self.queue(record, source, node.public_key_b64(), endpoint, now) {
+                                Ok(QueueOutcome::Queued | QueueOutcome::Skipped) => {
+                                    (StatusCode::ACCEPTED, Vec::new())
+                                }
+                                Err(QueueError::Full) => {
+                                    tracing::debug!(
+                                        event = "discovery_rejected",
+                                        %source,
+                                        reason = "probe_queue_full"
+                                    );
+                                    (StatusCode::SERVICE_UNAVAILABLE, Vec::new())
+                                }
+                            }
+                        }
                         Err(error) => {
                             tracing::debug!(event="discovery_rejected",%source,%error);
                             (StatusCode::BAD_REQUEST, Vec::new())
@@ -147,25 +189,103 @@ impl Discovery {
             }
             _ => (StatusCode::METHOD_NOT_ALLOWED, Vec::new()),
         };
-        Response::builder()
+        let mut builder = Response::builder()
             .status(status)
-            .header("content-type", "application/json")
-            .header("connection", "close")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::CACHE_CONTROL, "no-store")
+            .header(header::CONNECTION, "close");
+        if status == StatusCode::SERVICE_UNAVAILABLE {
+            builder = builder.header(header::RETRY_AFTER, crate::node::SERVICE_RETRY_SECONDS);
+        }
+        builder
             .body(Full::new(Bytes::from(body)))
             .expect("static response")
     }
 
-    fn queue(&self, record: Record, source: impl std::fmt::Display) -> Result<()> {
-        let permit = self
-            .sender
-            .try_reserve()
-            .map_err(|_| anyhow::anyhow!("probe queue full"))?;
-        tracing::debug!(event="discovery_probe_queued",%source,node_key=%record.key,endpoint=%record.endpoint);
-        permit.send(record);
-        Ok(())
+    fn is_self(record: &Record, own_key: Option<&str>, endpoint: &crate::Endpoint) -> bool {
+        record.endpoint == endpoint.as_str() || own_key.is_some_and(|key| key == record.key)
     }
 
-    async fn verify(&self, record: Record) -> Result<()> {
+    pub(super) fn prepare_restored_probe(
+        &self,
+        record: Record,
+        own_key: Option<&str>,
+        endpoint: &crate::Endpoint,
+        now: u64,
+    ) -> Option<QueuedProbe> {
+        if Self::is_self(&record, own_key, endpoint) {
+            return None;
+        }
+        let mut book = self.book.lock().expect("peer book");
+        if book
+            .skip_probe_reason(&record.key, record.issued, now)
+            .is_some()
+        {
+            return None;
+        }
+        let key = record.key.clone();
+        book.begin_probe(key.clone());
+        drop(book);
+        Some(QueuedProbe {
+            record,
+            guard: InFlightGuard {
+                book: Arc::clone(&self.book),
+                key,
+            },
+        })
+    }
+
+    fn queue(
+        &self,
+        record: Record,
+        source: impl std::fmt::Display,
+        own_key: Option<&str>,
+        endpoint: &crate::Endpoint,
+        now: u64,
+    ) -> std::result::Result<QueueOutcome, QueueError> {
+        if Self::is_self(&record, own_key, endpoint) {
+            tracing::debug!(
+                event = "discovery_probe_skipped",
+                %source,
+                reason = "self",
+                node_key = %record.key,
+                endpoint = %record.endpoint
+            );
+            return Ok(QueueOutcome::Skipped);
+        }
+        // Check known/in-flight and reserve a probe slot atomically so duplicate
+        // replays never evict newcomers from the bounded queue or race into two probes.
+        let mut book = self.book.lock().expect("peer book");
+        if let Some(reason) = book.skip_probe_reason(&record.key, record.issued, now) {
+            drop(book);
+            tracing::debug!(
+                event = "discovery_probe_skipped",
+                %source,
+                reason,
+                node_key = %record.key,
+                endpoint = %record.endpoint
+            );
+            return Ok(QueueOutcome::Skipped);
+        }
+        let Ok(permit) = self.sender.try_reserve() else {
+            return Err(QueueError::Full);
+        };
+        let key = record.key.clone();
+        book.begin_probe(key.clone());
+        drop(book);
+        tracing::debug!(event="discovery_probe_queued",%source,node_key=%record.key,endpoint=%record.endpoint);
+        permit.send(QueuedProbe {
+            record,
+            guard: InFlightGuard {
+                book: Arc::clone(&self.book),
+                key,
+            },
+        });
+        Ok(QueueOutcome::Queued)
+    }
+
+    async fn verify(&self, probe: QueuedProbe) -> Result<()> {
+        let QueuedProbe { record, guard } = probe;
         let target = record.origin.join(LIVE)?;
         let client = transport::pinned(&target).await?;
         let response = client.get(target).send().await?;
@@ -187,6 +307,8 @@ impl Discovery {
             .lock()
             .expect("peer book")
             .insert(record, ip, now)?;
+        // Release the in-flight marker only after the verified record is visible in Book.
+        drop(guard);
         self.dirty.notify_one();
         tracing::debug!(event="discovery_peer_verified",node_key=%key,%ip);
         Ok(())
@@ -197,6 +319,8 @@ impl Discovery {
         client: &reqwest::Client,
         url: &url::Url,
         peer: &str,
+        own_key: Option<&str>,
+        endpoint: &crate::Endpoint,
         own: Option<&Envelope>,
     ) -> Result<()> {
         // Pull before announcing so remote POST rejections (rate limits or a full
@@ -208,15 +332,26 @@ impl Discovery {
         ensure!(entries.len() <= SAMPLE, "oversized sample");
         let now = crate::node::now().unsigned_abs();
         for entry in entries {
-            let result = entry.verify(Purpose::Gossip, now).and_then(|record| {
+            let verified = entry.verify(Purpose::Gossip, now).and_then(|record| {
                 ensure!(
                     record.offers_community_service(),
                     "peer does not offer community service"
                 );
-                self.queue(record, peer)
+                Ok(record)
             });
-            if let Err(error) = result {
-                tracing::debug!(event="discovery_rejected", source=%peer, %error);
+            match verified {
+                Ok(record) => {
+                    if self.queue(record, peer, own_key, endpoint, now).is_err() {
+                        tracing::debug!(
+                            event = "discovery_rejected",
+                            source = %peer,
+                            reason = "probe_queue_full"
+                        );
+                    }
+                }
+                Err(error) => {
+                    tracing::debug!(event="discovery_rejected", source=%peer, %error);
+                }
             }
         }
         if let Some(own) = own {
@@ -234,10 +369,17 @@ impl Discovery {
         Ok(())
     }
 
-    async fn exchange(&self, peer: &str, own: Option<&Envelope>) -> Result<()> {
-        let url = transport::origin(peer)?.join(PATH)?;
+    async fn exchange(
+        &self,
+        peer: &str,
+        own_key: Option<&str>,
+        endpoint: &crate::Endpoint,
+        own: Option<&Envelope>,
+    ) -> Result<()> {
+        let url = transport::relay_origin(peer)?.join(PATH)?;
         let client = transport::pinned(&url).await?;
-        self.exchange_with_client(&client, &url, peer, own).await
+        self.exchange_with_client(&client, &url, peer, own_key, endpoint, own)
+            .await
     }
 
     fn exchange_targets(
@@ -263,6 +405,7 @@ impl Discovery {
 
     async fn exchange_round(
         &self,
+        own_key: Option<&str>,
         endpoint: &crate::Endpoint,
         seeds: &[String],
         own: Option<&Envelope>,
@@ -278,7 +421,7 @@ impl Discovery {
             .skip(cursor % targets.len())
             .take(targets.len().min(EXCHANGE_FANOUT))
         {
-            match self.exchange(peer, own).await {
+            match self.exchange(peer, own_key, endpoint, own).await {
                 Ok(()) => {
                     self.book
                         .lock()
@@ -300,59 +443,72 @@ impl Discovery {
         }
     }
 
-    async fn announce(
-        &self,
-        node: &crate::node::Runtime,
-        endpoint: &crate::Endpoint,
-        seeds: &[String],
-    ) {
-        if transport::origin(endpoint.relay_url()).is_err() {
+    async fn announce(&self, node: &crate::node::Runtime, endpoint: &crate::Endpoint) {
+        if transport::relay_origin(endpoint.relay_url()).is_err() {
             // Non-public or cleartext nodes stay out of public gossip entirely;
             // keep the task alive because `Server::serve` treats discovery exit as fatal.
             std::future::pending::<()>().await;
         }
+        let mut seeds_watch = node.subscribe_bootstrap_nodes();
         let mut cursor = 0usize;
         loop {
+            let seeds = Arc::clone(&*seeds_watch.borrow_and_update());
             match self_gossip(node, endpoint) {
                 SelfGossip::LocalOnly | SelfGossip::OptedOut => {}
                 SelfGossip::ObserverOnly => {
-                    self.exchange_round(endpoint, seeds, None, cursor).await;
-                    cursor = cursor.wrapping_add(EXCHANGE_FANOUT);
-                }
-                SelfGossip::Advertise(own) => {
-                    self.exchange_round(endpoint, seeds, Some(&own), cursor)
+                    self.exchange_round(node.public_key_b64(), endpoint, &seeds, None, cursor)
                         .await;
                     cursor = cursor.wrapping_add(EXCHANGE_FANOUT);
                 }
+                SelfGossip::Advertise(own) => {
+                    self.exchange_round(
+                        node.public_key_b64(),
+                        endpoint,
+                        &seeds,
+                        Some(&own),
+                        cursor,
+                    )
+                    .await;
+                    cursor = cursor.wrapping_add(EXCHANGE_FANOUT);
+                }
             }
-            tokio::time::sleep(PERIOD).await;
+            tokio::select! {
+                () = tokio::time::sleep(PERIOD) => {}
+                changed = seeds_watch.changed() => {
+                    if changed.is_ok() {
+                        let count = seeds_watch.borrow().len();
+                        tracing::debug!(event = "discovery_bootstrap_nodes_reloaded", count);
+                    } else {
+                        tokio::time::sleep(PERIOD).await;
+                    }
+                }
+            }
         }
     }
 
     pub async fn run(
         &self,
-        mut receiver: mpsc::Receiver<Record>,
+        mut receiver: mpsc::Receiver<QueuedProbe>,
         node: &crate::node::Runtime,
         endpoint: &crate::Endpoint,
-        seeds: &[String],
         store: &crate::Database,
     ) {
-        let persistence = self.maintain_cache(store);
+        let persistence = self.maintain_cache(store, node, endpoint);
         tokio::pin!(persistence);
-        let announce = self.announce(node, endpoint, seeds);
+        let announce = self.announce(node, endpoint);
         tokio::pin!(announce);
         let mut workers = JoinSet::new();
         loop {
             tokio::select! {
                 ()=&mut announce=>return,
                 ()=&mut persistence=>return,
-                record=receiver.recv(),if workers.len()<WORKERS=>{
-                    let Some(record)=record else{return;};
-                    if record.endpoint==endpoint.as_str() {continue;}
+                probe=receiver.recv(),if workers.len()<WORKERS=>{
+                    let Some(probe)=probe else{return;};
+                    if Self::is_self(&probe.record, node.public_key_b64(), endpoint) {continue;}
                     let this=self.clone();
                     workers.spawn(async move {
-                        let address=record.endpoint.clone();
-                        if let Err(error)=this.verify(record).await.with_context(||"live probe") {
+                        let address=probe.record.endpoint.clone();
+                        if let Err(error)=this.verify(probe).await.with_context(||"live probe") {
                             tracing::debug!(event="discovery_rejected",endpoint=%address,%error);
                         }
                     });
@@ -366,3 +522,7 @@ impl Discovery {
 #[cfg(test)]
 #[path = "discovery_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "ingress_tests.rs"]
+mod ingress_tests;

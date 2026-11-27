@@ -528,3 +528,72 @@ fn disabling_contribution_clears_community_caps_when_no_static_ceiling_is_config
     assert!(!state.settings.access.contributing);
     drop(state);
 }
+
+#[test]
+fn bootstrap_nodes_hot_reload_updates_subscribers_and_rejects_reserved_suffixes() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("node.sqlite");
+    let config_path = dir.path().join("node.json");
+    let endpoint = Endpoint::parse("wss://node.example/v2/ws").unwrap();
+
+    let mut settings = Settings {
+        bootstrap_nodes: vec!["https://seed1.example".into()],
+        ..Settings::default()
+    };
+    let node = Runtime::default();
+    node.identify(Identity::generate().unwrap()).unwrap();
+    node.configure(
+        settings.clone(),
+        Database::open(&db_path, endpoint.identity).unwrap(),
+    )
+    .unwrap();
+
+    let mut seeds_watch = node.subscribe_bootstrap_nodes();
+    assert_eq!(
+        seeds_watch.borrow_and_update().as_ref(),
+        ["https://seed1.example"]
+    );
+
+    let write_config = |node_settings: &Settings| {
+        std::fs::write(
+            &config_path,
+            serde_json::to_vec(&serde_json::json!({
+                "listen": "127.0.0.1:8484",
+                "database": "node.sqlite",
+                "identity_file": "identity",
+                "node": node_settings,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    };
+
+    // Unrelated node edits must not wake bootstrap_nodes subscribers.
+    settings.region = "us-west".into();
+    write_config(&settings);
+    node.refresh_settings(Some(&config_path), now()).unwrap();
+    assert!(!seeds_watch.has_changed().unwrap());
+
+    // Valid bootstrap_nodes updates notify subscribers and update Runtime::bootstrap_nodes.
+    settings
+        .bootstrap_nodes
+        .push("https://seed2.example".into());
+    write_config(&settings);
+    node.refresh_settings(Some(&config_path), now()).unwrap();
+    assert!(seeds_watch.has_changed().unwrap());
+    assert_eq!(
+        seeds_watch.borrow_and_update().as_ref(),
+        ["https://seed1.example", "https://seed2.example"]
+    );
+
+    // Reserved DNS suffix seeds fail reload without disturbing active seeds.
+    let mut invalid = settings;
+    invalid.bootstrap_nodes = vec!["https://seed.local".into()];
+    write_config(&invalid);
+    assert!(node.refresh_settings(Some(&config_path), now()).is_err());
+    assert!(!seeds_watch.has_changed().unwrap());
+    assert_eq!(
+        seeds_watch.borrow().as_ref(),
+        ["https://seed1.example", "https://seed2.example"]
+    );
+}

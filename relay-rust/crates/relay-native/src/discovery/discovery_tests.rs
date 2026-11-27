@@ -177,14 +177,14 @@ fn announcements_have_independent_global_and_source_budgets() {
         "https://100.64.1.1",
         "https://localhost",
     ] {
-        assert!(transport::origin(raw).is_err(), "{raw}");
+        assert!(transport::relay_origin(raw).is_err(), "{raw}");
     }
     for raw in [
         "https://relay.example",
         "https://1.1.1.1",
         "https://[2606:4700:4700::1111]",
     ] {
-        assert!(transport::origin(raw).is_ok());
+        assert!(transport::relay_origin(raw).is_ok());
     }
 }
 
@@ -568,7 +568,7 @@ async fn http_handler_suppresses_disabled_and_cleartext_self_and_rejects_invalid
     let (status, _) = send_discovery_http(&discovery, &node, &public_ep, &req).await;
     assert_eq!(status, StatusCode::ACCEPTED);
     let queued = receiver.try_recv().unwrap();
-    assert_eq!(queued.endpoint, "wss://node3.example/v2/ws");
+    assert_eq!(queued.record.endpoint, "wss://node3.example/v2/ws");
 }
 
 fn signed_endpoint(raw: &str, purpose: Purpose) -> Envelope {
@@ -730,7 +730,8 @@ async fn spawn_discovery_stub(
 async fn exchange_pulls_peers_even_when_post_fails_or_is_rejected() {
     let remote_peer = signed_endpoint("wss://neighbor.example/v2/ws", Purpose::Gossip);
     let sample_body = serde_json::to_vec(&vec![remote_peer]).unwrap();
-    let own = signed_endpoint("wss://self.example/v2/ws", Purpose::Gossip);
+    let self_ep = Endpoint::parse("wss://self.example/v2/ws").unwrap();
+    let own = signed_endpoint(self_ep.as_str(), Purpose::Gossip);
     let own_json = serde_json::to_value(&own).unwrap();
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
@@ -745,12 +746,19 @@ async fn exchange_pulls_peers_even_when_post_fails_or_is_rejected() {
             spawn_discovery_stub(StatusCode::OK, sample_body.clone(), behavior).await;
 
         discovery
-            .exchange_with_client(&client, &url, "https://peer.example", Some(&own))
+            .exchange_with_client(
+                &client,
+                &url,
+                "https://peer.example",
+                None,
+                &self_ep,
+                Some(&own),
+            )
             .await
             .unwrap();
 
         let queued = receiver.try_recv().expect("peer queued from GET");
-        assert_eq!(queued.endpoint, "wss://neighbor.example/v2/ws");
+        assert_eq!(queued.record.endpoint, "wss://neighbor.example/v2/ws");
         assert!(receiver.try_recv().is_err());
 
         let requests = seen.lock().unwrap();
@@ -773,11 +781,11 @@ async fn exchange_pulls_peers_even_when_post_fails_or_is_rejected() {
     )
     .await;
     discovery
-        .exchange_with_client(&client, &url, "https://peer.example", None)
+        .exchange_with_client(&client, &url, "https://peer.example", None, &self_ep, None)
         .await
         .unwrap();
     assert_eq!(
-        receiver.try_recv().expect("observer peer").endpoint,
+        receiver.try_recv().expect("observer peer").record.endpoint,
         "wss://neighbor.example/v2/ws"
     );
     let requests = seen.lock().unwrap();
@@ -788,7 +796,8 @@ async fn exchange_pulls_peers_even_when_post_fails_or_is_rejected() {
 
 #[tokio::test]
 async fn exchange_skips_post_when_get_fails() {
-    let own = signed_endpoint("wss://self.example/v2/ws", Purpose::Gossip);
+    let self_ep = Endpoint::parse("wss://self.example/v2/ws").unwrap();
+    let own = signed_endpoint(self_ep.as_str(), Purpose::Gossip);
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
     let (discovery, mut receiver) = Discovery::new();
     let (url, seen, server) = spawn_discovery_stub(
@@ -799,7 +808,14 @@ async fn exchange_skips_post_when_get_fails() {
     .await;
 
     let error = discovery
-        .exchange_with_client(&client, &url, "https://peer.example", Some(&own))
+        .exchange_with_client(
+            &client,
+            &url,
+            "https://peer.example",
+            None,
+            &self_ep,
+            Some(&own),
+        )
         .await
         .expect_err("GET failure should fail exchange");
     assert!(error.to_string().contains("500"));

@@ -151,7 +151,6 @@ pub struct Server {
     sources: SourcePolicy,
     limits: ConnectionLimits,
     node: crate::node::Runtime,
-    bootstrap_nodes: Vec<String>,
     settings_path: Option<std::path::PathBuf>,
 }
 
@@ -189,7 +188,6 @@ impl Server {
             sources,
             limits,
             node,
-            bootstrap_nodes: Vec::new(),
             settings_path: None,
         })
     }
@@ -201,7 +199,6 @@ impl Server {
         settings: crate::node::Settings,
         path: Option<std::path::PathBuf>,
     ) -> Result<Self> {
-        self.bootstrap_nodes.clone_from(&settings.bootstrap_nodes);
         self.node.configure(settings, self.registry.store.clone())?;
         self.node
             .open_console(&self.registry.endpoint, &self.registry.store)?;
@@ -242,7 +239,6 @@ impl Server {
             receiver,
             &self.node,
             &self.registry.endpoint,
-            &self.bootstrap_nodes,
             &self.registry.store,
         );
         tokio::pin!(gossip);

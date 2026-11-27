@@ -23,6 +23,16 @@ pub(super) struct Envelope {
     signature: String,
 }
 
+impl From<crate::node::GossipEnvelope> for Envelope {
+    fn from(envelope: crate::node::GossipEnvelope) -> Self {
+        Self {
+            version: envelope.version,
+            descriptor: envelope.descriptor,
+            signature: envelope.signature,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 pub(super) struct Services {
     pub(super) relay: bool,
@@ -142,7 +152,7 @@ impl Envelope {
             "descriptor lifetime"
         );
         let endpoint = crate::Endpoint::parse(&value.relay_endpoint)?;
-        let origin = transport::origin(endpoint.relay_url())?;
+        let origin = transport::relay_origin(endpoint.relay_url())?;
         Ok(Record {
             envelope: self,
             key: value.node_key,

@@ -59,25 +59,35 @@ fn select_public_addrs_balances_dual_stack_filters_private_and_caps_fanout() {
 }
 
 #[test]
-fn origin_and_seed_origin_enforce_dns_and_root_path_rules() {
+fn relay_origin_and_seed_origin_enforce_dns_reserved_suffix_and_root_path_rules() {
     for raw in [
         "https://relay.example",
         "https://relay.example/",
+        "https://relay.example./",
         "https://relay.example:8443/",
         "https://1.1.1.1",
         "https://[2606:4700:4700::1111]:8443",
     ] {
-        assert!(origin(raw).is_ok(), "origin({raw})");
+        assert!(relay_origin(raw).is_ok(), "relay_origin({raw})");
         assert!(seed_origin(raw).is_ok(), "seed_origin({raw})");
     }
 
     // Relay base URLs may carry subpath mounts while bootstrap seeds must be root origins.
-    assert!(origin("https://relay.example/mount").is_ok());
+    assert!(relay_origin("https://relay.example/mount").is_ok());
     assert!(seed_origin("https://relay.example/mount").is_err());
 
     for raw in [
         "http://relay.example",
         "https://localhost",
+        "https://sub.localhost",
+        "https://sub.localhost.",
+        "https://printer.local",
+        "https://printer.local.",
+        "https://metadata.google.internal",
+        "https://node.invalid",
+        "https://hidden.onion",
+        "https://router.home.arpa",
+        "https://1.0.0.127.in-addr.arpa",
         "https://..",
         "https://.example",
         "https://a..b",
@@ -88,7 +98,7 @@ fn origin_and_seed_origin_enforce_dns_and_root_path_rules() {
         "https://relay.example:0",
         "https://relay.example:65536",
     ] {
-        assert!(origin(raw).is_err(), "origin({raw})");
+        assert!(relay_origin(raw).is_err(), "relay_origin({raw})");
         assert!(seed_origin(raw).is_err(), "seed_origin({raw})");
     }
 }

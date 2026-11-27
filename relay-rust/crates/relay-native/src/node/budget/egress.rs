@@ -159,9 +159,14 @@ impl Runtime {
         let mut public_exhausted = None;
         if let Poll::Ready(Ok(written)) = result {
             state.budgets.charge(limits, written as u64);
+            let monthly_exhausted =
+                limits.monthly.is_some() && state.budgets.node_remaining(&state.settings) == 0;
             if limits.public_daily.is_some() && state.budgets.public_remaining(&state.settings) == 0
             {
                 public_exhausted = limits.public_daily;
+            }
+            if public_exhausted.is_some() || monthly_exhausted {
+                self.bump_descriptor_revision();
             }
         }
         drop(state);

@@ -6,7 +6,7 @@ use crate::storage::budget::BudgetRecords;
 use anyhow::{Context, Result, anyhow, ensure};
 use std::{
     path::{Path, PathBuf},
-    sync::atomic::Ordering,
+    sync::{Arc, atomic::Ordering},
     time::{Duration, Instant},
 };
 use windshare_relay_access::{Issuer, trust::Generation};
@@ -200,9 +200,18 @@ impl Runtime {
                     state.budgets.next_rollover(&state.settings),
                     Ordering::Release,
                 );
+                self.bump_descriptor_revision();
                 publication
             },
         );
+        let bootstrap_nodes_changed = self.bootstrap_nodes.send_if_modified(|current| {
+            if current.as_ref() == state.settings.bootstrap_nodes.as_slice() {
+                false
+            } else {
+                *current = Arc::from(state.settings.bootstrap_nodes.as_slice());
+                true
+            }
+        });
         let public_just_exhausted =
             !was_public_exhausted && state.budgets.public_exhausted(&state.settings, timestamp);
         if changed {
@@ -217,6 +226,8 @@ impl Runtime {
                 contributing = state.settings.access.contributing,
                 relay_enabled = state.settings.services.relay,
                 stun_enabled = state.settings.services.stun,
+                bootstrap_nodes = state.settings.bootstrap_nodes.len(),
+                bootstrap_nodes_changed,
                 access_changed = publication.changed,
             );
         }
@@ -266,6 +277,7 @@ impl Runtime {
         } else if state.unavailable {
             state.unavailable = false;
             self.unavailable.store(false, Ordering::Release);
+            self.bump_descriptor_revision();
             tracing::info!(event = "relay_service_available", timestamp);
         }
     }
@@ -306,6 +318,7 @@ impl Runtime {
             state.budgets.next_rollover(&state.settings),
             Ordering::Release,
         );
+        self.bump_descriptor_revision();
         let public_just_exhausted =
             !was_public_exhausted && state.budgets.public_exhausted(&state.settings, timestamp);
         drop(state);

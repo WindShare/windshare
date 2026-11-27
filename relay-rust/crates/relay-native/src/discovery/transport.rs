@@ -7,6 +7,19 @@ use url::Url;
 pub(super) const TIMEOUT: Duration = Duration::from_secs(4);
 const MAX_CANDIDATES_PER_FAMILY: usize = 4;
 const MAX_DIAL_CANDIDATES: usize = 8;
+// Reject special-use and internal DNS suffixes before queueing probes so discovery
+// workers never waste time on mDNS or local resolver lookups.
+const RESERVED_DNS_SUFFIXES: [&str; 6] =
+    ["localhost", "local", "internal", "invalid", "onion", "arpa"];
+
+fn is_reserved_dns_name(name: &str) -> bool {
+    let trimmed = name.strip_suffix('.').unwrap_or(name);
+    trimmed.rsplit('.').next().is_some_and(|label| {
+        RESERVED_DNS_SUFFIXES
+            .iter()
+            .any(|suffix| label.eq_ignore_ascii_case(suffix))
+    })
+}
 
 // Restrict IPv6 to allocated global unicast and reject transition prefixes that
 // can tunnel into an IPv4 network behind the public endpoint.
@@ -34,7 +47,9 @@ pub(super) fn public(ip: IpAddr) -> bool {
     }
 }
 
-pub(super) fn origin(raw: &str) -> Result<Url> {
+/// Validates a public HTTPS relay base URL, permitting valid subpath mounts
+/// because `/.well-known/windshare` and `/discovery/v1/peers` live at origin root.
+pub(super) fn relay_origin(raw: &str) -> Result<Url> {
     let url = Url::parse(raw)?;
     ensure!(
         url.scheme() == "https"
@@ -49,7 +64,7 @@ pub(super) fn origin(raw: &str) -> Result<Url> {
         url::Host::Domain(name) => {
             crate::config::validate_dns(name)?;
             ensure!(
-                name.strip_suffix('.').unwrap_or(name).contains('.'),
+                name.strip_suffix('.').unwrap_or(name).contains('.') && !is_reserved_dns_name(name),
                 "expected public DNS name"
             );
         }
@@ -62,7 +77,7 @@ pub(super) fn origin(raw: &str) -> Result<Url> {
 /// Validates a configured discovery seed URL, rejecting non-root paths while
 /// still tolerating a trailing slash copied from a browser address bar.
 pub(super) fn seed_origin(raw: &str) -> Result<Url> {
-    let url = origin(raw)?;
+    let url = relay_origin(raw)?;
     ensure!(
         matches!(url.path(), "" | "/"),
         "expected HTTPS origin without path"
@@ -78,7 +93,7 @@ pub(super) fn canonical_origin(url: &Url) -> String {
 }
 
 pub(super) fn canonical_origin_str(raw: &str) -> Result<String> {
-    origin(raw).map(|url| canonical_origin(&url))
+    relay_origin(raw).map(|url| canonical_origin(&url))
 }
 
 /// Filters resolved socket addresses down to deduplicated public addresses,

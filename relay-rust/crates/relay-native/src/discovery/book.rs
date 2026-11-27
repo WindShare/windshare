@@ -2,7 +2,10 @@ use super::{
     record::{Envelope, Record},
     transport,
 };
-use std::{collections::BTreeMap, net::IpAddr};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    net::IpAddr,
+};
 
 pub(super) const MAX_PEERS: usize = 128;
 const PER_IP: usize = 2;
@@ -22,6 +25,7 @@ struct Peer {
 #[derive(Default)]
 pub(super) struct Book {
     peers: BTreeMap<String, Peer>,
+    in_flight: BTreeSet<String>,
     cursor: usize,
     minute: u64,
     sources: BTreeMap<IpAddr, usize>,
@@ -54,6 +58,28 @@ impl Book {
         true
     }
 
+    pub fn skip_probe_reason(&self, key: &str, issued: u64, now: u64) -> Option<&'static str> {
+        if self
+            .peers
+            .get(key)
+            .is_some_and(|peer| peer.record.expires > now && issued <= peer.record.issued)
+        {
+            return Some("known");
+        }
+        if self.in_flight.contains(key) {
+            return Some("in_flight");
+        }
+        None
+    }
+
+    pub fn begin_probe(&mut self, key: String) {
+        self.in_flight.insert(key);
+    }
+
+    pub fn finish_probe(&mut self, key: &str) {
+        self.in_flight.remove(key);
+    }
+
     pub fn insert(&mut self, record: Record, ip: IpAddr, now: u64) -> anyhow::Result<()> {
         anyhow::ensure!(
             record.offers_community_service(),
@@ -62,8 +88,8 @@ impl Book {
         self.peers.retain(|_, p| p.record.expires > now);
         let known = self.peers.get(&record.key);
         anyhow::ensure!(
-            known.is_none_or(|p| record.issued >= p.record.issued),
-            "older record"
+            known.is_none_or(|p| record.issued > p.record.issued),
+            "older or duplicate record"
         );
         let since = known
             .filter(|p| p.ip == ip && p.record.endpoint == record.endpoint)

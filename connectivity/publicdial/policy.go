@@ -114,7 +114,7 @@ func (p Policy) parseOrigin(raw string, allowSubpath bool) (*url.URL, error) {
 		if err := networkendpoint.ValidateDNSHost(host); err != nil {
 			return nil, ErrAddress
 		}
-		if !strings.Contains(strings.TrimSuffix(host, "."), ".") {
+		if !strings.Contains(strings.TrimSuffix(host, "."), ".") || isReservedDNSHost(host) {
 			return nil, ErrAddress
 		}
 	}
@@ -131,6 +131,20 @@ func (p Policy) parseOrigin(raw string, allowSubpath bool) (*url.URL, error) {
 
 func forbiddenOriginRune(r rune) bool {
 	return r <= 0x1f || r == 0x7f || unicode.IsSpace(r) || r == '\ufeff'
+}
+
+func isReservedDNSHost(host string) bool {
+	trimmed := strings.TrimSuffix(host, ".")
+	suffix := trimmed
+	if idx := strings.LastIndexByte(trimmed, '.'); idx >= 0 {
+		suffix = trimmed[idx+1:]
+	}
+	switch suffix {
+	case "localhost", "local", "internal", "invalid", "onion", "arpa":
+		return true
+	default:
+		return false
+	}
 }
 
 func validSubpath(escapedPath string) bool {

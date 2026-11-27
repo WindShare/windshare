@@ -16,7 +16,7 @@ mod trace;
 pub use configuration::Configuration;
 
 pub(crate) use budget::WriteOrigin;
-pub(crate) use descriptor::GossipDescriptor;
+pub(crate) use descriptor::{GossipDescriptor, GossipEnvelope};
 pub(crate) use metered::Metered;
 pub(crate) use metrics::Metrics;
 pub use metrics::Snapshot;
@@ -59,6 +59,9 @@ pub struct Runtime {
     pub(crate) local_contribution: Arc<OnceLock<contribution::Control>>,
     control_writer: Arc<Mutex<()>>,
     reporting_authority: Arc<OnceLock<Option<usage::Authority>>>,
+    bootstrap_nodes: watch::Sender<Arc<[String]>>,
+    gossip_cache: Arc<Mutex<Option<descriptor::CachedGossip>>>,
+    descriptor_revision: Arc<AtomicU64>,
     revocations: watch::Sender<u64>,
     epoch: Arc<AtomicU64>,
     services: Arc<AtomicU8>,
@@ -91,6 +94,9 @@ impl Default for Runtime {
             local_contribution: Arc::default(),
             control_writer: Arc::default(),
             reporting_authority: Arc::default(),
+            bootstrap_nodes: watch::channel(Arc::from([])).0,
+            gossip_cache: Arc::default(),
+            descriptor_revision: Arc::new(AtomicU64::new(0)),
             revocations: watch::channel(0).0,
             epoch: Arc::new(AtomicU64::new(0)),
             services: Arc::new(AtomicU8::new(default_services.to_bits())),
@@ -165,6 +171,14 @@ impl Runtime {
         self.epoch.load(Ordering::Acquire)
     }
 
+    pub(crate) fn subscribe_bootstrap_nodes(&self) -> watch::Receiver<Arc<[String]>> {
+        self.bootstrap_nodes.subscribe()
+    }
+
+    pub(super) fn bump_descriptor_revision(&self) {
+        self.descriptor_revision.fetch_add(1, Ordering::Release);
+    }
+
     pub(crate) async fn revoked(&self, epoch: u64) {
         let mut changes = self.revocations.subscribe();
         while *changes.borrow_and_update() == epoch {
@@ -178,6 +192,7 @@ impl Runtime {
         if !state.unavailable {
             state.unavailable = true;
             self.unavailable.store(true, Ordering::Release);
+            self.bump_descriptor_revision();
             self.epoch.fetch_add(1, Ordering::Release);
             self.revocations.send_modify(|epoch| *epoch += 1);
             tracing::warn!(event = "relay_service_unavailable", reason);
