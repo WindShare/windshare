@@ -49,7 +49,7 @@ export function Login({ area, username, initialize, expired, submit, cancelSetup
   initialize: boolean
   expired?: boolean
   submit: (password: string, name: string) => Promise<void>
-  cancelSetup: () => void
+  cancelSetup?: () => void
 }) {
   const [visible, setVisible] = useState(false)
   const action = useAction()
@@ -82,7 +82,7 @@ export function Login({ area, username, initialize, expired, submit, cancelSetup
         visible={visible} autoComplete="new-password" minLength={MIN_PASSWORD_LENGTH} />}
       <Notice feedback={feedback} />
       <button disabled={action.busy}>{action.busy ? t.signingIn : title}<Icon name={action.busy ? 'loader' : 'arrow'} size={16} /></button>
-      {initialize && <button className="quiet" type="button" onClick={cancelSetup}>{t.usePassword}</button>}
+      {initialize && cancelSetup && <button className="quiet" type="button" onClick={cancelSetup}>{t.usePassword}</button>}
     </ValidatedForm>
   </EntryPage>
 }

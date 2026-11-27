@@ -3,6 +3,7 @@ import { ManagedTURN } from './managed-turn'
 import { useMemo, useState } from 'react'
 import { useAction, useResource, type Feedback } from '../ui/activity'
 import { ChangePasswordDialog, Login } from '../ui/forms'
+import { FocusPage } from '../ui/FocusPage'
 import { Icon } from '../ui/Icon'
 import './relay.css'
 import { Frame, Notice, SessionWait } from '../ui/layout'
@@ -28,13 +29,20 @@ function RelayContent({ api, session, capabilities, code, token, expired, clearT
   resetSession: () => void
 }) {
   const t = useCopy(relayCopy)
+  const shared = useCopy(sharedCopy)
   const page = usePage()
   // The signed-in console owns delivery of the key across route changes.
   const keyCreation = useServiceKeyCreation(api)
   if (capabilities === undefined) return <SessionWait error={session.error} retry={session.reload} />
-  if (capabilities === 'uninitialized' && !token) return <section className="panel"><h1>{t.owner}</h1><p>{t.initializeAtNode}</p></section>
+  if (capabilities === 'uninitialized' && !token) {
+    return <FocusPage icon="shield" label={t.owner} title={shared.ownerSetupTitle}>
+      <p className="lead">{t.initializeAtNode}</p>
+    </FocusPage>
+  }
   if (capabilities === null || capabilities === 'uninitialized') {
-    return <Login area={code ? t.pairing : t.owner} initialize={!!token} expired={expired} cancelSetup={clearToken}
+    // Uninitialized nodes have no password yet; offering password sign-in would discard the in-memory setup token.
+    const cancelSetup = capabilities === 'uninitialized' ? undefined : clearToken
+    return <Login area={code ? t.pairing : t.owner} initialize={!!token} expired={expired} cancelSetup={cancelSetup}
       submit={async password => { await api.signIn(password, token); resetSession() }} />
   }
   if (code) return <Pairing api={api} code={code} />

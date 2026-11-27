@@ -9,6 +9,31 @@ export const BYTES_PER_MEGABIT = 125_000
 export const MAX_DAILY_GIB = Math.floor(Number.MAX_SAFE_INTEGER / GIB)
 export const MAX_RATE_MBPS = Math.floor(Number.MAX_SAFE_INTEGER / BYTES_PER_MEGABIT)
 export const MAX_CONNECTIONS = Number.MAX_SAFE_INTEGER
+const CEILING_FRACTION_DIGITS = 2
+const MIN_DISPLAYED_CEILING = 10 ** -CEILING_FRACTION_DIGITS
+
+export function formatCeilingLimit(
+  raw: number,
+  unit: number,
+  unitLabel: string | undefined,
+  locale: string,
+): string {
+  const scaled = raw / unit
+  let formatted: string
+  if (unit === 1) {
+    formatted = scaled.toLocaleString(locale, { maximumFractionDigits: 0 })
+  } else if (scaled > 0 && scaled < MIN_DISPLAYED_CEILING) {
+    // Keep small positive ceilings distinguishable from an explicit zero budget.
+    const floor = MIN_DISPLAYED_CEILING.toLocaleString(locale, {
+      minimumFractionDigits: CEILING_FRACTION_DIGITS,
+      maximumFractionDigits: CEILING_FRACTION_DIGITS,
+    })
+    formatted = `< ${floor}`
+  } else {
+    formatted = scaled.toLocaleString(locale, { maximumFractionDigits: CEILING_FRACTION_DIGITS })
+  }
+  return unitLabel ? `${formatted} ${unitLabel}` : formatted
+}
 
 export interface ContributionDraft {
   enabled: boolean

@@ -7,6 +7,7 @@ import {
   MAX_DAILY_GIB,
   MAX_RATE_MBPS,
   draftFromPolicy,
+  formatCeilingLimit,
   parseContributionDraft,
 } from '../relay/contribution-policy.ts'
 
@@ -91,4 +92,16 @@ test('contribution policy parser enforces safe integer bounds and rejects invali
   for (const draft of invalidCases) {
     assert.equal(parseContributionDraft(draft), null, JSON.stringify(draft))
   }
+})
+
+test('formatCeilingLimit rounds fractional ceilings with units and preserves non-zero floors', () => {
+  assert.equal(formatCeilingLimit(500_000_000_000, GIB, 'GiB', 'en'), '465.66 GiB')
+  assert.equal(formatCeilingLimit(10 * GIB, GIB, 'GiB', 'en'), '10 GiB')
+  assert.equal(formatCeilingLimit(0, GIB, 'GiB', 'en'), '0 GiB')
+  assert.equal(formatCeilingLimit(1024, GIB, 'GiB', 'en'), '< 0.01 GiB')
+  assert.equal(formatCeilingLimit(12_500_000, BYTES_PER_MEGABIT, 'Mbps', 'en'), '100 Mbps')
+  assert.equal(formatCeilingLimit(10_485_760, BYTES_PER_MEGABIT, 'Mbps', 'en'), '83.89 Mbps')
+  assert.equal(formatCeilingLimit(100, BYTES_PER_MEGABIT, 'Mbps', 'en'), '< 0.01 Mbps')
+  assert.equal(formatCeilingLimit(64, 1, undefined, 'en'), '64')
+  assert.equal(formatCeilingLimit(1024, 1, undefined, 'en'), '1,024')
 })
