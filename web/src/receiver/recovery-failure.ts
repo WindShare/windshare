@@ -4,7 +4,7 @@ import { BlockLaneAttemptsError } from '../content/broker'
 import { BlockInactivityTimeoutError } from '../content/scheduling/block-response-wait'
 import { OperationRetryError, type SessionLaneIdentity, SessionRuntimeError } from '../session/runtime-types'
 import { RelayReceiverError } from '../transport/relay/receiver'
-import { RELAY_ERROR, RelayProtocolError } from '../transport/relay/protocol'
+import { RELAY_ERROR, RelayProtocolError, type RelayErrorCode } from '../transport/relay/protocol'
 import { SenderObjectError } from '../crypto/sender-object'
 import { CborError } from '../protocol/cbor'
 import { TranscriptError } from '../session/transcript'
@@ -50,10 +50,18 @@ export function recoveryBandwidthWait(error: unknown, depth = 0): number {
   return error instanceof Error ? recoveryBandwidthWait(error.cause, depth + 1) : 0
 }
 
+export type RecoveryRetryReason = 'bandwidth' | 'server' | 'share_not_ready'
+
 export interface RecoveryRetry {
   readonly retryAt: number
-  readonly reason: 'bandwidth' | 'server'
+  readonly reason: RecoveryRetryReason
 }
+
+const RETRY_REASON_PRIORITY: Readonly<Record<RecoveryRetryReason, number>> = Object.freeze({
+  share_not_ready: 0,
+  server: 1,
+  bandwidth: 2,
+})
 
 export class RelayCooldownError extends Error {
   readonly retry: RecoveryRetry
@@ -66,7 +74,23 @@ export class RelayCooldownError extends Error {
 }
 
 export function latestRecoveryRetry(first: RecoveryRetry | undefined, second: RecoveryRetry | undefined): RecoveryRetry | undefined {
-  return first === undefined || (second !== undefined && second.retryAt > first.retryAt) ? second : first
+  if (first === undefined) return second
+  if (second === undefined) return first
+  if (second.retryAt !== first.retryAt) return second.retryAt > first.retryAt ? second : first
+  return RETRY_REASON_PRIORITY[second.reason] > RETRY_REASON_PRIORITY[first.reason] ? second : first
+}
+
+export function earliestRecoveryRetry(first: RecoveryRetry | undefined, second: RecoveryRetry | undefined): RecoveryRetry | undefined {
+  if (first === undefined) return second
+  if (second === undefined) return first
+  if (second.retryAt !== first.retryAt) return second.retryAt < first.retryAt ? second : first
+  return RETRY_REASON_PRIORITY[second.reason] < RETRY_REASON_PRIORITY[first.reason] ? second : first
+}
+
+function relayRetryReason(code: RelayErrorCode): 'server' | 'share_not_ready' {
+  // Code 9 (`starting`) covers both initial publication and a detached sender
+  // in grace: its RetryAfter paces polling rather than signalling a relay outage.
+  return code === RELAY_ERROR.starting ? 'share_not_ready' : 'server'
 }
 
 export function recoveryRetry(error: unknown, now: number, depth = 0): RecoveryRetry | undefined {
@@ -79,11 +103,46 @@ export function recoveryRetry(error: unknown, now: number, depth = 0): RecoveryR
       (latest, cause: unknown) => latestRecoveryRetry(latest, recoveryRetry(cause, now, depth + 1)), undefined)
   }
   if (!(error instanceof Error)) return undefined
-  const milliseconds = error instanceof RelayReceiverError ? error.relayError?.retryAfterMilliseconds ?? 0 : 0
+  const relayError = error instanceof RelayReceiverError ? error.relayError : undefined
+  const milliseconds = relayError?.retryAfterMilliseconds ?? 0
   return latestRecoveryRetry(
-    milliseconds > 0 ? { retryAt: now + milliseconds, reason: 'server' } : undefined,
+    milliseconds > 0 && relayError !== undefined
+      ? { retryAt: now + milliseconds, reason: relayRetryReason(relayError.code) }
+      : undefined,
     recoveryRetry(error.cause, now, depth + 1),
   )
+}
+
+export interface RecoveryWaitPlan {
+  readonly retryAt: number
+  readonly mandatory?: Readonly<{
+    readonly milliseconds: number
+    readonly reason: 'capacity' | 'server' | 'bandwidth'
+  }>
+  readonly shareFloorAt?: number
+}
+
+export function planRecoveryWait(
+  now: number,
+  capacityDelay: number,
+  backoff: number,
+  retry: RecoveryRetry | undefined,
+): RecoveryWaitPlan {
+  const retryDelay = Math.max(0, (retry?.retryAt ?? now) - now)
+  // Share-not-ready polling hints still pace reconnects, but are not relay
+  // outages and must not flash the service-cooldown banner.
+  const serviceReason = retry?.reason === 'bandwidth' || retry?.reason === 'server' ? retry.reason : undefined
+  const serviceDelay = serviceReason === undefined ? 0 : retryDelay
+  const mandatoryMilliseconds = Math.max(capacityDelay, serviceDelay)
+  const retryAt = now + Math.max(capacityDelay, retryDelay, backoff)
+  const mandatoryReason = serviceDelay >= capacityDelay && serviceReason !== undefined ? serviceReason : 'capacity'
+  return Object.freeze({
+    retryAt,
+    ...(mandatoryMilliseconds > 0
+      ? { mandatory: Object.freeze({ milliseconds: mandatoryMilliseconds, reason: mandatoryReason }) }
+      : {}),
+    ...(retry?.reason === 'share_not_ready' && retryDelay > 0 ? { shareFloorAt: retry.retryAt } : {}),
+  })
 }
 
 export function isLaneRecoveryFailure(error: unknown): boolean {

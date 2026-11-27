@@ -71,13 +71,15 @@ describe('reconnect control admission', () => {
       session.detach(1)
       await vi.advanceTimersByTimeAsync(0)
       expect(states.at(-1)).toEqual({ kind: 'reconnecting', activity: {
-        kind: 'waiting', reason: 'server', retryAt: 250,
+        kind: 'waiting', reason: 'backoff', retryAt: 250,
       } })
       supervisor.requestReconnect()
       await vi.advanceTimersByTimeAsync(249)
+      expect(states.at(-1)).toEqual({ kind: 'reconnecting', activity: { kind: 'connecting' } })
       expect(dial.mock.calls.map(([base]) => base)).toEqual([official, independent])
       await vi.advanceTimersByTimeAsync(751)
       expect(states.at(-1)).toEqual({ kind: 'connected' })
+      expect(states.some(state => state.kind === 'reconnecting' && state.activity.kind === 'waiting' && state.activity.reason === 'server')).toBe(false)
       expect(supervisor.generationId).toBe(2)
       expect(dial.mock.calls.filter(([base]) => base === official)).toHaveLength(1)
     } finally { await supervisor.close() }
@@ -140,6 +142,51 @@ describe('reconnect control admission', () => {
       expect(states.at(-1)).toEqual({ kind: 'connected' })
       expect(traces).toContainEqual(expect.objectContaining({ eventName: 'connection_recovery',
         generationId: 1, transition: 'waiting', waitReason: 'capacity', delayMilliseconds: 75_000 }))
+    } finally { await supervisor.close() }
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('keeps share-not-ready polling hints out of the server cooldown banner while honoring the 250ms floor', async () => {
+    const { session, factory, supervisor, states, traces } = fixture()
+    const connected = deferred<ProtocolGenerationCore>()
+    factory.connectFreshImpl = async () => {
+      if (factory.connectFreshCalls > 2) return connected.promise
+      throw new RelayReceiverError('This share is not ready yet.', { relayError: {
+        code: RELAY_ERROR.starting, retryAfterMilliseconds: 250,
+      } })
+    }
+    try {
+      session.detach(1)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(states.at(-1)).toEqual({ kind: 'reconnecting', activity: {
+        kind: 'waiting', reason: 'backoff', retryAt: 5_000,
+      } })
+      expect(traces).toContainEqual(expect.objectContaining({ eventName: 'connection_recovery',
+        generationId: 1, transition: 'waiting', waitReason: 'share_not_ready', delayMilliseconds: 5_000 }))
+
+      // A manual retry before the 250ms floor gives immediate connecting feedback
+      // without redialing early or flashing a service-cooldown notice.
+      await vi.advanceTimersByTimeAsync(50)
+      supervisor.requestReconnect()
+      await vi.advanceTimersByTimeAsync(199)
+      expect(factory.connectFreshCalls).toBe(1)
+      expect(states.at(-1)).toEqual({ kind: 'reconnecting', activity: { kind: 'connecting' } })
+      await vi.advanceTimersByTimeAsync(1)
+      expect(factory.connectFreshCalls).toBe(2)
+      expect(states.at(-1)).toEqual({ kind: 'reconnecting', activity: {
+        kind: 'waiting', reason: 'backoff', retryAt: 5_250,
+      } })
+
+      // Once the 250ms floor has elapsed, manual retry skips the remaining backoff immediately.
+      await vi.advanceTimersByTimeAsync(300)
+      supervisor.requestReconnect()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(factory.connectFreshCalls).toBe(3)
+      expect(states.at(-1)).toEqual({ kind: 'reconnecting', activity: { kind: 'connecting' } })
+      expect(states.some(state => state.kind === 'reconnecting' && state.activity.kind === 'waiting' && state.activity.reason === 'server')).toBe(false)
+      connected.resolve(core(new FakeSession([2]), new TrackedRelay(2)))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(states.at(-1)).toEqual({ kind: 'connected' })
     } finally { await supervisor.close() }
     expect(vi.getTimerCount()).toBe(0)
   })

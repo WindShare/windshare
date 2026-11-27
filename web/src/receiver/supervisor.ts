@@ -1,7 +1,7 @@
 import {
   hasBlockInactivityTimeout, isTerminalRecoveryFailure, isShareRecoveryFailure,
-  isLaneRecoveryFailure, isSessionFailure, latestRecoveryRetry, recoveryBandwidthWait,
-  recoveryRetry, RelayCooldownError, stalledBlockLanes,
+  isLaneRecoveryFailure, isSessionFailure, latestRecoveryRetry, planRecoveryWait,
+  recoveryBandwidthWait, recoveryRetry, RelayCooldownError, stalledBlockLanes,
 } from './recovery-failure'
 import {
   defaultReconnectBackoff, generationReconnectBackoff, reconnectPhase, requireBackoff,
@@ -525,32 +525,46 @@ export class ReceiverReconnectSupervisor implements ContentGenerationProvider {
     this.#recoveryPhase = error instanceof GenerationRecoveryExhaustedError || retry?.reason === 'bandwidth'
       ? 'waiting' : reconnectPhase(this.#recoveryAttempt, now - startedAt)
     const capacityDelay = this.#generationRecovery.nextCapacityMilliseconds(now)
-    const serverDelay = Math.max(0, (retry?.retryAt ?? now) - now)
-    const requiredDelay = Math.max(capacityDelay, serverDelay)
     const backoff = this.#recoveryPhase === 'waiting' ? waitingReconnectBackoff()
       : requireBackoff(this.#generationBackoffMilliseconds(Math.max(0, this.#recoveryAttempt - 1)))
-    const delay = Math.max(requiredDelay, backoff)
-    const retryAt = now + delay
-    const reason = serverDelay >= capacityDelay ? retry?.reason ?? 'server' : 'capacity'
+    const plan = planRecoveryWait(now, capacityDelay, backoff, retry)
     try {
       // A manual request can skip backoff, but cannot manufacture capacity or
       // override the service's retry deadline. Publish that same distinction to UI.
-      if (requiredDelay > 0) await this.#waitForReconnect(requiredDelay, {
-        kind: 'waiting', reason, retryAt,
-      }, error)
-      const remaining = Math.max(0, retryAt - this.#clock.now())
-      if (remaining > 0) await this.#waitForReconnect(remaining, {
-        kind: 'waiting', reason: 'backoff', retryAt,
-      }, error)
+      if (plan.mandatory !== undefined) await this.#waitForReconnect(plan.mandatory.milliseconds, {
+        kind: 'waiting', reason: plan.mandatory.reason, retryAt: plan.retryAt,
+      }, plan.mandatory.reason, error)
+      const remaining = Math.max(0, plan.retryAt - this.#clock.now())
+      if (remaining > 0) {
+        const waitReason = plan.shareFloorAt !== undefined && this.#clock.now() < plan.shareFloorAt
+          ? 'share_not_ready' : 'backoff'
+        await this.#waitForReconnect(remaining, {
+          kind: 'waiting', reason: 'backoff', retryAt: plan.retryAt,
+        }, waitReason, error)
+      }
+      await this.#awaitSharePollingFloor(plan.shareFloorAt, error)
       return true
     } catch {
       return false
     }
   }
 
+  async #awaitSharePollingFloor(shareFloorAt: number | undefined, failure: unknown): Promise<void> {
+    if (shareFloorAt === undefined) return
+    const remaining = Math.max(0, shareFloorAt - this.#clock.now())
+    if (remaining <= 0) return
+    // Honor the relay's polling floor after a manual retry click without
+    // surfacing a misleading service-cooldown status.
+    this.connection.reconnecting({ kind: 'connecting' })
+    this.#traceConnection({ transition: 'waiting', delayMilliseconds: remaining,
+      waitReason: 'share_not_ready', failure })
+    await this.#clock.sleep(remaining, this.#lifetime.signal)
+  }
+
   async #waitForReconnect(
     milliseconds: number,
     activity: Extract<ReceiverReconnectActivity, { kind: 'waiting' }>,
+    waitReason: NonNullable<RecoveryObservation['waitReason']>,
     failure: unknown,
   ): Promise<void> {
     // Arm the wake before notifying observers, which may immediately request a retry.
@@ -559,7 +573,7 @@ export class ReceiverReconnectSupervisor implements ContentGenerationProvider {
       : this.#clock.sleep(milliseconds, this.#lifetime.signal)
     this.connection.reconnecting(activity)
     this.#traceConnection({ transition: 'waiting', delayMilliseconds: milliseconds,
-      waitReason: activity.reason, failure })
+      waitReason, failure })
     await wait
   }
 

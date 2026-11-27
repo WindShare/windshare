@@ -4,8 +4,8 @@ import {
 import { firstUsableRelay, RelayEndpointFailure } from './race'
 import { systemReconnectClock, type ReconnectClock } from '../recovery-clock'
 import {
-  isShareRecoveryFailure, isTerminalRecoveryFailure, latestRecoveryRetry, recoveryRetry,
-  RelayCooldownError, type RecoveryRetry,
+  earliestRecoveryRetry, isShareRecoveryFailure, isTerminalRecoveryFailure, latestRecoveryRetry,
+  recoveryRetry, RelayCooldownError, type RecoveryRetry,
 } from '../recovery-failure'
 
 type EndpointRejection =
@@ -77,9 +77,7 @@ export class RelayRecovery {
     for (const base of this.candidates.bases) {
       const rejection = this.#blockingRejection(base, now)
       if (rejection === undefined) return undefined
-      if (rejection.kind === 'cooldown' && (earliest === undefined || rejection.retry.retryAt < earliest.retryAt)) {
-        earliest = rejection.retry
-      }
+      if (rejection.kind === 'cooldown') earliest = earliestRecoveryRetry(earliest, rejection.retry)
     }
     return earliest
   }

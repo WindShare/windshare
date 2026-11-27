@@ -9,10 +9,14 @@ import { EnvelopeError } from '../../src/session/envelope'
 import { OperationRetryError, SessionRuntimeError } from '../../src/session/runtime-types'
 import { BlockLaneAttemptsError } from '../../src/content/broker'
 import { BlockInactivityTimeoutError } from '../../src/content/scheduling/block-response-wait'
+import { BandwidthWaitError } from '../../src/contracts/capacity'
 import {
+  earliestRecoveryRetry,
   isLaneRecoveryFailure,
   isShareRecoveryFailure,
   isTerminalRecoveryFailure,
+  latestRecoveryRetry,
+  planRecoveryWait,
   recoveryRetry,
   stalledBlockLanes,
 } from '../../src/receiver/recovery-failure'
@@ -67,6 +71,35 @@ describe('receiver failure scope', () => {
     expect(recoveryRetry(scoped, 10)).toBeUndefined()
     expect(recoveryRetry(new AggregateError([scoped, relayFailure(RELAY_ERROR.admission, 100)]), 10)).toEqual({
       retryAt: 110, reason: 'server',
+    })
+  })
+
+  it('distinguishes share-not-ready polling hints from relay service cooldowns', () => {
+    expect(recoveryRetry(relayFailure(RELAY_ERROR.starting, 250), 10)).toEqual({
+      retryAt: 260, reason: 'share_not_ready',
+    })
+    expect(recoveryRetry(relayFailure(RELAY_ERROR.admission, 250), 10)).toEqual({
+      retryAt: 260, reason: 'server',
+    })
+    expect(recoveryRetry(relayFailure(RELAY_ERROR.accessUnavailable, 1_000), 10)).toEqual({
+      retryAt: 1_010, reason: 'server',
+    })
+    const shareRetry = { retryAt: 260, reason: 'share_not_ready' as const }
+    const serverRetry = { retryAt: 260, reason: 'server' as const }
+    const bandwidthRetry = recoveryRetry(new BandwidthWaitError(250, new Error('busy')), 10)!
+    expect(latestRecoveryRetry(shareRetry, serverRetry)).toEqual(serverRetry)
+    expect(latestRecoveryRetry(serverRetry, shareRetry)).toEqual(serverRetry)
+    expect(latestRecoveryRetry(serverRetry, bandwidthRetry)).toEqual(bandwidthRetry)
+    expect(earliestRecoveryRetry(serverRetry, shareRetry)).toEqual(shareRetry)
+    expect(earliestRecoveryRetry(shareRetry, serverRetry)).toEqual(shareRetry)
+    expect(planRecoveryWait(10, 0, 5_000, shareRetry)).toEqual({
+      retryAt: 5_010, shareFloorAt: 260,
+    })
+    expect(planRecoveryWait(10, 100, 5_000, shareRetry)).toEqual({
+      retryAt: 5_010, mandatory: { milliseconds: 100, reason: 'capacity' }, shareFloorAt: 260,
+    })
+    expect(planRecoveryWait(10, 0, 5_000, serverRetry)).toEqual({
+      retryAt: 5_010, mandatory: { milliseconds: 250, reason: 'server' },
     })
   })
 
