@@ -5,6 +5,8 @@ use std::time::Duration;
 use url::Url;
 
 pub(super) const TIMEOUT: Duration = Duration::from_secs(4);
+const MAX_CANDIDATES_PER_FAMILY: usize = 4;
+const MAX_DIAL_CANDIDATES: usize = 8;
 
 // Restrict IPv6 to allocated global unicast and reject transition prefixes that
 // can tunnel into an IPv4 network behind the public endpoint.
@@ -44,13 +46,27 @@ pub(super) fn origin(raw: &str) -> Result<Url> {
         "expected HTTPS node address"
     );
     match url.host().context("missing node host")? {
-        url::Host::Domain(name) => ensure!(
-            name.trim_end_matches('.').contains('.'),
-            "expected public DNS name"
-        ),
+        url::Host::Domain(name) => {
+            crate::config::validate_dns(name)?;
+            ensure!(
+                name.strip_suffix('.').unwrap_or(name).contains('.'),
+                "expected public DNS name"
+            );
+        }
         url::Host::Ipv4(ip) => ensure!(public(ip.into()), "non-public node address"),
         url::Host::Ipv6(ip) => ensure!(public(ip.into()), "non-public node address"),
     }
+    Ok(url)
+}
+
+/// Validates a configured discovery seed URL, rejecting non-root paths while
+/// still tolerating a trailing slash copied from a browser address bar.
+pub(super) fn seed_origin(raw: &str) -> Result<Url> {
+    let url = origin(raw)?;
+    ensure!(
+        matches!(url.path(), "" | "/"),
+        "expected HTTPS origin without path"
+    );
     Ok(url)
 }
 
@@ -65,33 +81,90 @@ pub(super) fn canonical_origin_str(raw: &str) -> Result<String> {
     origin(raw).map(|url| canonical_origin(&url))
 }
 
-pub(super) async fn pinned(url: &Url) -> Result<(Client, IpAddr)> {
+/// Filters resolved socket addresses down to deduplicated public addresses,
+/// balancing the preferred and fallback IP families so a long AAAA list cannot
+/// starve IPv4 Happy Eyeballs fallback in hyper's connector.
+pub(super) fn select_public_addrs(
+    answers: impl IntoIterator<Item = SocketAddr>,
+) -> Vec<SocketAddr> {
+    let mut primaries = Vec::new();
+    let mut fallbacks = Vec::new();
+    let mut seen = Vec::new();
+    let mut primary_is_v6 = None;
+
+    for addr in answers {
+        let ip = addr.ip().to_canonical();
+        if !public(ip) {
+            continue;
+        }
+        let canonical = SocketAddr::new(ip, addr.port());
+        if seen.contains(&canonical) {
+            continue;
+        }
+        seen.push(canonical);
+        let is_v6 = ip.is_ipv6();
+        let preferred = *primary_is_v6.get_or_insert(is_v6);
+        let bucket = if is_v6 == preferred {
+            &mut primaries
+        } else {
+            &mut fallbacks
+        };
+        if bucket.len() < MAX_CANDIDATES_PER_FAMILY {
+            bucket.push(canonical);
+        }
+    }
+
+    let mut out = Vec::with_capacity((primaries.len() + fallbacks.len()).min(MAX_DIAL_CANDIDATES));
+    let mut index = 0;
+    while out.len() < MAX_DIAL_CANDIDATES && (index < primaries.len() || index < fallbacks.len()) {
+        if let Some(&addr) = primaries.get(index) {
+            out.push(addr);
+        }
+        if out.len() < MAX_DIAL_CANDIDATES
+            && let Some(&addr) = fallbacks.get(index)
+        {
+            out.push(addr);
+        }
+        index += 1;
+    }
+    out
+}
+
+pub(super) async fn pinned(url: &Url) -> Result<Client> {
     let host = url
         .host_str()
         .context("missing host")?
         .trim_matches(['[', ']']);
     let port = url.port_or_known_default().context("missing port")?;
-    let address = if let Ok(ip) = host.parse::<IpAddr>() {
-        SocketAddr::new(ip, port)
-    } else {
-        let answers =
-            tokio::time::timeout(TIMEOUT, tokio::net::lookup_host((host, port))).await??;
-        answers
-            .into_iter()
-            .find(|addr| public(addr.ip()))
-            .context("no public DNS address")?
-    };
-    ensure!(public(address.ip()), "non-public peer");
-    // TLS still verifies the original name. No second DNS lookup, proxy or redirect
-    // can substitute a different destination after the address check.
-    let client = Client::builder()
+    let mut builder = Client::builder()
         .no_proxy()
         .https_only(true)
         .timeout(TIMEOUT)
-        .redirect(Policy::none())
-        .resolve(host, address)
-        .build()?;
-    Ok((client, address.ip().to_canonical()))
+        .redirect(Policy::none());
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        ensure!(public(ip), "non-public peer");
+    } else {
+        let answers =
+            tokio::time::timeout(TIMEOUT, tokio::net::lookup_host((host, port))).await??;
+        let addrs = select_public_addrs(answers);
+        ensure!(!addrs.is_empty(), "no public DNS address");
+        // Pin all bounded public answers so hyper runs Happy Eyeballs across
+        // both address families without a second DNS lookup after validation.
+        builder = builder.resolve_to_addrs(host, &addrs);
+    }
+    Ok(builder.build()?)
+}
+
+/// Returns the actual peer IP that served the response after Happy Eyeballs
+/// selection so per-IP and per-prefix peer-book quotas reflect the real route.
+pub(super) fn verified_remote_ip(response: &Response) -> Result<IpAddr> {
+    let ip = response
+        .remote_addr()
+        .context("missing connected peer address")?
+        .ip()
+        .to_canonical();
+    ensure!(public(ip), "non-public peer");
+    Ok(ip)
 }
 
 pub(super) async fn body(response: Response, limit: usize) -> Result<Vec<u8>> {
@@ -111,3 +184,7 @@ pub(super) async fn body(response: Response, limit: usize) -> Result<Vec<u8>> {
     }
     Ok(data)
 }
+
+#[cfg(test)]
+#[path = "transport_tests.rs"]
+mod tests;

@@ -71,7 +71,7 @@ impl Discovery {
     pub fn validate(seeds: &[String]) -> Result<()> {
         ensure!(seeds.len() <= MAX_SEEDS, "too many bootstrap nodes");
         for seed in seeds {
-            transport::origin(seed)?;
+            transport::seed_origin(seed)?;
         }
         Ok(())
     }
@@ -167,8 +167,10 @@ impl Discovery {
 
     async fn verify(&self, record: Record) -> Result<()> {
         let target = record.origin.join(LIVE)?;
-        let (client, ip) = transport::pinned(&target).await?;
-        let data = transport::body(client.get(target).send().await?, MAX_RECORD).await?;
+        let client = transport::pinned(&target).await?;
+        let response = client.get(target).send().await?;
+        let ip = transport::verified_remote_ip(&response)?;
+        let data = transport::body(response, MAX_RECORD).await?;
         let now = crate::node::now().unsigned_abs();
         let live = serde_json::from_slice::<Envelope>(&data)?.verify(Purpose::Live, now)?;
         ensure!(
@@ -234,7 +236,7 @@ impl Discovery {
 
     async fn exchange(&self, peer: &str, own: Option<&Envelope>) -> Result<()> {
         let url = transport::origin(peer)?.join(PATH)?;
-        let (client, _) = transport::pinned(&url).await?;
+        let client = transport::pinned(&url).await?;
         self.exchange_with_client(&client, &url, peer, own).await
     }
 

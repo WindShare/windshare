@@ -97,7 +97,7 @@ func readBounded(r io.Reader, n int) ([]byte, error) {
 func (p *Pool) accept(raw json.RawMessage, source string) bool {
 	d, err := serviceauthority.InspectGossip(raw, p.now())
 	if err == nil {
-		_, err = p.policy.Origin(d.RelayBaseURL())
+		_, err = p.policy.RelayOrigin(d.RelayBaseURL())
 	}
 	if err != nil {
 		p.trace("community_descriptor_rejected", source, err.Error())
@@ -181,7 +181,7 @@ func (p *Pool) Candidates(scope Scope) []relayplan.Candidate {
 }
 
 func (p *Pool) sample(ctx context.Context, target string) error {
-	origin, err := p.policy.Origin(target)
+	origin, err := p.policy.RelayOrigin(target)
 	if err != nil {
 		return err
 	}

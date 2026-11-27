@@ -176,3 +176,26 @@ func TestLoadDefaultsAndExplicitFileFailures(t *testing.T) {
 		t.Fatalf("corrupt config silently fell back: %v", err)
 	}
 }
+
+func TestBootstrapNodesRequireStrictPublicHTTPSOrigins(t *testing.T) {
+	valid := `{"profiles":[],"bootstrap_nodes":["https://cn1.ourworld.top","https://us1.windshare.cc/","https://1.1.1.1:8443/"]}`
+	cfg, err := Decode(strings.NewReader(valid))
+	if err != nil || len(cfg.BootstrapNodes) != 3 {
+		t.Fatalf("valid bootstrap_nodes rejected: %v %v", cfg.BootstrapNodes, err)
+	}
+	for _, seed := range []string{
+		"https://cn1.ourworld.top/subpath",
+		"https://127.1",
+		"https://cn1.ourworld.top?",
+		"https://cn1.ourworld.top#",
+		"https://cn1.ourworld.top:0",
+		"https://cn1.ourworld.top:65536",
+		"https://cn1.ourworld.top:",
+		"https://..",
+	} {
+		raw := `{"profiles":[],"bootstrap_nodes":["` + seed + `"]}`
+		if _, err := Decode(strings.NewReader(raw)); !errors.Is(err, ErrConfig) {
+			t.Fatalf("invalid bootstrap node %q accepted: %v", seed, err)
+		}
+	}
+}

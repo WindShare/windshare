@@ -117,10 +117,11 @@ func TestPullWarmRestartAndOriginPolicy(t *testing.T) {
 	local := netip.MustParseAddr("127.0.0.1")
 	path := filepath.Join(t.TempDir(), "config.json")
 	open := func() *Pool {
-		p := New(path, publicdial.Policy{Permit: func(a netip.Addr) bool { return a == local }, Lookup: func(context.Context, string, string) ([]netip.Addr, error) { return []netip.Addr{local}, nil }},
-			func() time.Time { return now }, diagnostics.Sink{})
-		p.http.Transport.(*http.Transport).TLSClientConfig = server.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
-		return p
+		return New(path, publicdial.Policy{
+			Permit:          func(a netip.Addr) bool { return a == local },
+			Lookup:          func(context.Context, string, string) ([]netip.Addr, error) { return []netip.Addr{local}, nil },
+			TLSClientConfig: server.Client().Transport.(*http.Transport).TLSClientConfig,
+		}, func() time.Time { return now }, diagnostics.Sink{})
 	}
 	scope := Scope{Origin: front, Generation: 1}
 	pool := open()
@@ -167,11 +168,11 @@ func TestDisabledContributionExcludedFromPoolAndLiveSTUN(t *testing.T) {
 	identity := "wss://example.com:" + port + "/v2/ws"
 	local := netip.MustParseAddr("127.0.0.1")
 	pool := New("", publicdial.Policy{
-		Permit: func(a netip.Addr) bool { return a == local },
-		Lookup: func(context.Context, string, string) ([]netip.Addr, error) { return []netip.Addr{local}, nil },
+		Permit:          func(a netip.Addr) bool { return a == local },
+		Lookup:          func(context.Context, string, string) ([]netip.Addr, error) { return []netip.Addr{local}, nil },
+		TLSClientConfig: server.Client().Transport.(*http.Transport).TLSClientConfig,
 	}, func() time.Time { return now }, diagnostics.Sink{})
 	defer pool.Close()
-	pool.http.Transport.(*http.Transport).TLSClientConfig = server.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
 
 	// Disabled gossip descriptor with STUN enabled is rejected immediately.
 	disabledGossip := envelopeWithRelay(t, identity, serviceauthority.GossipDomain, now, 24*time.Hour, serviceauthority.RelayDisabled)
@@ -197,5 +198,53 @@ func TestDisabledContributionExcludedFromPoolAndLiveSTUN(t *testing.T) {
 	newerDisabled := envelopeWithRelay(t, identity, serviceauthority.GossipDomain, now.Add(time.Minute), 24*time.Hour, serviceauthority.RelayDisabled)
 	if pool.accept(newerDisabled, "seed") || len(pool.records()) != 0 {
 		t.Fatal("newer disabled record should evict prior cached entry")
+	}
+}
+
+func TestSubpathMountedCommunityRelayVerifiesAtOriginRootAndMountWebSocket(t *testing.T) {
+	now := time.Now()
+	const front = "https://share.example"
+	var gossip, live json.RawMessage
+	var upgrades atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case exchangePath:
+			_ = json.NewEncoder(w).Encode([]json.RawMessage{gossip})
+		case "/.well-known/windshare":
+			_, _ = w.Write(live)
+		case "/mount/v2/ws":
+			if r.Header.Get("Origin") != front {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: []string{"share.example"}})
+			if err != nil {
+				return
+			}
+			upgrades.Add(1)
+			_ = ws.CloseNow()
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	_, port, _ := net.SplitHostPort(strings.TrimPrefix(server.URL, "https://"))
+	seed := "https://example.com:" + port
+	identity := "wss://example.com:" + port + "/mount/v2/ws"
+	gossip = envelope(t, identity, serviceauthority.GossipDomain, now, 24*time.Hour)
+	live = envelope(t, identity, serviceauthority.DescriptorDomain, now, 5*time.Minute)
+	local := netip.MustParseAddr("127.0.0.1")
+	pool := New("", publicdial.Policy{
+		Permit:          func(a netip.Addr) bool { return a == local },
+		Lookup:          func(context.Context, string, string) ([]netip.Addr, error) { return []netip.Addr{local}, nil },
+		TLSClientConfig: server.Client().Transport.(*http.Transport).TLSClientConfig,
+	}, func() time.Time { return now }, diagnostics.Sink{})
+	defer pool.Close()
+
+	scope := Scope{Origin: front, Generation: 1}
+	pool.Refresh(t.Context(), scope, []string{seed})
+	peers := pool.Candidates(scope)
+	if len(peers) != 1 || !peers[0].Verified || peers[0].URL != seed+"/mount" || upgrades.Load() != 1 {
+		t.Fatalf("subpath relay failed discovery/verification: peers=%v upgrades=%d", peers, upgrades.Load())
 	}
 }

@@ -26,7 +26,7 @@ func (p *Pool) verify(ctx context.Context, scope Scope, entry peer) error {
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 	d := entry.d
-	base, err := p.policy.Origin(d.RelayBaseURL())
+	base, err := p.policy.RelayOrigin(d.RelayBaseURL())
 	if err != nil {
 		return err
 	}
