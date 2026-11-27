@@ -58,7 +58,8 @@ export function decodeRelayErrorIfPresent(encoded: Uint8Array): RelayErrorFrame 
 
 export function relayErrorMessage(error: RelayErrorFrame): string {
   if (error.code === RELAY_ERROR.stopped) return 'This share was stopped permanently.'
-  if (error.code === RELAY_ERROR.starting) return 'This share is still starting.'
+  // Code 9 covers both initial publication and a detached sender in grace.
+  if (error.code === RELAY_ERROR.starting) return 'This share is not ready yet.'
   if (error.code === RELAY_ERROR.notFound) return 'This share is not currently available.'
   if (error.code === RELAY_ERROR.admission) return 'The relay is currently at capacity.'
   if (error.code === RELAY_ERROR.accessDenied) return 'Relay access was denied for this share.'

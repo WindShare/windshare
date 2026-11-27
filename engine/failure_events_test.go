@@ -79,6 +79,7 @@ func TestDescribeFailureCoversDomainCategoriesAndContext(t *testing.T) {
 		{"route 404", &relayv2.WebSocketRouteError{BaseHint: hint}, FailureRelayRouteNotFound},
 		{"relay rejected", &relayv2.RelayError{Code: v2.ErrorInvalidProof}, FailureRelayRejected},
 		{"relay not found", &relayv2.RelayError{Code: v2.ErrorNotFound}, FailureRelayNotFound},
+		{"relay share not ready", &relayv2.RelayError{Code: v2.ErrorStarting, RetryAfter: 250 * time.Millisecond}, FailureShareNotReady},
 		{"relay retryable", &relayv2.RelayError{Code: v2.ErrorAdmission, RetryAfter: 2 * time.Second}, FailureRelayUnavailable},
 		{"relay stopped", &relayv2.RelayError{Code: v2.ErrorStopped}, FailureRelayStopped},
 		{"relay denied", &relayv2.RelayError{Code: v2.ErrorAccessDenied}, FailureRelayAccessDenied},
@@ -185,6 +186,12 @@ func TestDescribeFailurePrecedenceAndFallthrough(t *testing.T) {
 			name:     "initial join timeout maps relay not found",
 			err:      errors.Join(relayset.ErrReceiverUnavailable, &relayv2.RelayError{Code: v2.ErrorNotFound}),
 			wantCode: FailureRelayNotFound,
+		},
+		{
+			name:           "initial join timeout maps share not ready with retry after",
+			err:            errors.Join(relayset.ErrReceiverUnavailable, &relayv2.RelayError{Code: v2.ErrorStarting, RetryAfter: 250 * time.Millisecond}),
+			wantCode:       FailureShareNotReady,
+			wantRetryAfter: 250 * time.Millisecond,
 		},
 		{
 			name:     "cancellation does not hide teardown transport failure",

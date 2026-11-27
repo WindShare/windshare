@@ -48,6 +48,7 @@ const (
 	FailureRelayStopped                  FailureCode = "relay_stopped"
 	FailureRelayAccessDenied             FailureCode = "relay_access_denied"
 	FailureRelayRouteNotFound            FailureCode = "relay_route_not_found"
+	FailureShareNotReady                 FailureCode = "share_not_ready"
 	FailureShareStopped                  FailureCode = "share_stopped"
 	FailureDirectUnavailable             FailureCode = "direct_unavailable"
 	FailureDirectAdmission               FailureCode = "direct_admission"
@@ -316,7 +317,11 @@ func classifyRelayError(relayErr *relayv2.RelayError) (Failure, bool) {
 		code = FailureRelayRejected
 	case v2.ErrorNotFound:
 		code = FailureRelayNotFound
-	case v2.ErrorStarting, v2.ErrorAdmission, v2.ErrorAccessUnavailable:
+	case v2.ErrorStarting:
+		// The relay is reachable, but the share is activating or its sender is
+		// in reconnect grace; keep relay-outage diagnostics separate.
+		code = FailureShareNotReady
+	case v2.ErrorAdmission, v2.ErrorAccessUnavailable:
 		code = FailureRelayUnavailable
 	case v2.ErrorStopped:
 		code = FailureRelayStopped

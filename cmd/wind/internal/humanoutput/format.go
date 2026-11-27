@@ -167,6 +167,8 @@ func failureMessage(failure engine.Failure) string {
 		message = "The share is not currently available. Retry the original link."
 	case engine.FailureRelayStopped:
 		message = "A relay reported that its route for this share was stopped."
+	case engine.FailureShareNotReady:
+		message = "The share is not ready yet."
 	case engine.FailureShareStopped:
 		message = "This share has stopped. Ask the sender for a new link."
 	case engine.FailureDirectUnavailable:
