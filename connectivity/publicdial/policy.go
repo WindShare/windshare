@@ -78,45 +78,19 @@ func (p Policy) parseOrigin(raw string, allowSubpath bool) (*url.URL, error) {
 		u.RawFragment != "" || strings.HasSuffix(u.Host, ":") {
 		return nil, ErrAddress
 	}
-	if !allowSubpath {
-		if (u.Path != "" && u.Path != "/") || u.RawPath != "" {
-			return nil, ErrAddress
-		}
-	} else if !validSubpath(u.EscapedPath()) {
-		return nil, ErrAddress
+	if err := validateOriginPath(u, allowSubpath); err != nil {
+		return nil, err
 	}
 	if err := urlhost.Normalize(u); err != nil {
 		return nil, ErrAddress
 	}
-	port := u.Port()
-	if port != "" {
-		value, err := strconv.ParseUint(port, 10, 16)
-		if err != nil || value == 0 {
-			return nil, ErrAddress
-		}
-		if value == httpsDefaultPort {
-			port = ""
-		} else {
-			port = strconv.FormatUint(value, 10)
-		}
+	port, err := normalizeHTTPSPort(u.Port())
+	if err != nil {
+		return nil, err
 	}
-	hostname := u.Hostname()
-	host := strings.ToLower(hostname)
-	bracketed := strings.HasPrefix(u.Host, "[")
-	if ip, err := netip.ParseAddr(hostname); err == nil {
-		if bracketed != ip.Is6() || !p.Permits(ip) {
-			return nil, ErrAddress
-		}
-		host = ip.Unmap().String()
-	} else if bracketed {
-		return nil, ErrAddress
-	} else {
-		if err := networkendpoint.ValidateDNSHost(host); err != nil {
-			return nil, ErrAddress
-		}
-		if !strings.Contains(strings.TrimSuffix(host, "."), ".") || isReservedDNSHost(host) {
-			return nil, ErrAddress
-		}
+	host, err := p.normalizeOriginHost(u.Hostname(), strings.HasPrefix(u.Host, "["))
+	if err != nil {
+		return nil, err
 	}
 	if strings.ContainsRune(host, ':') {
 		host = "[" + host + "]"
@@ -127,6 +101,53 @@ func (p Policy) parseOrigin(raw string, allowSubpath bool) (*url.URL, error) {
 	u.Host = host
 	u.Path, u.RawPath = "", ""
 	return u, nil
+}
+
+func validateOriginPath(u *url.URL, allowSubpath bool) error {
+	if allowSubpath {
+		if !validSubpath(u.EscapedPath()) {
+			return ErrAddress
+		}
+		return nil
+	}
+	if (u.Path != "" && u.Path != "/") || u.RawPath != "" {
+		return ErrAddress
+	}
+	return nil
+}
+
+func normalizeHTTPSPort(port string) (string, error) {
+	if port == "" {
+		return "", nil
+	}
+	value, err := strconv.ParseUint(port, 10, 16)
+	if err != nil || value == 0 {
+		return "", ErrAddress
+	}
+	if value == httpsDefaultPort {
+		return "", nil
+	}
+	return strconv.FormatUint(value, 10), nil
+}
+
+func (p Policy) normalizeOriginHost(hostname string, bracketed bool) (string, error) {
+	if ip, err := netip.ParseAddr(hostname); err == nil {
+		if bracketed != ip.Is6() || !p.Permits(ip) {
+			return "", ErrAddress
+		}
+		return ip.Unmap().String(), nil
+	}
+	if bracketed {
+		return "", ErrAddress
+	}
+	host := strings.ToLower(hostname)
+	if err := networkendpoint.ValidateDNSHost(host); err != nil {
+		return "", ErrAddress
+	}
+	if !strings.Contains(strings.TrimSuffix(host, "."), ".") || isReservedDNSHost(host) {
+		return "", ErrAddress
+	}
+	return host, nil
 }
 
 func forbiddenOriginRune(r rune) bool {

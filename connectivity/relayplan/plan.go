@@ -45,9 +45,9 @@ type Candidate struct {
 	IPLiteral        bool
 	// ProbeFailed marks a community candidate whose scoped live probe failed
 	// recently, keeping it behind unmeasured peers even after short backoff expires.
-	ProbeFailed      bool
-	CooldownUntil    time.Time
-	ServerRetryAt    time.Time
+	ProbeFailed   bool
+	CooldownUntil time.Time
+	ServerRetryAt time.Time
 }
 
 // ObservedHandshake returns the recent admitted handshake duration used for
