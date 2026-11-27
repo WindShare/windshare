@@ -139,14 +139,23 @@ func (config Config) Validate() error {
 	return err
 }
 
-func (config Config) validateFields() error {
-	if len(config.BootstrapNodes) > MaximumBootstrapNodes {
+// ValidateBootstrapNodes enforces the shared count ceiling and strict public
+// HTTPS origin rules for both user configuration and embedded release manifests.
+func ValidateBootstrapNodes(nodes []string) error {
+	if len(nodes) > MaximumBootstrapNodes {
 		return fmt.Errorf("%w: too many bootstrap nodes", ErrConfig)
 	}
-	for _, seed := range config.BootstrapNodes {
+	for _, seed := range nodes {
 		if _, err := (publicdial.Policy{}).Origin(seed); err != nil {
 			return fmt.Errorf("%w: invalid bootstrap node", ErrConfig)
 		}
+	}
+	return nil
+}
+
+func (config Config) validateFields() error {
+	if err := ValidateBootstrapNodes(config.BootstrapNodes); err != nil {
+		return err
 	}
 	if err := ValidateTURNServices(config.TURNServices); err != nil {
 		return err

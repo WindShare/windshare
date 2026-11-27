@@ -194,7 +194,13 @@ impl Console {
                 json!({"ok": true})
             }
             "/api/enrollments/cancel" => {
-                into_anyhow(access::cancel(&mut store, body, now))?;
+                let outcome = into_anyhow(access::cancel(&mut store, body, now))?;
+                if outcome.found {
+                    tracing::info!(
+                        event = "enrollment_cancelled",
+                        enrollment_id = %text_id(&outcome.enrollment_id)
+                    );
+                }
                 json!({"ok": true})
             }
             _ => return Err(ConsoleError::bad_request("invalid_request").into()),

@@ -582,4 +582,31 @@ func TestRelayAddAnonymousAndCommunityPreferences(t *testing.T) {
 	if cfg, err := store.Load(); err != nil || !cfg.CommunityEnabled() {
 		t.Fatalf("invalid community edit mutated config: enabled=%v err=%v", cfg.CommunityEnabled(), err)
 	}
+
+	// Selected mode hides Community nodes on `relay list` to avoid suggesting it is active,
+	// but explicitly confirms updates made via `relay community <on|off>`.
+	if code := app.Run(t.Context(), []string{"relay", "mode", "selected"}); code != ExitOK {
+		t.Fatalf("relay mode selected exit=%d stderr=%q", code, stderr.String())
+	}
+	stderr.Reset()
+	if code := app.Run(t.Context(), []string{"relay", "list"}); code != ExitOK {
+		t.Fatalf("relay list in selected mode exit=%d stderr=%q", code, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "Community nodes:") {
+		t.Fatalf("selected-mode relay list printed Community nodes: %q", stderr.String())
+	}
+	stderr.Reset()
+	if code := app.Run(t.Context(), []string{"relay", "community", "off"}); code != ExitOK {
+		t.Fatalf("relay community off in selected mode exit=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "Community nodes: disabled (applies in automatic mode)") {
+		t.Fatalf("selected-mode community off missing confirmation: %q", stderr.String())
+	}
+	stderr.Reset()
+	if code := app.Run(t.Context(), []string{"relay", "community", "on"}); code != ExitOK {
+		t.Fatalf("relay community on in selected mode exit=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "Community nodes: enabled (applies in automatic mode)") {
+		t.Fatalf("selected-mode community on missing confirmation: %q", stderr.String())
+	}
 }

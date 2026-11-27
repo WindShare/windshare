@@ -106,3 +106,22 @@ func TestRemoveRelayCleansActiveSelection(t *testing.T) {
 		t.Fatal("removing an unsaved relay succeeded")
 	}
 }
+
+func TestPreferenceEditUsesCanonicalCommunityNodesAction(t *testing.T) {
+	var c Config
+	if err := (PreferenceEdit{Action: "community_nodes", Value: "off"}).Apply(&c); err != nil {
+		t.Fatalf("community_nodes off failed: %v", err)
+	}
+	if c.CommunityEnabled() {
+		t.Fatal("community_nodes off did not disable community nodes")
+	}
+	if err := (PreferenceEdit{Action: "community_nodes", Value: "on"}).Apply(&c); err != nil {
+		t.Fatalf("community_nodes on failed: %v", err)
+	}
+	if !c.CommunityEnabled() {
+		t.Fatal("community_nodes on did not enable community nodes")
+	}
+	if err := (PreferenceEdit{Action: "community", Value: "off"}).Apply(&c); err == nil {
+		t.Fatal("non-canonical community alias was accepted")
+	}
+}

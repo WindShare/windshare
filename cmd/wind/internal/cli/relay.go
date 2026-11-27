@@ -118,19 +118,19 @@ func (app *App) parseRelayURL(flags *flag.FlagSet, synopsis string, args []strin
 	return positionals[0], requestParseReady
 }
 
-func (app *App) runRelaySetup(ctx context.Context, command relaySetupCommand) (code int) {
+func (app *App) runRelaySetup(ctx context.Context, setup relaySetupCommand) (code int) {
 	closeApp, err := app.ensureApplication(diagnostics.Sink{})
 	if err != nil {
 		return ExitFailure
 	}
 	defer app.closeCommandApplication(closeApp, &code)
-	current, err := app.application.StartRelaySetup(ctx, command.request)
+	current, err := app.application.StartRelaySetup(ctx, setup.request)
 	if err != nil {
 		return app.writeRelaySetupFailure(err)
 	}
 	for observation := range current.Observations() {
 		if event, ok := observation.Event.(engine.RelaySetupProgress); ok && event.Stage == "approval_required" {
-			app.presentRelayApproval(ctx, event, command.noBrowser)
+			app.presentRelayApproval(ctx, event, setup.noBrowser)
 		}
 	}
 	result, err := current.Wait(context.Background())
@@ -158,14 +158,14 @@ func (app *App) runRelaySetup(ctx context.Context, command relaySetupCommand) (c
 	}
 	app.writeCompleteLine("Relay mode: %s. Share website: %s", mode, front)
 	if receipt.OfferedFrontend != "" && receipt.OfferedFrontend != front {
-		app.writeCompleteLine("Use your receiver website: wind relay frontend %s", receipt.OfferedFrontend)
+		app.writeCompleteLine("Use your receiver website: %s relay frontend %s", command.Name, receipt.OfferedFrontend)
 	}
 	return ExitOK
 }
 
 func (app *App) presentRelayApproval(ctx context.Context, event engine.RelaySetupProgress, noBrowser bool) {
 	if event.GuestAvailable {
-		app.writeCompleteLine("For guest access, interrupt this command and run wind relay add --anonymous with the same relay address.")
+		app.writeCompleteLine("For guest access, interrupt this command and run %s relay add --anonymous with the same relay address.", command.Name)
 	}
 	if event.ServiceLogin != nil {
 		// Match Desktop: when both service-account sign-in and owner approval

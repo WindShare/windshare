@@ -317,7 +317,10 @@ async fn sqlite_cache_round_trips_and_restore_reprobes_only_valid_remote_communi
     let second = receiver.try_recv().expect("peer-b queued for reprobe");
     assert!(receiver.try_recv().is_err());
     assert_eq!(first.record.endpoint, "wss://peer-a.example/v2/ws");
+    assert_eq!(first.source, ProbeSource::Cache);
+    assert_eq!(first.source.to_string(), "cache");
     assert_eq!(second.record.endpoint, "wss://peer-b.example/v2/ws");
+    assert_eq!(second.source, ProbeSource::Cache);
 }
 
 #[tokio::test]

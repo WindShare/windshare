@@ -158,7 +158,7 @@ type PreferenceEdit struct {
 
 func (e PreferenceEdit) Apply(c *Config) error {
 	switch e.Action {
-	case "community_nodes", "community":
+	case "community_nodes":
 		switch e.Value {
 		case "on", "off":
 			enabled := e.Value == "on"

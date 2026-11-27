@@ -2,6 +2,7 @@ package networkruntime
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -229,10 +230,45 @@ func (r *Runtime) communitySettings(ctx context.Context) (relayconfig.Config, bo
 	}
 	c, e, err := (relayconfig.FileStore{Path: path}).ReadCommunityState(ctx)
 	if err != nil {
+		if errors.Is(err, relayconfig.ErrCorruptEligibility) {
+			r.recordCommunityStateError("corrupt_eligibility", err)
+			if len(c.OwnedNative()) == 0 {
+				// Without owned native relays eligibility cannot be paused; do not
+				// fail closed on an irrelevant corrupt sidecar file.
+				r.recordEligibilityPaused(false, false, false)
+				return c, c.CommunityEnabled() && !c.ConfiguredOnly
+			}
+			// Return the valid settings so observeOwnedRelays can still re-probe
+			// owned relays and repair community-eligibility.json on disk.
+			return c, false
+		}
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			r.recordCommunityStateError("read_failed", err)
+		}
 		return relayconfig.Config{}, false
 	}
+	r.clearCommunityStateError()
 	r.recordEligibilityPaused(false, e.Paused, false)
 	return c, c.CommunityEnabled() && !c.ConfiguredOnly && !e.Paused
+}
+
+func (r *Runtime) recordCommunityStateError(reason string, err error) {
+	r.mu.Lock()
+	already := r.communityStateErr == reason
+	r.communityStateErr = reason
+	r.mu.Unlock()
+	if !already && r.diagnostics.Enabled() {
+		r.diagnostics.Emit(diagnostics.New("community_eligibility_read_failed", diagnostics.Fields{
+			"reason": diagnostics.Text(reason),
+			"error":  diagnostics.Text(err.Error()),
+		}).At(r.now()))
+	}
+}
+
+func (r *Runtime) clearCommunityStateError() {
+	r.mu.Lock()
+	r.communityStateErr = ""
+	r.mu.Unlock()
 }
 
 func (r *Runtime) recordEligibilityPaused(previous, current, hasPrevious bool) {
@@ -260,10 +296,11 @@ func (r *Runtime) updateEligibility(observed map[string]serviceauthority.PublicR
 			return err
 		}
 		old, err := relayconfig.ReadEligibility(tx)
-		if err != nil {
+		corrupt := errors.Is(err, relayconfig.ErrCorruptEligibility)
+		if err != nil && !corrupt {
 			return err
 		}
-		wasPaused := relayconfig.EvaluateEligibility(old, c, nil).Paused
+		wasPaused := corrupt || relayconfig.EvaluateEligibility(old, c, nil).Paused
 		e, err := relayconfig.ReconcileEligibility(tx, c, observed)
 		if err != nil {
 			return err
@@ -275,6 +312,7 @@ func (r *Runtime) updateEligibility(observed map[string]serviceauthority.PublicR
 	if err != nil {
 		return false
 	}
+	r.clearCommunityStateError()
 	r.recordEligibilityPaused(prevPaused, nextPaused, true)
 	return resumed
 }

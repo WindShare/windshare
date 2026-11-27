@@ -44,6 +44,7 @@ type Runtime struct {
 	mu                sync.Mutex
 	eligibilityKnown  bool
 	eligibilityPaused bool
+	communityStateErr string
 	linkUnreachable   bool
 	backupReachable   bool
 	ctx               context.Context

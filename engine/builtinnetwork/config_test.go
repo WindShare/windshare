@@ -3,11 +3,14 @@ package builtinnetwork
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/windshare/windshare/engine/relayconfig"
 )
 
 func TestReleasePinsTrustAndLeavesUnprovisionedBuildsExplicit(t *testing.T) {
@@ -85,5 +88,52 @@ func TestEmbeddedReleaseSeparatesLiveAndNativeFallbackMirrors(t *testing.T) {
 		if strings.Contains(strings.ToLower(mirror), "github.com") {
 			t.Fatalf("live mirror list contains release asset %q", mirror)
 		}
+	}
+}
+
+func TestParseValidatesBootstrapNodes(t *testing.T) {
+	valid, err := Parse([]byte(`{"network":"test","bootstrap_nodes":["https://cn1.example","https://1.1.1.1:8443/"],"roots":[],"snapshot":null}`), "")
+	if err != nil || len(valid.BootstrapNodes) != 2 {
+		t.Fatalf("valid bootstrap_nodes rejected: config=%+v err=%v", valid, err)
+	}
+	if _, err := Parse([]byte(`{"network":"test","bootstrap_nodes":[],"roots":[],"snapshot":null}`), ""); err != nil {
+		t.Fatalf("empty bootstrap_nodes rejected: %v", err)
+	}
+	for _, seed := range []string{
+		"http://cn1.example",
+		"https://cn1.example/subpath",
+		"https://127.0.0.1",
+		"https://127.1",
+		"https://cn1.example?",
+		"https://..",
+	} {
+		raw, err := json.Marshal(map[string]any{
+			"network":         "test",
+			"bootstrap_nodes": []string{seed},
+			"roots":           []any{},
+			"snapshot":        nil,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Parse(raw, ""); err == nil {
+			t.Fatalf("invalid bootstrap node %q accepted", seed)
+		}
+	}
+	tooMany := make([]string, relayconfig.MaximumBootstrapNodes+1)
+	for i := range tooMany {
+		tooMany[i] = fmt.Sprintf("https://seed%d.example", i)
+	}
+	raw, err := json.Marshal(map[string]any{
+		"network":         "test",
+		"bootstrap_nodes": tooMany,
+		"roots":           []any{},
+		"snapshot":        nil,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Parse(raw, ""); err == nil {
+		t.Fatal("oversized bootstrap_nodes list accepted")
 	}
 }

@@ -20,6 +20,8 @@ const (
 	commitName           = "commit.json"
 )
 
+var ErrRecordTooLarge = errors.New("state record too large")
+
 type mutation struct {
 	Name   string `json:"name"`
 	Data   []byte `json:"data,omitempty"`
@@ -114,7 +116,7 @@ func (tx *Transaction) Read(name string) ([]byte, error) {
 		return nil, err
 	}
 	if len(data) > maximumCommitBytes {
-		return nil, errors.New("state record too large")
+		return nil, ErrRecordTooLarge
 	}
 	return data, nil
 }

@@ -747,3 +747,59 @@ fn contribution_endpoints_validate_and_persist_policy_updates() {
         false
     );
 }
+
+#[test]
+fn enrollment_cancel_emits_info_trace_only_when_found() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("node.sqlite");
+    let identity = Identity::generate().unwrap();
+    let console = open(&db, &identity, &Policy::default());
+
+    let secret = [29_u8; 32];
+    let enrolled = post(
+        &console,
+        "/api/enrollments",
+        &json!({
+            "device_name": "Workstation",
+            "claim_digest": text_id(&Digest::of(&secret).0),
+        }),
+        "",
+    );
+    assert_eq!(enrolled.status, StatusCode::OK);
+    let enrollment_id = enrolled.body["enrollment_id"].as_str().unwrap().to_owned();
+
+    let found_events = crate::test_support::capture_events(|| {
+        let reply = post(
+            &console,
+            "/api/enrollments/cancel",
+            &json!({
+                "enrollment_id": enrollment_id,
+                "claim_secret": text_id(&secret),
+            }),
+            "",
+        );
+        assert_eq!(reply.status, StatusCode::OK);
+    });
+    assert!(found_events.iter().any(|entry| {
+        entry["fields"]["event"] == "enrollment_cancelled"
+            && entry["fields"]["enrollment_id"] == enrollment_id
+    }));
+
+    let missing_events = crate::test_support::capture_events(|| {
+        let reply = post(
+            &console,
+            "/api/enrollments/cancel",
+            &json!({
+                "enrollment_id": text_id(&[0xab_u8; 16]),
+                "claim_secret": text_id(&secret),
+            }),
+            "",
+        );
+        assert_eq!(reply.status, StatusCode::OK);
+    });
+    assert!(
+        !missing_events
+            .iter()
+            .any(|entry| entry["fields"]["event"] == "enrollment_cancelled")
+    );
+}

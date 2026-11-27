@@ -4,12 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 
 	"github.com/windshare/windshare/core/serviceauthority"
 	"github.com/windshare/windshare/engine/internal/statefile"
 	"github.com/windshare/windshare/engine/relayprofile"
 )
+
+// ErrCorruptEligibility identifies malformed or oversized derived
+// community-eligibility.json state so callers can distinguish recoverable
+// sidecar corruption from primary settings or filesystem I/O failures.
+var ErrCorruptEligibility = errors.New("corrupt community eligibility state")
 
 func (c Config) OwnedNative() []relayprofile.Candidate {
 	var owned []relayprofile.Candidate
@@ -33,11 +39,16 @@ func ReadEligibility(tx *statefile.Transaction) (Eligibility, error) {
 		return Eligibility{}, nil
 	}
 	if err != nil {
+		if errors.Is(err, statefile.ErrRecordTooLarge) {
+			return Eligibility{}, fmt.Errorf("%w: %w", ErrCorruptEligibility, err)
+		}
 		return Eligibility{}, err
 	}
 	var e Eligibility
-	err = json.Unmarshal(data, &e)
-	return e, err
+	if err := json.Unmarshal(data, &e); err != nil {
+		return Eligibility{}, fmt.Errorf("%w: %w", ErrCorruptEligibility, err)
+	}
+	return e, nil
 }
 
 // EvaluateEligibility derives current community eligibility from previously
@@ -71,13 +82,17 @@ func EvaluateEligibility(current Eligibility, c Config, observed map[string]serv
 
 func ReconcileEligibility(tx *statefile.Transaction, c Config, observed map[string]serviceauthority.PublicRelay) (Eligibility, error) {
 	e, err := ReadEligibility(tx)
-	if err != nil {
-		return e, err
+	corrupt := errors.Is(err, ErrCorruptEligibility)
+	if err != nil && !corrupt {
+		return Eligibility{}, err
 	}
-	previous, _ := json.Marshal(e)
+	var previous []byte
+	if !corrupt {
+		previous, _ = json.Marshal(e)
+	}
 	e = EvaluateEligibility(e, c, observed)
 	next, _ := json.Marshal(e)
-	if string(next) != string(previous) {
+	if corrupt || string(next) != string(previous) {
 		err = tx.Put(statefile.CommunityEligibility, next)
 	}
 	return e, err
@@ -85,6 +100,8 @@ func ReconcileEligibility(tx *statefile.Transaction, c Config, observed map[stri
 
 // ReadCommunityState reads saved settings and derives current community
 // eligibility without acquiring a write lock unless commit recovery is pending.
+// When only community-eligibility.json is corrupt, the decoded Config is still
+// returned alongside an error matching ErrCorruptEligibility.
 func (s FileStore) ReadCommunityState(ctx context.Context) (Config, Eligibility, error) {
 	path, err := s.Location()
 	if err != nil {

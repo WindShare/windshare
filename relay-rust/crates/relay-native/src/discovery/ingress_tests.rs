@@ -130,6 +130,10 @@ async fn post_deduplicates_self_known_and_in_flight_records_and_releases_on_drop
     assert_eq!(status, StatusCode::ACCEPTED);
     let in_flight_probe = receiver.try_recv().expect("initial probe queued");
     assert_eq!(in_flight_probe.record.endpoint, "wss://peer1.example/v2/ws");
+    assert_eq!(
+        in_flight_probe.source,
+        ProbeSource::Ingress([20, 0, 0, 1].into())
+    );
 
     let (status, _, _) = send_http_from(
         &discovery,

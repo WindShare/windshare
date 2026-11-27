@@ -62,8 +62,26 @@ impl Drop for InFlightGuard {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ProbeSource {
+    Ingress(IpAddr),
+    Peer(String),
+    Cache,
+}
+
+impl std::fmt::Display for ProbeSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ingress(ip) => write!(f, "{ip}"),
+            Self::Peer(peer) => f.write_str(peer),
+            Self::Cache => f.write_str("cache"),
+        }
+    }
+}
+
 pub struct QueuedProbe {
     pub(super) record: Record,
+    source: ProbeSource,
     guard: InFlightGuard,
 }
 
@@ -163,7 +181,13 @@ impl Discovery {
                     .await;
                     match parsed {
                         Ok(record) => {
-                            match self.queue(record, source, node.public_key_b64(), endpoint, now) {
+                            match self.queue(
+                                record,
+                                ProbeSource::Ingress(source),
+                                node.public_key_b64(),
+                                endpoint,
+                                now,
+                            ) {
                                 Ok(QueueOutcome::Queued | QueueOutcome::Skipped) => {
                                     (StatusCode::ACCEPTED, Vec::new())
                                 }
@@ -228,6 +252,7 @@ impl Discovery {
         drop(book);
         Some(QueuedProbe {
             record,
+            source: ProbeSource::Cache,
             guard: InFlightGuard {
                 book: Arc::clone(&self.book),
                 key,
@@ -238,7 +263,7 @@ impl Discovery {
     fn queue(
         &self,
         record: Record,
-        source: impl std::fmt::Display,
+        source: ProbeSource,
         own_key: Option<&str>,
         endpoint: &crate::Endpoint,
         now: u64,
@@ -276,6 +301,7 @@ impl Discovery {
         tracing::debug!(event="discovery_probe_queued",%source,node_key=%record.key,endpoint=%record.endpoint);
         permit.send(QueuedProbe {
             record,
+            source,
             guard: InFlightGuard {
                 book: Arc::clone(&self.book),
                 key,
@@ -285,7 +311,11 @@ impl Discovery {
     }
 
     async fn verify(&self, probe: QueuedProbe) -> Result<()> {
-        let QueuedProbe { record, guard } = probe;
+        let QueuedProbe {
+            record,
+            source,
+            guard,
+        } = probe;
         let target = record.origin.join(LIVE)?;
         let client = transport::pinned(&target).await?;
         let response = client.get(target).send().await?;
@@ -310,7 +340,7 @@ impl Discovery {
         // Release the in-flight marker only after the verified record is visible in Book.
         drop(guard);
         self.dirty.notify_one();
-        tracing::debug!(event="discovery_peer_verified",node_key=%key,%ip);
+        tracing::debug!(event="discovery_peer_verified",%source,node_key=%key,%ip);
         Ok(())
     }
 
@@ -344,7 +374,16 @@ impl Discovery {
             });
             match verified {
                 Ok(record) => {
-                    if self.queue(record, peer, own_key, endpoint, now).is_err() {
+                    if self
+                        .queue(
+                            record,
+                            ProbeSource::Peer(peer.to_owned()),
+                            own_key,
+                            endpoint,
+                            now,
+                        )
+                        .is_err()
+                    {
                         tracing::debug!(
                             event = "discovery_rejected",
                             source = %peer,
@@ -510,9 +549,10 @@ impl Discovery {
                     if Self::is_self(&probe.record, node.public_key_b64(), endpoint) {continue;}
                     let this=self.clone();
                     workers.spawn(async move {
-                        let address=probe.record.endpoint.clone();
-                        if let Err(error)=this.verify(probe).await.with_context(||"live probe") {
-                            tracing::debug!(event="discovery_rejected",endpoint=%address,%error);
+                        let address = probe.record.endpoint.clone();
+                        let source = probe.source.clone();
+                        if let Err(error) = this.verify(probe).await.with_context(|| "live probe") {
+                            tracing::debug!(event = "discovery_rejected", %source, endpoint = %address, %error);
                         }
                     });
                 }

@@ -2,6 +2,7 @@ package relayconfig
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -155,5 +156,67 @@ func TestConfigWritesReconcileEligibilityAndReadsStayLockFree(t *testing.T) {
 	}
 	if _, err := os.Stat(path + ".lock"); !os.IsNotExist(err) {
 		t.Fatalf("lock-free reads recreated lock file: err=%v", err)
+	}
+}
+
+func TestCorruptEligibilityDoesNotBrickConfigWritesAndRepairsOnSave(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	store := FileStore{Path: path}
+	owner := relayprofile.Candidate{
+		PublicURL: "https://owner.example",
+		AccessKey: "owner-key",
+		Role:      relayprofile.Owner,
+		Node:      relayprofile.NodeIdentity{Platform: "native", NodeKey: "test-node"},
+	}
+	cfg := emptyConfig()
+	cfg.Profiles = []relayprofile.Candidate{owner}
+	cfg.ActiveRelays = []string{owner.PublicURL}
+	if err := store.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	eligibilityPath := filepath.Join(statefile.StateDirectory(path), statefile.CommunityEligibility)
+	corruptEligibility := func() {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(eligibilityPath), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(eligibilityPath, []byte("{corrupt"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// ReadCommunityState must return the valid Config alongside ErrCorruptEligibility.
+	corruptEligibility()
+	gotCfg, _, err := store.ReadCommunityState(t.Context())
+	if !errors.Is(err, ErrCorruptEligibility) || len(gotCfg.OwnedNative()) != 1 {
+		t.Fatalf("ReadCommunityState = (owned=%d, err=%v), want owned=1 and ErrCorruptEligibility", len(gotCfg.OwnedNative()), err)
+	}
+
+	// FileStore.Update must not fail on corrupt derived state and must repair the file on disk.
+	if _, err := store.Update(t.Context(), func(c *Config) error {
+		return c.SetMode(Selected)
+	}); err != nil {
+		t.Fatalf("FileStore.Update blocked by corrupt eligibility: %v", err)
+	}
+	if _, _, err := store.ReadCommunityState(t.Context()); err != nil {
+		t.Fatalf("ReadCommunityState after Update repair failed: %v", err)
+	}
+
+	// FileStore.Save must also repair corrupt derived eligibility state.
+	corruptEligibility()
+	if err := store.Save(emptyConfig()); err != nil {
+		t.Fatalf("FileStore.Save blocked by corrupt eligibility: %v", err)
+	}
+	if _, _, err := store.ReadCommunityState(t.Context()); err != nil {
+		t.Fatalf("ReadCommunityState after Save repair failed: %v", err)
+	}
+
+	// Corrupting config.json itself must still fail with a non-eligibility error.
+	if err := os.WriteFile(path, []byte("{broken-config"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.ReadCommunityState(t.Context()); err == nil || errors.Is(err, ErrCorruptEligibility) {
+		t.Fatalf("corrupt config.json returned %v, want non-eligibility error", err)
 	}
 }

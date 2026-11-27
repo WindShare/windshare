@@ -689,3 +689,103 @@ func TestCommunityEligibilityChangedEmitsAcrossEnrollmentAndRemoval(t *testing.T
 		t.Fatalf("removal events = %+v, want 1 paused=false at %v", events, removeAt)
 	}
 }
+
+func TestCorruptEligibilityEmitsTraceAndSelfHeals(t *testing.T) {
+	current := time.Date(2026, 11, 27, 13, 0, 0, 0, time.UTC)
+	var nowUnix atomic.Int64
+	nowUnix.Store(current.Unix())
+	nowFn := func() time.Time { return time.Unix(nowUnix.Load(), 0).UTC() }
+
+	settingsPath := filepath.Join(t.TempDir(), "config.json")
+	store := relayconfig.FileStore{Path: settingsPath}
+	eligibilityPath := filepath.Join(statefile.StateDirectory(settingsPath), statefile.CommunityEligibility)
+	corruptEligibility := func() {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(eligibilityPath), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(eligibilityPath, []byte("{corrupt"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	stream, err := diagnostics.NewStream(16, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+
+	r, err := New(nil, nowFn, "", stream.Sink(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(r.Close)
+	r.config = networkconfig.Config{CommunitySettingsPath: settingsPath}
+	r.community = community.New("", publicdial.Policy{}, nowFn, stream.Sink())
+
+	drainReadFailures := func() []diagnostics.Record {
+		var out []diagnostics.Record
+		for {
+			select {
+			case rec := <-stream.Records():
+				if rec.Name() == "community_eligibility_read_failed" {
+					out = append(out, rec)
+				}
+			default:
+				return out
+			}
+		}
+	}
+
+	// Without owned native relays, corrupt sidecar state is traced once (deduplicated)
+	// without unnecessarily disabling community nodes.
+	corruptEligibility()
+	if _, allowed := r.communitySettings(t.Context()); !allowed {
+		t.Fatal("corrupt sidecar disabled community nodes when no native relay is owned")
+	}
+	if _, allowed := r.communitySettings(t.Context()); !allowed {
+		t.Fatal("repeated read unexpectedly disabled community nodes")
+	}
+	events := drainReadFailures()
+	if len(events) != 1 || events[0].Payload().Get("reason").Text() != "corrupt_eligibility" || !events[0].ObservedAt().Equal(current) {
+		t.Fatalf("read failure events = %+v, want 1 corrupt_eligibility at %v", events, current)
+	}
+
+	// With an owned native relay, saving config repairs disk state and clears the error latch.
+	const ownerKey = "owned-corrupt-recovery-key"
+	ownedCfg := relayconfig.Config{
+		Profiles: []relayprofile.Candidate{
+			{PublicURL: "https://owned.example", Role: relayprofile.Owner, AccessKey: "k", Node: relayprofile.NodeIdentity{Platform: "native", NodeKey: ownerKey}},
+		},
+		ActiveRelays: []string{"https://owned.example"},
+	}
+	if err := store.Save(ownedCfg); err != nil {
+		t.Fatalf("Save with corrupt eligibility failed: %v", err)
+	}
+	if _, allowed := r.communitySettings(t.Context()); !allowed {
+		t.Fatal("community nodes should be allowed after Save repaired eligibility")
+	}
+
+	// Re-corrupting while an owned native relay exists fails closed, preserves owned settings
+	// for background observation, and emits one fresh diagnostic trace.
+	corruptAt := current.Add(30 * time.Second)
+	nowUnix.Store(corruptAt.Unix())
+	corruptEligibility()
+	gotCfg, allowed := r.communitySettings(t.Context())
+	if allowed || len(gotCfg.OwnedNative()) != 1 {
+		t.Fatalf("corrupt owned communitySettings = (owned=%d, allowed=%t), want (1, false)", len(gotCfg.OwnedNative()), allowed)
+	}
+	_, _ = r.communitySettings(t.Context())
+	events = drainReadFailures()
+	if len(events) != 1 || events[0].Payload().Get("reason").Text() != "corrupt_eligibility" || !events[0].ObservedAt().Equal(corruptAt) {
+		t.Fatalf("owned corrupt read events = %+v, want 1 corrupt_eligibility at %v", events, corruptAt)
+	}
+
+	// Owner observation repairs community-eligibility.json and reports resumed=true to wake refresh.
+	if resumed := r.updateEligibility(map[string]serviceauthority.PublicRelay{ownerKey: serviceauthority.RelayAnonymous}); !resumed {
+		t.Fatal("updateEligibility after corrupt recovery did not signal resumed=true")
+	}
+	if _, allowed := r.communitySettings(t.Context()); !allowed {
+		t.Fatal("community nodes stayed disabled after owner observation repaired eligibility")
+	}
+}
