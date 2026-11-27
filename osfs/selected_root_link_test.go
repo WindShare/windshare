@@ -49,6 +49,10 @@ func openSelection(t *testing.T, selection string, omissions catalog.SourceOmiss
 
 // filepath.Abs reports "." as a shell's logical $PWD and drops a trailing "/" or
 // "/.". Such spellings name the directory the kernel reaches, not the link.
+// Windows resolves the final link only for a trailing separator: "." and ".."
+// are cleaned lexically and Lstat follows a final link only when the name ends
+// in a separator (os/stat_windows.go), so the POSIX-only spellings name the
+// link there and stay refused.
 func TestSelectionResolvingThroughAFinalLinkSharesTheDirectory(t *testing.T) {
 	fixture := newLinkedSelectionFixture(t)
 	chain := filepath.Join(fixture.parent, "chain")
@@ -57,15 +61,25 @@ func TestSelectionResolvingThroughAFinalLinkSharesTheDirectory(t *testing.T) {
 	}
 	t.Chdir(fixture.link)
 	separator := string(filepath.Separator)
-	for name, test := range map[string]struct{ selection, root string }{
-		"dot in linked cwd":      {".", "link"},
-		"trailing separator":     {fixture.link + separator, "link"},
-		"trailing dot":           {fixture.link + separator + ".", "link"},
-		"parent of a child":      {"inner" + separator + "..", "link"},
-		"chain with a separator": {chain + separator, "chain"},
+	for name, test := range map[string]struct {
+		selection, root string
+		posixOnly       bool
+	}{
+		"dot in linked cwd":      {".", "link", true},
+		"dot with a separator":   {"." + separator, "link", false},
+		"trailing separator":     {fixture.link + separator, "link", false},
+		"trailing dot":           {fixture.link + separator + ".", "link", true},
+		"parent of a child":      {"inner" + separator + "..", "link", true},
+		"chain with a separator": {chain + separator, "chain", false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			source, err := openSelection(t, test.selection, nil)
+			if test.posixOnly && runtime.GOOS == "windows" {
+				if source != nil || !errors.Is(err, errSelectedSymbolicLink) {
+					t.Fatalf("selection %q = %v, %v; want the named link refused on Windows", test.selection, source, err)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("selection %q = %v", test.selection, err)
 			}
@@ -133,6 +147,19 @@ func TestSelectionNamingAnUnusableLinkKeepsItsReason(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		return
 	}
+	// A loop never reaches a file or directory: main's unsupported source, not
+	// an unavailable one. (Windows reports loops with its own error; not covered.)
+	loop := filepath.Join(fixture.parent, "loop")
+	if err := os.Symlink("loop", loop); err != nil {
+		t.Fatal(err)
+	}
+	for _, selection := range []string{loop, loop + string(filepath.Separator)} {
+		_, err := openSelection(t, selection, nil)
+		failure, _ := errors.AsType[*catalog.SourceError](err)
+		if !errors.Is(err, content.ErrUnsupportedStability) || failure == nil || failure.Failure != catalog.SourceFailureUnsupported {
+			t.Fatalf("link loop %q = %v", selection, err)
+		}
+	}
 	device := filepath.Join(fixture.parent, "device")
 	if err := os.Symlink(os.DevNull, device); err != nil {
 		t.Fatal(err)
@@ -182,14 +209,20 @@ func TestSelectionThroughAFinalLinkKeepsKernelRefusals(t *testing.T) {
 		t.Fatal(err)
 	}
 	separator := string(filepath.Separator)
-	for name, test := range map[string]struct {
+	type refusal struct {
 		selection string
 		failure   catalog.SourceFailure
 		cause     error
-	}{
+	}
+	disagreement := refusal{fixture.link + separator + "jump" + separator + "..", catalog.SourceFailureUnsupported, content.ErrUnsupportedStability}
+	if runtime.GOOS == "windows" {
+		// Windows cleans ".." lexically, so the typed path names the link itself.
+		disagreement.failure, disagreement.cause = catalog.SourceFailureSymbolicLink, errSelectedSymbolicLink
+	}
+	for name, test := range map[string]refusal{
 		"dangling link with separator": {dangling + separator, catalog.SourceFailureMissing, fs.ErrNotExist},
 		// Lexical cleaning yields "link", but the kernel resolves the typed path to "elsewhere".
-		"lexical and kernel disagree": {fixture.link + separator + "jump" + separator + "..", catalog.SourceFailureUnsupported, content.ErrUnsupportedStability},
+		"lexical and kernel disagree": disagreement,
 	} {
 		t.Run(name, func(t *testing.T) {
 			source, err := openSelection(t, test.selection, nil)

@@ -22,7 +22,7 @@ wind share <path...> [--relay <url>]... [--configured-relays-only] [--front-url 
 ```
 
 - Commits the selected roots, registers the descriptor with active relays, prints the capability link once a relay admits sessions, and serves catalog pages and file blocks on demand until stopped.
-- A path naming a symbolic link is refused, while `.`, `..` and a trailing `/` or `/.` resolve to the directory the system reaches, even through a linked working directory or a final link; links inside a shared folder are skipped and reported.
+- A path naming a symbolic link is refused. `.` and a trailing `/` or `/.` share the directory the system reaches, even when the working directory or the final element is a link; `..` keeps the shell's logical meaning and, when that parent is a link, is shared only if it is the directory the system reaches. On Windows only a trailing `\` or `/` resolves a final link. Links inside a shared folder are skipped and reported.
 - Default stdout output is `Link: <link>`. `--split-key` prints `Bare link: <link-without-key>` and `Key: <key>`.
 - Default sharing combines saved active relays with the built-in signed network. `--configured-relays-only` excludes network relays; repeatable `--relay` supplies the complete relay set for that run.
 - `--front-url` overrides the saved frontend; otherwise the release's built-in frontend applies. `--browser-trace` enables browser receiver diagnostics.
