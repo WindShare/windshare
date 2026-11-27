@@ -26,6 +26,11 @@ import (
 
 func envelope(t *testing.T, endpoint, domain string, now time.Time, lifetime time.Duration) json.RawMessage {
 	t.Helper()
+	return envelopeWithRelay(t, endpoint, domain, now, lifetime, serviceauthority.RelayAnonymous)
+}
+
+func envelopeWithRelay(t *testing.T, endpoint, domain string, now time.Time, lifetime time.Duration, state serviceauthority.PublicRelay) json.RawMessage {
+	t.Helper()
 	key := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
 	public := key.Public().(ed25519.PublicKey)
 	digest := sha256.Sum256(append([]byte("windshare/node-identity/v1\x00"), public...))
@@ -36,7 +41,7 @@ func envelope(t *testing.T, endpoint, domain string, now time.Time, lifetime tim
 	}
 	payload, err := json.Marshal(map[string]any{"version": 2, "platform": "native", "node_id": encode(digest[:]), "node_key": encode(public), "relay_endpoint": endpoint,
 		"services": map[string]bool{"relay": true, "stun": true}, "stun": []string{"stun:" + u.Hostname() + ":3478", "stun:elsewhere.example:3478"},
-		"public_relay": serviceauthority.RelayAnonymous, "issued_at": now.Unix(), "expires_at": now.Add(lifetime).Unix()})
+		"public_relay": state, "issued_at": now.Unix(), "expires_at": now.Add(lifetime).Unix()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,5 +147,55 @@ func TestPullWarmRestartAndOriginPolicy(t *testing.T) {
 	restored.Refresh(t.Context(), scope, nil)
 	if !restored.Candidates(scope)[0].Verified || pulls.Load() != 2 {
 		t.Fatal("failed to recover from cache without seeds")
+	}
+}
+
+func TestDisabledContributionExcludedFromPoolAndLiveSTUN(t *testing.T) {
+	now := time.Now()
+	const front = "https://share.example"
+	var live json.RawMessage
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/windshare":
+			_, _ = w.Write(live)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	_, port, _ := net.SplitHostPort(strings.TrimPrefix(server.URL, "https://"))
+	identity := "wss://example.com:" + port + "/v2/ws"
+	local := netip.MustParseAddr("127.0.0.1")
+	pool := New("", publicdial.Policy{
+		Permit: func(a netip.Addr) bool { return a == local },
+		Lookup: func(context.Context, string, string) ([]netip.Addr, error) { return []netip.Addr{local}, nil },
+	}, func() time.Time { return now }, diagnostics.Sink{})
+	defer pool.Close()
+	pool.http.Transport.(*http.Transport).TLSClientConfig = server.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+
+	// Disabled gossip descriptor with STUN enabled is rejected immediately.
+	disabledGossip := envelopeWithRelay(t, identity, serviceauthority.GossipDomain, now, 24*time.Hour, serviceauthority.RelayDisabled)
+	if pool.accept(disabledGossip, "seed") || len(pool.records()) != 0 {
+		t.Fatal("disabled descriptor must not enter community pool")
+	}
+
+	// If a previously cached STUN-capable node turns off contribution, live verification refuses it.
+	stunOnlyGossip := envelopeWithRelay(t, identity, serviceauthority.GossipDomain, now, 24*time.Hour, serviceauthority.RelayUnavailable)
+	if !pool.accept(stunOnlyGossip, "seed") {
+		t.Fatal("expected STUN-only community peer to be accepted")
+	}
+	live = envelopeWithRelay(t, identity, serviceauthority.DescriptorDomain, now, 5*time.Minute, serviceauthority.RelayDisabled)
+	scope := Scope{Origin: front, Generation: 1}
+	if err := pool.check(t.Context(), scope, identity, 0); err == nil {
+		t.Fatal("live disabled node must not be admitted for STUN")
+	}
+	if stun := pool.STUN(scope); len(stun) != 0 {
+		t.Fatalf("expected no STUN endpoints for disabled node, got %v", stun)
+	}
+
+	// A newer same-key Disabled gossip record evicts the stale cached entry.
+	newerDisabled := envelopeWithRelay(t, identity, serviceauthority.GossipDomain, now.Add(time.Minute), 24*time.Hour, serviceauthority.RelayDisabled)
+	if pool.accept(newerDisabled, "seed") || len(pool.records()) != 0 {
+		t.Fatal("newer disabled record should evict prior cached entry")
 	}
 }

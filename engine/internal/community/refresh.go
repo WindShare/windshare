@@ -85,7 +85,7 @@ func (p *Pool) warm(ctx context.Context, scope Scope, cursor int) {
 	var candidates []peer
 	for i := range records {
 		entry := records[(cursor+i)%len(records)]
-		if entry.d.Authority == nil && (entry.d.Services.STUN || entry.d.PublicRelay == serviceauthority.RelayAnonymous) {
+		if entry.d.Authority == nil && entry.d.PublicRelay != serviceauthority.RelayDisabled && (entry.d.Services.STUN || entry.d.PublicRelay == serviceauthority.RelayAnonymous) {
 			candidates = append(candidates, entry)
 		}
 	}

@@ -60,7 +60,7 @@ func (p *Pool) verify(ctx context.Context, scope Scope, entry peer) error {
 	if err != nil {
 		return err
 	}
-	if live.Authority != nil || live.RelayEndpoint != d.RelayEndpoint || !p.policy.Permits(ip) {
+	if live.Authority != nil || live.PublicRelay == serviceauthority.RelayDisabled || live.RelayEndpoint != d.RelayEndpoint || !p.policy.Permits(ip) {
 		return serviceauthority.ErrFormat
 	}
 	if d.Services.Relay && d.PublicRelay == serviceauthority.RelayAnonymous {

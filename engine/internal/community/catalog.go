@@ -103,6 +103,15 @@ func (p *Pool) accept(raw json.RawMessage, source string) bool {
 		p.trace("community_descriptor_rejected", source, err.Error())
 		return false
 	}
+	if d.PublicRelay == serviceauthority.RelayDisabled {
+		p.mu.Lock()
+		if old, ok := p.peers[d.RelayEndpoint]; ok && old.d.NodeKey == d.NodeKey && d.IssuedAt >= old.d.IssuedAt {
+			delete(p.peers, d.RelayEndpoint)
+		}
+		p.mu.Unlock()
+		p.trace("community_descriptor_rejected", source, "contribution_disabled")
+		return false
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	key := d.RelayEndpoint

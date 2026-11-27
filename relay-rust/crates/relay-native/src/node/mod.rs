@@ -16,6 +16,7 @@ mod trace;
 pub use configuration::Configuration;
 
 pub(crate) use budget::WriteOrigin;
+pub(crate) use descriptor::GossipDescriptor;
 pub(crate) use metered::Metered;
 pub(crate) use metrics::Metrics;
 pub use metrics::Snapshot;

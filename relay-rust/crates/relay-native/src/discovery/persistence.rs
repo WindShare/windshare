@@ -17,6 +17,7 @@ impl Discovery {
             let entries: Vec<Envelope> = serde_json::from_slice(&raw)?;
             for entry in entries.into_iter().take(MAX_PEERS) {
                 if let Ok(record) = entry.verify(Purpose::Gossip, crate::node::now().unsigned_abs())
+                    && record.offers_community_service()
                 {
                     // A restart loses endpoint reachability. Reprobe before advertising cached records.
                     if self.sender.send(record).await.is_err() {

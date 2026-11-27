@@ -9,11 +9,13 @@ use sha2::{Digest, Sha256};
 use std::fmt;
 
 pub const MAX_DESCRIPTOR: usize = 16 * 1024;
-const DESCRIPTOR_VERSION: u8 = 2;
 const MAX_CLOCK_SKEW_SECONDS: u64 = 60;
 const MAX_DESCRIPTOR_LIFETIME_SECONDS: u64 =
     windshare_relay_access::descriptor::Purpose::Live.lifetime();
-use windshare_relay_access::descriptor::MAX_STUN_URLS;
+use windshare_relay_access::descriptor::{
+    DESCRIPTOR_VERSION, InvariantError, NODE_IDENTITY_DOMAIN, NODE_PLATFORM_NATIVE,
+    validate_service_invariants,
+};
 const BYTES_PER_MBPS: u64 = 125_000;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -129,7 +131,7 @@ fn decode_verified(bytes: &[u8]) -> Result<(Descriptor, [u8; 32]), DescriptorErr
             value.version
         )));
     }
-    if value.platform != "native" {
+    if value.platform != NODE_PLATFORM_NATIVE {
         return Err(DescriptorError::invalid("unsupported node platform"));
     }
     let key = public_key(&value.node_key)
@@ -143,7 +145,7 @@ fn validate_identity_and_endpoint(
     key: &[u8; 32],
 ) -> Result<(), DescriptorError> {
     let mut digest = Sha256::new();
-    digest.update(b"windshare/node-identity/v1\0");
+    digest.update(NODE_IDENTITY_DOMAIN);
     digest.update(key);
     let expected_node_id = B64.encode(digest.finalize());
     if value.node_id != expected_node_id {
@@ -192,15 +194,20 @@ fn validate_services(
     origin: &str,
     value: &Descriptor,
 ) -> Result<(Vec<Role>, Vec<String>), DescriptorError> {
-    if matches!(
+    validate_service_invariants(
+        value.services.relay,
+        value.services.stun,
+        value.stun.len(),
         value.public_relay,
-        windshare_relay_access::descriptor::PublicRelay::Enabled { .. }
-    ) && !value.services.relay
-    {
-        return Err(DescriptorError::mismatch(
-            "enabled public relay requires the relay service",
-        ));
-    }
+    )
+    .map_err(|error| match error {
+        InvariantError::EnabledWithoutRelayService => {
+            DescriptorError::mismatch("enabled public relay requires the relay service")
+        }
+        InvariantError::TooManyStunUrls | InvariantError::StunServiceWithoutUrls => {
+            DescriptorError::mismatch("descriptor STUN URL count does not match declared services")
+        }
+    })?;
     let mut roles = Vec::new();
     if value.services.relay {
         roles.push(Role::Relay);
@@ -211,11 +218,6 @@ fn validate_services(
     if roles.is_empty() {
         return Err(DescriptorError::mismatch(
             "descriptor advertises neither relay nor STUN service",
-        ));
-    }
-    if value.stun.len() > MAX_STUN_URLS || (value.services.stun && value.stun.is_empty()) {
-        return Err(DescriptorError::mismatch(
-            "descriptor STUN URL count does not match declared services",
         ));
     }
     let mut stun = Vec::new();

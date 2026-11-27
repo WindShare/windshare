@@ -4,7 +4,17 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use ed25519_dalek::SigningKey;
 use windshare_relay_access::{Credential, trust};
 
-use windshare_relay_access::descriptor::{PublicRelay, Purpose};
+use windshare_relay_access::descriptor::{PublicRelay, Purpose, offers_community_service};
+
+pub enum GossipDescriptor {
+    /// Owner explicitly disabled community contribution on this self-hosted node.
+    OptedOut,
+    /// Node does not currently advertise a community relay or STUN service
+    /// (for example an official seed or temporarily exhausted relay without STUN).
+    ObserverOnly,
+    /// Signed gossip descriptor for a contributing community node.
+    Advertise(serde_json::Value),
+}
 
 /// Immutable node identity installed once at startup with pre-derived key material
 /// so discovery and status checks never re-expand the seed or lock `Runtime::state`.
@@ -196,19 +206,48 @@ impl Runtime {
         self.sign_descriptor(endpoint, Purpose::Live)
     }
 
+    pub(crate) fn gossip_descriptor(&self, endpoint: &crate::Endpoint) -> Result<GossipDescriptor> {
+        let timestamp = super::now();
+        let now = timestamp.unsigned_abs();
+        let snapshot = self.descriptor_snapshot(timestamp, endpoint)?;
+        if snapshot.public_relay == PublicRelay::Disabled {
+            return Ok(GossipDescriptor::OptedOut);
+        }
+        if !offers_community_service(
+            snapshot.authority.is_some(),
+            snapshot.services.relay,
+            snapshot.services.stun,
+            snapshot.public_relay,
+        ) {
+            return Ok(GossipDescriptor::ObserverOnly);
+        }
+        self.sign_snapshot(endpoint, Purpose::Gossip, now, &snapshot)
+            .map(GossipDescriptor::Advertise)
+    }
+
     pub(crate) fn sign_descriptor(
         &self,
         endpoint: &crate::Endpoint,
         purpose: Purpose,
     ) -> Result<serde_json::Value> {
-        let identity = self
-            .identity
-            .get()
-            .ok_or_else(|| anyhow!("missing node identity"))?;
         let timestamp = super::now();
         let now = timestamp.unsigned_abs();
         // Snapshot settings together so signing and access checks can run outside the state lock.
         let snapshot = self.descriptor_snapshot(timestamp, endpoint)?;
+        self.sign_snapshot(endpoint, purpose, now, &snapshot)
+    }
+
+    fn sign_snapshot(
+        &self,
+        endpoint: &crate::Endpoint,
+        purpose: Purpose,
+        now: u64,
+        snapshot: &DescriptorSnapshot,
+    ) -> Result<serde_json::Value> {
+        let identity = self
+            .identity
+            .get()
+            .ok_or_else(|| anyhow!("missing node identity"))?;
         let accepting = self.access.public_enabled();
         let login_page = self
             .console

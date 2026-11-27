@@ -26,6 +26,27 @@ const WORKERS: usize = 4;
 const QUEUE: usize = 32;
 const PERIOD: Duration = Duration::from_mins(10);
 const MAX_SEEDS: usize = 16;
+const EXCHANGE_FANOUT: usize = 2;
+
+enum SelfGossip {
+    LocalOnly,
+    OptedOut,
+    ObserverOnly,
+    Advertise(Envelope),
+}
+
+fn self_gossip(node: &crate::node::Runtime, endpoint: &crate::Endpoint) -> SelfGossip {
+    if transport::origin(endpoint.relay_url()).is_err() {
+        return SelfGossip::LocalOnly;
+    }
+    match node.gossip_descriptor(endpoint) {
+        Ok(crate::node::GossipDescriptor::OptedOut) => SelfGossip::OptedOut,
+        Ok(crate::node::GossipDescriptor::Advertise(value)) => {
+            serde_json::from_value(value).map_or(SelfGossip::ObserverOnly, SelfGossip::Advertise)
+        }
+        Ok(crate::node::GossipDescriptor::ObserverOnly) | Err(_) => SelfGossip::ObserverOnly,
+    }
+}
 
 #[derive(Clone)]
 pub struct Discovery {
@@ -62,10 +83,10 @@ impl Discovery {
         endpoint: &crate::Endpoint,
     ) -> Vec<Envelope> {
         // Reserve one slot for the local descriptor before sampling so the book cursor matches emitted peers.
-        let own = node
-            .sign_descriptor(endpoint, Purpose::Gossip)
-            .and_then(|v| Ok(serde_json::from_value(v)?))
-            .ok();
+        let own = match self_gossip(node, endpoint) {
+            SelfGossip::Advertise(own) => Some(own),
+            SelfGossip::LocalOnly | SelfGossip::OptedOut | SelfGossip::ObserverOnly => None,
+        };
         let limit = SAMPLE - usize::from(own.is_some());
         let mut sample = self.book.lock().expect("peer book").sample(now, limit);
         if let Some(own) = own {
@@ -105,6 +126,10 @@ impl Discovery {
                             .to_bytes();
                         let record = serde_json::from_slice::<Envelope>(&body)?
                             .verify(Purpose::Gossip, now)?;
+                        ensure!(
+                            record.offers_community_service(),
+                            "peer does not offer community service"
+                        );
                         self.queue(record, source)
                     }
                     .await;
@@ -149,7 +174,10 @@ impl Discovery {
         ensure!(
             record.key == live.key
                 && record.endpoint == live.endpoint
-                && record.public_relay == live.public_relay,
+                && record.public_relay == live.public_relay
+                && record.services == live.services
+                && record.authority == live.authority
+                && live.offers_community_service(),
             "live descriptor mismatch"
         );
         let key = record.key.clone();
@@ -162,28 +190,95 @@ impl Discovery {
         Ok(())
     }
 
-    async fn exchange(&self, peer: &str, own: &serde_json::Value) -> Result<()> {
+    async fn exchange(&self, peer: &str, own: Option<&Envelope>) -> Result<()> {
         let url = transport::origin(peer)?.join(PATH)?;
         let (client, _) = transport::pinned(&url).await?;
-        client
-            .post(url.clone())
-            .json(own)
-            .send()
-            .await?
-            .error_for_status()?;
+        if let Some(own) = own {
+            // POST rejection (rate limits or a busy probe queue) does not indicate
+            // an offline peer; still pull its sample and judge reachability by GET.
+            match client.post(url.clone()).json(own).send().await {
+                Ok(response) => {
+                    if let Err(error) = response.error_for_status() {
+                        tracing::debug!(event = "discovery_announce_rejected", %peer, %error);
+                    }
+                }
+                Err(error) => {
+                    tracing::debug!(event = "discovery_announce_failed", %peer, %error);
+                }
+            }
+        }
         let bytes = transport::body(client.get(url).send().await?, SAMPLE * MAX_RECORD).await?;
         let entries: Vec<Envelope> = serde_json::from_slice(&bytes)?;
         ensure!(entries.len() <= SAMPLE, "oversized sample");
         let now = crate::node::now().unsigned_abs();
         for entry in entries {
-            if let Err(error) = entry
-                .verify(Purpose::Gossip, now)
-                .and_then(|record| self.queue(record, peer))
-            {
+            let result = entry.verify(Purpose::Gossip, now).and_then(|record| {
+                ensure!(
+                    record.offers_community_service(),
+                    "peer does not offer community service"
+                );
+                self.queue(record, peer)
+            });
+            if let Err(error) = result {
                 tracing::debug!(event="discovery_rejected", source=%peer, %error);
             }
         }
         Ok(())
+    }
+
+    async fn exchange_round(
+        &self,
+        endpoint: &crate::Endpoint,
+        seeds: &[String],
+        own: Option<&Envelope>,
+        cursor: usize,
+    ) {
+        let own_origin =
+            transport::origin(endpoint.relay_url()).map(|url| url.origin().ascii_serialization());
+        let mut targets = self
+            .book
+            .lock()
+            .expect("peer book")
+            .targets(crate::node::now().unsigned_abs());
+        for seed in seeds {
+            if let Ok(url) = transport::origin(seed) {
+                targets.push(url.origin().ascii_serialization());
+            }
+        }
+        if let Ok(own_origin) = own_origin {
+            targets.retain(|target| target != &own_origin);
+        }
+        targets.sort();
+        targets.dedup();
+        if targets.is_empty() {
+            return;
+        }
+        for peer in targets
+            .iter()
+            .cycle()
+            .skip(cursor % targets.len())
+            .take(targets.len().min(EXCHANGE_FANOUT))
+        {
+            match self.exchange(peer, own).await {
+                Ok(()) => {
+                    self.book
+                        .lock()
+                        .expect("peer book")
+                        .note_exchange_success(peer);
+                }
+                Err(error) => {
+                    tracing::debug!(event = "discovery_exchange_failed", %peer, %error);
+                    let evicted = self
+                        .book
+                        .lock()
+                        .expect("peer book")
+                        .note_exchange_failure(peer);
+                    if evicted {
+                        self.dirty.notify_one();
+                    }
+                }
+            }
+        }
     }
 
     async fn announce(
@@ -192,29 +287,25 @@ impl Discovery {
         endpoint: &crate::Endpoint,
         seeds: &[String],
     ) {
+        if transport::origin(endpoint.relay_url()).is_err() {
+            // Non-public or cleartext nodes stay out of public gossip entirely;
+            // keep the task alive because `Server::serve` treats discovery exit as fatal.
+            std::future::pending::<()>().await;
+        }
         let mut cursor = 0usize;
         loop {
-            let mut targets = self
-                .book
-                .lock()
-                .expect("peer book")
-                .targets(crate::node::now().unsigned_abs());
-            targets.extend_from_slice(seeds);
-            targets.sort();
-            targets.dedup();
-            if let Ok(own) = node.sign_descriptor(endpoint, Purpose::Gossip) {
-                for peer in targets
-                    .iter()
-                    .cycle()
-                    .skip(cursor % targets.len().max(1))
-                    .take(targets.len().min(2))
-                {
-                    if let Err(error) = self.exchange(peer, &own).await {
-                        tracing::debug!(event="discovery_exchange_failed",%peer,%error);
-                    }
+            match self_gossip(node, endpoint) {
+                SelfGossip::LocalOnly | SelfGossip::OptedOut => {}
+                SelfGossip::ObserverOnly => {
+                    self.exchange_round(endpoint, seeds, None, cursor).await;
+                    cursor = cursor.wrapping_add(EXCHANGE_FANOUT);
+                }
+                SelfGossip::Advertise(own) => {
+                    self.exchange_round(endpoint, seeds, Some(&own), cursor)
+                        .await;
+                    cursor = cursor.wrapping_add(EXCHANGE_FANOUT);
                 }
             }
-            cursor = cursor.wrapping_add(2);
             tokio::time::sleep(PERIOD).await;
         }
     }

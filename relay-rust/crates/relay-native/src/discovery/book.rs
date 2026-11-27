@@ -1,4 +1,7 @@
-use super::record::{Envelope, Record};
+use super::{
+    record::{Envelope, Record},
+    transport,
+};
 use std::{collections::BTreeMap, net::IpAddr};
 
 pub(super) const MAX_PEERS: usize = 128;
@@ -7,10 +10,13 @@ const PER_PREFIX: usize = 4;
 const ANNOUNCEMENTS_PER_MINUTE: usize = 64;
 const PER_SOURCE: usize = 4;
 pub(super) const SAMPLE: usize = 8;
+pub(super) const MAX_EXCHANGE_FAILURES: u8 = 3;
+
 struct Peer {
     record: Record,
     ip: IpAddr,
     since: u64,
+    failures: u8,
 }
 
 #[derive(Default)]
@@ -49,6 +55,10 @@ impl Book {
     }
 
     pub fn insert(&mut self, record: Record, ip: IpAddr, now: u64) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            record.offers_community_service(),
+            "peer does not offer community service"
+        );
         self.peers.retain(|_, p| p.record.expires > now);
         let known = self.peers.get(&record.key);
         anyhow::ensure!(
@@ -68,18 +78,78 @@ impl Book {
             "address quota"
         );
         if known.is_none() && self.peers.len() == MAX_PEERS {
-            let newest = self
+            // Preserve long-lived reachable peers against churn, but let any peer
+            // that failed live GET probes lose its protection before healthy newcomers.
+            let victim = self
                 .peers
                 .values()
-                .max_by_key(|p| p.since)
+                .max_by_key(|p| (p.failures, p.since))
                 .expect("full book");
-            let key = newest.record.key.clone();
-            tracing::debug!(event="discovery_peer_evicted", node_key=%key, reason="capacity");
+            let key = victim.record.key.clone();
+            let failures = victim.failures;
+            let reason = if failures > 0 {
+                "unreachable"
+            } else {
+                "capacity"
+            };
+            tracing::debug!(event = "discovery_peer_evicted", node_key = %key, failures, reason);
             self.peers.remove(&key);
         }
-        self.peers
-            .insert(record.key.clone(), Peer { record, ip, since });
+        self.peers.insert(
+            record.key.clone(),
+            Peer {
+                record,
+                ip,
+                since,
+                failures: 0,
+            },
+        );
         Ok(())
+    }
+
+    pub fn note_exchange_success(&mut self, peer: &str) {
+        let Ok(origin) = transport::origin(peer).map(|url| url.origin().ascii_serialization())
+        else {
+            return;
+        };
+        for entry in self.peers.values_mut() {
+            if entry.record.origin.origin().ascii_serialization() == origin {
+                entry.failures = 0;
+            }
+        }
+    }
+
+    pub fn note_exchange_failure(&mut self, peer: &str) -> bool {
+        let Ok(origin) = transport::origin(peer).map(|url| url.origin().ascii_serialization())
+        else {
+            return false;
+        };
+        let mut evicted = Vec::new();
+        for (key, entry) in &mut self.peers {
+            if entry.record.origin.origin().ascii_serialization() != origin {
+                continue;
+            }
+            entry.failures = entry.failures.saturating_add(1);
+            if entry.failures >= MAX_EXCHANGE_FAILURES {
+                evicted.push((key.clone(), entry.failures));
+            } else {
+                tracing::debug!(
+                    event = "discovery_peer_demoted",
+                    node_key = %key,
+                    failures = entry.failures
+                );
+            }
+        }
+        for (key, failures) in &evicted {
+            tracing::debug!(
+                event = "discovery_peer_evicted",
+                node_key = %key,
+                failures = *failures,
+                reason = "unreachable"
+            );
+            self.peers.remove(key);
+        }
+        !evicted.is_empty()
     }
 
     pub fn sample(&mut self, now: u64, limit: usize) -> Vec<Envelope> {
@@ -114,7 +184,7 @@ impl Book {
         self.peers
             .values()
             .filter(|p| p.record.expires > now)
-            .map(|p| p.record.origin.to_string())
+            .map(|p| p.record.origin.origin().ascii_serialization())
             .collect()
     }
 }
