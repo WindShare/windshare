@@ -56,16 +56,31 @@ type Pool struct {
 	path     string
 	now      func() time.Time
 	sink     diagnostics.Sink
+	ctx      context.Context
+	cancel   context.CancelFunc
+	workers  sync.WaitGroup
 	mu       sync.Mutex
+	closed   bool
 	peers    map[string]peer
-	cycle    chan struct{}
+	cycle    *refreshCycle
 	cursor   int
 	probes   chan struct{}
 	inflight map[probeKey]*probe
 }
 
 func New(path string, policy publicdial.Policy, now func() time.Time, sink diagnostics.Sink) *Pool {
-	p := &Pool{policy: policy, http: policy.Client(), now: now, sink: sink, peers: make(map[string]peer), probes: make(chan struct{}, fanout), inflight: make(map[probeKey]*probe)}
+	ctx, cancel := context.WithCancel(context.Background())
+	p := &Pool{
+		policy:   policy,
+		http:     policy.Client(),
+		now:      now,
+		sink:     sink,
+		ctx:      ctx,
+		cancel:   cancel,
+		peers:    make(map[string]peer),
+		probes:   make(chan struct{}, fanout),
+		inflight: make(map[probeKey]*probe),
+	}
 	if path != "" {
 		p.path = filepath.Join(statefile.StateDirectory(path), "community-peers.json")
 		if f, err := os.Open(p.path); err == nil {
@@ -81,7 +96,20 @@ func New(path string, policy publicdial.Policy, now func() time.Time, sink diagn
 	}
 	return p
 }
-func (p *Pool) Close() { p.http.CloseIdleConnections() }
+
+// Close aborts pool-owned refreshes and probes and joins their goroutines
+// before releasing idle HTTP connections.
+func (p *Pool) Close() {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	p.closed = true
+	p.cancel()
+	p.mu.Unlock()
+	p.workers.Wait()
+	p.http.CloseIdleConnections()
+}
 func (p *Pool) trace(event, source, reason string) {
 	if p.sink.Enabled() {
 		p.sink.Emit(diagnostics.New(event, diagnostics.Fields{"source": diagnostics.Text(source), "reason": diagnostics.Text(reason)}).At(p.now()))

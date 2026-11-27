@@ -8,20 +8,30 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/windshare/windshare/connectivity/publicdial"
 	"github.com/windshare/windshare/connectivity/relayplan"
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/link"
+	"github.com/windshare/windshare/core/nodedirectory"
 	"github.com/windshare/windshare/core/serviceauthority"
 	"github.com/windshare/windshare/engine/internal/community"
 	"github.com/windshare/windshare/engine/internal/statefile"
+	"github.com/windshare/windshare/engine/networkdirectory"
 	"github.com/windshare/windshare/engine/relayprofile"
 )
 
@@ -253,5 +263,165 @@ func TestCommunityReadsStayLockFreeAndPlanHonorsCancelOnPendingRecovery(t *testi
 	}
 	if selection, err := r.Plan(t.Context(), relayprofile.Plan(nil), ""); err != nil || len(selection.Relays) != 1 {
 		t.Fatalf("post-recovery Plan=(%+v, %v)", selection, err)
+	}
+}
+
+func TestBootstrapDirectoryWinDoesNotPoisonCommunityRefreshOrVerify(t *testing.T) {
+	data, err := os.ReadFile("../../../testdata/network/directory.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Now     time.Time
+		Roots   []struct{ ID, Key string }
+		Entries []struct{ Envelope json.RawMessage }
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	rootKey, err := base64.RawURLEncoding.DecodeString(fixture.Roots[0].Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const front = "https://front.example"
+	var gossip, live json.RawMessage
+	var pulls, probes atomic.Int32
+	var probeAborted atomic.Bool
+	warmEntered, releaseWarm := make(chan struct{}), make(chan struct{})
+	var warmOnce sync.Once
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/discovery/v1/peers":
+			pulls.Add(1)
+			_ = json.NewEncoder(w).Encode([]json.RawMessage{gossip})
+		case "/.well-known/windshare":
+			probes.Add(1)
+			warmOnce.Do(func() { close(warmEntered) })
+			select {
+			case <-r.Context().Done():
+				probeAborted.Store(true)
+				return
+			case <-releaseWarm:
+			}
+			_, _ = w.Write(live)
+		case "/v2/ws":
+			ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: []string{"front.example"}})
+			if err != nil {
+				return
+			}
+			_ = ws.CloseNow()
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	_, port, _ := net.SplitHostPort(strings.TrimPrefix(server.URL, "https://"))
+	seed := "https://example.com:" + port
+	identity := "wss://example.com:" + port + "/v2/ws"
+	makeEnvelope := func(domain string, lifetime time.Duration) json.RawMessage {
+		key := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{46}, ed25519.SeedSize))
+		pub := key.Public().(ed25519.PublicKey)
+		digest := sha256.Sum256(append([]byte("windshare/node-identity/v1\x00"), pub...))
+		enc := base64.RawURLEncoding.EncodeToString
+		payload, err := json.Marshal(map[string]any{
+			"version": 2, "platform": "native", "node_id": enc(digest[:]), "node_key": enc(pub),
+			"relay_endpoint": identity, "services": map[string]bool{"relay": true, "stun": false},
+			"public_relay": serviceauthority.RelayAnonymous,
+			"issued_at":    fixture.Now.Unix(), "expires_at": fixture.Now.Add(lifetime).Unix(),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sig := ed25519.Sign(key, append([]byte(domain), payload...))
+		raw, err := json.Marshal(map[string]any{"version": 2, "descriptor": enc(payload), "signature": enc(sig)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	gossip = makeEnvelope(serviceauthority.GossipDomain, 24*time.Hour)
+	live = makeEnvelope(serviceauthority.DescriptorDomain, 5*time.Minute)
+
+	releaseDir := make(chan struct{})
+	r, err := New(nil, func() time.Time { return fixture.Now }, "", diagnostics.Sink{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(r.Close)
+	r.config.LinkHost = front
+	r.config.BootstrapNodes = []string{seed}
+	r.directory, err = networkdirectory.New(networkdirectory.Config{
+		Network: "test",
+		Roots:   []nodedirectory.Root{{ID: fixture.Roots[0].ID, Key: ed25519.PublicKey(rootKey)}},
+		Mirrors: []string{"https://mirror.example/network"},
+		Now:     r.now,
+		Fetch: func(ctx context.Context, _ string) ([]byte, error) {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-releaseDir:
+				return fixture.Entries[0].Envelope, nil
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := netip.MustParseAddr("127.0.0.1")
+	r.community = community.New("", publicdial.Policy{
+		Permit:          func(a netip.Addr) bool { return a == local },
+		Lookup:          func(context.Context, string, string) ([]netip.Addr, error) { return []netip.Addr{local}, nil },
+		TLSClientConfig: server.Client().Transport.(*http.Transport).TLSClientConfig,
+	}, r.now, diagnostics.Sink{})
+
+	type planResult struct {
+		sel Selection
+		err error
+	}
+	planned := make(chan planResult, 1)
+	go func() {
+		sel, err := r.Plan(t.Context(), relayprofile.Plan(nil), "")
+		planned <- planResult{sel, err}
+	}()
+	select {
+	case <-warmEntered:
+	case res := <-planned:
+		t.Fatalf("Plan returned before community warm started: (%+v, %v)", res.sel, res.err)
+	}
+
+	scope := r.scope(front)
+	refreshDone := make(chan struct{})
+	go func() {
+		r.community.Refresh(r.ctx, scope, []string{seed})
+		close(refreshDone)
+	}()
+	verifyErr := make(chan error, 1)
+	go func() {
+		verifyErr <- r.community.Verify(t.Context(), scope, identity)
+	}()
+
+	// Let directory.Refresh win bootstrap() and cancel bootstrapCtx while both
+	// a coalesced Refresh and an unrelated live share's Verify are waiting.
+	close(releaseDir)
+	res := <-planned
+	if res.err != nil || len(res.sel.Plan.DirectoryCandidates()) == 0 {
+		t.Fatalf("bootstrap plan = (%+v, %v), want official candidates", res.sel.Plan, res.err)
+	}
+
+	close(releaseWarm)
+	if err := <-verifyErr; err != nil {
+		t.Fatalf("unrelated live Verify poisoned by bootstrap cancellation: %v", err)
+	}
+	<-refreshDone
+	if probeAborted.Load() {
+		t.Fatal("bootstrap cancellation aborted the in-flight community probe")
+	}
+	if pulls.Load() != 1 || probes.Load() != 1 {
+		t.Fatalf("expected coalesced refresh/verify to reuse single flight, got pulls=%d probes=%d", pulls.Load(), probes.Load())
+	}
+	if peers := r.community.Candidates(scope); len(peers) != 1 || !peers[0].Verified {
+		t.Fatalf("coalesced community refresh failed to complete: %+v", peers)
 	}
 }

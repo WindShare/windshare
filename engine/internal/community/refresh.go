@@ -16,63 +16,134 @@ import (
 	"github.com/windshare/windshare/engine/internal/statefile"
 )
 
+type refreshCycle struct {
+	done  chan struct{}
+	scope Scope
+}
+
+// advanceScope records a newer non-empty scope without letting a delayed
+// caller roll the network generation backwards.
+func (c *refreshCycle) advanceScope(next Scope) {
+	if next.Origin == "" {
+		return
+	}
+	if c.scope.Origin == "" || next.Generation > c.scope.Generation || (next.Generation == c.scope.Generation && next.Origin != c.scope.Origin) {
+		c.scope = next
+	}
+}
+
+// Refresh coalesces startup bootstrapping and periodic pool maintenance.
+// Shared I/O runs on the pool lifetime context so caller cancellation only
+// unblocks that caller's wait without poisoning coalesced refreshers or probes.
 func (p *Pool) Refresh(ctx context.Context, scope Scope, seeds []string) {
 	if p == nil {
 		return
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Err() != nil {
+		return
+	}
 	p.mu.Lock()
-	if running := p.cycle; running != nil {
+	if p.closed {
+		p.mu.Unlock()
+		return
+	}
+	running := p.cycle
+	if running != nil {
+		running.advanceScope(scope)
 		p.mu.Unlock()
 		select {
 		case <-ctx.Done():
-		case <-running:
+		case <-p.ctx.Done():
+		case <-running.done:
 		}
 		return
 	}
-	p.cycle = make(chan struct{})
+	running = &refreshCycle{done: make(chan struct{}), scope: scope}
+	p.cycle = running
 	cursor := p.cursor
 	p.cursor += fanout
+	p.workers.Add(1)
 	p.mu.Unlock()
-	defer func() { p.mu.Lock(); close(p.cycle); p.cycle = nil; p.mu.Unlock() }()
-	var cached []string
+	clonedSeeds := slices.Clone(seeds)
+	go func() {
+		defer p.workers.Done()
+		defer func() {
+			p.mu.Lock()
+			p.cycle = nil
+			close(running.done)
+			p.mu.Unlock()
+		}()
+		p.runRefresh(running, cursor, clonedSeeds)
+	}()
+	select {
+	case <-ctx.Done():
+	case <-p.ctx.Done():
+	case <-running.done:
+	}
+}
+
+func (p *Pool) runRefresh(cycle *refreshCycle, cursor int, seeds []string) {
 	records := p.records()
+	cached := make([]string, 0, len(records))
 	for _, entry := range records {
 		cached = append(cached, entry.d.RelayBaseURL())
 	}
 	var initial sync.WaitGroup
+	var warmedScope Scope
 	if len(records) > 0 {
-		initial.Go(func() { p.warm(ctx, scope, cursor) })
+		p.mu.Lock()
+		warmedScope = cycle.scope
+		p.mu.Unlock()
+		initial.Go(func() { p.warm(p.ctx, warmedScope, cursor) })
 	}
 	pull := func(targets []string) bool {
 		ready := false
 		for i := 0; i < min(fanout, len(targets)); i++ {
+			if p.ctx.Err() != nil {
+				return ready
+			}
 			target := targets[(cursor+i)%len(targets)]
-			if err := p.sample(ctx, target); err == nil {
+			if err := p.sample(p.ctx, target); err == nil {
 				ready = true
-			} else {
+			} else if p.ctx.Err() == nil {
 				p.trace("community_pull_failed", target, err.Error())
 			}
 		}
 		return ready
 	}
-	if !pull(cached) && ctx.Err() == nil {
+	if !pull(cached) && p.ctx.Err() == nil {
 		pull(seeds)
 	}
 	records = p.records()
-	if p.path != "" && len(records) > 0 {
+	if p.path != "" && len(records) > 0 && p.ctx.Err() == nil {
 		raw := make([]json.RawMessage, 0, len(records))
 		for _, r := range records {
 			raw = append(raw, r.raw)
 		}
 		data, _ := json.Marshal(raw)
-		if err := statefile.Write(ctx, p.path, data); err != nil {
+		if err := statefile.Write(p.ctx, p.path, data); err != nil && p.ctx.Err() == nil {
 			p.trace("community_cache_failed", p.path, err.Error())
 		}
 	}
-	if len(cached) == 0 {
-		p.warm(ctx, scope, cursor)
+	if len(cached) == 0 && p.ctx.Err() == nil {
+		p.mu.Lock()
+		warmedScope = cycle.scope
+		p.mu.Unlock()
+		p.warm(p.ctx, warmedScope, cursor)
 	}
 	initial.Wait()
+	// A coalesced caller may arrive mid-cycle with a newer frontend origin or
+	// network generation. Re-warm once for that latest scope so callers do not
+	// sleep for RefreshInterval with observations bound only to the old scope.
+	p.mu.Lock()
+	latestScope := cycle.scope
+	p.mu.Unlock()
+	if latestScope.Origin != "" && latestScope != warmedScope && p.ctx.Err() == nil {
+		p.warm(p.ctx, latestScope, cursor)
+	}
 }
 
 func (p *Pool) warm(ctx context.Context, scope Scope, cursor int) {
@@ -113,7 +184,7 @@ func (p *Pool) warm(ctx context.Context, scope Scope, cursor int) {
 	var workers sync.WaitGroup
 	for _, entry := range candidates[:min(fanout, len(candidates))] {
 		workers.Go(func() {
-			if err := p.check(ctx, scope, entry.d.RelayEndpoint, RefreshInterval); err != nil {
+			if err := p.check(ctx, scope, entry.d.RelayEndpoint, RefreshInterval); err != nil && ctx.Err() == nil {
 				p.trace("community_probe_failed", entry.d.RelayEndpoint, err.Error())
 			}
 		})
@@ -131,6 +202,9 @@ type probe struct {
 }
 
 func (p *Pool) Verify(ctx context.Context, scope Scope, identity string) error {
+	if p == nil {
+		return serviceauthority.ErrExpired
+	}
 	if err := p.check(ctx, scope, identity, 0); err != nil {
 		return err
 	}
@@ -144,8 +218,21 @@ func (p *Pool) Verify(ctx context.Context, scope Scope, identity string) error {
 }
 
 func (p *Pool) check(ctx context.Context, scope Scope, identity string, minValidity time.Duration) error {
+	if p == nil {
+		return serviceauthority.ErrExpired
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	job := probeKey{scope, identity}
 	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return p.ctx.Err()
+	}
 	entry, ok := p.peers[identity]
 	if !ok || int64(entry.d.ExpiresAt) <= p.now().Unix() {
 		p.mu.Unlock()
@@ -155,36 +242,45 @@ func (p *Pool) check(ctx context.Context, scope Scope, identity string, minValid
 		p.mu.Unlock()
 		return nil
 	}
-	if running := p.inflight[job]; running != nil {
+	running := p.inflight[job]
+	if running == nil {
+		running = &probe{done: make(chan struct{})}
+		p.inflight[job] = running
+		p.workers.Add(1)
 		p.mu.Unlock()
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-running.done:
-			return running.err
-		}
+		go p.runProbe(job, entry, running)
+	} else {
+		p.mu.Unlock()
 	}
-	running := &probe{done: make(chan struct{})}
-	p.inflight[job] = running
-	p.mu.Unlock()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-p.ctx.Done():
+		return p.ctx.Err()
+	case <-running.done:
+		return running.err
+	}
+}
+
+func (p *Pool) runProbe(job probeKey, entry peer, running *probe) {
+	defer p.workers.Done()
 	select {
 	case p.probes <- struct{}{}:
-		running.err = p.verify(ctx, scope, entry)
+		running.err = p.verify(p.ctx, job.scope, entry)
 		<-p.probes
-	case <-ctx.Done():
-		running.err = ctx.Err()
+	case <-p.ctx.Done():
+		running.err = p.ctx.Err()
 	}
 	p.mu.Lock()
-	if running.err != nil && ctx.Err() == nil {
-		if latest, ok := p.peers[identity]; ok && latest.d.NodeKey == entry.d.NodeKey && latest.live.scope == scope {
+	if running.err != nil && p.ctx.Err() == nil {
+		if latest, ok := p.peers[job.identity]; ok && latest.d.NodeKey == entry.d.NodeKey && latest.live.scope == job.scope {
 			latest.live = observation{}
-			p.peers[identity] = latest
+			p.peers[job.identity] = latest
 		}
 	}
 	delete(p.inflight, job)
 	close(running.done)
 	p.mu.Unlock()
-	return running.err
 }
 
 func publicPrefix(ip netip.Addr) netip.Prefix {
