@@ -119,7 +119,7 @@ func (source *SelectedCatalogSource) openSelectedRoot(
 		// missing root.
 		return catalog.NodeRecord{}, nil, pathfailure.Filesystem("resolve selected root", selectedPath, fs.ErrNotExist)
 	}
-	absolute, err := filepath.Abs(selectedPath)
+	absolute, name, err := resolveSelectedRootPath(selectedPath)
 	if err != nil {
 		return catalog.NodeRecord{}, nil, pathfailure.Filesystem("resolve selected root", selectedPath, err)
 	}
@@ -156,12 +156,50 @@ func (source *SelectedCatalogSource) openSelectedRoot(
 	if err != nil {
 		return catalog.NodeRecord{}, nil, err
 	}
-	record, err := source.buildSelectedRootRecord(absolute, relative, slot, parent, kind, opened, identity, candidate)
+	record, err := source.buildSelectedRootRecord(name, relative, slot, parent, kind, opened, identity, candidate)
 	if err != nil {
 		return catalog.NodeRecord{}, nil, err
 	}
 	ownedRoot = true
 	return record, root, nil
+}
+
+// resolveSelectedRootPath returns the path to inspect and the root's published
+// name. filepath.Abs folds "." into Getwd, which reports a shell's logical $PWD,
+// so `wind share .` in a directory entered through a symlink would inspect the
+// link. A selection whose final element is ".", ".." or a trailing separator
+// names the directory the kernel reaches, so such a final link is followed only
+// when the kernel's own resolution agrees. Naming the link entry stays refused.
+func resolveSelectedRootPath(selectedPath string) (string, string, error) {
+	absolute, err := filepath.Abs(selectedPath)
+	if err != nil {
+		return "", "", err
+	}
+	name := filepath.Base(absolute)
+	if !namesDirectoryItself(selectedPath) {
+		return absolute, name, nil
+	}
+	if link, err := os.Lstat(absolute); err != nil || link.Mode()&fs.ModeSymlink == 0 {
+		return absolute, name, nil
+	}
+	followed, followErr := os.Stat(selectedPath)
+	resolved, resolveErr := filepath.EvalSymlinks(absolute)
+	if followErr != nil || resolveErr != nil || !followed.IsDir() {
+		return absolute, name, nil
+	}
+	if target, err := os.Lstat(resolved); err != nil || !target.IsDir() || !os.SameFile(followed, target) {
+		return absolute, name, nil
+	}
+	return resolved, name, nil
+}
+
+func namesDirectoryItself(selectedPath string) bool {
+	last := len(selectedPath)
+	for last > 0 && !os.IsPathSeparator(selectedPath[last-1]) {
+		last--
+	}
+	final := selectedPath[last:]
+	return final == "" || final == "." || final == ".."
 }
 
 func (source *SelectedCatalogSource) openSelectedRootBaseline(
@@ -209,7 +247,7 @@ func (source *SelectedCatalogSource) openSelectedRootBaseline(
 }
 
 func (source *SelectedCatalogSource) buildSelectedRootRecord(
-	absolute string,
+	name string,
 	relative string,
 	slot RootSlot,
 	parent catalog.DirectoryID,
@@ -222,7 +260,6 @@ func (source *SelectedCatalogSource) buildSelectedRootRecord(
 	if err != nil {
 		return catalog.NodeRecord{}, err
 	}
-	name := filepath.Base(absolute)
 	if kind == sourceEntryDirectory {
 		directory, idErr := source.newDirectoryID()
 		if idErr != nil {
