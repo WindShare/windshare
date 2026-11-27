@@ -51,3 +51,18 @@ func TestCloudPlaceholderFailureAndOmissionGuidance(t *testing.T) {
 		t.Fatalf("unexpected cloud omission reason: %q", reason)
 	}
 }
+
+// A named link gets a next step that holds for file and folder links; the
+// generic unsupported text stays as it was for FIFOs, pipes and loops.
+func TestSelectedSymbolicLinkFailureGuidance(t *testing.T) {
+	msg := failureMessage(engine.Failure{Code: engine.FailureSourceSymbolicLink, SourcePath: "fl"})
+	if !strings.Contains(msg, "This path is a symbolic link, which is not followed when named directly.") ||
+		!strings.Contains(msg, "Select its target instead; for a link to a folder, add a trailing slash") ||
+		!strings.HasSuffix(msg, "Path: fl") {
+		t.Fatalf("unexpected named link message: %q", msg)
+	}
+	generic := failureMessage(engine.Failure{Code: engine.FailureSourceUnsupported, SourcePath: "fifo"})
+	if generic != "This source cannot be shared safely. Select a regular file or directory on a supported filesystem; symbolic links are not supported. Path: fifo" {
+		t.Fatalf("generic unsupported text changed: %q", generic)
+	}
+}

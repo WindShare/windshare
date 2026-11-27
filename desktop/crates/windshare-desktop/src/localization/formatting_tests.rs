@@ -117,3 +117,26 @@ fn share_error_from_failure_drops_empty_paths() {
         ShareError::Message("collision fallback".into())
     );
 }
+
+#[test]
+fn share_error_maps_a_selected_symbolic_link_to_the_unsupported_wording() {
+    let named_link = Failure {
+        code: "startup_failed".into(),
+        message: "raw fallback".into(),
+        engine_code: Some("source_symbolic_link".into()),
+        source_path: Some(r"C:\work\photos".into()),
+        selection_collision: None,
+    };
+    let error = ShareError::from_failure(&named_link);
+    assert_eq!(
+        error,
+        ShareError::SourceUnsupported {
+            path: Some(r"C:\work\photos".into())
+        }
+    );
+    assert!(
+        Language::English
+            .share_error(&error)
+            .contains("instead of a symbolic link or junction")
+    );
+}

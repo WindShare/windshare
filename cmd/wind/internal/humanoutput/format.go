@@ -290,7 +290,8 @@ func sourceFailureMessage(failure engine.Failure) string {
 	case engine.FailureSourceUnsupported:
 		return "This source cannot be shared safely. Select a regular file or directory on a supported filesystem; symbolic links are not supported."
 	case engine.FailureSourceSymbolicLink:
-		return "Symbolic links are not followed. Select the target instead, or add a trailing slash to share the folder a link points to."
+		// Correct for links to files and folders alike: the code does not say which.
+		return `This path is a symbolic link, which is not followed when named directly. Select its target instead; for a link to a folder, add a trailing slash (for example "link/").`
 	case engine.FailureSourceCloudPlaceholder:
 		return "This item is stored in the cloud and not fully available on this device. Make this item available on this device, then share it again."
 	case engine.FailureSourceOmitted:
