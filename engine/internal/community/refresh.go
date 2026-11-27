@@ -342,12 +342,19 @@ func (p *Pool) warm(ctx context.Context, scope Scope, cursor, limit int, exclude
 	for _, entry := range selected {
 		attempted = append(attempted, entry.d.RelayEndpoint)
 		workers.Go(func() {
-			_ = p.check(ctx, scope, entry.d.RelayEndpoint, RefreshInterval)
+			_ = p.check(ctx, scope, entry.d.RelayEndpoint, RefreshInterval, probeLaneBackground)
 		})
 	}
 	workers.Wait()
 	return attempted
 }
+
+type probeLane uint8
+
+const (
+	probeLaneBackground probeLane = iota
+	probeLaneForeground
+)
 
 type probeKey struct {
 	scope    Scope
@@ -362,7 +369,7 @@ func (p *Pool) Verify(ctx context.Context, scope Scope, identity string) error {
 	if p == nil {
 		return serviceauthority.ErrExpired
 	}
-	if err := p.check(ctx, scope, identity, 0); err != nil {
+	if err := p.check(ctx, scope, identity, 0, probeLaneForeground); err != nil {
 		return err
 	}
 	p.mu.Lock()
@@ -374,7 +381,7 @@ func (p *Pool) Verify(ctx context.Context, scope Scope, identity string) error {
 	return nil
 }
 
-func (p *Pool) check(ctx context.Context, scope Scope, identity string, minValidity time.Duration) error {
+func (p *Pool) check(ctx context.Context, scope Scope, identity string, minValidity time.Duration, lane probeLane) error {
 	if p == nil {
 		return serviceauthority.ErrExpired
 	}
@@ -418,7 +425,7 @@ func (p *Pool) check(ctx context.Context, scope Scope, identity string, minValid
 		p.inflight[job] = running
 		p.workers.Add(1)
 		p.mu.Unlock()
-		go p.runProbe(job, entry, running)
+		go p.runProbe(job, entry, running, lane)
 	} else {
 		p.mu.Unlock()
 	}
@@ -432,12 +439,20 @@ func (p *Pool) check(ctx context.Context, scope Scope, identity string, minValid
 	}
 }
 
-func (p *Pool) runProbe(job probeKey, entry peer, running *probe) {
+func (p *Pool) probeSlots(lane probeLane) chan struct{} {
+	if lane == probeLaneForeground {
+		return p.verifyProbes
+	}
+	return p.warmProbes
+}
+
+func (p *Pool) runProbe(job probeKey, entry peer, running *probe, lane probeLane) {
 	defer p.workers.Done()
+	slots := p.probeSlots(lane)
 	select {
-	case p.probes <- struct{}{}:
+	case slots <- struct{}{}:
 		running.err = p.verify(p.ctx, job.scope, entry)
-		<-p.probes
+		<-slots
 	case <-p.ctx.Done():
 		running.err = p.ctx.Err()
 	}

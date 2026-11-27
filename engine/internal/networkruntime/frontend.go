@@ -83,6 +83,7 @@ func (r *Runtime) run(changes <-chan networkstate.Snapshot, unsubscribe func()) 
 
 func (r *Runtime) handleNetworkChange() {
 	r.kickCommunity()
+	r.kickOwnerObserve()
 	if r.directory != nil {
 		r.directory.NetworkChanged()
 	}

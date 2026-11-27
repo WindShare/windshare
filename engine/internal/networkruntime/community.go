@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/windshare/windshare/connectivity/publicdial"
@@ -21,6 +22,11 @@ import (
 	"github.com/windshare/windshare/engine/relayprofile"
 )
 
+const (
+	ownerObserveBatchSize = 2
+	ownerObserveTimeout   = 4 * time.Second
+)
+
 func (r *Runtime) startCommunity() {
 	if r.config.CommunitySettingsPath == "" && len(r.config.BootstrapNodes) == 0 {
 		return
@@ -32,9 +38,8 @@ func (r *Runtime) startCommunity() {
 	r.communityWorkers.Go(func() {
 		tick := time.NewTicker(community.RefreshInterval)
 		defer tick.Stop()
-		cursor := 0
 		for {
-			r.maintainCommunity(&cursor)
+			r.refreshCommunity()
 			select {
 			case <-r.ctx.Done():
 				return
@@ -43,39 +48,105 @@ func (r *Runtime) startCommunity() {
 			}
 		}
 	})
-}
-
-func (r *Runtime) maintainCommunity(cursor *int) {
-	settings, allowed := r.communitySettings(r.ctx)
-	r.deliverCommunityNotice(r.ctx)
-	if owned := settings.OwnedNative(); len(owned) > 0 {
-		observed := map[string]serviceauthority.PublicRelay{}
-		for i := 0; i < min(2, len(owned)); i++ {
-			p := owned[(*cursor+i)%len(owned)]
-			if state, ok := r.observeOwner(p); ok {
-				observed[p.Node.NodeKey] = state
+	if r.config.CommunitySettingsPath == "" {
+		return
+	}
+	// Run owned-relay eligibility observation on an independent loop so offline
+	// or blackholed owned relays (e.g. a home LAN node while away) cannot delay
+	// community pool refresh or warming when persisted eligibility already allows it.
+	r.ownerKick = make(chan struct{}, 1)
+	r.communityWorkers.Go(func() {
+		tick := time.NewTicker(community.RefreshInterval)
+		defer tick.Stop()
+		cursor := 0
+		for {
+			r.observeOwnedRelays(&cursor)
+			select {
+			case <-r.ctx.Done():
+				return
+			case <-r.ownerKick:
+			case <-tick.C:
 			}
 		}
-		*cursor += 2
-		if len(observed) > 0 {
-			allowed = r.updateEligibility(observed)
-			r.deliverCommunityNotice(r.ctx)
+	})
+}
+
+func (r *Runtime) refreshCommunity() {
+	settings, allowed := r.communitySettings(r.ctx)
+	r.deliverCommunityNotice(r.ctx)
+	if !allowed {
+		return
+	}
+	r.mu.Lock()
+	origin := r.communityOrigin
+	r.mu.Unlock()
+	if origin == "" {
+		origin = r.frontend(settings.FrontURL).primary
+	}
+	r.community.Refresh(r.ctx, r.scope(origin), r.seeds(settings))
+}
+
+func (r *Runtime) observeOwnedRelays(cursor *int) {
+	settings, _ := r.communitySettings(r.ctx)
+	owned := settings.OwnedNative()
+	if len(owned) == 0 {
+		return
+	}
+	observed := r.observeOwnerBatch(owned, cursor)
+	if len(observed) == 0 || r.ctx.Err() != nil {
+		return
+	}
+	resumed := r.updateEligibility(observed)
+	r.deliverCommunityNotice(r.ctx)
+	if resumed {
+		r.kickCommunity()
+	}
+}
+
+func (r *Runtime) observeOwnerBatch(owned []relayprofile.Candidate, cursor *int) map[string]serviceauthority.PublicRelay {
+	batchSize := min(ownerObserveBatchSize, len(owned))
+	start := *cursor
+	*cursor += ownerObserveBatchSize
+	type result struct {
+		key   string
+		state serviceauthority.PublicRelay
+		ok    bool
+	}
+	results := make([]result, batchSize)
+	if batchSize == 1 {
+		p := owned[start%len(owned)]
+		state, ok := r.observeOwner(p)
+		results[0] = result{key: p.Node.NodeKey, state: state, ok: ok}
+	} else {
+		var wg sync.WaitGroup
+		for i := range batchSize {
+			p := owned[(start+i)%len(owned)]
+			wg.Go(func() {
+				state, ok := r.observeOwner(p)
+				results[i] = result{key: p.Node.NodeKey, state: state, ok: ok}
+			})
+		}
+		wg.Wait()
+	}
+	observed := make(map[string]serviceauthority.PublicRelay, batchSize)
+	for _, item := range results {
+		if item.ok {
+			observed[item.key] = item.state
 		}
 	}
-	if allowed {
-		r.mu.Lock()
-		origin := r.communityOrigin
-		r.mu.Unlock()
-		if origin == "" {
-			origin = r.frontend(settings.FrontURL).primary
-		}
-		r.community.Refresh(r.ctx, r.scope(origin), r.seeds(settings))
-	}
+	return observed
 }
 
 func (r *Runtime) kickCommunity() {
 	select {
 	case r.communityKick <- struct{}{}:
+	default:
+	}
+}
+
+func (r *Runtime) kickOwnerObserve() {
+	select {
+	case r.ownerKick <- struct{}{}:
 	default:
 	}
 }
@@ -135,6 +206,7 @@ func (r *Runtime) RelaySettingsChanged(ctx context.Context) {
 	r.mu.Unlock()
 	r.deliverCommunityNotice(ctx)
 	r.kickCommunity()
+	r.kickOwnerObserve()
 }
 
 func (r *Runtime) communitySettings(ctx context.Context) (relayconfig.Config, bool) {
@@ -156,7 +228,7 @@ func (r *Runtime) communitySettings(ctx context.Context) (relayconfig.Config, bo
 }
 
 func (r *Runtime) updateEligibility(observed map[string]serviceauthority.PublicRelay) bool {
-	allowed := false
+	resumed := false
 	err := statefile.Transact(r.ctx, r.config.CommunitySettingsPath, func(tx *statefile.Transaction) error {
 		c, err := relayconfig.ReadSettings(tx)
 		if err != nil {
@@ -166,14 +238,18 @@ func (r *Runtime) updateEligibility(observed map[string]serviceauthority.PublicR
 		if err != nil {
 			return err
 		}
+		wasPaused := relayconfig.EvaluateEligibility(old, c, nil).Paused
 		e, err := relayconfig.ReconcileEligibility(tx, c, observed)
-		allowed = c.CommunityEnabled() && !c.ConfiguredOnly && !e.Paused
-		if err == nil && old.Paused != e.Paused && r.diagnostics.Enabled() {
+		if err != nil {
+			return err
+		}
+		resumed = wasPaused && c.CommunityEnabled() && !c.ConfiguredOnly && !e.Paused
+		if old.Paused != e.Paused && r.diagnostics.Enabled() {
 			r.diagnostics.Emit(diagnostics.New("community_eligibility_changed", diagnostics.Fields{"paused": diagnostics.Bool(e.Paused)}))
 		}
-		return err
+		return nil
 	})
-	return allowed && err == nil
+	return resumed && err == nil
 }
 
 func (r *Runtime) observeOwner(profile relayprofile.Candidate) (serviceauthority.PublicRelay, bool) {
@@ -186,7 +262,7 @@ func (r *Runtime) observeOwner(profile relayprofile.Candidate) (serviceauthority
 	u.Scheme = map[string]string{"ws": "http", "wss": "https"}[u.Scheme]
 	u.Path = "/.well-known/windshare"
 	u.RawPath = ""
-	ctx, cancel := context.WithTimeout(r.ctx, 4*time.Second)
+	ctx, cancel := context.WithTimeout(r.ctx, ownerObserveTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {

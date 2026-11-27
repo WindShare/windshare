@@ -72,8 +72,13 @@ type Pool struct {
 	peers          map[string]peer
 	cycle          *refreshCycle
 	cursor         int
-	probes         chan struct{}
-	inflight       map[probeKey]*probe
+	// Isolate background warming from foreground on-demand Verify() slots so
+	// stalled background probes cannot head-of-line block share fallback, while
+	// keeping warmProbes sized to fanout so coalesced foreground callers never
+	// queue behind background probes.
+	warmProbes   chan struct{}
+	verifyProbes chan struct{}
+	inflight     map[probeKey]*probe
 }
 
 func New(path string, policy publicdial.Policy, now func() time.Time, sink diagnostics.Sink) *Pool {
@@ -87,7 +92,8 @@ func New(path string, policy publicdial.Policy, now func() time.Time, sink diagn
 		ctx:            ctx,
 		cancel:         cancel,
 		peers:          make(map[string]peer),
-		probes:         make(chan struct{}, fanout),
+		warmProbes:     make(chan struct{}, fanout),
+		verifyProbes:   make(chan struct{}, fanout),
 		inflight:       make(map[probeKey]*probe),
 	}
 	if path != "" {

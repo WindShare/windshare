@@ -26,6 +26,7 @@ import (
 type Runtime struct {
 	community        *community.Pool
 	communityKick    chan struct{}
+	ownerKick        chan struct{}
 	communityOrigin  string // Explicit per-share origin override; empty follows settings or built-in frontend.
 	communityWorkers sync.WaitGroup
 	accounts         *account.Service

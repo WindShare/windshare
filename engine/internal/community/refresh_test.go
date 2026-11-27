@@ -205,7 +205,7 @@ func TestDisabledContributionExcludedFromPoolAndLiveSTUN(t *testing.T) {
 	}
 	live = envelopeWithRelay(t, identity, serviceauthority.DescriptorDomain, now, 5*time.Minute, serviceauthority.RelayDisabled)
 	scope := Scope{Origin: front, Generation: 1}
-	if err := pool.check(t.Context(), scope, identity, 0); err == nil {
+	if err := pool.check(t.Context(), scope, identity, 0, probeLaneBackground); err == nil {
 		t.Fatal("live disabled node must not be admitted for STUN")
 	}
 	if stun := pool.STUN(scope.Generation); len(stun) != 0 {
