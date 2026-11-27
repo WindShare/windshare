@@ -21,7 +21,10 @@ services:
       RELAY_SNI: ${RELAY_SNI:-${RELAY_HOST}}
       CERT_POLICY: ${CERT_POLICY:-domain_cert}
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Mount a dedicated config directory rather than a single file so atomic edits
+      # (vim, sed -i, mv, git pull) remain visible to `caddy reload` without exposing
+      # sibling host files such as instance/.env or instance/node.json.
+      - ${WSRELAY_CADDY_DIR:-./caddy}:/etc/caddy:ro
       - caddy-data:/data
       - caddy-config:/config
 volumes:
