@@ -140,6 +140,16 @@ func (source *SelectedCatalogSource) traceSelectedRootPolicy(slot RootSlot, deci
 	source.diagnostics.Emit(diag.New("catalog_source_policy", fields))
 }
 
+func (source *SelectedCatalogSource) traceSelectedRootLinkedCWD(slot RootSlot) {
+	if !source.diagnostics.Enabled() {
+		return
+	}
+	source.diagnostics.Emit(diag.New("catalog_source_policy", diag.Fields{
+		"root_slot": diag.Uint(uint64(slot)),
+		"decision":  diag.Text("resolved_linked_cwd"),
+	}))
+}
+
 func (source *SelectedCatalogSource) traceCatalogOmissionSummary(request catalog.ScanRequest, count uint64) {
 	if count == 0 || !source.diagnostics.Enabled() {
 		return

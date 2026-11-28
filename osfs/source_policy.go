@@ -2,6 +2,7 @@ package osfs
 
 import (
 	"errors"
+	"os"
 
 	"github.com/windshare/windshare/core/catalog"
 )
@@ -57,4 +58,39 @@ func omissionForEntryKind(kind sourceEntryKind) catalog.SourceOmissionReason {
 	default:
 		return catalog.SourceOmissionSpecialFile
 	}
+}
+
+type resolvedLinkedDirectory struct {
+	openPath string
+	identity sourceObjectIdentity
+	kind     sourceEntryKind
+	audit    sourceEntryAudit
+}
+
+// isPureDotTraversal reports whether selectedPath consists solely of "." and
+// ".." relative components separated by path separators. Only these spellings
+// ask for the working directory or its ancestors without naming a link
+// component; named links (including "link/." or glob-expanded "dir/*/.") stay
+// outside this allowance.
+func isPureDotTraversal(selectedPath string) bool {
+	if selectedPath == "" || os.IsPathSeparator(selectedPath[0]) {
+		return false
+	}
+	hasComponent := false
+	start := 0
+	for index := 0; index <= len(selectedPath); index++ {
+		if index < len(selectedPath) && !os.IsPathSeparator(selectedPath[index]) {
+			continue
+		}
+		component := selectedPath[start:index]
+		start = index + 1
+		if component == "" {
+			continue
+		}
+		if component != "." && component != ".." {
+			return false
+		}
+		hasComponent = true
+	}
+	return hasComponent
 }
