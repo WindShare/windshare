@@ -29,13 +29,13 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 	var relayURLs []string
 	flags.Func("relay", "override saved relay selection; repeat to use multiple relays", func(value string) error {
 		if value == "" {
-			return errors.New("--relay URL must not be empty")
+			return command.OptionError("--relay URL must not be empty")
 		}
 		if slices.Contains(relayURLs, value) {
 			return nil
 		}
 		if len(relayURLs) >= relayprofile.MaximumEndpoints {
-			return errors.New("too many --relay endpoints")
+			return command.OptionError("too many --relay endpoints")
 		}
 		relayURLs = append(relayURLs, value)
 		return nil
@@ -47,6 +47,9 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 		catalog.MinChunkSize, catalog.MaxChunkSize), func(value string) error {
 		parsed, err := strconv.ParseInt(value, 10, 64)
 		if err != nil {
+			if errors.Is(err, strconv.ErrRange) {
+				return command.OptionError(invalidBlockSizeMessage())
+			}
 			return errors.New("must be a decimal integer")
 		}
 		blockSize = parsed
@@ -76,8 +79,7 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 	// Report invalid flags before configuration or workflow failures can obscure
 	// the user's input error.
 	if blockSize != 0 && (blockSize < 0 || blockSize > math.MaxUint32 || !catalog.ValidChunkSize(uint32(blockSize))) {
-		a.writeCompleteLine("share: --block-size must be 0 for the default or a power of two from %d to %d bytes",
-			catalog.MinChunkSize, catalog.MaxChunkSize)
+		a.writeCompleteLine("share: %s", invalidBlockSizeMessage())
 		return shareRequest{}, requestParseUsageFailure
 	}
 	// The process entry point supplies personal configuration. Embedded callers
@@ -113,6 +115,13 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 		link:      shareLinkPresentation{frontURL: frontend, splitKey: *splitKey, browserTrace: *browserTrace},
 		chunkSize: uint32(blockSize), observation: observation,
 	}, requestParseReady
+}
+
+func invalidBlockSizeMessage() string {
+	return fmt.Sprintf(
+		"--block-size must be 0 for the default or a power of two from %d to %d bytes",
+		catalog.MinChunkSize, catalog.MaxChunkSize,
+	)
 }
 
 func shareFrontend(flags *flag.FlagSet, override, saved string) (string, error) {

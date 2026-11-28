@@ -62,8 +62,8 @@ func TestParseInterleavedHandlesMixedPositionalsTerminatorAndErrors(t *testing.T
 		verbose := fs.Bool("v", false, "verbose")
 		target := fs.String("target", "", "target")
 		positionals, err := ParseInterleaved(fs, []string{"first", "-v", "--target", "--", "second", "--", "-literal", "--help"})
-		if err != nil || !*verbose || *target != "--" || !slices.Equal(positionals, []string{"first", "second", "-literal", "--help"}) {
-			t.Fatalf("err=%v verbose=%v target=%q positionals=%q", err, *verbose, *target, positionals)
+		if err != nil || !fs.Parsed() || !*verbose || *target != "--" || !slices.Equal(positionals, []string{"first", "second", "-literal", "--help"}) {
+			t.Fatalf("err=%v parsed=%v verbose=%v target=%q positionals=%q", err, fs.Parsed(), *verbose, *target, positionals)
 		}
 	})
 
@@ -99,12 +99,13 @@ func TestParseInterleavedHandlesMixedPositionalsTerminatorAndErrors(t *testing.T
 			{"missing short value", []string{"-c"}, ExitUsage, `-c requires a value`},
 			{"invalid int value", []string{"--count", "abc"}, ExitUsage, `invalid value "abc" for --count: parse error`},
 			{"invalid equals value", []string{"--count=abc"}, ExitUsage, `invalid value "abc" for --count: parse error`},
-			{"invalid bool value", []string{"--flag=abc"}, ExitUsage, `invalid value "abc" for --flag: parse error`},
+			{"invalid bool value omits secret", []string{"--flag=secret-value"}, ExitUsage, `--flag requires a boolean value (true or false)`},
 			{"redacts fragment in invalid value", []string{"--count", "https://ws.example/id#secret"}, ExitUsage, `invalid value "https://ws.example/id#<redacted>" for --count: parse error`},
-			{"custom error already naming option", []string{"--item", "0"}, ExitUsage, `--item must be positive`},
-			{"custom error with incidental substring still names option", []string{"-o", "bad"}, ExitUsage, `invalid value "bad" for -o: read-only destination`},
+			{"self-contained option error", []string{"--item", "0"}, ExitUsage, `--item must be positive`},
+			{"plain custom error wraps option and value", []string{"-o", "bad"}, ExitUsage, `invalid value "bad" for -o: read-only destination`},
 			{"triple dash", []string{"---flag"}, ExitUsage, `invalid option syntax "---flag"`},
-			{"leading equals", []string{"--=flag"}, ExitUsage, `invalid option syntax "--=flag"`},
+			{"triple dash drops attached value", []string{"---flag=secret"}, ExitUsage, `invalid option syntax "---flag="`},
+			{"leading equals drops attached value", []string{"--=secret"}, ExitUsage, `invalid option syntax "--="`},
 		}
 		for _, tc := range tests {
 			t.Run(tc.name, func(t *testing.T) {
@@ -112,7 +113,7 @@ func TestParseInterleavedHandlesMixedPositionalsTerminatorAndErrors(t *testing.T
 				fs.Int("count", 0, "count")
 				fs.Int("c", 0, "short count")
 				fs.Bool("flag", false, "flag")
-				fs.Func("item", "item", func(string) error { return errors.New("--item must be positive") })
+				fs.Func("item", "item", func(string) error { return OptionError("--item must be positive") })
 				fs.Func("o", "output", func(string) error { return errors.New("read-only destination") })
 				_, err := ParseInterleaved(fs, tc.args)
 				if err == nil || ParseExitCode(err) != tc.wantExit || err.Error() != tc.wantErr {

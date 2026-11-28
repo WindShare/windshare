@@ -10,11 +10,9 @@ import (
 
 // List and discard accept no positional arguments. ParseNoPositionals stops at
 // the first positional or "--" so later tokens cannot be reinterpreted as help.
-type flagRequestParser struct {
-	logger resumeLogger
-}
+type flagRequestParser struct{}
 
-func (parser flagRequestParser) ParseRoot(
+func (flagRequestParser) ParseRoot(
 	action string,
 	args []string,
 ) (resumeRootRequest, error) {
@@ -22,52 +20,36 @@ func (parser flagRequestParser) ParseRoot(
 	var rootPath resumeRootPathFlag
 	flags.Var(&rootPath, "o", "output directory (required)")
 	if err := command.ParseNoPositionals(flags, args); err != nil {
-		if !errors.Is(err, command.ErrHelp) {
-			parser.logger.Logf("%s: %v", action, err)
-		}
 		return resumeRootRequest{}, err
 	}
 	if !rootPath.set {
-		err := errors.New("-o is required")
-		parser.logger.Logf("%s: %v", action, err)
-		return resumeRootRequest{}, err
+		return resumeRootRequest{}, errors.New("-o is required")
 	}
 	absolute, err := absoluteResumeRoot(rootPath.value)
 	if err != nil {
-		err := errors.New("output directory is invalid")
-		parser.logger.Logf("%s: %v", action, err)
-		return resumeRootRequest{}, err
+		return resumeRootRequest{}, errors.New("output directory is invalid")
 	}
 	return resumeRootRequest{rootPath: absolute}, nil
 }
 
-func (parser flagRequestParser) ParseDiscard(args []string) (resumeDiscardRequest, error) {
+func (flagRequestParser) ParseDiscard(args []string) (resumeDiscardRequest, error) {
 	flags := command.NewFlagSet("resume discard")
 	var rootPath resumeRootPathFlag
 	flags.Var(&rootPath, "o", "output directory (required)")
 	var item resumeItemNumberFlag
 	flags.Var(&item, "item", "one current inventory item number (required)")
 	if err := command.ParseNoPositionals(flags, args); err != nil {
-		if !errors.Is(err, command.ErrHelp) {
-			parser.logger.Logf("resume discard: %v", err)
-		}
 		return resumeDiscardRequest{}, err
 	}
 	if !rootPath.set {
-		err := errors.New("-o is required")
-		parser.logger.Logf("resume discard: %v", err)
-		return resumeDiscardRequest{}, err
+		return resumeDiscardRequest{}, errors.New("-o is required")
 	}
 	if !item.set {
-		err := errors.New("--item is required")
-		parser.logger.Logf("resume discard: %v", err)
-		return resumeDiscardRequest{}, err
+		return resumeDiscardRequest{}, errors.New("--item is required")
 	}
 	absolute, err := absoluteResumeRoot(rootPath.value)
 	if err != nil {
-		err := errors.New("output directory is invalid")
-		parser.logger.Logf("resume discard: %v", err)
-		return resumeDiscardRequest{}, err
+		return resumeDiscardRequest{}, errors.New("output directory is invalid")
 	}
 	return resumeDiscardRequest{rootPath: absolute, itemNumber: item.value}, nil
 }
@@ -86,10 +68,10 @@ func (root *resumeRootPathFlag) String() string {
 
 func (root *resumeRootPathFlag) Set(value string) error {
 	if root == nil || root.set {
-		return errors.New("exactly one -o is allowed")
+		return command.OptionError("exactly one -o is allowed")
 	}
 	if value == "" {
-		return errors.New("-o must name an output directory")
+		return command.OptionError("-o must name an output directory")
 	}
 	root.set = true
 	root.value = value
@@ -110,13 +92,13 @@ func (item *resumeItemNumberFlag) String() string {
 
 func (item *resumeItemNumberFlag) Set(value string) error {
 	if item == nil || item.set {
-		return errors.New("exactly one --item is allowed")
+		return command.OptionError("exactly one --item is allowed")
 	}
 	// IntSize-1 bits keeps the ordinal within int, so it cannot wrap to a
 	// non-positive or different item number when converted below.
 	parsed, err := strconv.ParseUint(value, 10, strconv.IntSize-1)
 	if err != nil || parsed == 0 || strconv.FormatUint(parsed, 10) != value {
-		return errors.New("--item must be one canonical positive decimal number")
+		return command.OptionError("--item must be one canonical positive decimal number")
 	}
 	item.set = true
 	item.value = int(parsed)

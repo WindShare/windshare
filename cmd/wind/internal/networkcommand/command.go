@@ -58,7 +58,7 @@ func (runner Runner) Run(ctx context.Context, cmd string, args []string) command
 	}
 	options, err := parseNetworkArgs(cmd, args)
 	if err != nil {
-		return runner.reportParseError(cmd, args, err)
+		return runner.reportParseError(cmd, err)
 	}
 	if runner.Service == nil {
 		runner.Service = platformsetup.New()
@@ -110,21 +110,34 @@ func (runner Runner) Run(ctx context.Context, cmd string, args []string) command
 
 type networkOptions struct{ skip, remove, noninteractive, jsonOutput bool }
 
-var errNetworkUsage = errors.New("network usage")
+type networkParseError struct {
+	label string
+	cause error
+}
 
-func (runner Runner) reportParseError(cmd string, args []string, err error) command.ExitCode {
+func (err networkParseError) Error() string {
+	if err.cause == nil {
+		return "network usage"
+	}
+	if err.label == "" {
+		return err.cause.Error()
+	}
+	return err.label + ": " + err.cause.Error()
+}
+
+func (err networkParseError) Unwrap() error { return err.cause }
+
+func (runner Runner) reportParseError(cmd string, err error) command.ExitCode {
 	if errors.Is(err, command.ErrHelp) {
 		runner.writeLine("%s", networkUsage(cmd))
 		return command.ExitOK
 	}
-	if !errors.Is(err, errNetworkUsage) {
-		label := cmd
-		if cmd != "doctor" && cmd != "setup" {
-			label = command.Name
-		} else if len(args) > 0 && args[0] == "network" {
-			label = cmd + " network"
+	if parsed, ok := errors.AsType[networkParseError](err); ok {
+		if parsed.cause != nil {
+			runner.writeLine("%s", parsed.Error())
 		}
-		runner.writeLine("%s: %v", label, err)
+	} else {
+		runner.writeLine("%s: %v", cmd, err)
 	}
 	runner.writeLine("%s", networkUsage(cmd))
 	return command.ParseExitCode(err)
@@ -133,18 +146,25 @@ func (runner Runner) reportParseError(cmd string, args []string, err error) comm
 func parseNetworkArgs(cmd string, args []string) (networkOptions, error) {
 	var options networkOptions
 	if cmd != "doctor" && cmd != "setup" {
-		return options, fmt.Errorf("unknown command %q", command.RedactToken(cmd))
+		return options, networkParseError{
+			label: command.Name,
+			cause: fmt.Errorf("unknown command %q", command.RedactToken(cmd)),
+		}
 	}
 	if len(args) == 0 {
-		return options, errNetworkUsage
+		return options, networkParseError{}
 	}
 	if command.IsHelpToken(args[0]) {
 		return options, command.ErrHelp
 	}
 	if args[0] != "network" {
-		return options, fmt.Errorf("unknown target %q", command.RedactToken(args[0]))
+		return options, networkParseError{
+			label: cmd,
+			cause: fmt.Errorf("unknown target %q", command.RedactToken(args[0])),
+		}
 	}
-	flags := command.NewFlagSet(cmd + " network")
+	label := cmd + " network"
+	flags := command.NewFlagSet(label)
 	flags.BoolVar(&options.jsonOutput, "json", false, "write the executable rule inspection as JSON")
 	if cmd == "setup" {
 		flags.BoolVar(&options.skip, "skip", false, "save the preference to stop reminders")
@@ -152,10 +172,16 @@ func parseNetworkArgs(cmd string, args []string) (networkOptions, error) {
 		flags.BoolVar(&options.noninteractive, "non-interactive", false, "never request elevation")
 	}
 	if err := command.ParseNoPositionals(flags, args[1:]); err != nil {
-		return options, err
+		if errors.Is(err, command.ErrHelp) {
+			return options, command.ErrHelp
+		}
+		return options, networkParseError{label: label, cause: err}
 	}
 	if options.skip && options.remove {
-		return options, errors.New("--skip and --remove cannot be used together")
+		return options, networkParseError{
+			label: label,
+			cause: errors.New("--skip and --remove cannot be used together"),
+		}
 	}
 	return options, nil
 }

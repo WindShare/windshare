@@ -139,7 +139,7 @@ func TestNetworkCommandReportsActionableParseDiagnostics(t *testing.T) {
 		{"unknown option", "doctor", []string{"network", "--skip"}, `doctor network: unknown option "--skip"`},
 		{"unexpected positional", "doctor", []string{"network", "extra"}, `doctor network: unexpected positional argument "extra"`},
 		{"conflicting setup flags", "setup", []string{"network", "--skip", "--remove"}, "setup network: --skip and --remove cannot be used together"},
-		{"invalid json flag", "doctor", []string{"network", "--json=maybe"}, `doctor network: invalid value "maybe" for --json: parse error`},
+		{"invalid json flag", "doctor", []string{"network", "--json=maybe"}, "doctor network: --json requires a boolean value (true or false)"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

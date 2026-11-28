@@ -232,7 +232,7 @@ func normalizeReceiveSelection(requested []string) (receiveSelection, error) {
 	for _, raw := range requested {
 		path, err := catalog.CanonicalPath(strings.TrimSuffix(raw, "/"))
 		if err != nil {
-			return receiveSelection{}, fmt.Errorf("--only %q: %w", raw, err)
+			return receiveSelection{}, fmt.Errorf("--only %q: %w", command.RedactToken(raw), err)
 		}
 		if _, duplicate := seen[path]; duplicate {
 			continue

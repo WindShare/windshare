@@ -15,6 +15,19 @@ var (
 	ErrInternal = errors.New("command arguments could not be parsed")
 )
 
+type optionDiagnosticError struct {
+	message string
+}
+
+func (err optionDiagnosticError) Error() string { return err.message }
+
+// OptionError marks a custom flag validator failure as a complete,
+// self-contained diagnostic so flag parsing surfaces it verbatim without
+// echoing the rejected value or adding another option wrapper.
+func OptionError(message string) error {
+	return optionDiagnosticError{message: message}
+}
+
 // ParseExitCode maps a flag-parsing result to the process exit status contract.
 func ParseExitCode(err error) ExitCode {
 	switch {
@@ -64,6 +77,11 @@ func parseFlags(fs *flag.FlagSet, args []string, allowPositionals bool) ([]strin
 	if fs == nil {
 		return nil, ErrInternal
 	}
+	// Mark the FlagSet parsed so fs.Parsed() matches standard flag.Parse semantics
+	// even though individual options are applied through fs.Set.
+	if err := fs.Parse(nil); err != nil {
+		return nil, ErrInternal
+	}
 	var positionals []string
 	if allowPositionals {
 		positionals = make([]string, 0, len(args))
@@ -108,7 +126,11 @@ func parseFlagOccurrence(fs *flag.FlagSet, args []string) (int, error) {
 	}
 	nameAndValue := arg[numMinuses:]
 	if nameAndValue == "" || nameAndValue[0] == '-' || nameAndValue[0] == '=' {
-		return 0, fmt.Errorf("invalid option syntax %q", RedactToken(arg))
+		syntaxToken, _, hasEquals := strings.Cut(arg, "=")
+		if hasEquals {
+			syntaxToken += "="
+		}
+		return 0, fmt.Errorf("invalid option syntax %q", RedactToken(syntaxToken))
 	}
 	name, value, hasValue := strings.Cut(nameAndValue, "=")
 	registered := fs.Lookup(name)
@@ -124,7 +146,12 @@ func parseFlagOccurrence(fs *flag.FlagSet, args []string) (int, error) {
 			value = "true"
 		}
 		if err := fs.Set(registered.Name, value); err != nil {
-			return 0, formatOptionValueError(option, value, err)
+			if _, ok := errors.AsType[optionDiagnosticError](err); ok {
+				return 0, err
+			}
+			// Omit the rejected boolean value: flags such as --password-stdin can
+			// receive a mistakenly attached secret instead of true/false.
+			return 0, fmt.Errorf("%s requires a boolean value (true or false)", option)
 		}
 		return 1, nil
 	}
@@ -150,26 +177,10 @@ func formatOptionName(name string) string {
 }
 
 func formatOptionValueError(option, value string, err error) error {
-	if containsOptionToken(err.Error(), option) {
+	if _, ok := errors.AsType[optionDiagnosticError](err); ok {
 		return err
 	}
 	return fmt.Errorf("invalid value %q for %s: %w", RedactToken(value), option, err)
-}
-
-func containsOptionToken(message, option string) bool {
-	for rest := message; ; {
-		index := strings.Index(rest, option)
-		if index < 0 {
-			return false
-		}
-		beforeOK := index == 0 || rest[index-1] == ' '
-		after := index + len(option)
-		afterOK := after == len(rest) || rest[after] == ' ' || rest[after] == ':' || rest[after] == ',' || rest[after] == ';'
-		if beforeOK && afterOK {
-			return true
-		}
-		rest = rest[index+1:]
-	}
 }
 
 // WriteFlagHelp renders only registration-time metadata. PrintDefaults uses

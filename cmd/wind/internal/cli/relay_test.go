@@ -161,7 +161,7 @@ func TestRelayArgumentErrorsCompleteBeforeOperation(t *testing.T) {
 		{[]string{"cancel"}, "exactly one relay URL is required"},
 		{[]string{"cancel", "https://relay.example", "extra"}, "exactly one relay URL is required"},
 		{[]string{"add", "--name"}, "--name requires a value"},
-		{[]string{"add", "--no-browser=maybe"}, `invalid value "maybe" for --no-browser`},
+		{[]string{"add", "--no-browser=maybe"}, `--no-browser requires a boolean value (true or false)`},
 		{[]string{"onboard", "--unknown-flag"}, `unknown option "--unknown-flag"`},
 		{[]string{"cancel", "--no-browser"}, `unknown option "--no-browser"`},
 	} {

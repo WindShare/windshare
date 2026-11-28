@@ -17,7 +17,7 @@ func Parse(args []string, output command.LineOutput) (Request, command.ExitCode,
 	})
 	return parseRequest(
 		args,
-		flagRequestParser{logger: logger},
+		flagRequestParser{},
 		textRenderer{}.Usage,
 		func(usage string) { command.WriteLines(output, usage) },
 		logger,
@@ -79,13 +79,13 @@ func parseRequest(
 	case "list":
 		parsed, err := parser.ParseRoot("resume list", args[1:])
 		if err != nil {
-			return Request{}, unreadyRequest(err, usage, writeUsage), false
+			return Request{}, unreadyRequest("resume list", err, usage, writeUsage, logger), false
 		}
 		return Request{action: "list", rootPath: parsed.rootPath}, command.ExitOK, true
 	case "discard":
 		parsed, err := parser.ParseDiscard(args[1:])
 		if err != nil {
-			return Request{}, unreadyRequest(err, usage, writeUsage), false
+			return Request{}, unreadyRequest("resume discard", err, usage, writeUsage, logger), false
 		}
 		return Request{action: "discard", rootPath: parsed.rootPath, itemNumber: parsed.itemNumber}, command.ExitOK, true
 	default:
@@ -98,11 +98,18 @@ func parseRequest(
 // unreadyRequest answers a request that cannot run. Help is answered before any
 // inventory is opened, so it can never touch destination state even when it
 // follows otherwise valid discard arguments.
-func unreadyRequest(err error, usage func() string, writeUsage func(string)) command.ExitCode {
+func unreadyRequest(
+	action string,
+	err error,
+	usage func() string,
+	writeUsage func(string),
+	logger resumeLogger,
+) command.ExitCode {
 	if errors.Is(err, command.ErrHelp) {
 		writeUsage(usage())
 		return command.ExitOK
 	}
+	logger.Logf("%s: %v", action, err)
 	return command.ParseExitCode(err)
 }
 

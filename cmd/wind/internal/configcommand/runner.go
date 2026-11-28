@@ -34,22 +34,8 @@ type Runner struct {
 
 func (runner Runner) Run(ctx context.Context, args []string) command.ExitCode {
 	request, err := parse(args)
-	if errors.Is(err, command.ErrHelp) {
-		runner.writeLine("%s", Usage)
-		return command.ExitOK
-	}
 	if err != nil {
-		if errors.Is(err, errConfigUsage) {
-			runner.writeLine("%s", Usage)
-			return command.ExitUsage
-		}
-		if len(args) > 0 && args[0] != "import" {
-			runner.writeLine("config: %v", err)
-			runner.writeLine("%s", Usage)
-			return command.ExitUsage
-		}
-		runner.writeLine("config import: %v", err)
-		return command.ParseExitCode(err)
+		return runner.reportParseError(err)
 	}
 	traceHandler := slog.DiscardHandler
 	if request.verbose && runner.TraceHandler != nil {
@@ -130,6 +116,25 @@ func (runner Runner) Run(ctx context.Context, args []string) command.ExitCode {
 	return command.ExitOK
 }
 
+func (runner Runner) reportParseError(err error) command.ExitCode {
+	if errors.Is(err, command.ErrHelp) {
+		runner.writeLine("%s", Usage)
+		return command.ExitOK
+	}
+	parsed, ok := errors.AsType[configParseError](err)
+	if !ok {
+		runner.writeLine("config import: %v", err)
+		return command.ParseExitCode(err)
+	}
+	if parsed.cause != nil {
+		runner.writeLine("%s", parsed.Error())
+	}
+	if parsed.showUsage {
+		runner.writeLine("%s", Usage)
+	}
+	return command.ParseExitCode(err)
+}
+
 func (runner Runner) writeLine(format string, args ...any) {
 	command.WriteLinef(runner.Output, format, args...)
 }
@@ -157,17 +162,37 @@ type importRequest struct {
 	frontURL string
 }
 
-var errConfigUsage = errors.New("config usage")
+type configParseError struct {
+	label     string
+	cause     error
+	showUsage bool
+}
+
+func (err configParseError) Error() string {
+	if err.cause == nil {
+		return "config usage"
+	}
+	if err.label == "" {
+		return err.cause.Error()
+	}
+	return err.label + ": " + err.cause.Error()
+}
+
+func (err configParseError) Unwrap() error { return err.cause }
 
 func parse(args []string) (importRequest, error) {
 	if len(args) > 0 && command.IsHelpToken(args[0]) {
 		return importRequest{}, command.ErrHelp
 	}
 	if len(args) == 0 {
-		return importRequest{}, errConfigUsage
+		return importRequest{}, configParseError{showUsage: true}
 	}
 	if args[0] != "import" {
-		return importRequest{}, fmt.Errorf("unknown action %q", command.RedactToken(args[0]))
+		return importRequest{}, configParseError{
+			label:     "config",
+			cause:     fmt.Errorf("unknown action %q", command.RedactToken(args[0])),
+			showUsage: true,
+		}
 	}
 	var request importRequest
 	flags := command.NewFlagSet("config import")
@@ -176,10 +201,13 @@ func parse(args []string) (importRequest, error) {
 	flags.StringVar(&request.frontURL, "front-url", "", "save this frontend base URL for future shares")
 	paths, err := command.ParseInterleaved(flags, args[1:])
 	if err != nil {
-		return importRequest{}, err
+		if errors.Is(err, command.ErrHelp) {
+			return importRequest{}, command.ErrHelp
+		}
+		return importRequest{}, configParseError{label: "config import", cause: err}
 	}
 	if len(paths) != 1 || paths[0] == "" {
-		return importRequest{}, errConfigUsage
+		return importRequest{}, configParseError{showUsage: true}
 	}
 	// Validate after flag parsing so --front-url preserves relayconfig.ErrFrontURL
 	// while omitting the flag stays valid.
@@ -190,7 +218,7 @@ func parse(args []string) (importRequest, error) {
 		}
 	})
 	if frontErr != nil {
-		return importRequest{}, frontErr
+		return importRequest{}, configParseError{label: "config import", cause: frontErr}
 	}
 	request.source = paths[0]
 	return request, nil

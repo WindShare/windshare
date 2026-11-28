@@ -521,9 +521,7 @@ func (app *resumeTestApp) Run(ctx context.Context, args []string) command.ExitCo
 }
 
 func (app *resumeTestApp) parser() flagRequestParser {
-	return flagRequestParser{
-		logger: testDiagnosticOutput{writer: app.stderr},
-	}
+	return flagRequestParser{}
 }
 
 func (app *resumeTestApp) runner() Runner {

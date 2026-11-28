@@ -53,13 +53,13 @@ func TestArgumentParsingReportsActionableDiagnostics(t *testing.T) {
 		{
 			name:       "malformed get option",
 			args:       []string{"get", "--=not-an-option"},
-			wantPrefix: "get: invalid option syntax \"--=not-an-option\"\n",
+			wantPrefix: "get: invalid option syntax \"--=\"\n",
 			wantExact:  true,
 		},
 		{
 			name:       "invalid share boolean",
 			args:       []string{"share", "selected", "--split-key=maybe"},
-			wantPrefix: "share: invalid value \"maybe\" for --split-key: parse error\n",
+			wantPrefix: "share: --split-key requires a boolean value (true or false)\n",
 			wantExact:  true,
 		},
 		{
@@ -67,6 +67,11 @@ func TestArgumentParsingReportsActionableDiagnostics(t *testing.T) {
 			args:       []string{"share", "selected", "--block-size", "abc"},
 			wantPrefix: "share: invalid value \"abc\" for --block-size: must be a decimal integer\n",
 			wantExact:  true,
+		},
+		{
+			name:       "overflowing share block size",
+			args:       []string{"share", "selected", "--block-size", "99999999999999999999999"},
+			wantPrefix: "share: --block-size must be 0 for the default or a power of two",
 		},
 		{
 			name:       "invalid connectivity",
@@ -77,19 +82,19 @@ func TestArgumentParsingReportsActionableDiagnostics(t *testing.T) {
 		{
 			name:       "invalid account login boolean",
 			args:       []string{"account", "login", "--password-stdin=maybe", "alice"},
-			wantPrefix: "account login: invalid value \"maybe\" for --password-stdin: parse error\n",
+			wantPrefix: "account login: --password-stdin requires a boolean value (true or false)\n",
 			wantExact:  true,
 		},
 		{
 			name:       "invalid config import boolean",
 			args:       []string{"config", "import", "--verbose=maybe", "-"},
-			wantPrefix: "config import: invalid value \"maybe\" for --verbose: parse error\n",
+			wantPrefix: "config import: --verbose requires a boolean value (true or false)\n",
 			wantExact:  true,
 		},
 		{
 			name:       "invalid relay add boolean",
 			args:       []string{"relay", "add", "--no-browser=maybe", "https://relay.example"},
-			wantPrefix: "relay add: invalid value \"maybe\" for --no-browser: parse error\n",
+			wantPrefix: "relay add: --no-browser requires a boolean value (true or false)\n",
 			wantExact:  true,
 		},
 		{
@@ -101,7 +106,7 @@ func TestArgumentParsingReportsActionableDiagnostics(t *testing.T) {
 		{
 			name:       "invalid doctor network boolean",
 			args:       []string{"doctor", "network", "--json=maybe"},
-			wantPrefix: "doctor network: invalid value \"maybe\" for --json: parse error\nUsage: wind doctor network [--json]\n",
+			wantPrefix: "doctor network: --json requires a boolean value (true or false)\nUsage: wind doctor network [--json]\n",
 			wantExact:  true,
 		},
 	}
@@ -132,6 +137,12 @@ func TestArgumentParsingRedactsURLFragmentsAndProtectsCredentialBoundaries(t *te
 		{name: "invalid boolean", args: func(link string) []string { return []string{"share", "selected", "--split-key=" + link} }},
 		{name: "invalid integer", args: func(link string) []string { return []string{"share", "selected", "--block-size", link} }},
 		{name: "invalid connectivity", args: func(link string) []string { return []string{"get", completeLink, "--connectivity", link} }},
+		{name: "invalid get only path", args: func(link string) []string {
+			if !strings.Contains(link, "://") {
+				link = "../" + link
+			}
+			return []string{"get", "--only", link, completeLink}
+		}},
 		{name: "invalid get capability", args: func(link string) []string { return []string{"get", strings.Replace(link, "://", "://[invalid]/", 1)} }},
 		{name: "invalid resume item", args: func(link string) []string { return []string{"resume", "discard", "-o", ".", "--item", link} }},
 	}
@@ -156,6 +167,28 @@ func TestArgumentParsingRedactsURLFragmentsAndProtectsCredentialBoundaries(t *te
 		}
 		if strings.Contains(stderr, credentialCanary) {
 			t.Fatalf("credential canary leaked: %q", stderr)
+		}
+	})
+
+	t.Run("boolean and malformed attached values never echo secrets", func(t *testing.T) {
+		const secretCanary = "attached_secret_CANARY_94d112f0"
+		for _, tc := range []struct {
+			name string
+			args []string
+		}{
+			{name: "password-stdin attached password", args: []string{"account", "login", "--password-stdin=" + secretCanary, "alice"}},
+			{name: "malformed triple dash attached secret", args: []string{"share", "---key=" + secretCanary}},
+			{name: "malformed leading equals attached secret", args: []string{"get", "--=" + secretCanary}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				stdout, stderr, code := runArgumentParsingCase(t, tc.args)
+				if code != ExitUsage || stdout != "" || stderr == "" {
+					t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+				}
+				if strings.Contains(stderr, secretCanary) {
+					t.Fatalf("attached secret leaked: %q", stderr)
+				}
+			})
 		}
 	})
 }
