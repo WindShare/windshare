@@ -1,10 +1,14 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -192,4 +196,118 @@ func (writer *startedShareFailureWriter) Write(payload []byte) (int, error) {
 		return len(payload) - 1, nil
 	}
 	return 0, errors.New("stdout failed after service startup")
+}
+
+func TestShareAliasPublishesExactSelectedRoots(t *testing.T) {
+	workDir := t.TempDir()
+	for _, name := range []string{"notes.txt", "config", "share", "-weird"} {
+		if err := os.WriteFile(filepath.Join(workDir, name), []byte("hello"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(workDir)
+
+	tests := []struct {
+		name       string
+		args       []string
+		wantRoots  []string
+		wantPrefix string
+		wantKey    bool
+	}{
+		{
+			name:       "bare file",
+			args:       []string{"s", "notes.txt", "--relay", "https://relay.example", "--front-url", "https://front.example"},
+			wantRoots:  []string{"notes.txt"},
+			wantPrefix: "Link: https://front.example/",
+		},
+		{
+			name:       "leading and interleaved options",
+			args:       []string{"s", "--split-key", "-v", "notes.txt", "--relay", "https://relay.example", "--front-url", "https://front.example"},
+			wantRoots:  []string{"notes.txt"},
+			wantPrefix: "Bare link: https://front.example/",
+			wantKey:    true,
+		},
+		{
+			name:       "subcommand-named paths",
+			args:       []string{"s", "share", "config", "--relay", "https://relay.example", "--front-url", "https://front.example"},
+			wantRoots:  []string{"share", "config"},
+			wantPrefix: "Link: https://front.example/",
+		},
+		{
+			name:       "dash-prefixed path after option terminator",
+			args:       []string{"s", "--relay", "https://relay.example", "--front-url", "https://front.example", "--", "-weird"},
+			wantRoots:  []string{"-weird"},
+			wantPrefix: "Link: https://front.example/",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			relays := &cliShareRelays{
+				stopped:        make(chan struct{}),
+				cleanupStarted: make(chan context.Context, 1),
+				cleanupRelease: make(chan struct{}),
+			}
+			close(relays.cleanupRelease)
+
+			var (
+				selectedRoots []string
+				stdout        bytes.Buffer
+			)
+			stderr := &lockedTestBuffer{}
+			app := &App{
+				Stdout: &cancelOnWriteBuffer{buf: &stdout, cancel: cancel},
+				Stderr: stderr,
+				Stdin:  strings.NewReader(""),
+				engineConfig: engine.Config{Share: engine.ShareDependencies{
+					Prepare: func(ctx context.Context, config liveshare.SenderConfig) (engine.PreparedShare, error) {
+						baseSource := config.Source
+						config.Source = liveshare.FileSourceFactoryFunc(func(ctx context.Context, sourceCtx liveshare.FileSourceContext) (liveshare.FileSource, error) {
+							source, err := baseSource.OpenFileSource(ctx, sourceCtx)
+							if err == nil && source != nil {
+								for _, root := range source.SelectedRoots() {
+									selectedRoots = append(selectedRoots, root.Entry().Name())
+								}
+							}
+							return source, err
+						})
+						prepared, err := liveshare.PrepareSender(ctx, config)
+						if prepared == nil {
+							return nil, err
+						}
+						return preparedShareAdapter{PreparedSender: prepared}, err
+					},
+					Relays:      func(context.Context, []relayprofile.Registration) (engine.ShareRelays, error) { return relays, nil },
+					PollNetwork: func(ctx context.Context, _ func()) { <-ctx.Done() },
+				}},
+			}
+
+			code := app.Run(ctx, test.args)
+			app.closeTerminalOutput()
+			if code != ExitOK {
+				t.Fatalf("args=%v exit=%d stderr=%q stdout=%q", test.args, code, stderr.String(), stdout.String())
+			}
+			if !slices.Equal(selectedRoots, test.wantRoots) {
+				t.Fatalf("selected roots = %v, want %v", selectedRoots, test.wantRoots)
+			}
+			published := stdout.String()
+			if !strings.HasPrefix(published, test.wantPrefix) {
+				t.Fatalf("stdout=%q want prefix %q", published, test.wantPrefix)
+			}
+			if test.wantKey && !strings.Contains(published, "\nKey: ") {
+				t.Fatalf("split-key stdout=%q missing key line", published)
+			}
+		})
+	}
+}
+
+type preparedShareAdapter struct {
+	*liveshare.PreparedSender
+}
+
+func (prepared preparedShareAdapter) NewRuntimeFactory(config liveshare.RuntimeFactoryConfig) (engine.ShareSessionFactory, error) {
+	return prepared.PreparedSender.NewRuntimeFactory(config)
 }

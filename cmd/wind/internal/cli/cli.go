@@ -40,7 +40,7 @@ const (
 
 const usageText = `Usage:
   ` + command.Name + ` share <path...> [--relay <url>]... [--configured-relays-only] [--block-size <bytes>] [--split-key] [--front-url <url>] [--browser-trace] [-v|--verbose] [--trace <file>|--trace-dir <directory>]
-  ` + command.Name + ` s <path...> [options]
+  ` + command.Name + ` s <path...> [options] (alias for share)
       Commit selected roots, wait for relay registration, print a suite-02 link, and scan descendants on demand.
       --split-key prints a bare link and key string for delivery over separate channels.
       Sharing defaults load from the user config directory's windshare/config.json (or WINDSHARE_CONFIG).

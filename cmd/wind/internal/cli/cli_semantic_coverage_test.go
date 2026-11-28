@@ -72,7 +72,7 @@ func TestTopLevelHelpMatchesOrdinaryOutputCommandContracts(t *testing.T) {
 	}
 	output := stderr.String()
 	for _, required := range []string{
-		"wind s <path...> [options]",
+		"wind s <path...> [options] (alias for share)",
 		"wind get <link>",
 		"wind get -o <directory> <link>",
 		"incomplete",
