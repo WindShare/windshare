@@ -19,8 +19,10 @@ progress, prompts, and diagnostics go to stderr. See [installation](installation
 
 ```text
 wind share <path...> [--relay <url>]... [--configured-relays-only] [--front-url <url>] [--block-size <bytes>] [--split-key] [--browser-trace]
+wind s <path...> [options]
 ```
 
+- `wind s` is an alias for `wind share`.
 - Commits the selected roots, registers the descriptor with active relays, prints the capability link once a relay admits sessions, and serves catalog pages and file blocks on demand until stopped.
 - Default stdout output is `Link: <link>`. `--split-key` prints `Bare link: <link-without-key>` and `Key: <key>`.
 - Automatic sharing combines saved active relays, official nodes and eligible community nodes. `--configured-relays-only` uses saved active relays. Repeat `--relay` to choose the complete set for one share.
