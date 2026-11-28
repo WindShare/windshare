@@ -19,6 +19,7 @@ progress, prompts, and diagnostics go to stderr. See [installation](installation
 
 ```text
 wind share <path...> [--relay <url>]... [--configured-relays-only] [--front-url <url>] [--block-size <bytes>] [--split-key] [--browser-trace]
+wind s <path...> [options]
 ```
 
 - Commits the selected roots, registers the descriptor with active relays, prints the capability link once a relay admits sessions, and serves catalog pages and file blocks on demand until stopped.

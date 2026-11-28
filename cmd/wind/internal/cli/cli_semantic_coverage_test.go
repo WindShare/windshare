@@ -72,6 +72,7 @@ func TestTopLevelHelpMatchesOrdinaryOutputCommandContracts(t *testing.T) {
 	}
 	output := stderr.String()
 	for _, required := range []string{
+		"wind s <path...> [options]",
 		"wind get <link>",
 		"wind get -o <directory> <link>",
 		"incomplete",
@@ -135,6 +136,7 @@ func TestTopLevelHelpStaysAlignedWithSubcommandSynopsesAndFlags(t *testing.T) {
 	// Verify every flag registered on flag-based commands is surfaced in top-level help.
 	for _, args := range [][]string{
 		{"share", "--help"},
+		{"s", "--help"},
 		{"get", "--help"},
 		{"relay", "add", "--help"},
 		{"relay", "onboard", "--help"},

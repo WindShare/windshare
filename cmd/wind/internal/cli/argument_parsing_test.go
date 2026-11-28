@@ -27,6 +27,12 @@ func TestArgumentParsingReportsActionableDiagnostics(t *testing.T) {
 			wantExact:  true,
 		},
 		{
+			name:       "unknown share alias option",
+			args:       []string{"s", "--not-registered"},
+			wantPrefix: "share: unknown option \"--not-registered\"\n",
+			wantExact:  true,
+		},
+		{
 			name:       "unknown get option",
 			args:       []string{"get", "--not-registered"},
 			wantPrefix: "get: unknown option \"--not-registered\"\n",
@@ -204,6 +210,8 @@ func TestShareAndGetHelpAreSafeInterleavedParseOutcomes(t *testing.T) {
 		{name: "share long before positional", args: []string{"share", "--help", completeLink}, wantUsage: "Usage: wind share <path...> [options]\n"},
 		{name: "share short after positional", args: []string{"share", completeLink, "-h"}, wantUsage: "Usage: wind share <path...> [options]\n"},
 		{name: "share long after positional", args: []string{"share", completeLink, "--help"}, wantUsage: "Usage: wind share <path...> [options]\n"},
+		{name: "share alias short before positional", args: []string{"s", "-h", completeLink}, wantUsage: "Usage: wind share <path...> [options]\n"},
+		{name: "share alias long after positional", args: []string{"s", completeLink, "--help"}, wantUsage: "Usage: wind share <path...> [options]\n"},
 		{name: "get short before positional", args: []string{"get", "-h", completeLink}, wantUsage: "Usage: wind get [options] <link>\n"},
 		{name: "get long before positional", args: []string{"get", "--help", completeLink}, wantUsage: "Usage: wind get [options] <link>\n"},
 		{name: "get short after positional", args: []string{"get", completeLink, "-h"}, wantUsage: "Usage: wind get [options] <link>\n"},
@@ -275,6 +283,8 @@ func TestAllCommandsHandleHelpAndUsageWithoutStartingEngine(t *testing.T) {
 		wantCode int
 	}{
 		{"top-level -help", []string{"-help"}, ExitOK},
+		{"share alias --help", []string{"s", "--help"}, ExitOK},
+		{"share alias missing path", []string{"s"}, ExitUsage},
 		{"doctor --help", []string{"doctor", "--help"}, ExitOK},
 		{"doctor help", []string{"doctor", "help"}, ExitOK},
 		{"setup --help", []string{"setup", "--help"}, ExitOK},
