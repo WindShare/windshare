@@ -201,6 +201,29 @@ func TestShareRequestValidationPreservesSuiteBoundaries(t *testing.T) {
 		}
 	})
 
+	t.Run("block size is plain decimal", func(t *testing.T) {
+		// Each spelling is a power of two (or zero) under strconv base 0 and must
+		// not be accepted as one; leading zeros are decimal, never octal.
+		for _, spelling := range []string{"010000", "0x1000", "0X10000", "0b1000000000000", "0o10000", "65_536"} {
+			app, _, stderr := newSemanticTestApp(strings.NewReader(""))
+			request, parse := app.parseShareRequest([]string{
+				"root", "--relay", "wss://relay.example", "--front-url", "https://app.example",
+				"--block-size", spelling,
+			})
+			if parse != requestParseUsageFailure {
+				t.Fatalf("--block-size %s parse=%d chunk=%d stderr=%q", spelling, parse, request.chunkSize, stderr.String())
+			}
+		}
+		app, _, stderr := newSemanticTestApp(strings.NewReader(""))
+		request, parse := app.parseShareRequest([]string{
+			"root", "--relay", "wss://relay.example", "--front-url", "https://app.example",
+			"--block-size", "0004096",
+		})
+		if parse != requestParseReady || request.chunkSize != 4096 {
+			t.Fatalf("zero-padded decimal parse=%d chunk=%d stderr=%q", parse, request.chunkSize, stderr.String())
+		}
+	})
+
 	for _, test := range []struct {
 		name       string
 		args       []string
