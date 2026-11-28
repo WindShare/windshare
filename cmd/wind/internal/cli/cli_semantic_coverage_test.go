@@ -201,6 +201,42 @@ func TestShareRequestValidationPreservesSuiteBoundaries(t *testing.T) {
 		}
 	})
 
+	t.Run("block size is decimal", func(t *testing.T) {
+		// Each spelling is a power of two or zero under strconv base 0 and must
+		// not be accepted as one; leading zeros are decimal, never octal.
+		for _, tc := range []struct {
+			spelling   string
+			wantStderr string
+		}{
+			{"010000", "--block-size"},
+			{"0x1000", "option value is invalid"},
+			{"0X10000", "option value is invalid"},
+			{"0x0", "option value is invalid"},
+			{"0b1000000000000", "option value is invalid"},
+			{"0o10000", "option value is invalid"},
+			{"65_536", "option value is invalid"},
+			{"0_0", "option value is invalid"},
+		} {
+			app, _, stderr := newSemanticTestApp(strings.NewReader(""))
+			request, parse := app.parseShareRequest([]string{
+				"root", "--relay", "wss://relay.example", "--front-url", "https://app.example",
+				"--block-size", tc.spelling,
+			})
+			if parse != requestParseUsageFailure || !strings.Contains(stderr.String(), tc.wantStderr) {
+				t.Fatalf("--block-size %s parse=%d chunk=%d stderr=%q want=%q",
+					tc.spelling, parse, request.chunkSize, stderr.String(), tc.wantStderr)
+			}
+		}
+		app, _, stderr := newSemanticTestApp(strings.NewReader(""))
+		request, parse := app.parseShareRequest([]string{
+			"root", "--relay", "wss://relay.example", "--front-url", "https://app.example",
+			"--block-size", "0004096",
+		})
+		if parse != requestParseReady || request.chunkSize != 4096 {
+			t.Fatalf("zero-padded decimal parse=%d chunk=%d stderr=%q", parse, request.chunkSize, stderr.String())
+		}
+	})
+
 	for _, test := range []struct {
 		name       string
 		args       []string

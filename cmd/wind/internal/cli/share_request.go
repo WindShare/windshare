@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
 
 	"github.com/windshare/windshare/cmd/wind/internal/command"
 	"github.com/windshare/windshare/cmd/wind/internal/humanoutput"
@@ -39,8 +40,18 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 		relayURLs = append(relayURLs, value)
 		return nil
 	})
-	blockSize := flags.Int64("block-size", 0, fmt.Sprintf("file-local block size in bytes; 0 uses the default, otherwise a power of two from %d to %d",
-		catalog.MinChunkSize, catalog.MaxChunkSize))
+	// flag.Int64 parses with base 0, which would silently read 010000 as octal
+	// 4096 and accept 0x10000 or 65_536. A byte count is decimal.
+	var blockSize int64
+	flags.Func("block-size", fmt.Sprintf("file-local block size in `bytes`; 0 uses the default, otherwise a power of two from %d to %d",
+		catalog.MinChunkSize, catalog.MaxChunkSize), func(value string) error {
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return err
+		}
+		blockSize = parsed
+		return nil
+	})
 	splitKey := flags.Bool("split-key", false, "print a bare link and separate key string")
 	frontURL := flags.String("front-url", "", "override the saved frontend base URL for this share")
 	configuredOnly := flags.Bool("configured-relays-only", false, "use only configured relays for this share")
@@ -64,7 +75,7 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 	}
 	// Report invalid flags before configuration or workflow failures can obscure
 	// the user's input error.
-	if *blockSize != 0 && (*blockSize < 0 || *blockSize > math.MaxUint32 || !catalog.ValidChunkSize(uint32(*blockSize))) {
+	if blockSize != 0 && (blockSize < 0 || blockSize > math.MaxUint32 || !catalog.ValidChunkSize(uint32(blockSize))) {
 		a.writeCompleteLine("share: --block-size must be 0 for the default or a power of two from %d to %d bytes",
 			catalog.MinChunkSize, catalog.MaxChunkSize)
 		return shareRequest{}, requestParseUsageFailure
@@ -100,7 +111,7 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 	return shareRequest{
 		paths: paths, relayIntent: intent, turnServices: saved.TURNServices,
 		link:      shareLinkPresentation{frontURL: frontend, splitKey: *splitKey, browserTrace: *browserTrace},
-		chunkSize: uint32(*blockSize), observation: observation,
+		chunkSize: uint32(blockSize), observation: observation,
 	}, requestParseReady
 }
 
