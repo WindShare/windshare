@@ -41,9 +41,9 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 		return nil
 	})
 	// flag.Int64 parses with base 0, which would silently read 010000 as octal
-	// 4096 and accept 0x10000 or 65_536. A byte count is plain decimal.
+	// 4096 and accept 0x10000 or 65_536. A byte count is decimal.
 	var blockSize int64
-	flags.Func("block-size", fmt.Sprintf("file-local block size in bytes; 0 uses the default, otherwise a power of two from %d to %d",
+	flags.Func("block-size", fmt.Sprintf("file-local block size in `bytes`; 0 uses the default, otherwise a power of two from %d to %d",
 		catalog.MinChunkSize, catalog.MaxChunkSize), func(value string) error {
 		parsed, err := strconv.ParseInt(value, 10, 64)
 		if err != nil {
