@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
-	"strings"
 	"syscall"
 	"unsafe"
 
@@ -276,17 +275,7 @@ func windowsExtendedPath(path string) string {
 	if path == "" || linkresolve.HasWindowsExtendedOrDevicePrefix(path) {
 		return path
 	}
-	clean := filepath.Clean(path)
-	if linkresolve.HasWindowsExtendedOrDevicePrefix(clean) {
-		return clean
-	}
-	if rest, ok := strings.CutPrefix(clean, `\\`); ok {
-		return linkresolve.WindowsExtendedUNCPrefix + rest
-	}
-	if len(clean) >= 3 && clean[1] == ':' && clean[2] == '\\' {
-		return linkresolve.WindowsExtendedPrefix + clean
-	}
-	return path
+	return linkresolve.AddWindowsExtendedPrefix(filepath.Clean(path))
 }
 
 func queryWindowsHandleAttributeTag(handle windows.Handle) (windowsAttributeTagInfo, error) {
@@ -461,64 +450,59 @@ func inspectSelectedRootKind(absolute string) (sourceObjectIdentity, sourceEntry
 	return identity, kind, audit, err
 }
 
-func isLinkedDirectoryLeaf(kind sourceEntryKind, audit sourceEntryAudit) bool {
+func isSelectedRootLink(kind sourceEntryKind, audit sourceEntryAudit) bool {
 	return kind == sourceEntrySymbolicLink ||
 		(kind == sourceEntryReparsePoint && audit.reparseTag == windows.IO_REPARSE_TAG_MOUNT_POINT)
 }
 
-// resolveLinkedWorkingDirectory resolves a pure "." / ".." traversal whose
-// logical working directory ends in a Windows symlink or directory junction.
-// Opening without FILE_FLAG_OPEN_REPARSE_POINT lets the kernel follow both
-// symlinks and mount points while FILE_FLAG_OPEN_NO_RECALL prevents implicit
-// cloud hydration; target admission still uses classifyWindowsOpenHandle so
-// hydrated cloud directories remain allowed and dehydrated placeholders stay
-// rejected.
-func resolveLinkedWorkingDirectory(_, absolute string) (linkedDirectoryResolution, error) {
-	return resolveWindowsLinkedDirectoryWith(absolute, openWindowsFollowedTarget, inspectSelectedRootKind)
+// resolveSelectedRootLink resolves an explicitly selected top-level Windows
+// symbolic link or directory junction once through the kernel. Opening without
+// FILE_FLAG_OPEN_REPARSE_POINT follows symlinks and mount points while
+// FILE_FLAG_OPEN_NO_RECALL prevents implicit cloud hydration; target admission
+// still uses classifyWindowsOpenHandle so hydrated cloud targets remain allowed
+// and dehydrated placeholders stay rejected.
+func resolveSelectedRootLink(absolute string) (selectedLinkResolution, error) {
+	return resolveWindowsSelectedLinkWith(absolute, openWindowsFollowedTarget, inspectSelectedRootKind)
 }
 
-// Win32 canonicalizes relative ".." lexically against GetCurrentDirectoryW, so
-// filepath.Abs already matches the directory the system opens on Windows.
-func verifyParentDotTraversal(_, _ string, _ sourceObjectIdentity) error { return nil }
-
-func resolveWindowsLinkedDirectoryWith(
+func resolveWindowsSelectedLinkWith(
 	absolute string,
 	follow func(string) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, string, error),
 	inspect func(string) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, error),
-) (linkedDirectoryResolution, error) {
+) (selectedLinkResolution, error) {
 	identity, kind, audit, resolved, err := follow(absolute)
 	if err != nil {
-		return linkedDirectoryResolution{}, err
+		return selectedLinkResolution{}, err
 	}
 	switch kind {
-	case sourceEntryDirectory:
+	case sourceEntryDirectory, sourceEntryRegularFile:
 	case sourceEntryCloudPlaceholder, sourceEntryReparsePoint:
-		return linkedDirectoryResolution{
-			disposition: linkedDirectoryRejected,
+		return selectedLinkResolution{
+			disposition: selectedLinkRejected,
 			identity:    identity,
 			kind:        kind,
 			audit:       audit,
 		}, nil
 	default:
-		return linkedDirectoryResolution{}, fmt.Errorf("osfs: selected root %q is not a stable file or directory: %w", absolute, content.ErrUnsupportedStability)
+		return selectedLinkResolution{}, fmt.Errorf("osfs: selected root %q is not a stable file or directory: %w", absolute, content.ErrUnsupportedStability)
 	}
 	targetID, targetKind, targetAudit, err := inspect(resolved)
 	if err != nil {
-		return linkedDirectoryResolution{}, pathfailure.Filesystem("inspect selected root link target", absolute, err)
+		return selectedLinkResolution{}, pathfailure.Filesystem("inspect selected root link target", absolute, err)
 	}
 	if targetKind == sourceEntryCloudPlaceholder && identity.sameObject(targetID) {
-		return linkedDirectoryResolution{
-			disposition: linkedDirectoryRejected,
+		return selectedLinkResolution{
+			disposition: selectedLinkRejected,
 			identity:    targetID,
 			kind:        targetKind,
 			audit:       targetAudit,
 		}, nil
 	}
-	if targetKind != sourceEntryDirectory || !identity.sameObject(targetID) {
-		return linkedDirectoryResolution{}, fmt.Errorf("osfs: selected root %q does not resolve to the directory the system opens: %w", absolute, content.ErrUnsupportedStability)
+	if targetKind != kind || !identity.sameObject(targetID) {
+		return selectedLinkResolution{}, fmt.Errorf("osfs: selected root %q changed during link resolution: %w", absolute, catalog.ErrDirectoryStale)
 	}
-	return linkedDirectoryResolution{
-		disposition: linkedDirectoryResolved,
+	return selectedLinkResolution{
+		disposition: selectedLinkResolved,
 		openPath:    resolved,
 		identity:    targetID,
 		kind:        targetKind,
@@ -553,7 +537,7 @@ func openWindowsFollowedTarget(absolute string) (sourceObjectIdentity, sourceEnt
 	if err != nil {
 		return sourceObjectIdentity{}, 0, sourceEntryAudit{}, "", pathfailure.Filesystem("inspect selected root link target", absolute, err)
 	}
-	if kind != sourceEntryDirectory {
+	if kind != sourceEntryDirectory && kind != sourceEntryRegularFile {
 		return identity, kind, audit, "", nil
 	}
 	resolved, err := linkresolve.WindowsFinalPathByHandle(handle)

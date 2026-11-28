@@ -31,8 +31,8 @@ func resolveContainerTarget(
 		}
 		return path, info, nil
 	}
-	resolved, followed, err := linkresolve.ResolvePOSIXDirectory(path, path, linkresolve.POSIXOps{
-		FollowSelected: follow,
+	resolved, followed, err := linkresolve.ResolvePOSIXDirectory(path, linkresolve.POSIXOps{
+		Follow: follow,
 	})
 	if err != nil {
 		return "", nil, errors.Join(ErrUnsafeNamespace, err)

@@ -133,7 +133,7 @@ func (source *SelectedCatalogSource) openSelectedRoot(
 	if err != nil {
 		return catalog.NodeRecord{}, selectedRoot{}, pathfailure.Filesystem("inspect selected root", absolute, err)
 	}
-	target, err := source.prepareSelectedRootTarget(selectedPath, absolute, slot, before, kind, beforeAudit)
+	target, err := source.resolveSelectedRootTarget(absolute, slot, before, kind, beforeAudit)
 	if err != nil {
 		return catalog.NodeRecord{}, selectedRoot{}, err
 	}
@@ -148,18 +148,14 @@ func (source *SelectedCatalogSource) openSelectedRoot(
 		}
 		return catalog.NodeRecord{}, selectedRoot{}, fmt.Errorf("osfs: selected root %q is not a stable file or directory: %w", absolute, content.ErrUnsupportedStability)
 	}
-	var rootPath, relative string
+	rootPath, relative := filepath.Dir(target.openTarget), filepath.Base(target.openTarget)
 	if target.kind == sourceEntryDirectory {
 		rootPath, relative = target.openTarget, ""
-	} else {
-		// Regular files never undergo linked-CWD substitution, so their root
-		// authority and relative name always come from the logical absolute path.
-		rootPath, relative = filepath.Dir(absolute), filepath.Base(absolute)
 	}
 	root, err := os.OpenRoot(rootPath)
 	if err != nil {
 		openErrPath := rootPath
-		if target.resolvedLinkedCWD {
+		if target.resolvedLink {
 			openErrPath = absolute
 		}
 		return catalog.NodeRecord{}, selectedRoot{}, pathfailure.Filesystem("open selected root authority", openErrPath, err)
@@ -178,24 +174,23 @@ func (source *SelectedCatalogSource) openSelectedRoot(
 	if err != nil {
 		return catalog.NodeRecord{}, selectedRoot{}, err
 	}
-	if target.resolvedLinkedCWD {
-		source.traceSelectedRootLinkedCWD(slot, target.leafAudit)
+	if target.resolvedLink {
+		source.traceSelectedRootLink(slot, target.leafAudit)
 	}
 	ownedRoot = true
 	return record, selectedRoot{authority: root, displayPath: absolute}, nil
 }
 
 type preparedRootTarget struct {
-	openTarget        string
-	before            sourceObjectIdentity
-	kind              sourceEntryKind
-	audit             sourceEntryAudit
-	leafAudit         sourceEntryAudit
-	resolvedLinkedCWD bool
+	openTarget   string
+	before       sourceObjectIdentity
+	kind         sourceEntryKind
+	audit        sourceEntryAudit
+	leafAudit    sourceEntryAudit
+	resolvedLink bool
 }
 
-func (source *SelectedCatalogSource) prepareSelectedRootTarget(
-	selectedPath string,
+func (source *SelectedCatalogSource) resolveSelectedRootTarget(
 	absolute string,
 	slot RootSlot,
 	before sourceObjectIdentity,
@@ -209,19 +204,10 @@ func (source *SelectedCatalogSource) prepareSelectedRootTarget(
 		audit:      beforeAudit,
 		leafAudit:  beforeAudit,
 	}
-	pureDot, hasParentDot := classifyPureDotTraversal(selectedPath)
-	if !pureDot {
+	if !isSelectedRootLink(kind, beforeAudit) {
 		return target, nil
 	}
-	if !isLinkedDirectoryLeaf(kind, beforeAudit) {
-		if hasParentDot && kind == sourceEntryDirectory {
-			if err := verifyParentDotTraversal(selectedPath, absolute, before); err != nil {
-				return preparedRootTarget{}, err
-			}
-		}
-		return target, nil
-	}
-	resolved, err := resolveLinkedWorkingDirectory(selectedPath, absolute)
+	resolved, err := resolveSelectedRootLink(absolute)
 	if err != nil {
 		if kind == sourceEntryReparsePoint && errors.Is(err, content.ErrUnsupportedStability) {
 			source.traceSelectedRootPolicy(slot, "rejected_reparse", beforeAudit)
@@ -229,17 +215,17 @@ func (source *SelectedCatalogSource) prepareSelectedRootTarget(
 		return preparedRootTarget{}, err
 	}
 	switch resolved.disposition {
-	case linkedDirectoryResolved:
-		if resolved.openPath == "" || resolved.kind != sourceEntryDirectory {
+	case selectedLinkResolved:
+		if resolved.openPath == "" || (resolved.kind != sourceEntryDirectory && resolved.kind != sourceEntryRegularFile) {
 			return preparedRootTarget{}, fmt.Errorf("osfs: selected root %q is not a stable file or directory: %w", absolute, content.ErrUnsupportedStability)
 		}
 		target.openTarget = resolved.openPath
 		target.before = resolved.identity
 		target.kind = resolved.kind
 		target.audit = resolved.audit
-		target.resolvedLinkedCWD = true
+		target.resolvedLink = true
 		return target, nil
-	case linkedDirectoryRejected:
+	case selectedLinkRejected:
 		target.before = resolved.identity
 		target.kind = resolved.kind
 		target.audit = resolved.audit

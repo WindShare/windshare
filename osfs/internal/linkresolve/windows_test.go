@@ -96,6 +96,23 @@ func TestHasWindowsExtendedOrDevicePrefixAndUnresolvableErrors(t *testing.T) {
 		}
 	}
 
+	for _, tc := range []struct {
+		in, want string
+	}{
+		{"", ""},
+		{`C:\dir`, `\\?\C:\dir`},
+		{`\\server\share\dir`, `\\?\UNC\server\share\dir`},
+		{`\\?\C:\dir`, `\\?\C:\dir`},
+		{`\??\C:\dir`, `\??\C:\dir`},
+		{`\\.\NUL`, `\\.\NUL`},
+		{`\\?\Volume{1}\dir`, `\\?\Volume{1}\dir`},
+		{`relative\dir`, `relative\dir`},
+	} {
+		if got := AddWindowsExtendedPrefix(tc.in); got != tc.want {
+			t.Fatalf("AddWindowsExtendedPrefix(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+
 	for _, err := range []error{
 		windows.ERROR_CANT_RESOLVE_FILENAME,
 		windows.ERROR_INVALID_REPARSE_DATA,
@@ -156,5 +173,24 @@ func TestWindowsFinalPathByHandleReadsRealDirectoryIncludingLongPath(t *testing.
 	gotInfo, err := os.Stat(got)
 	if err != nil || !os.SameFile(wantInfo, gotInfo) {
 		t.Fatalf("WindowsFinalPathByHandle = %q (err=%v), want same directory as %q", got, err, longDir)
+	}
+
+	// Verify real VOLUME_NAME_GUID output preserves \\?\Volume{...}\ and opens cleanly via os.OpenRoot.
+	guidRaw, err := QueryWindowsFinalPath(handle, WindowsVolumeNameGUID)
+	if err != nil {
+		t.Fatalf("QueryWindowsFinalPath(VOLUME_NAME_GUID) failed: %v", err)
+	}
+	guidPath := NormalizeWindowsFinalPath(guidRaw)
+	if !strings.HasPrefix(guidPath, `\\?\Volume{`) {
+		t.Fatalf("normalized volume GUID path = %q, want \\\\?\\Volume{...} prefix", guidPath)
+	}
+	root, err := os.OpenRoot(guidPath)
+	if err != nil {
+		t.Fatalf("os.OpenRoot(%q) failed: %v", guidPath, err)
+	}
+	defer root.Close()
+	guidInfo, err := root.Stat(".")
+	if err != nil || !os.SameFile(wantInfo, guidInfo) {
+		t.Fatalf("os.OpenRoot(guidPath).Stat(.) = (%v, %v), want same dir as %q", guidInfo, err, longDir)
 	}
 }

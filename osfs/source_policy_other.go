@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 
+	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/osfs/internal/linkresolve"
 	"github.com/windshare/windshare/osfs/internal/pathfailure"
@@ -66,56 +67,44 @@ func inspectSelectedRootKind(absolute string) (sourceObjectIdentity, sourceEntry
 	return sourceObjectIdentity{info: before}, classifyPOSIXFileInfo(before), sourceEntryAudit{}, nil
 }
 
-func isLinkedDirectoryLeaf(kind sourceEntryKind, _ sourceEntryAudit) bool {
+func isSelectedRootLink(kind sourceEntryKind, _ sourceEntryAudit) bool {
 	return kind == sourceEntrySymbolicLink
 }
 
-func resolveLinkedWorkingDirectory(selectedPath, absolute string) (linkedDirectoryResolution, error) {
-	return resolveLinkedWorkingDirectoryWith(selectedPath, absolute, linkresolve.POSIXOps{})
+// resolveSelectedRootLink resolves an explicitly selected top-level symbolic
+// link once through the kernel (honoring Linux fs.protected_symlinks) so the
+// real regular file or directory can be pinned inside os.Root while keeping all
+// descendants strictly no-follow.
+func resolveSelectedRootLink(absolute string) (selectedLinkResolution, error) {
+	return resolveSelectedRootLinkWith(absolute, linkresolve.POSIXOps{})
 }
 
-func resolveLinkedWorkingDirectoryWith(
-	selectedPath string,
+func resolveSelectedRootLinkWith(
 	absolute string,
 	ops linkresolve.POSIXOps,
-) (linkedDirectoryResolution, error) {
-	resolved, followed, err := linkresolve.ResolvePOSIXDirectory(selectedPath, absolute, ops)
+) (selectedLinkResolution, error) {
+	resolved, target, err := linkresolve.ResolvePOSIXTarget(absolute, ops)
 	if err != nil {
-		return linkedDirectoryResolution{}, classifyPOSIXLinkResolveError("resolve selected root link", absolute, err)
+		return selectedLinkResolution{}, classifyPOSIXLinkResolveError("resolve selected root link", absolute, err)
 	}
-	return linkedDirectoryResolution{
-		disposition: linkedDirectoryResolved,
+	kind := classifyPOSIXFileInfo(target)
+	if kind != sourceEntryDirectory && kind != sourceEntryRegularFile {
+		return selectedLinkResolution{}, fmt.Errorf("osfs: selected root %q is not a stable file or directory: %w", absolute, content.ErrUnsupportedStability)
+	}
+	return selectedLinkResolution{
+		disposition: selectedLinkResolved,
 		openPath:    resolved,
-		identity:    sourceObjectIdentity{info: followed},
-		kind:        sourceEntryDirectory,
+		identity:    sourceObjectIdentity{info: target},
+		kind:        kind,
 	}, nil
-}
-
-// verifyParentDotTraversal ensures a pure ".." traversal whose logical parent
-// is a real directory still agrees with the physical directory the POSIX kernel
-// opens, preventing silent divergence when $PWD traverses an intermediate link.
-func verifyParentDotTraversal(selectedPath, absolute string, expected sourceObjectIdentity) error {
-	return verifyParentDotTraversalWith(selectedPath, absolute, expected, os.Stat)
-}
-
-func verifyParentDotTraversalWith(
-	selectedPath string,
-	absolute string,
-	expected sourceObjectIdentity,
-	follow func(string) (fs.FileInfo, error),
-) error {
-	if err := linkresolve.VerifyPOSIXDirectoryAgreement(selectedPath, expected.info, follow); err != nil {
-		return classifyPOSIXLinkResolveError("follow selected root", absolute, err)
-	}
-	return nil
 }
 
 func classifyPOSIXLinkResolveError(operation, absolute string, err error) error {
 	switch {
-	case errors.Is(err, linkresolve.ErrSymlinkLoop), errors.Is(err, linkresolve.ErrNotDirectory):
+	case errors.Is(err, linkresolve.ErrSymlinkLoop):
 		return fmt.Errorf("osfs: selected root %q is not a stable file or directory: %w", absolute, content.ErrUnsupportedStability)
-	case errors.Is(err, linkresolve.ErrDirectoryMismatch):
-		return fmt.Errorf("osfs: selected root %q does not resolve to the directory the system opens: %w", absolute, content.ErrUnsupportedStability)
+	case errors.Is(err, linkresolve.ErrTargetMismatch):
+		return fmt.Errorf("osfs: selected root %q changed during link resolution: %w", absolute, catalog.ErrDirectoryStale)
 	default:
 		return pathfailure.Filesystem(operation, absolute, err)
 	}

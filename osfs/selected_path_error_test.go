@@ -37,25 +37,25 @@ func TestSelectionFailureIdentifiesFailedRootAndReleasesEarlierRoots(t *testing.
 	}
 }
 
-func TestSelectedSymbolicLinkIsAnUnsupportedSource(t *testing.T) {
+func TestSelectedUnresolvableSymbolicLinkIsAnUnsupportedSource(t *testing.T) {
 	root := t.TempDir()
-	target := filepath.Join(root, "target")
-	if err := os.WriteFile(target, []byte("content"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	selected := filepath.Join(root, "link")
-	if err := os.Symlink(target, selected); err != nil {
+	loopA := filepath.Join(root, "loop-a")
+	loopB := filepath.Join(root, "loop-b")
+	if err := os.Symlink(loopB, loopA); err != nil {
 		t.Skipf("symbolic links unavailable: %v", err)
 	}
+	if err := os.Symlink(loopA, loopB); err != nil {
+		t.Fatal(err)
+	}
 	source, err := NewSelectedFileSource(context.Background(), SelectedCatalogSourceConfig{
-		Paths: []string{selected}, SyntheticRoot: catalog.DirectoryID{1},
+		Paths: []string{loopA}, SyntheticRoot: catalog.DirectoryID{1},
 	})
 	if source != nil || !errors.Is(err, content.ErrUnsupportedStability) {
-		t.Fatalf("selected symbolic link = %v, %v", source, err)
+		t.Fatalf("selected looping symbolic link = %v, %v", source, err)
 	}
 	path, pathOK := errors.AsType[*catalog.SelectionError](err)
 	failure, failureOK := errors.AsType[*catalog.SourceError](err)
-	if !pathOK || path.Label != selected || !failureOK || failure.Failure != catalog.SourceFailureUnsupported {
+	if !pathOK || path.Label != loopA || !failureOK || failure.Failure != catalog.SourceFailureUnsupported {
 		t.Fatalf("unsupported selection lost its identity: %+v, %+v", path, failure)
 	}
 }

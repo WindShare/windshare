@@ -34,6 +34,22 @@ func HasWindowsExtendedOrDevicePrefix(path string) bool {
 	return isSep(path[0]) && isSep(path[1]) && (path[2] == '?' || path[2] == '.') && isSep(path[3])
 }
 
+// AddWindowsExtendedPrefix prepends \\?\ or \\?\UNC\ to an already-cleaned
+// absolute drive or UNC path unless it already carries an extended or device
+// namespace prefix.
+func AddWindowsExtendedPrefix(path string) string {
+	if path == "" || HasWindowsExtendedOrDevicePrefix(path) {
+		return path
+	}
+	if rest, ok := strings.CutPrefix(path, `\\`); ok {
+		return WindowsExtendedUNCPrefix + rest
+	}
+	if len(path) >= 3 && path[1] == ':' && path[2] == '\\' {
+		return WindowsExtendedPrefix + path
+	}
+	return path
+}
+
 // QueryWindowsFinalPath calls GetFinalPathNameByHandle with dynamic buffer
 // growth for paths exceeding MAX_PATH.
 func QueryWindowsFinalPath(handle windows.Handle, flags uint32) (string, error) {
@@ -88,7 +104,8 @@ func NormalizeWindowsFinalPath(path string) string {
 }
 
 // IsWindowsUnresolvableLinkError reports Windows errors indicating a symlink /
-// reparse cycle, corrupted reparse data, or an unhandled reparse target.
+// reparse cycle, corrupted reparse data, or an unhandled reparse target
+// (STATUS_IO_REPARSE_TAG_NOT_HANDLED maps to ERROR_CANT_ACCESS_FILE in Win32).
 func IsWindowsUnresolvableLinkError(err error) bool {
 	return errors.Is(err, windows.ERROR_CANT_RESOLVE_FILENAME) ||
 		errors.Is(err, windows.ERROR_INVALID_REPARSE_DATA) ||

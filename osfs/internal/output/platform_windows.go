@@ -125,16 +125,7 @@ func windowsCreateFilePath(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if linkresolve.HasWindowsExtendedOrDevicePrefix(full) {
-		return full, nil
-	}
-	if rest, ok := strings.CutPrefix(full, `\\`); ok {
-		return linkresolve.WindowsExtendedUNCPrefix + rest, nil
-	}
-	if len(full) >= 3 && full[1] == ':' && full[2] == '\\' {
-		return linkresolve.WindowsExtendedPrefix + full, nil
-	}
-	return full, nil
+	return linkresolve.AddWindowsExtendedPrefix(full), nil
 }
 
 func windowsCreateFileUTF16(path string) (*uint16, error) {
@@ -540,7 +531,7 @@ func entryMatchesSpelling(parent *Dir, name string) (exact bool, resultErr error
 	if info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
 		return false, ErrUnsafeNamespace
 	}
-	actual, err := linkresolve.QueryWindowsFinalPath(handle, linkresolve.WindowsVolumeNameDOS)
+	actual, err := linkresolve.WindowsFinalPathByHandle(handle)
 	if err != nil {
 		return false, err
 	}
@@ -618,7 +609,7 @@ func windowsDirLockName(root *Dir) (string, error) {
 		), nil
 	}
 	// Fallback for virtual filesystems that report zero volume and file indices.
-	finalPath, err := linkresolve.QueryWindowsFinalPath(windows.Handle(root.handle.Fd()), linkresolve.WindowsVolumeNameDOS)
+	finalPath, err := linkresolve.WindowsFinalPathByHandle(windows.Handle(root.handle.Fd()))
 	runtime.KeepAlive(root.handle)
 	if err != nil {
 		return "", err

@@ -144,7 +144,7 @@ func (nativeWindowsRevisionMetadata) Filesystem(handle windows.Handle) (string, 
 }
 
 func (nativeWindowsRevisionMetadata) FinalPath(handle windows.Handle) (string, error) {
-	return linkresolve.QueryWindowsFinalPath(handle, linkresolve.WindowsVolumeNameDOS)
+	return linkresolve.WindowsFinalPathByHandle(handle)
 }
 
 type windowsMutationToken struct {

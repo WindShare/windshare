@@ -215,11 +215,15 @@ func TestSelectedCatalogSourceOmitsSymlinksWithoutPublishingAuthority(t *testing
 	}
 
 	synthetic, _ := catalog.DirectoryIDFromBytes(identity16(36))
+	loop := filepath.Join(root, "loop.bin")
+	if err := os.Symlink(loop, loop); err != nil {
+		t.Fatal(err)
+	}
 	if leaked, err := NewSelectedCatalogSource(SelectedCatalogSourceConfig{
-		Paths: []string{filepath.Join(root, "link.bin")}, SyntheticRoot: synthetic,
+		Paths: []string{loop}, SyntheticRoot: synthetic,
 	}); err == nil {
 		_ = leaked.Close()
-		t.Fatal("selected symlink acquired catalog authority")
+		t.Fatal("selected unresolvable symlink acquired catalog authority")
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -13,93 +14,6 @@ import (
 	"github.com/windshare/windshare/core/content"
 	diag "github.com/windshare/windshare/core/diagnostics"
 )
-
-func TestClassifyPureDotTraversal(t *testing.T) {
-	allowed := []struct {
-		path      string
-		hasParent bool
-	}{
-		{".", false},
-		{"./", false},
-		{".//", false},
-		{"./.", false},
-		{"././", false},
-		{"..", true},
-		{"../", true},
-		{"../..", true},
-		{"../../", true},
-		{"./..", true},
-		{"../.", true},
-	}
-	rejected := []string{
-		"",
-		"/",
-		"//",
-		"/.",
-		"/..",
-		"...",
-		". ",
-		" .",
-		"link",
-		"link/",
-		"link/.",
-		"link/./",
-		"inner/..",
-		"dir/link/.",
-		"./link",
-		"./link/.",
-		"../link",
-		"C:.",
-		"C:..",
-	}
-	if runtime.GOOS == "windows" {
-		allowed = append(allowed,
-			struct {
-				path      string
-				hasParent bool
-			}{`.\`, false},
-			struct {
-				path      string
-				hasParent bool
-			}{`..\`, true},
-			struct {
-				path      string
-				hasParent bool
-			}{`..\..`, true},
-			struct {
-				path      string
-				hasParent bool
-			}{`..\..\`, true},
-			struct {
-				path      string
-				hasParent bool
-			}{`.\..`, true},
-			struct {
-				path      string
-				hasParent bool
-			}{`..\.`, true},
-			struct {
-				path      string
-				hasParent bool
-			}{`../.\`, true},
-		)
-		rejected = append(rejected, `\`, `\.`, `\..`, `link\`, `link\.`, `link\.\`, `inner\..`, `dir\link\.`)
-	} else {
-		rejected = append(rejected, `.\`, `..\`)
-	}
-	for _, tc := range allowed {
-		pure, hasParent := classifyPureDotTraversal(tc.path)
-		if !pure || hasParent != tc.hasParent {
-			t.Fatalf("classifyPureDotTraversal(%q) = (%v, %v), want (true, %v)", tc.path, pure, hasParent, tc.hasParent)
-		}
-	}
-	for _, path := range rejected {
-		pure, hasParent := classifyPureDotTraversal(path)
-		if pure || hasParent {
-			t.Fatalf("classifyPureDotTraversal(%q) = (%v, %v), want (false, false)", path, pure, hasParent)
-		}
-	}
-}
 
 func openLinkedTestSource(
 	t *testing.T,
@@ -120,7 +34,13 @@ func openLinkedTestSource(
 	return source, err
 }
 
-func assertUnsupportedSelection(t *testing.T, paths []string, wantLabel string) {
+func assertSelectionFailure(
+	t *testing.T,
+	paths []string,
+	wantLabel string,
+	wantCause error,
+	wantFailure catalog.SourceFailure,
+) {
 	t.Helper()
 	source, err := NewSelectedFileSource(context.Background(), SelectedCatalogSourceConfig{
 		Paths:         paths,
@@ -132,22 +52,22 @@ func assertUnsupportedSelection(t *testing.T, paths []string, wantLabel string) 
 	}
 	selected, hasSelection := errors.AsType[*catalog.SelectionError](err)
 	failure, hasSource := errors.AsType[*catalog.SourceError](err)
-	if !errors.Is(err, content.ErrUnsupportedStability) ||
+	if !errors.Is(err, wantCause) ||
 		!hasSelection || selected.Label != wantLabel ||
-		!hasSource || failure.Failure != catalog.SourceFailureUnsupported {
-		t.Fatalf("selection %q = %v (selected=%+v, failure=%+v), want unsupported on %q",
-			paths, err, selected, failure, wantLabel)
+		!hasSource || failure.Failure != wantFailure {
+		t.Fatalf("selection %q = %v (selected=%+v, failure=%+v), want (%v, %v) on %q",
+			paths, err, selected, failure, wantCause, wantFailure, wantLabel)
 	}
 }
 
-func TestDotTraversalThroughSymlinkedWorkingDirectorySharesTarget(t *testing.T) {
+func TestSelectedDirectorySymlinkSharesTargetAcrossPathForms(t *testing.T) {
 	base := t.TempDir()
 	target := filepath.Join(base, "real-target")
 	nested := filepath.Join(target, "sub", "nested")
 	if err := os.MkdirAll(nested, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	payload := []byte("shared through linked cwd")
+	payload := []byte("shared through directory symlink")
 	if err := os.WriteFile(filepath.Join(target, "a.txt"), payload, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -162,8 +82,12 @@ func TestDotTraversalThroughSymlinkedWorkingDirectorySharesTarget(t *testing.T) 
 	if err := os.Symlink(link, chain); err != nil {
 		t.Fatal(err)
 	}
-	// An inner symlink must stay omitted even when the working directory root
-	// resolved through a symlink.
+	relativeLink := filepath.Join(base, "rel-link")
+	if err := os.Symlink("real-target", relativeLink); err != nil {
+		t.Fatal(err)
+	}
+	// An inner symlink must stay omitted even when the selected root resolved
+	// through a symlink.
 	if err := os.Symlink("a.txt", filepath.Join(target, "inside-link")); err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +107,13 @@ func TestDotTraversalThroughSymlinkedWorkingDirectorySharesTarget(t *testing.T) 
 		{"parent slash from sub", subViaLink, "../", "my-link", link},
 		{"dot slash parent from sub", subViaLink, "./..", "my-link", link},
 		{"grandparent from nested", nestedViaLink, "../..", "my-link", link},
+		{"named absolute link", base, link, "my-link", link},
+		{"named link trailing slash", base, link + "/", "my-link", link},
+		{"named link dot suffix", base, link + "/.", "my-link", link},
+		{"named relative link", base, "my-link", "my-link", link},
+		{"relative target symlink", base, relativeLink, "rel-link", relativeLink},
 		{"symlink chain dot", chain, ".", "my-chain", chain},
+		{"symlink chain named", base, chain, "my-chain", chain},
 	}
 	if runtime.GOOS == "windows" {
 		cases = append(cases,
@@ -196,6 +126,12 @@ func TestDotTraversalThroughSymlinkedWorkingDirectorySharesTarget(t *testing.T) 
 			struct {
 				name, cwd, selection, wantRoot, wantDisplay string
 			}{"grandparent backslash", nestedViaLink, `..\..`, "my-link", link},
+			struct {
+				name, cwd, selection, wantRoot, wantDisplay string
+			}{"named backslash", base, link + `\`, "my-link", link},
+			struct {
+				name, cwd, selection, wantRoot, wantDisplay string
+			}{"named backslash dot", base, link + `\.`, "my-link", link},
 		)
 	}
 
@@ -269,108 +205,150 @@ func TestDotTraversalThroughSymlinkedWorkingDirectorySharesTarget(t *testing.T) 
 
 			foundDecision := false
 			for rec := range stream.Records() {
-				if rec.Name() == "catalog_source_policy" && rec.Payload().Get("decision").Text() == "resolved_linked_cwd" {
+				if rec.Name() == "catalog_source_policy" && rec.Payload().Get("decision").Text() == "resolved_selected_link" {
 					foundDecision = true
 				}
 			}
 			if !foundDecision {
-				t.Fatal("missing catalog_source_policy resolved_linked_cwd diagnostic trace")
+				t.Fatal("missing catalog_source_policy resolved_selected_link diagnostic trace")
 			}
 		})
 	}
 }
 
-func TestNamedSymlinkSelectionsStayRefusedIncludingDotSuffixes(t *testing.T) {
+func TestSelectedFileSymlinkSharesOnlyTargetFileAndSurvivesLinkRemoval(t *testing.T) {
 	base := t.TempDir()
-	target := filepath.Join(base, "target")
-	if err := os.MkdirAll(filepath.Join(target, "inner"), 0o700); err != nil {
+	targetDir := filepath.Join(base, "target-dir")
+	linkDir := filepath.Join(base, "link-dir")
+	if err := os.MkdirAll(targetDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	realFile := filepath.Join(target, "a.txt")
-	if err := os.WriteFile(realFile, []byte("a"), 0o600); err != nil {
+	if err := os.MkdirAll(linkDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	dir := filepath.Join(base, "dir")
-	if err := os.Mkdir(dir, 0o700); err != nil {
+	payload := []byte("shared through file symlink")
+	targetFile := filepath.Join(targetDir, "real-file.bin")
+	siblingFile := filepath.Join(targetDir, "sibling-secret.bin")
+	if err := os.WriteFile(targetFile, payload, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	link := filepath.Join(dir, "zz")
-	if err := os.Symlink(target, link); err != nil {
+	if err := os.WriteFile(siblingFile, []byte("must not be authorized"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(linkDir, "published.bin")
+	if err := os.Symlink(targetFile, link); err != nil {
 		t.Skipf("symbolic links unavailable: %v", err)
 	}
-	fileLink := filepath.Join(dir, "file-link")
-	if err := os.Symlink(realFile, fileLink); err != nil {
+	chain := filepath.Join(linkDir, "chained.bin")
+	if err := os.Symlink(link, chain); err != nil {
 		t.Fatal(err)
 	}
 
-	t.Chdir(link)
-	cases := []struct {
-		name  string
-		paths []string
-	}{
-		{"named dir link", []string{link}},
-		{"named dir link with slash", []string{link + "/"}},
-		{"named dir link with dot", []string{link + "/."}},
-		{"named dir link with dot slash", []string{link + "/./"}},
-		{"child then parent spelling", []string{"inner/.."}},
-		{"glob-like dir/* with link", []string{realFile, link}},
-		{"glob-like dir/*/ with link", []string{filepath.Join(target, "inner") + "/", link + "/"}},
-		{"glob-like dir/*/. with link", []string{filepath.Join(target, "inner") + "/.", link + "/."}},
-		{"named file link", []string{fileLink}},
-		{"named file link with dot", []string{fileLink + "/."}},
+	stream, err := diag.NewStream(16, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if runtime.GOOS == "windows" {
-		cases = append(cases,
-			struct {
-				name  string
-				paths []string
-			}{"named dir link backslash", []string{link + `\`}},
-			struct {
-				name  string
-				paths []string
-			}{"named dir link backslash dot", []string{link + `\.`}},
-			struct {
-				name  string
-				paths []string
-			}{"named dir link backslash dot backslash", []string{link + `\.\`}},
-			struct {
-				name  string
-				paths []string
-			}{"child backslash parent spelling", []string{`inner\..`}},
-		)
+	source, err := openLinkedTestSource(t, []string{chain}, stream.Sink(), nil)
+	if err != nil {
+		t.Fatalf("open file symlink chain failed: %v", err)
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			assertUnsupportedSelection(t, tc.paths, tc.paths[len(tc.paths)-1])
-		})
+	stream.Close()
+
+	root := source.SelectedRoots()[0]
+	if _, ok := root.FileID(); !ok || root.Entry().Name() != "chained.bin" {
+		t.Fatalf("root = (name=%q, file=%v), want chained.bin", root.Entry().Name(), ok)
+	}
+
+	// Deleting the symlink after selection must not break the pinned root authority.
+	if err := os.Remove(chain); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+
+	stable, err := source.OpenStable(context.Background(), root)
+	if err != nil {
+		t.Fatalf("OpenStable after link removal failed: %v", err)
+	}
+	buf := make([]byte, stable.ExactSize())
+	_, readErr := stable.ReadAt(context.Background(), buf, 0)
+	closeErr := stable.Close()
+	if readErr != nil || closeErr != nil || !bytes.Equal(buf, payload) {
+		t.Fatalf("read = (%q, %v, %v), want %q", buf, readErr, closeErr, payload)
+	}
+
+	// The borrowed parent root must never authorize a sibling file in targetDir.
+	siblingSource, err := openLinkedTestSource(t, []string{siblingFile}, diag.Sink{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leaked, err := source.OpenStable(context.Background(), siblingSource.SelectedRoots()[0]); err == nil {
+		_ = leaked.Close()
+		t.Fatal("file symlink root authorized a sibling file in the target directory")
+	} else if !errors.Is(err, content.ErrRevisionStale) {
+		t.Fatalf("sibling rejection = %v, want ErrRevisionStale", err)
+	}
+
+	foundDecision := false
+	for rec := range stream.Records() {
+		if rec.Name() == "catalog_source_policy" && rec.Payload().Get("decision").Text() == "resolved_selected_link" {
+			foundDecision = true
+		}
+	}
+	if !foundDecision {
+		t.Fatal("missing catalog_source_policy resolved_selected_link diagnostic trace for file symlink")
 	}
 }
 
-func TestParentTraversalWithinLinkedTreeSharesAgreeingSubdirectory(t *testing.T) {
+func TestSelectedDanglingAndLoopingSymlinksFailCleanly(t *testing.T) {
 	base := t.TempDir()
-	target := filepath.Join(base, "real-target")
-	nested := filepath.Join(target, "sub", "nested")
-	if err := os.MkdirAll(nested, 0o700); err != nil {
+	dangling := filepath.Join(base, "dangling")
+	if err := os.Symlink(filepath.Join(base, "does-not-exist"), dangling); err != nil {
+		t.Skipf("symbolic links unavailable: %v", err)
+	}
+	assertSelectionFailure(t, []string{dangling}, dangling, fs.ErrNotExist, catalog.SourceFailureMissing)
+
+	loopA := filepath.Join(base, "loop-a")
+	loopB := filepath.Join(base, "loop-b")
+	if err := os.Symlink(loopB, loopA); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(target, "sub", "in-sub.txt"), []byte("sub"), 0o600); err != nil {
+	if err := os.Symlink(loopA, loopB); err != nil {
 		t.Fatal(err)
 	}
-	link := filepath.Join(base, "my-link")
-	if err := os.Symlink(target, link); err != nil {
+	assertSelectionFailure(t, []string{loopA}, loopA, content.ErrUnsupportedStability, catalog.SourceFailureUnsupported)
+}
+
+func TestParentTraversalFromNestedSymlinkSharesLogicalParentConsistently(t *testing.T) {
+	base := t.TempDir()
+	realParent := filepath.Join(base, "real-parent")
+	elsewhere := filepath.Join(base, "elsewhere", "child")
+	if err := os.MkdirAll(realParent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(elsewhere, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(realParent, "logical.txt"), []byte("logical"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "elsewhere", "physical.txt"), []byte("physical"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	jump := filepath.Join(realParent, "jump")
+	if err := os.Symlink(elsewhere, jump); err != nil {
 		t.Skipf("symbolic links unavailable: %v", err)
 	}
 
-	// Both logical ".." (my-link/sub) and physical ".." (real-target/sub) point
-	// to the exact same real directory, so sharing ".." succeeds on all OSes.
-	t.Chdir(filepath.Join(link, "sub", "nested"))
+	t.Chdir(jump)
 	source, err := openLinkedTestSource(t, []string{".."}, diag.Sink{}, nil)
 	if err != nil {
-		t.Fatalf("sharing .. from my-link/sub/nested failed: %v", err)
+		t.Fatalf("sharing .. from real-parent/jump failed: %v", err)
 	}
 	root := source.SelectedRoots()[0]
-	if root.Entry().Name() != "sub" {
-		t.Fatalf("root name = %q, want sub", root.Entry().Name())
+	if root.Entry().Name() != "real-parent" {
+		t.Fatalf("root name = %q, want real-parent", root.Entry().Name())
 	}
 	children := &collectingScanChildren{}
 	if _, err := source.ScanDirectory(context.Background(), catalog.ScanRequest{
@@ -378,7 +356,7 @@ func TestParentTraversalWithinLinkedTreeSharesAgreeingSubdirectory(t *testing.T)
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if len(children.items) != 2 {
-		t.Fatalf("children = %+v, want in-sub.txt and nested", children.items)
+	if len(children.items) != 1 || children.items[0].Name != "logical.txt" {
+		t.Fatalf("children = %+v, want only logical.txt", children.items)
 	}
 }

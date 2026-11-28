@@ -153,16 +153,16 @@ impl Language {
     fn source_unsupported_error(self, path: Option<&str>) -> String {
         match (self, path.and_then(item_display_name)) {
             (Self::English, Some(name)) => format!(
-                "“{name}” can’t be shared safely. Select a regular file or folder instead of a symbolic link or junction."
+                "“{name}” can’t be shared safely. Select a regular file or folder on a supported filesystem."
             ),
             (Self::English, None) => {
-                "This item can’t be shared safely. Select a regular file or folder instead of a symbolic link or junction.".into()
+                "This item can’t be shared safely. Select a regular file or folder on a supported filesystem.".into()
             }
             (Self::SimplifiedChinese, Some(name)) => format!(
-                "无法安全分享“{name}”。请选择常规文件或文件夹，暂不支持符号链接或目录联接。"
+                "无法安全分享“{name}”。请选择受支持文件系统上的常规文件或文件夹。"
             ),
             (Self::SimplifiedChinese, None) => {
-                "无法安全分享所选项目。请选择常规文件或文件夹，暂不支持符号链接或目录联接。".into()
+                "无法安全分享所选项目。请选择受支持文件系统上的常规文件或文件夹。".into()
             }
         }
     }

@@ -29,7 +29,7 @@ func createTestWindowsJunction(t *testing.T, link, target string) {
 	t.Cleanup(func() { _ = os.Remove(link) })
 }
 
-func TestWindowsDotTraversalThroughJunctionSharesTarget(t *testing.T) {
+func TestWindowsSelectedJunctionSharesTargetAcrossPathForms(t *testing.T) {
 	base := t.TempDir()
 	target := filepath.Join(base, "real-target")
 	nested := filepath.Join(target, "sub", "nested")
@@ -73,7 +73,13 @@ func TestWindowsDotTraversalThroughJunctionSharesTarget(t *testing.T) {
 		{"dot slash parent", subViaJunction, "./..", "my-junction", jlink},
 		{"grandparent backslash", nestedViaJunction, `..\..`, "my-junction", jlink},
 		{"grandparent slash", nestedViaJunction, "../..", "my-junction", jlink},
+		{"named absolute junction", base, jlink, "my-junction", jlink},
+		{"named junction backslash", base, jlink + `\`, "my-junction", jlink},
+		{"named junction slash", base, jlink + "/", "my-junction", jlink},
+		{"named junction dot suffix", base, jlink + `\.`, "my-junction", jlink},
+		{"named relative junction", base, "my-junction", "my-junction", jlink},
 		{"junction chain dot", jchain, ".", "my-chain", jchain},
+		{"junction chain named", base, jchain, "my-chain", jchain},
 	}
 
 	for _, tc := range cases {
@@ -139,48 +145,21 @@ func TestWindowsDotTraversalThroughJunctionSharesTarget(t *testing.T) {
 
 			foundDecision := false
 			for rec := range stream.Records() {
-				if rec.Name() == "catalog_source_policy" && rec.Payload().Get("decision").Text() == "resolved_linked_cwd" {
+				if rec.Name() == "catalog_source_policy" && rec.Payload().Get("decision").Text() == "resolved_selected_link" {
 					if rec.Payload().Get("reparse_tag").Text() != "0xa0000003" {
-						t.Fatalf("resolved_linked_cwd lost mount-point reparse_tag: %+v", rec.Payload())
+						t.Fatalf("resolved_selected_link lost mount-point reparse_tag: %+v", rec.Payload())
 					}
 					foundDecision = true
 				}
 			}
 			if !foundDecision {
-				t.Fatal("missing catalog_source_policy resolved_linked_cwd diagnostic trace")
+				t.Fatal("missing catalog_source_policy resolved_selected_link diagnostic trace")
 			}
 		})
 	}
 }
 
-func TestWindowsNamedJunctionSelectionsStayRefusedIncludingDotSuffixes(t *testing.T) {
-	base := t.TempDir()
-	target := filepath.Join(base, "target")
-	if err := os.MkdirAll(filepath.Join(target, "inner"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	jlink := filepath.Join(base, "my-junction")
-	createTestWindowsJunction(t, jlink, target)
-
-	t.Chdir(jlink)
-	for _, selection := range []string{
-		jlink,
-		jlink + `\`,
-		jlink + "/",
-		jlink + `\.`,
-		jlink + `\.\`,
-		jlink + "/.",
-		jlink + "/./",
-		`inner\..`,
-		"inner/..",
-	} {
-		t.Run(selection, func(t *testing.T) {
-			assertUnsupportedSelection(t, []string{selection}, selection)
-		})
-	}
-}
-
-func TestWindowsLinkedWorkingDirectorySupportsLongPathTarget(t *testing.T) {
+func TestWindowsSelectedJunctionSupportsLongPathTarget(t *testing.T) {
 	base := t.TempDir()
 	seg := strings.Repeat("d", 60)
 	longTarget := filepath.Join(base, seg, seg, seg, seg, "long-target")
@@ -196,33 +175,47 @@ func TestWindowsLinkedWorkingDirectorySupportsLongPathTarget(t *testing.T) {
 	shortLink := filepath.Join(base, "short-to-long")
 	createTestWindowsJunction(t, shortLink, linkresolve.WindowsExtendedPrefix+longTarget)
 
-	t.Chdir(shortLink)
-	source, err := openLinkedTestSource(t, []string{"."}, diag.Sink{}, nil)
-	if err != nil {
-		t.Fatalf("open '.' through junction to >MAX_PATH target failed: %v", err)
-	}
-	root := source.SelectedRoots()[0]
-	if root.Entry().Name() != "short-to-long" {
-		t.Fatalf("root name = %q, want short-to-long", root.Entry().Name())
-	}
-	children := &collectingScanChildren{}
-	if _, err := source.ScanDirectory(context.Background(), catalog.ScanRequest{
-		Directory: root, Work: &countingScanWork{}, Children: children,
-	}); err != nil {
-		t.Fatalf("ScanDirectory on long target failed: %v", err)
-	}
-	if len(children.items) != 1 || children.items[0].Name != "payload.txt" {
-		t.Fatalf("children = %+v, want payload.txt", children.items)
+	for _, selection := range []string{shortLink, "."} {
+		t.Run(selection, func(t *testing.T) {
+			if selection == "." {
+				t.Chdir(shortLink)
+			}
+			source, err := openLinkedTestSource(t, []string{selection}, diag.Sink{}, nil)
+			if err != nil {
+				t.Fatalf("open %q through junction to >MAX_PATH target failed: %v", selection, err)
+			}
+			root := source.SelectedRoots()[0]
+			if root.Entry().Name() != "short-to-long" {
+				t.Fatalf("root name = %q, want short-to-long", root.Entry().Name())
+			}
+			children := &collectingScanChildren{}
+			if _, err := source.ScanDirectory(context.Background(), catalog.ScanRequest{
+				Directory: root, Work: &countingScanWork{}, Children: children,
+			}); err != nil {
+				t.Fatalf("ScanDirectory on long target failed: %v", err)
+			}
+			if len(children.items) != 1 || children.items[0].Name != "payload.txt" {
+				t.Fatalf("children = %+v, want payload.txt", children.items)
+			}
+		})
 	}
 }
 
-func TestWindowsResolveLinkedDirectoryCloudAndSafetyPolicy(t *testing.T) {
+func TestWindowsResolveSelectedLinkCloudAndSafetyPolicy(t *testing.T) {
 	dirID := sourceObjectIdentity{volumeSerial: 1, fileIndexHigh: 2, fileIndexLow: 3, isDir: true}
+	fileID := sourceObjectIdentity{volumeSerial: 1, fileIndexHigh: 2, fileIndexLow: 4, isDir: false}
 	otherID := sourceObjectIdentity{volumeSerial: 1, fileIndexHigh: 2, fileIndexLow: 9, isDir: true}
-	hydratedAudit := sourceEntryAudit{
+	hydratedDirAudit := sourceEntryAudit{
 		attributes:       windows.FILE_ATTRIBUTE_DIRECTORY | windows.FILE_ATTRIBUTE_REPARSE_POINT,
 		reparseTag:       testReparseTagCloudRoot,
 		placeholderState: cfPlaceholderStatePlaceholder | cfPlaceholderStateInSync | cfPlaceholderStateSyncRoot,
+		hydratedCloud:    true,
+		hasCloudState:    true,
+	}
+	hydratedFileAudit := sourceEntryAudit{
+		attributes:       windows.FILE_ATTRIBUTE_REPARSE_POINT,
+		reparseTag:       testReparseTagCloudPinned,
+		placeholderState: cfPlaceholderStatePlaceholder | cfPlaceholderStateInSync,
 		hydratedCloud:    true,
 		hasCloudState:    true,
 	}
@@ -233,23 +226,36 @@ func TestWindowsResolveLinkedDirectoryCloudAndSafetyPolicy(t *testing.T) {
 		hasCloudState:    true,
 	}
 
-	// 1. Hydrated cloud directory target remains admitted.
-	got, err := resolveWindowsLinkedDirectoryWith(
+	// 1. Hydrated cloud directory and regular file targets remain admitted.
+	got, err := resolveWindowsSelectedLinkWith(
 		`C:\work\link`,
 		func(string) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, string, error) {
-			return dirID, sourceEntryDirectory, hydratedAudit, `C:\Users\me\OneDrive\Docs`, nil
+			return dirID, sourceEntryDirectory, hydratedDirAudit, `C:\Users\me\OneDrive\Docs`, nil
 		},
 		func(string) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, error) {
-			return dirID, sourceEntryDirectory, hydratedAudit, nil
+			return dirID, sourceEntryDirectory, hydratedDirAudit, nil
 		},
 	)
-	if err != nil || got.disposition != linkedDirectoryResolved || got.kind != sourceEntryDirectory ||
+	if err != nil || got.disposition != selectedLinkResolved || got.kind != sourceEntryDirectory ||
 		!got.audit.hydratedCloud || got.openPath != `C:\Users\me\OneDrive\Docs` {
-		t.Fatalf("hydrated cloud target = (%+v, %v)", got, err)
+		t.Fatalf("hydrated cloud dir target = (%+v, %v)", got, err)
+	}
+	got, err = resolveWindowsSelectedLinkWith(
+		`C:\work\file-link`,
+		func(string) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, string, error) {
+			return fileID, sourceEntryRegularFile, hydratedFileAudit, `C:\Users\me\OneDrive\report.pdf`, nil
+		},
+		func(string) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, error) {
+			return fileID, sourceEntryRegularFile, hydratedFileAudit, nil
+		},
+	)
+	if err != nil || got.disposition != selectedLinkResolved || got.kind != sourceEntryRegularFile ||
+		!got.audit.hydratedCloud || got.openPath != `C:\Users\me\OneDrive\report.pdf` {
+		t.Fatalf("hydrated cloud file target = (%+v, %v)", got, err)
 	}
 
 	// 2. Dehydrated cloud placeholder target returns explicit rejection without recall.
-	got, err = resolveWindowsLinkedDirectoryWith(
+	got, err = resolveWindowsSelectedLinkWith(
 		`C:\work\link`,
 		func(string) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, string, error) {
 			return dirID, sourceEntryCloudPlaceholder, placeholderAudit, "", nil
@@ -259,39 +265,39 @@ func TestWindowsResolveLinkedDirectoryCloudAndSafetyPolicy(t *testing.T) {
 			return sourceObjectIdentity{}, 0, sourceEntryAudit{}, nil
 		},
 	)
-	if err != nil || got.disposition != linkedDirectoryRejected || got.kind != sourceEntryCloudPlaceholder || got.openPath != "" {
+	if err != nil || got.disposition != selectedLinkRejected || got.kind != sourceEntryCloudPlaceholder || got.openPath != "" {
 		t.Fatalf("dehydrated cloud target = (%+v, %v)", got, err)
 	}
 
 	// 3. Target dehydrating between follow and inspect reports cloud placeholder,
-	// while a swapped foreign cloud placeholder fails closed with mismatch.
-	got, err = resolveWindowsLinkedDirectoryWith(
+	// while a swapped foreign object reports ErrDirectoryStale.
+	got, err = resolveWindowsSelectedLinkWith(
 		`C:\work\link`,
 		func(string) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, string, error) {
-			return dirID, sourceEntryDirectory, hydratedAudit, `C:\Users\me\OneDrive\Docs`, nil
+			return dirID, sourceEntryDirectory, hydratedDirAudit, `C:\Users\me\OneDrive\Docs`, nil
 		},
 		func(string) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, error) {
 			return dirID, sourceEntryCloudPlaceholder, placeholderAudit, nil
 		},
 	)
-	if err != nil || got.disposition != linkedDirectoryRejected || got.kind != sourceEntryCloudPlaceholder || got.openPath != "" {
+	if err != nil || got.disposition != selectedLinkRejected || got.kind != sourceEntryCloudPlaceholder || got.openPath != "" {
 		t.Fatalf("mid-resolve dehydration = (%+v, %v)", got, err)
 	}
-	if _, err := resolveWindowsLinkedDirectoryWith(
+	if _, err := resolveWindowsSelectedLinkWith(
 		`C:\work\link`,
 		func(string) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, string, error) {
-			return dirID, sourceEntryDirectory, hydratedAudit, `C:\Users\me\OneDrive\Docs`, nil
+			return dirID, sourceEntryDirectory, hydratedDirAudit, `C:\Users\me\OneDrive\Docs`, nil
 		},
 		func(string) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, error) {
 			return otherID, sourceEntryCloudPlaceholder, placeholderAudit, nil
 		},
-	); !errors.Is(err, content.ErrUnsupportedStability) {
-		t.Fatalf("swapped foreign cloud placeholder err = %v, want ErrUnsupportedStability", err)
+	); !errors.Is(err, catalog.ErrDirectoryStale) {
+		t.Fatalf("swapped foreign cloud placeholder err = %v, want ErrDirectoryStale", err)
 	}
 
-	// 4. Unknown reparse target stays rejected as reparse point.
+	// 4. Unknown reparse target stays rejected as reparse point; special file stays unsupported.
 	unknownAudit := sourceEntryAudit{attributes: windows.FILE_ATTRIBUTE_REPARSE_POINT, reparseTag: testReparseTagUnknown}
-	got, err = resolveWindowsLinkedDirectoryWith(
+	got, err = resolveWindowsSelectedLinkWith(
 		`C:\work\link`,
 		func(string) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, string, error) {
 			return dirID, sourceEntryReparsePoint, unknownAudit, "", nil
@@ -300,23 +306,23 @@ func TestWindowsResolveLinkedDirectoryCloudAndSafetyPolicy(t *testing.T) {
 			return sourceObjectIdentity{}, 0, sourceEntryAudit{}, nil
 		},
 	)
-	if err != nil || got.disposition != linkedDirectoryRejected || got.kind != sourceEntryReparsePoint {
+	if err != nil || got.disposition != selectedLinkRejected || got.kind != sourceEntryReparsePoint {
 		t.Fatalf("unknown reparse target = (%+v, %v)", got, err)
 	}
-
-	// 5. Regular file target and identity mismatch fail closed.
-	if _, err := resolveWindowsLinkedDirectoryWith(
+	if _, err := resolveWindowsSelectedLinkWith(
 		`C:\work\link`,
 		func(string) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, string, error) {
-			return sourceObjectIdentity{volumeSerial: 1, fileIndexLow: 4}, sourceEntryRegularFile, sourceEntryAudit{}, "", nil
+			return sourceObjectIdentity{}, sourceEntrySpecialFile, sourceEntryAudit{}, "", nil
 		},
 		func(string) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, error) {
 			return sourceObjectIdentity{}, 0, sourceEntryAudit{}, nil
 		},
 	); !errors.Is(err, content.ErrUnsupportedStability) {
-		t.Fatalf("regular file target err = %v, want ErrUnsupportedStability", err)
+		t.Fatalf("special file target err = %v, want ErrUnsupportedStability", err)
 	}
-	if _, err := resolveWindowsLinkedDirectoryWith(
+
+	// 5. Identity mismatch between follow and inspect reports ErrDirectoryStale.
+	if _, err := resolveWindowsSelectedLinkWith(
 		`C:\work\link`,
 		func(string) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, string, error) {
 			return dirID, sourceEntryDirectory, sourceEntryAudit{}, `C:\target`, nil
@@ -324,47 +330,26 @@ func TestWindowsResolveLinkedDirectoryCloudAndSafetyPolicy(t *testing.T) {
 		func(string) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, error) {
 			return otherID, sourceEntryDirectory, sourceEntryAudit{}, nil
 		},
-	); !errors.Is(err, content.ErrUnsupportedStability) {
-		t.Fatalf("identity mismatch err = %v, want ErrUnsupportedStability", err)
+	); !errors.Is(err, catalog.ErrDirectoryStale) {
+		t.Fatalf("identity mismatch err = %v, want ErrDirectoryStale", err)
 	}
 
 	// 6. Real dangling junction and mutual junction loop (including rejected_reparse audit).
 	base := t.TempDir()
 	dangling := filepath.Join(base, "dangling")
 	createTestWindowsJunction(t, dangling, filepath.Join(base, "missing"))
-	if _, err := resolveLinkedWorkingDirectory(".", dangling); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("dangling junction err = %v, want fs.ErrNotExist", err)
-	}
+	assertSelectionFailure(t, []string{dangling}, dangling, fs.ErrNotExist, catalog.SourceFailureMissing)
+
 	loopA := filepath.Join(base, "loopA")
 	loopB := filepath.Join(base, "loopB")
 	createTestWindowsJunction(t, loopA, loopB)
 	createTestWindowsJunction(t, loopB, loopA)
-	if _, err := resolveLinkedWorkingDirectory(".", loopA); !errors.Is(err, content.ErrUnsupportedStability) {
-		t.Fatalf("junction loop err = %v, want ErrUnsupportedStability", err)
-	}
-
-	// Verify openSelectedRoot preserves rejected_reparse policy audit when a
-	// dot traversal lands on a Windows junction whose resolution fails closed.
-	realDir := filepath.Join(base, "real-dir")
-	realSub := filepath.Join(realDir, "sub")
-	if err := os.MkdirAll(realSub, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	retargeted := filepath.Join(base, "retargeted")
-	loopPartner := filepath.Join(base, "retargeted-loop")
-	createTestWindowsJunction(t, retargeted, realDir)
-	t.Chdir(filepath.Join(retargeted, "sub"))
-	if err := os.Remove(retargeted); err != nil {
-		t.Fatal(err)
-	}
-	createTestWindowsJunction(t, retargeted, loopPartner)
-	createTestWindowsJunction(t, loopPartner, retargeted)
 	stream, err := diag.NewStream(16, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := openLinkedTestSource(t, []string{".."}, stream.Sink(), nil); !errors.Is(err, content.ErrUnsupportedStability) {
-		t.Fatalf("dot traversal to looping junction err = %v, want ErrUnsupportedStability", err)
+	if _, err := openLinkedTestSource(t, []string{loopA}, stream.Sink(), nil); !errors.Is(err, content.ErrUnsupportedStability) {
+		t.Fatalf("looping junction err = %v, want ErrUnsupportedStability", err)
 	}
 	stream.Close()
 	foundRejected := false
@@ -375,47 +360,6 @@ func TestWindowsResolveLinkedDirectoryCloudAndSafetyPolicy(t *testing.T) {
 		}
 	}
 	if !foundRejected {
-		t.Fatal("missing catalog_source_policy rejected_reparse diagnostic trace for dot-traversal junction loop")
-	}
-}
-
-func TestWindowsParentTraversalFromRealParentThroughNestedJunctionKeepsLogicalParent(t *testing.T) {
-	base := t.TempDir()
-	realParent := filepath.Join(base, "real-parent")
-	elsewhere := filepath.Join(base, "elsewhere", "child")
-	if err := os.MkdirAll(realParent, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(elsewhere, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(realParent, "logical.txt"), []byte("logical"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(base, "elsewhere", "physical.txt"), []byte("physical"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	jump := filepath.Join(realParent, "jump")
-	createTestWindowsJunction(t, jump, elsewhere)
-
-	// Win32 resolves ".." lexically against GetCurrentDirectoryW, so real-parent
-	// matches the directory Windows opens from real-parent\jump.
-	t.Chdir(jump)
-	source, err := openLinkedTestSource(t, []string{".."}, diag.Sink{}, nil)
-	if err != nil {
-		t.Fatalf("sharing .. from realParent\\jump failed: %v", err)
-	}
-	root := source.SelectedRoots()[0]
-	if root.Entry().Name() != "real-parent" {
-		t.Fatalf("root name = %q, want real-parent", root.Entry().Name())
-	}
-	children := &collectingScanChildren{}
-	if _, err := source.ScanDirectory(context.Background(), catalog.ScanRequest{
-		Directory: root, Work: &countingScanWork{}, Children: children,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if len(children.items) != 1 || children.items[0].Name != "logical.txt" {
-		t.Fatalf("children = %+v, want only logical.txt from logical parent", children.items)
+		t.Fatal("missing catalog_source_policy rejected_reparse diagnostic trace for looping junction")
 	}
 }

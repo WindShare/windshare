@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-func TestResolvePOSIXDirectoryEnforcesAgreementAndLoopClassification(t *testing.T) {
+func TestResolvePOSIXTargetAndDirectoryEnforceAgreementAndLoopClassification(t *testing.T) {
 	base := t.TempDir()
 	target := filepath.Join(base, "target")
 	other := filepath.Join(base, "other")
@@ -25,8 +25,12 @@ func TestResolvePOSIXDirectoryEnforcesAgreementAndLoopClassification(t *testing.
 	if err := os.WriteFile(regularFile, []byte("ok"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	link := filepath.Join(base, "link")
-	if err := os.Symlink(target, link); err != nil {
+	dirLink := filepath.Join(base, "dir-link")
+	if err := os.Symlink(target, dirLink); err != nil {
+		t.Fatal(err)
+	}
+	fileLink := filepath.Join(base, "file-link")
+	if err := os.Symlink(regularFile, fileLink); err != nil {
 		t.Fatal(err)
 	}
 
@@ -42,113 +46,82 @@ func TestResolvePOSIXDirectoryEnforcesAgreementAndLoopClassification(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	linkLstat, err := os.Lstat(link)
+	linkLstat, err := os.Lstat(dirLink)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	resolved, info, err := ResolvePOSIXDirectory(link, link, POSIXOps{})
+	// Real directory symlink resolves cleanly for both Target and Directory APIs.
+	resolvedDir, info, err := ResolvePOSIXDirectory(dirLink, POSIXOps{})
 	if err != nil || !os.SameFile(info, targetInfo) {
-		t.Fatalf("ResolvePOSIXDirectory(link) = (%q, %v, %v)", resolved, info, err)
+		t.Fatalf("ResolvePOSIXDirectory(dirLink) = (%q, %v, %v)", resolvedDir, info, err)
 	}
-	if resolvedTarget, err := filepath.EvalSymlinks(target); err != nil || resolved != resolvedTarget {
-		t.Fatalf("resolved = %q, want %q (err=%v)", resolved, resolvedTarget, err)
+	if wantDir, err := filepath.EvalSymlinks(target); err != nil || resolvedDir != wantDir {
+		t.Fatalf("resolvedDir = %q, want %q (err=%v)", resolvedDir, wantDir, err)
+	}
+
+	// Real regular-file symlink resolves cleanly for ResolvePOSIXTarget and fails
+	// fast with ErrNotDirectory for ResolvePOSIXDirectory without EvalSymlinks.
+	resolvedFile, info, err := ResolvePOSIXTarget(fileLink, POSIXOps{})
+	if err != nil || !os.SameFile(info, fileInfo) || !info.Mode().IsRegular() {
+		t.Fatalf("ResolvePOSIXTarget(fileLink) = (%q, %v, %v)", resolvedFile, info, err)
+	}
+	if wantFile, err := filepath.EvalSymlinks(regularFile); err != nil || resolvedFile != wantFile {
+		t.Fatalf("resolvedFile = %q, want %q (err=%v)", resolvedFile, wantFile, err)
+	}
+	evalCalled := false
+	if _, _, err := ResolvePOSIXDirectory(fileLink, POSIXOps{
+		EvalSymlinks: func(string) (string, error) {
+			evalCalled = true
+			return "", nil
+		},
+	}); !errors.Is(err, ErrNotDirectory) || evalCalled {
+		t.Fatalf("ResolvePOSIXDirectory(fileLink) = (%v, evalCalled=%v), want ErrNotDirectory without EvalSymlinks", err, evalCalled)
 	}
 
 	// Simulated kernel EACCES (e.g. fs.protected_symlinks) propagates as permission error.
-	if _, _, err := ResolvePOSIXDirectory(".", link, POSIXOps{
-		FollowSelected: func(string) (fs.FileInfo, error) {
-			return nil, &fs.PathError{Op: "stat", Path: ".", Err: fs.ErrPermission}
+	if _, _, err := ResolvePOSIXTarget(dirLink, POSIXOps{
+		Follow: func(string) (fs.FileInfo, error) {
+			return nil, &fs.PathError{Op: "stat", Path: dirLink, Err: fs.ErrPermission}
 		},
 	}); !errors.Is(err, fs.ErrPermission) {
 		t.Fatalf("permission error = %v, want fs.ErrPermission", err)
 	}
 
 	// Kernel ELOOP maps to ErrSymlinkLoop.
-	if _, _, err := ResolvePOSIXDirectory(".", link, POSIXOps{
-		FollowSelected: func(string) (fs.FileInfo, error) {
-			return nil, &fs.PathError{Op: "stat", Path: ".", Err: syscall.ELOOP}
+	if _, _, err := ResolvePOSIXTarget(dirLink, POSIXOps{
+		Follow: func(string) (fs.FileInfo, error) {
+			return nil, &fs.PathError{Op: "stat", Path: dirLink, Err: syscall.ELOOP}
 		},
 	}); !errors.Is(err, ErrSymlinkLoop) {
 		t.Fatalf("kernel ELOOP = %v, want ErrSymlinkLoop", err)
 	}
 
-	// Non-directory kernel target maps to ErrNotDirectory.
-	if _, _, err := ResolvePOSIXDirectory(".", link, POSIXOps{
-		FollowSelected: func(string) (fs.FileInfo, error) { return fileInfo, nil },
-	}); !errors.Is(err, ErrNotDirectory) {
-		t.Fatalf("non-directory target = %v, want ErrNotDirectory", err)
-	}
-
-	// Disagreement between selectedPath and logicalPath maps to ErrDirectoryMismatch.
-	if _, _, err := ResolvePOSIXDirectory("..", link, POSIXOps{
-		FollowSelected: func(string) (fs.FileInfo, error) { return otherInfo, nil },
-		StatLogical:    func(string) (fs.FileInfo, error) { return targetInfo, nil },
-	}); !errors.Is(err, ErrDirectoryMismatch) {
-		t.Fatalf("logical/kernel mismatch = %v, want ErrDirectoryMismatch", err)
-	}
-
 	// EvalSymlinks hitting a loop after Stat succeeds maps to ErrSymlinkLoop.
-	if _, _, err := ResolvePOSIXDirectory(".", link, POSIXOps{
-		FollowSelected: func(string) (fs.FileInfo, error) { return targetInfo, nil },
-		StatLogical:    func(string) (fs.FileInfo, error) { return targetInfo, nil },
-		EvalSymlinks:   func(string) (string, error) { return "", errors.New("EvalSymlinks: too many links") },
+	if _, _, err := ResolvePOSIXTarget(dirLink, POSIXOps{
+		Follow:       func(string) (fs.FileInfo, error) { return targetInfo, nil },
+		EvalSymlinks: func(string) (string, error) { return "", errors.New("EvalSymlinks: too many links") },
 	}); !errors.Is(err, ErrSymlinkLoop) {
 		t.Fatalf("EvalSymlinks loop = %v, want ErrSymlinkLoop", err)
 	}
 
-	// Lstat returning a symlink or a different directory maps to ErrDirectoryMismatch.
-	if _, _, err := ResolvePOSIXDirectory(".", link, POSIXOps{
-		FollowSelected: func(string) (fs.FileInfo, error) { return targetInfo, nil },
-		StatLogical:    func(string) (fs.FileInfo, error) { return targetInfo, nil },
-		EvalSymlinks:   func(string) (string, error) { return target, nil },
-		Lstat:          func(string) (fs.FileInfo, error) { return linkLstat, nil },
-	}); !errors.Is(err, ErrDirectoryMismatch) {
-		t.Fatalf("Lstat symlink race = %v, want ErrDirectoryMismatch", err)
-	}
-	if _, _, err := ResolvePOSIXDirectory(".", link, POSIXOps{
-		FollowSelected: func(string) (fs.FileInfo, error) { return targetInfo, nil },
-		StatLogical:    func(string) (fs.FileInfo, error) { return targetInfo, nil },
-		EvalSymlinks:   func(string) (string, error) { return target, nil },
-		Lstat:          func(string) (fs.FileInfo, error) { return otherInfo, nil },
-	}); !errors.Is(err, ErrDirectoryMismatch) {
-		t.Fatalf("Lstat swapped dir = %v, want ErrDirectoryMismatch", err)
-	}
-}
-
-func TestVerifyPOSIXDirectoryAgreement(t *testing.T) {
-	base := t.TempDir()
-	dirA := filepath.Join(base, "a")
-	dirB := filepath.Join(base, "b")
-	if err := os.Mkdir(dirA, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(dirB, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	infoA, err := os.Stat(dirA)
-	if err != nil {
-		t.Fatal(err)
-	}
-	infoB, err := os.Stat(dirB)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if err := VerifyPOSIXDirectoryAgreement("..", infoA, func(string) (fs.FileInfo, error) { return infoA, nil }); err != nil {
-		t.Fatalf("matching directory rejected: %v", err)
-	}
-	if err := VerifyPOSIXDirectoryAgreement("..", infoA, func(string) (fs.FileInfo, error) { return infoB, nil }); !errors.Is(err, ErrDirectoryMismatch) {
-		t.Fatalf("mismatching directory = %v, want ErrDirectoryMismatch", err)
-	}
-	if err := VerifyPOSIXDirectoryAgreement("..", infoA, func(string) (fs.FileInfo, error) {
-		return nil, &fs.PathError{Op: "stat", Path: "..", Err: syscall.ELOOP}
-	}); !errors.Is(err, ErrSymlinkLoop) {
-		t.Fatalf("ELOOP = %v, want ErrSymlinkLoop", err)
-	}
-	if err := VerifyPOSIXDirectoryAgreement("..", infoA, func(string) (fs.FileInfo, error) {
-		return nil, &fs.PathError{Op: "stat", Path: "..", Err: fs.ErrPermission}
-	}); !errors.Is(err, fs.ErrPermission) {
-		t.Fatalf("EACCES = %v, want fs.ErrPermission", err)
+	// Lstat returning a symlink, another object, or a mismatched mode type maps to ErrTargetMismatch.
+	for _, tc := range []struct {
+		name  string
+		lstat fs.FileInfo
+	}{
+		{name: "lstat symlink race", lstat: linkLstat},
+		{name: "lstat swapped dir", lstat: otherInfo},
+		{name: "lstat mode type mismatch", lstat: fileInfo},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, _, err := ResolvePOSIXTarget(dirLink, POSIXOps{
+				Follow:       func(string) (fs.FileInfo, error) { return targetInfo, nil },
+				EvalSymlinks: func(string) (string, error) { return target, nil },
+				Lstat:        func(string) (fs.FileInfo, error) { return tc.lstat, nil },
+			}); !errors.Is(err, ErrTargetMismatch) {
+				t.Fatalf("%s = %v, want ErrTargetMismatch", tc.name, err)
+			}
+		})
 	}
 }
