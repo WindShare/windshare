@@ -145,8 +145,8 @@ func (a *App) parseReceiveRequest(ctx context.Context, cmd receiveCommand, args 
 	)
 	var only command.RepeatedFlag
 	flags.Var(&only, "only", "download only this catalog path; repeatable, directories include descendants")
-	positional, flagParse := command.ParseInterleaved(flags, args)
-	if parse := a.projectFlagParse(name, flags, name+" [options] <link>", flagParse); parse != requestParseReady {
+	positional, err := command.ParseInterleaved(flags, args)
+	if parse := a.projectFlagParse(name, flags, name+" [options] <link>", err); parse != requestParseReady {
 		return receiveRequest{}, parse
 	}
 	if err := observation.validate(); err != nil {
@@ -183,7 +183,7 @@ func (a *App) parseReceiveRequest(ctx context.Context, cmd receiveCommand, args 
 	}
 	connectivity, err := engine.ParseConnectivityPolicy(*connectivityName)
 	if err != nil {
-		a.writeCompleteLine("%s: connectivity must be auto, relay-only, or p2p-only", name)
+		a.writeCompleteLine("%s: invalid value %q for --connectivity: must be auto, relay-only, or p2p-only", name, command.RedactToken(*connectivityName))
 		return receiveRequest{}, requestParseUsageFailure
 	}
 	capability, err := a.resolveLink(ctx, positional[0], *keyString)

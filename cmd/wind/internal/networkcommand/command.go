@@ -6,6 +6,7 @@ package networkcommand
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -55,10 +56,9 @@ func (runner Runner) Run(ctx context.Context, cmd string, args []string) command
 	if runner.JSONOutput == nil {
 		runner.JSONOutput = io.Discard
 	}
-	options, outcome := parseNetworkArgs(cmd, args)
-	if outcome != command.ParseReady {
-		runner.writeLine("%s", networkUsage(cmd))
-		return outcome.ExitCode()
+	options, err := parseNetworkArgs(cmd, args)
+	if err != nil {
+		return runner.reportParseError(cmd, args, err)
 	}
 	if runner.Service == nil {
 		runner.Service = platformsetup.New()
@@ -110,19 +110,39 @@ func (runner Runner) Run(ctx context.Context, cmd string, args []string) command
 
 type networkOptions struct{ skip, remove, noninteractive, jsonOutput bool }
 
-func parseNetworkArgs(cmd string, args []string) (networkOptions, command.ParseOutcome) {
+var errNetworkUsage = errors.New("network usage")
+
+func (runner Runner) reportParseError(cmd string, args []string, err error) command.ExitCode {
+	if errors.Is(err, command.ErrHelp) {
+		runner.writeLine("%s", networkUsage(cmd))
+		return command.ExitOK
+	}
+	if !errors.Is(err, errNetworkUsage) {
+		label := cmd
+		if cmd != "doctor" && cmd != "setup" {
+			label = command.Name
+		} else if len(args) > 0 && args[0] == "network" {
+			label = cmd + " network"
+		}
+		runner.writeLine("%s: %v", label, err)
+	}
+	runner.writeLine("%s", networkUsage(cmd))
+	return command.ParseExitCode(err)
+}
+
+func parseNetworkArgs(cmd string, args []string) (networkOptions, error) {
 	var options networkOptions
 	if cmd != "doctor" && cmd != "setup" {
-		return options, command.ParseInvalidOptionSyntax
+		return options, fmt.Errorf("unknown command %q", command.RedactToken(cmd))
 	}
 	if len(args) == 0 {
-		return options, command.ParseInvalidOptionSyntax
+		return options, errNetworkUsage
 	}
 	if command.IsHelpToken(args[0]) {
-		return options, command.ParseHelp
+		return options, command.ErrHelp
 	}
 	if args[0] != "network" {
-		return options, command.ParseInvalidOptionSyntax
+		return options, fmt.Errorf("unknown target %q", command.RedactToken(args[0]))
 	}
 	flags := command.NewFlagSet(cmd + " network")
 	flags.BoolVar(&options.jsonOutput, "json", false, "write the executable rule inspection as JSON")
@@ -131,14 +151,13 @@ func parseNetworkArgs(cmd string, args []string) (networkOptions, command.ParseO
 		flags.BoolVar(&options.remove, "remove", false, "remove only this executable's WindShare rules")
 		flags.BoolVar(&options.noninteractive, "non-interactive", false, "never request elevation")
 	}
-	outcome := command.ParseNoPositionals(flags, args[1:])
-	if outcome != command.ParseReady {
-		return options, outcome
+	if err := command.ParseNoPositionals(flags, args[1:]); err != nil {
+		return options, err
 	}
 	if options.skip && options.remove {
-		return options, command.ParseInvalidOptionValue
+		return options, errors.New("--skip and --remove cannot be used together")
 	}
-	return options, command.ParseReady
+	return options, nil
 }
 
 func IsInteractive(input io.Reader, output io.Writer) bool {

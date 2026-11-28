@@ -8,55 +8,37 @@ import (
 	"strings"
 )
 
-// ParseOutcome classifies flag parsing outcomes into a closed set so rejected
-// command-line values (such as accidentally pasted capability links or keys)
-// are never reflected back to terminal output.
-type ParseOutcome uint8
-
-const (
-	ParseReady ParseOutcome = iota
-	ParseHelp
-	ParseUnknownOption
-	ParseMissingOptionValue
-	ParseInvalidOptionValue
-	ParseInvalidOptionSyntax
-	ParseUnexpectedPositional
-	ParseInternalFailure
+var (
+	// ErrHelp reports that argument parsing stopped at a help flag.
+	ErrHelp = flag.ErrHelp
+	// ErrInternal reports a programming error such as a nil FlagSet.
+	ErrInternal = errors.New("command arguments could not be parsed")
 )
 
-// Diagnostic returns a closed, value-free human diagnostic for a non-ready parse outcome.
-func (outcome ParseOutcome) Diagnostic() string {
-	switch outcome {
-	case ParseUnknownOption:
-		return "unknown option"
-	case ParseMissingOptionValue:
-		return "option value is required"
-	case ParseInvalidOptionValue:
-		return "option value is invalid"
-	case ParseInvalidOptionSyntax:
-		return "option syntax is invalid"
-	case ParseUnexpectedPositional:
-		return "positional arguments are not accepted"
-	default:
-		return "command arguments could not be parsed"
-	}
-}
-
-// ExitCode maps a parse outcome to the process exit status contract.
-func (outcome ParseOutcome) ExitCode() ExitCode {
-	switch outcome {
-	case ParseReady, ParseHelp:
+// ParseExitCode maps a flag-parsing result to the process exit status contract.
+func ParseExitCode(err error) ExitCode {
+	switch {
+	case err == nil, errors.Is(err, ErrHelp):
 		return ExitOK
-	case ParseInternalFailure:
+	case errors.Is(err, ErrInternal):
 		return ExitFailure
 	default:
 		return ExitUsage
 	}
 }
 
-// NewFlagSet creates a FlagSet with a discard-only output sink because the
-// standard library quotes rejected option values in its error messages.
-// Human diagnostics are produced from ParseOutcome instead.
+// RedactToken strips any URL fragment from an echoed CLI token so an
+// accidentally pasted share link does not project its #key into error output.
+func RedactToken(token string) string {
+	prefix, _, hasFragment := strings.Cut(token, "#")
+	if !hasFragment {
+		return token
+	}
+	return prefix + "#<redacted>"
+}
+
+// NewFlagSet creates a FlagSet with a discard-only output sink because all wind
+// diagnostics flow through LineOutput and TerminalCanvas rather than raw stderr.
 func NewFlagSet(name string) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -64,102 +46,130 @@ func NewFlagSet(name string) *flag.FlagSet {
 	return fs
 }
 
-// ParseInterleaved preserves the standard flag package's per-option semantics
-// while allowing positional arguments and options to appear in any order.
-// Parsing one occurrence at a time lets the boundary classify failures from
-// option structure without inspecting value-bearing error text.
-func ParseInterleaved(fs *flag.FlagSet, args []string) ([]string, ParseOutcome) {
+// ParseInterleaved preserves standard flag per-option semantics while allowing
+// positional arguments and options to appear in any order.
+func ParseInterleaved(fs *flag.FlagSet, args []string) ([]string, error) {
 	return parseFlags(fs, args, true)
 }
 
-// ParseNoPositionals parses options with the same closed diagnostics as
+// ParseNoPositionals parses options with the same diagnostics as
 // ParseInterleaved, but rejects positional arguments immediately so trailing
 // tokens after an invalid positional or "--" cannot be reinterpreted as help.
-func ParseNoPositionals(fs *flag.FlagSet, args []string) ParseOutcome {
-	_, outcome := parseFlags(fs, args, false)
-	return outcome
+func ParseNoPositionals(fs *flag.FlagSet, args []string) error {
+	_, err := parseFlags(fs, args, false)
+	return err
 }
 
-func parseFlags(fs *flag.FlagSet, args []string, allowPositionals bool) ([]string, ParseOutcome) {
+func parseFlags(fs *flag.FlagSet, args []string, allowPositionals bool) ([]string, error) {
 	if fs == nil {
-		return nil, ParseInternalFailure
+		return nil, ErrInternal
 	}
 	var positionals []string
 	if allowPositionals {
 		positionals = make([]string, 0, len(args))
 	}
 	for len(args) > 0 {
-		if args[0] == "--" {
+		arg := args[0]
+		if arg == "--" {
 			if !allowPositionals {
 				if len(args) > 1 {
-					return nil, ParseUnexpectedPositional
+					return nil, fmt.Errorf("unexpected positional argument %q", RedactToken(args[1]))
 				}
-				return nil, ParseReady
+				return nil, nil
 			}
-			return append(positionals, args[1:]...), ParseReady
+			return append(positionals, args[1:]...), nil
 		}
-		occurrence := inspectFlagOccurrence(fs, args)
-		if occurrence.positional {
+		if len(arg) < 2 || arg[0] != '-' || arg == "-" {
 			if !allowPositionals {
-				return nil, ParseUnexpectedPositional
+				return nil, fmt.Errorf("unexpected positional argument %q", RedactToken(arg))
 			}
-			positionals = append(positionals, args[0])
+			positionals = append(positionals, arg)
 			args = args[1:]
 			continue
 		}
-		err := fs.Parse(args[:occurrence.width])
-		if errors.Is(err, flag.ErrHelp) {
-			return nil, ParseHelp
-		}
+		consumed, err := parseFlagOccurrence(fs, args)
 		if err != nil {
-			return nil, occurrence.failure
+			return nil, err
 		}
-		args = args[occurrence.width:]
+		args = args[consumed:]
 	}
-	return positionals, ParseReady
-}
-
-type flagOccurrence struct {
-	width      int
-	failure    ParseOutcome
-	positional bool
+	return positionals, nil
 }
 
 type boolFlag interface {
 	IsBoolFlag() bool
 }
 
-func inspectFlagOccurrence(fs *flag.FlagSet, args []string) flagOccurrence {
-	argument := args[0]
-	if len(argument) < 2 || argument[0] != '-' || argument == "-" {
-		return flagOccurrence{width: 1, positional: true}
-	}
+func parseFlagOccurrence(fs *flag.FlagSet, args []string) (int, error) {
+	arg := args[0]
 	numMinuses := 1
-	if argument[1] == '-' {
+	if arg[1] == '-' {
 		numMinuses++
-		if len(argument) == numMinuses {
-			return flagOccurrence{width: 1, positional: true}
-		}
 	}
-	nameAndValue := argument[numMinuses:]
+	nameAndValue := arg[numMinuses:]
 	if nameAndValue == "" || nameAndValue[0] == '-' || nameAndValue[0] == '=' {
-		return flagOccurrence{width: 1, failure: ParseInvalidOptionSyntax}
+		return 0, fmt.Errorf("invalid option syntax %q", RedactToken(arg))
 	}
-	name, _, hasValue := strings.Cut(nameAndValue, "=")
+	name, value, hasValue := strings.Cut(nameAndValue, "=")
 	registered := fs.Lookup(name)
 	if registered == nil {
-		return flagOccurrence{width: 1, failure: ParseUnknownOption}
+		if name == "h" || name == "help" {
+			return 0, ErrHelp
+		}
+		return 0, fmt.Errorf("unknown option %q", arg[:numMinuses]+RedactToken(name))
 	}
+	option := formatOptionName(registered.Name)
 	if candidate, ok := registered.Value.(boolFlag); ok && candidate.IsBoolFlag() {
-		return flagOccurrence{width: 1, failure: ParseInvalidOptionValue}
+		if !hasValue {
+			value = "true"
+		}
+		if err := fs.Set(registered.Name, value); err != nil {
+			return 0, formatOptionValueError(option, value, err)
+		}
+		return 1, nil
 	}
-	if hasValue {
-		return flagOccurrence{width: 1, failure: ParseInvalidOptionValue}
+	consumed := 1
+	if !hasValue {
+		if len(args) < 2 {
+			return 0, fmt.Errorf("%s requires a value", option)
+		}
+		value = args[1]
+		consumed = 2
 	}
-	if len(args) == 1 {
-		return flagOccurrence{width: 1, failure: ParseMissingOptionValue}
+	if err := fs.Set(registered.Name, value); err != nil {
+		return 0, formatOptionValueError(option, value, err)
 	}
-	return flagOccurrence{width: 2, failure: ParseInvalidOptionValue}
+	return consumed, nil
+}
+
+func formatOptionName(name string) string {
+	if len(name) == 1 {
+		return "-" + name
+	}
+	return "--" + name
+}
+
+func formatOptionValueError(option, value string, err error) error {
+	if containsOptionToken(err.Error(), option) {
+		return err
+	}
+	return fmt.Errorf("invalid value %q for %s: %w", RedactToken(value), option, err)
+}
+
+func containsOptionToken(message, option string) bool {
+	for rest := message; ; {
+		index := strings.Index(rest, option)
+		if index < 0 {
+			return false
+		}
+		beforeOK := index == 0 || rest[index-1] == ' '
+		after := index + len(option)
+		afterOK := after == len(rest) || rest[after] == ' ' || rest[after] == ':' || rest[after] == ',' || rest[after] == ';'
+		if beforeOK && afterOK {
+			return true
+		}
+		rest = rest[index+1:]
+	}
 }
 
 // WriteFlagHelp renders only registration-time metadata. PrintDefaults uses

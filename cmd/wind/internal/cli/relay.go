@@ -67,6 +67,7 @@ func (app *App) runRelay(ctx context.Context, args []string) (code int) {
 		app.writeCompleteLine("Pending relay setup cancelled.")
 		return ExitOK
 	default:
+		app.writeCompleteLine("relay: unknown action %q", command.RedactToken(args[0]))
 		app.writeCompleteLine("%s", relayUsage)
 		return ExitUsage
 	}
@@ -107,8 +108,8 @@ func (app *App) parseRelaySetupRequest(operation string, args []string) (relaySe
 }
 
 func (app *App) parseRelayURL(flags *flag.FlagSet, synopsis string, args []string) (string, requestParseOutcome) {
-	positionals, flagParse := command.ParseInterleaved(flags, args)
-	if outcome := app.projectFlagParse(flags.Name(), flags, synopsis, flagParse); outcome != requestParseReady {
+	positionals, err := command.ParseInterleaved(flags, args)
+	if outcome := app.projectFlagParse(flags.Name(), flags, synopsis, err); outcome != requestParseReady {
 		return "", outcome
 	}
 	if len(positionals) != 1 || positionals[0] == "" {

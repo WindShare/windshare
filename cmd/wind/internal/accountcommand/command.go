@@ -89,8 +89,8 @@ func Parse(args []string, output command.LineOutput) (Request, command.ExitCode,
 		req.action = action
 		flags := command.NewFlagSet("account " + action)
 		flags.BoolVar(&req.passwordStdin, "password-stdin", false, "read password from standard input")
-		positionals, outcome := command.ParseInterleaved(flags, rest)
-		if code, ok := projectAccountFlagParse(output, "account "+action, outcome); !ok {
+		positionals, err := command.ParseInterleaved(flags, rest)
+		if code, ok := projectAccountFlagParse(output, "account "+action, err); !ok {
 			return Request{}, code, false
 		}
 		if len(positionals) != 1 || positionals[0] == "" {
@@ -101,8 +101,8 @@ func Parse(args []string, output command.LineOutput) (Request, command.ExitCode,
 		return req, command.ExitOK, true
 	case "email", "verify":
 		flags := command.NewFlagSet("account " + action)
-		positionals, outcome := command.ParseInterleaved(flags, rest)
-		if code, ok := projectAccountFlagParse(output, "account "+action, outcome); !ok {
+		positionals, err := command.ParseInterleaved(flags, rest)
+		if code, ok := projectAccountFlagParse(output, "account "+action, err); !ok {
 			return Request{}, code, false
 		}
 		if len(positionals) != 1 || positionals[0] == "" {
@@ -111,8 +111,8 @@ func Parse(args []string, output command.LineOutput) (Request, command.ExitCode,
 		}
 		return Request{action: action, value: positionals[0]}, command.ExitOK, true
 	case "revoke":
-		positionals, outcome := parseRevokePositionals(rest)
-		if code, ok := projectAccountFlagParse(output, "account revoke", outcome); !ok {
+		positionals, err := parseRevokePositionals(rest)
+		if code, ok := projectAccountFlagParse(output, "account revoke", err); !ok {
 			return Request{}, code, false
 		}
 		if len(positionals) != 1 || positionals[0] == "" {
@@ -126,6 +126,7 @@ func Parse(args []string, output command.LineOutput) (Request, command.ExitCode,
 		}
 		return Request{action: action, credential: [16]byte(raw)}, command.ExitOK, true
 	default:
+		command.WriteLinef(output, "account: unknown action %q", command.RedactToken(action))
 		command.WriteLines(output, Usage)
 		return Request{}, command.ExitUsage, false
 	}
@@ -134,31 +135,30 @@ func Parse(args []string, output command.LineOutput) (Request, command.ExitCode,
 // parseRevokePositionals enforces revoke's option-free positional contract:
 // Base64URL credential IDs can legitimately start with "-", so non-help tokens
 // before "--" stay positional instead of failing as unknown options.
-func parseRevokePositionals(args []string) ([]string, command.ParseOutcome) {
+func parseRevokePositionals(args []string) ([]string, error) {
 	positionals := make([]string, 0, len(args))
 	for i, arg := range args {
 		if arg == "--" {
-			return append(positionals, args[i+1:]...), command.ParseReady
+			return append(positionals, args[i+1:]...), nil
 		}
 		if command.IsHelpFlag(arg) {
-			return nil, command.ParseHelp
+			return nil, command.ErrHelp
 		}
 		positionals = append(positionals, arg)
 	}
-	return positionals, command.ParseReady
+	return positionals, nil
 }
 
-func projectAccountFlagParse(output command.LineOutput, label string, outcome command.ParseOutcome) (command.ExitCode, bool) {
-	switch outcome {
-	case command.ParseReady:
+func projectAccountFlagParse(output command.LineOutput, label string, err error) (command.ExitCode, bool) {
+	if err == nil {
 		return command.ExitOK, true
-	case command.ParseHelp:
+	}
+	if errors.Is(err, command.ErrHelp) {
 		command.WriteLines(output, Usage)
 		return command.ExitOK, false
-	default:
-		command.WriteLinef(output, "%s: %s", label, outcome.Diagnostic())
-		return outcome.ExitCode(), false
 	}
+	command.WriteLinef(output, "%s: %v", label, err)
+	return command.ParseExitCode(err), false
 }
 
 func (runner Runner) Run(ctx context.Context, args []string) command.ExitCode {

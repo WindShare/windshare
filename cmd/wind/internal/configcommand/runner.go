@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -32,22 +33,23 @@ type Runner struct {
 }
 
 func (runner Runner) Run(ctx context.Context, args []string) command.ExitCode {
-	request, outcome, err := parse(args)
-	if outcome == command.ParseHelp {
+	request, err := parse(args)
+	if errors.Is(err, command.ErrHelp) {
 		runner.writeLine("%s", Usage)
 		return command.ExitOK
 	}
-	if outcome != command.ParseReady {
-		runner.writeLine("config import: %s", outcome.Diagnostic())
-		return outcome.ExitCode()
-	}
 	if err != nil {
-		if errors.Is(err, relayconfig.ErrFrontURL) {
-			runner.writeLine("config import: %s", err)
-		} else {
+		if errors.Is(err, errConfigUsage) {
 			runner.writeLine("%s", Usage)
+			return command.ExitUsage
 		}
-		return command.ExitUsage
+		if len(args) > 0 && args[0] != "import" {
+			runner.writeLine("config: %v", err)
+			runner.writeLine("%s", Usage)
+			return command.ExitUsage
+		}
+		runner.writeLine("config import: %v", err)
+		return command.ParseExitCode(err)
 	}
 	traceHandler := slog.DiscardHandler
 	if request.verbose && runner.TraceHandler != nil {
@@ -155,27 +157,32 @@ type importRequest struct {
 	frontURL string
 }
 
-func parse(args []string) (importRequest, command.ParseOutcome, error) {
+var errConfigUsage = errors.New("config usage")
+
+func parse(args []string) (importRequest, error) {
 	if len(args) > 0 && command.IsHelpToken(args[0]) {
-		return importRequest{}, command.ParseHelp, nil
+		return importRequest{}, command.ErrHelp
 	}
-	if len(args) == 0 || args[0] != "import" {
-		return importRequest{}, command.ParseReady, errors.New("expected import")
+	if len(args) == 0 {
+		return importRequest{}, errConfigUsage
+	}
+	if args[0] != "import" {
+		return importRequest{}, fmt.Errorf("unknown action %q", command.RedactToken(args[0]))
 	}
 	var request importRequest
 	flags := command.NewFlagSet("config import")
 	flags.BoolVar(&request.verbose, "v", false, "emit structured import diagnostics")
 	flags.BoolVar(&request.verbose, "verbose", false, "emit structured import diagnostics")
 	flags.StringVar(&request.frontURL, "front-url", "", "save this frontend base URL for future shares")
-	paths, outcome := command.ParseInterleaved(flags, args[1:])
-	if outcome != command.ParseReady {
-		return importRequest{}, outcome, nil
+	paths, err := command.ParseInterleaved(flags, args[1:])
+	if err != nil {
+		return importRequest{}, err
 	}
 	if len(paths) != 1 || paths[0] == "" {
-		return importRequest{}, command.ParseReady, errors.New("expected one input file or stdin")
+		return importRequest{}, errConfigUsage
 	}
-	// Validate after flag parsing so flag.Func cannot flatten the error category
-	// into a message that also echoes the rejected value. Omission stays valid.
+	// Validate after flag parsing so --front-url preserves relayconfig.ErrFrontURL
+	// while omitting the flag stays valid.
 	var frontErr error
 	flags.Visit(func(option *flag.Flag) {
 		if option.Name == "front-url" {
@@ -183,8 +190,8 @@ func parse(args []string) (importRequest, command.ParseOutcome, error) {
 		}
 	})
 	if frontErr != nil {
-		return importRequest{}, command.ParseReady, frontErr
+		return importRequest{}, frontErr
 	}
 	request.source = paths[0]
-	return request, command.ParseReady, nil
+	return request, nil
 }

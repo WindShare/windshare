@@ -17,56 +17,59 @@ type flagRequestParser struct {
 func (parser flagRequestParser) ParseRoot(
 	action string,
 	args []string,
-) (resumeRootRequest, command.ParseOutcome) {
+) (resumeRootRequest, error) {
 	flags := command.NewFlagSet(action)
 	var rootPath resumeRootPathFlag
 	flags.Var(&rootPath, "o", "output directory (required)")
-	outcome := command.ParseNoPositionals(flags, args)
-	if outcome != command.ParseReady {
-		if outcome != command.ParseHelp {
-			parser.logger.Logf("%s: %s", action, outcome.Diagnostic())
+	if err := command.ParseNoPositionals(flags, args); err != nil {
+		if !errors.Is(err, command.ErrHelp) {
+			parser.logger.Logf("%s: %v", action, err)
 		}
-		return resumeRootRequest{}, outcome
+		return resumeRootRequest{}, err
 	}
 	if !rootPath.set {
-		parser.logger.Logf("%s: -o is required", action)
-		return resumeRootRequest{}, command.ParseMissingOptionValue
+		err := errors.New("-o is required")
+		parser.logger.Logf("%s: %v", action, err)
+		return resumeRootRequest{}, err
 	}
 	absolute, err := absoluteResumeRoot(rootPath.value)
 	if err != nil {
-		parser.logger.Logf("%s: output directory is invalid", action)
-		return resumeRootRequest{}, command.ParseInvalidOptionValue
+		err := errors.New("output directory is invalid")
+		parser.logger.Logf("%s: %v", action, err)
+		return resumeRootRequest{}, err
 	}
-	return resumeRootRequest{rootPath: absolute}, command.ParseReady
+	return resumeRootRequest{rootPath: absolute}, nil
 }
 
-func (parser flagRequestParser) ParseDiscard(args []string) (resumeDiscardRequest, command.ParseOutcome) {
+func (parser flagRequestParser) ParseDiscard(args []string) (resumeDiscardRequest, error) {
 	flags := command.NewFlagSet("resume discard")
 	var rootPath resumeRootPathFlag
 	flags.Var(&rootPath, "o", "output directory (required)")
 	var item resumeItemNumberFlag
 	flags.Var(&item, "item", "one current inventory item number (required)")
-	outcome := command.ParseNoPositionals(flags, args)
-	if outcome != command.ParseReady {
-		if outcome != command.ParseHelp {
-			parser.logger.Logf("resume discard: %s", outcome.Diagnostic())
+	if err := command.ParseNoPositionals(flags, args); err != nil {
+		if !errors.Is(err, command.ErrHelp) {
+			parser.logger.Logf("resume discard: %v", err)
 		}
-		return resumeDiscardRequest{}, outcome
+		return resumeDiscardRequest{}, err
 	}
 	if !rootPath.set {
-		parser.logger.Logf("resume discard: -o is required")
-		return resumeDiscardRequest{}, command.ParseMissingOptionValue
+		err := errors.New("-o is required")
+		parser.logger.Logf("resume discard: %v", err)
+		return resumeDiscardRequest{}, err
 	}
 	if !item.set {
-		parser.logger.Logf("resume discard: --item is required")
-		return resumeDiscardRequest{}, command.ParseMissingOptionValue
+		err := errors.New("--item is required")
+		parser.logger.Logf("resume discard: %v", err)
+		return resumeDiscardRequest{}, err
 	}
 	absolute, err := absoluteResumeRoot(rootPath.value)
 	if err != nil {
-		parser.logger.Logf("resume discard: output directory is invalid")
-		return resumeDiscardRequest{}, command.ParseInvalidOptionValue
+		err := errors.New("output directory is invalid")
+		parser.logger.Logf("resume discard: %v", err)
+		return resumeDiscardRequest{}, err
 	}
-	return resumeDiscardRequest{rootPath: absolute, itemNumber: item.value}, command.ParseReady
+	return resumeDiscardRequest{rootPath: absolute, itemNumber: item.value}, nil
 }
 
 type resumeRootPathFlag struct {

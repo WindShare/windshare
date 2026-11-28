@@ -2,6 +2,7 @@ package command
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 	"slices"
 	"strings"
@@ -36,99 +37,130 @@ func TestHelpTokenClassification(t *testing.T) {
 	}
 }
 
+func TestRedactTokenStripsURLFragments(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"shrae", "shrae"},
+		{"--block-size", "--block-size"},
+		{"0x1000", "0x1000"},
+		{"https://ws.example/id#secret", "https://ws.example/id#<redacted>"},
+		{"#secret", "#<redacted>"},
+		{"https://ws.example/id#first#second", "https://ws.example/id#<redacted>"},
+	}
+	for _, tc := range tests {
+		if got := RedactToken(tc.input); got != tc.want {
+			t.Fatalf("RedactToken(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
 func TestParseInterleavedHandlesMixedPositionalsTerminatorAndErrors(t *testing.T) {
 	t.Run("interleaved options and positionals", func(t *testing.T) {
 		fs := NewFlagSet("example")
 		verbose := fs.Bool("v", false, "verbose")
 		target := fs.String("target", "", "target")
-		positionals, outcome := ParseInterleaved(fs, []string{"first", "-v", "--target", "--", "second", "--", "-literal", "--help"})
-		if outcome != ParseReady || !*verbose || *target != "--" || !slices.Equal(positionals, []string{"first", "second", "-literal", "--help"}) {
-			t.Fatalf("outcome=%v verbose=%v target=%q positionals=%q", outcome, *verbose, *target, positionals)
+		positionals, err := ParseInterleaved(fs, []string{"first", "-v", "--target", "--", "second", "--", "-literal", "--help"})
+		if err != nil || !*verbose || *target != "--" || !slices.Equal(positionals, []string{"first", "second", "-literal", "--help"}) {
+			t.Fatalf("err=%v verbose=%v target=%q positionals=%q", err, *verbose, *target, positionals)
 		}
 	})
 
 	t.Run("stdin dash stays positional", func(t *testing.T) {
 		fs := NewFlagSet("example")
 		verbose := fs.Bool("v", false, "verbose")
-		positionals, outcome := ParseInterleaved(fs, []string{"-", "-v"})
-		if outcome != ParseReady || !*verbose || !slices.Equal(positionals, []string{"-"}) {
-			t.Fatalf("outcome=%v verbose=%v positionals=%q", outcome, *verbose, positionals)
+		positionals, err := ParseInterleaved(fs, []string{"-", "-v"})
+		if err != nil || !*verbose || !slices.Equal(positionals, []string{"-"}) {
+			t.Fatalf("err=%v verbose=%v positionals=%q", err, *verbose, positionals)
 		}
 	})
 
 	t.Run("help before and after positional", func(t *testing.T) {
 		for _, args := range [][]string{{"-h"}, {"--help"}, {"-help"}, {"--h"}, {"--help=1"}, {"pos", "--help"}, {"--help", "pos"}} {
 			fs := NewFlagSet("example")
-			if _, outcome := ParseInterleaved(fs, args); outcome != ParseHelp {
-				t.Fatalf("args=%q outcome=%v want=%v", args, outcome, ParseHelp)
+			if _, err := ParseInterleaved(fs, args); !errors.Is(err, ErrHelp) || ParseExitCode(err) != ExitOK {
+				t.Fatalf("args=%q err=%v exit=%v", args, err, ParseExitCode(err))
 			}
 		}
 	})
 
-	t.Run("closed failure classifications", func(t *testing.T) {
+	t.Run("actionable parse diagnostics", func(t *testing.T) {
 		tests := []struct {
-			name        string
-			args        []string
-			wantOutcome ParseOutcome
-			wantExit    ExitCode
-			wantDiag    string
+			name     string
+			args     []string
+			wantExit ExitCode
+			wantErr  string
 		}{
-			{"unknown option", []string{"--nope"}, ParseUnknownOption, ExitUsage, "unknown option"},
-			{"missing value", []string{"--count"}, ParseMissingOptionValue, ExitUsage, "option value is required"},
-			{"invalid int value", []string{"--count", "secret"}, ParseInvalidOptionValue, ExitUsage, "option value is invalid"},
-			{"invalid equals value", []string{"--count=secret"}, ParseInvalidOptionValue, ExitUsage, "option value is invalid"},
-			{"invalid bool value", []string{"--flag=secret"}, ParseInvalidOptionValue, ExitUsage, "option value is invalid"},
-			{"triple dash", []string{"---flag"}, ParseInvalidOptionSyntax, ExitUsage, "option syntax is invalid"},
-			{"leading equals", []string{"--=flag"}, ParseInvalidOptionSyntax, ExitUsage, "option syntax is invalid"},
+			{"unknown long option", []string{"--nope"}, ExitUsage, `unknown option "--nope"`},
+			{"unknown short option", []string{"-x"}, ExitUsage, `unknown option "-x"`},
+			{"unknown option drops attached value", []string{"--nope=secret"}, ExitUsage, `unknown option "--nope"`},
+			{"missing long value", []string{"--count"}, ExitUsage, `--count requires a value`},
+			{"missing short value", []string{"-c"}, ExitUsage, `-c requires a value`},
+			{"invalid int value", []string{"--count", "abc"}, ExitUsage, `invalid value "abc" for --count: parse error`},
+			{"invalid equals value", []string{"--count=abc"}, ExitUsage, `invalid value "abc" for --count: parse error`},
+			{"invalid bool value", []string{"--flag=abc"}, ExitUsage, `invalid value "abc" for --flag: parse error`},
+			{"redacts fragment in invalid value", []string{"--count", "https://ws.example/id#secret"}, ExitUsage, `invalid value "https://ws.example/id#<redacted>" for --count: parse error`},
+			{"custom error already naming option", []string{"--item", "0"}, ExitUsage, `--item must be positive`},
+			{"custom error with incidental substring still names option", []string{"-o", "bad"}, ExitUsage, `invalid value "bad" for -o: read-only destination`},
+			{"triple dash", []string{"---flag"}, ExitUsage, `invalid option syntax "---flag"`},
+			{"leading equals", []string{"--=flag"}, ExitUsage, `invalid option syntax "--=flag"`},
 		}
 		for _, tc := range tests {
 			t.Run(tc.name, func(t *testing.T) {
 				fs := NewFlagSet("example")
 				fs.Int("count", 0, "count")
+				fs.Int("c", 0, "short count")
 				fs.Bool("flag", false, "flag")
-				_, outcome := ParseInterleaved(fs, tc.args)
-				if outcome != tc.wantOutcome || outcome.ExitCode() != tc.wantExit || outcome.Diagnostic() != tc.wantDiag {
-					t.Fatalf("outcome=%v exit=%v diag=%q", outcome, outcome.ExitCode(), outcome.Diagnostic())
+				fs.Func("item", "item", func(string) error { return errors.New("--item must be positive") })
+				fs.Func("o", "output", func(string) error { return errors.New("read-only destination") })
+				_, err := ParseInterleaved(fs, tc.args)
+				if err == nil || ParseExitCode(err) != tc.wantExit || err.Error() != tc.wantErr {
+					t.Fatalf("err=%v exit=%v want=%q", err, ParseExitCode(err), tc.wantErr)
 				}
 			})
 		}
 	})
 
-	t.Run("nil flag set fails closed", func(t *testing.T) {
-		_, outcome := ParseInterleaved(nil, []string{"-h"})
-		if outcome != ParseInternalFailure || outcome.ExitCode() != ExitFailure || outcome.Diagnostic() == "" {
-			t.Fatalf("outcome=%v exit=%v diag=%q", outcome, outcome.ExitCode(), outcome.Diagnostic())
+	t.Run("nil flag set fails as internal error", func(t *testing.T) {
+		_, err := ParseInterleaved(nil, []string{"-h"})
+		if !errors.Is(err, ErrInternal) || ParseExitCode(err) != ExitFailure || err.Error() == "" {
+			t.Fatalf("err=%v exit=%v", err, ParseExitCode(err))
 		}
 	})
 }
 
 func TestParseNoPositionalsRejectsPositionalsBeforeTrailingHelp(t *testing.T) {
-	for _, args := range [][]string{
-		{"-o", "dir", "--", "-h"},
-		{"-o", "dir", "--", "literal", "--help"},
-		{"-o", "dir", "literal", "-h"},
-		{"-o", "dir", "literal", "--help"},
+	for _, tc := range []struct {
+		args    []string
+		wantErr string
+	}{
+		{[]string{"-o", "dir", "--", "-h"}, `unexpected positional argument "-h"`},
+		{[]string{"-o", "dir", "--", "literal", "--help"}, `unexpected positional argument "literal"`},
+		{[]string{"-o", "dir", "literal", "-h"}, `unexpected positional argument "literal"`},
+		{[]string{"-o", "dir", "literal", "--help"}, `unexpected positional argument "literal"`},
+		{[]string{"-o", "dir", "https://ws.example/id#secret"}, `unexpected positional argument "https://ws.example/id#<redacted>"`},
 	} {
 		fs := NewFlagSet("example")
 		fs.String("o", "", "output")
-		outcome := ParseNoPositionals(fs, args)
-		if outcome != ParseUnexpectedPositional || outcome.ExitCode() != ExitUsage || outcome.Diagnostic() != "positional arguments are not accepted" {
-			t.Fatalf("args=%q outcome=%v", args, outcome)
+		err := ParseNoPositionals(fs, tc.args)
+		if err == nil || ParseExitCode(err) != ExitUsage || err.Error() != tc.wantErr {
+			t.Fatalf("args=%q err=%v want=%q", tc.args, err, tc.wantErr)
 		}
 	}
 
 	for _, value := range []string{"--", "-h", "--help"} {
 		fs := NewFlagSet("example")
 		out := fs.String("o", "", "output")
-		if outcome := ParseNoPositionals(fs, []string{"-o", value, "--"}); outcome != ParseReady || *out != value {
-			t.Fatalf("value=%q outcome=%v got=%q", value, outcome, *out)
+		if err := ParseNoPositionals(fs, []string{"-o", value, "--"}); err != nil || *out != value {
+			t.Fatalf("value=%q err=%v got=%q", value, err, *out)
 		}
 	}
 
 	fs := NewFlagSet("example")
 	fs.String("o", "", "output")
-	if outcome := ParseNoPositionals(fs, []string{"-o", "dir", "--help"}); outcome != ParseHelp || outcome.ExitCode() != ExitOK {
-		t.Fatalf("outcome=%v", outcome)
+	if err := ParseNoPositionals(fs, []string{"-o", "dir", "--help"}); !errors.Is(err, ErrHelp) || ParseExitCode(err) != ExitOK {
+		t.Fatalf("err=%v exit=%v", err, ParseExitCode(err))
 	}
 }
 

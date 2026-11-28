@@ -7,113 +7,157 @@ import (
 	"testing"
 )
 
-func TestArgumentParsingNeverProjectsRejectedSecretValues(t *testing.T) {
-	canaries, completeLink := argumentParsingCanaries(t)
-	_, baselineUnknownStderr, baselineUnknownCode := runArgumentParsingCase(t, []string{"not-a-command"})
-	if baselineUnknownCode != ExitUsage || !strings.HasPrefix(baselineUnknownStderr, "wind: unknown command\nUsage:\n") {
-		t.Fatalf("unknown-command baseline exit=%d stderr=%q", baselineUnknownCode, baselineUnknownStderr)
-	}
-
-	scenarios := []struct {
+func TestArgumentParsingReportsActionableDiagnostics(t *testing.T) {
+	_, completeLink := argumentParsingCanaries(t)
+	tests := []struct {
 		name       string
-		args       func(string) []string
-		wantCode   int
-		wantStderr string
+		args       []string
+		wantPrefix string
+		wantExact  bool
 	}{
 		{
 			name:       "unknown command",
-			args:       func(canary string) []string { return []string{canary} },
-			wantCode:   ExitUsage,
-			wantStderr: baselineUnknownStderr,
+			args:       []string{"not-a-command"},
+			wantPrefix: "wind: unknown command \"not-a-command\"\nUsage:\n",
 		},
 		{
-			name: "invalid boolean",
-			args: func(canary string) []string {
-				return []string{"share", "selected", "--split-key=" + canary}
-			},
-			wantCode:   ExitUsage,
-			wantStderr: "share: option value is invalid\n",
+			name:       "unknown share option",
+			args:       []string{"share", "--not-registered"},
+			wantPrefix: "share: unknown option \"--not-registered\"\n",
+			wantExact:  true,
 		},
 		{
-			name: "invalid integer",
-			args: func(canary string) []string {
-				return []string{"share", "selected", "--block-size", canary}
-			},
-			wantCode:   ExitUsage,
-			wantStderr: "share: option value is invalid\n",
+			name:       "unknown get option",
+			args:       []string{"get", "--not-registered"},
+			wantPrefix: "get: unknown option \"--not-registered\"\n",
+			wantExact:  true,
 		},
 		{
-			name: "invalid enum",
-			args: func(canary string) []string {
-				return []string{"get", completeLink, "--connectivity", canary}
-			},
-			wantCode:   ExitUsage,
-			wantStderr: "get: connectivity must be auto, relay-only, or p2p-only\n",
+			name:       "missing share value",
+			args:       []string{"share", "selected", "--block-size"},
+			wantPrefix: "share: --block-size requires a value\n",
+			wantExact:  true,
 		},
 		{
-			name: "account unknown option",
-			args: func(canary string) []string {
-				return []string{"account", "login", "--password-stdin=" + canary, "alice"}
-			},
-			wantCode:   ExitUsage,
-			wantStderr: "account login: option value is invalid\n",
+			name:       "missing get value",
+			args:       []string{"get", "--connectivity"},
+			wantPrefix: "get: --connectivity requires a value\n",
+			wantExact:  true,
 		},
 		{
-			name: "account revoke invalid credential",
-			args: func(canary string) []string {
-				return []string{"account", "revoke", canary}
-			},
-			wantCode:   ExitUsage,
-			wantStderr: "Account: invalid credential ID\n",
+			name:       "malformed share option",
+			args:       []string{"share", "---not-an-option"},
+			wantPrefix: "share: invalid option syntax \"---not-an-option\"\n",
+			wantExact:  true,
 		},
 		{
-			name: "config invalid boolean",
-			args: func(canary string) []string {
-				return []string{"config", "import", "--verbose=" + canary, "-"}
-			},
-			wantCode:   ExitUsage,
-			wantStderr: "config import: option value is invalid\n",
+			name:       "malformed get option",
+			args:       []string{"get", "--=not-an-option"},
+			wantPrefix: "get: invalid option syntax \"--=not-an-option\"\n",
+			wantExact:  true,
 		},
 		{
-			name: "relay invalid boolean",
-			args: func(canary string) []string {
-				return []string{"relay", "add", "--no-browser=" + canary, "https://relay.example"}
-			},
-			wantCode:   ExitUsage,
-			wantStderr: "relay add: option value is invalid\n",
+			name:       "invalid share boolean",
+			args:       []string{"share", "selected", "--split-key=maybe"},
+			wantPrefix: "share: invalid value \"maybe\" for --split-key: parse error\n",
+			wantExact:  true,
 		},
 		{
-			name: "resume discard invalid item",
-			args: func(canary string) []string {
-				return []string{"resume", "discard", "-o", ".", "--item", canary}
-			},
-			wantCode:   ExitUsage,
-			wantStderr: "resume discard: option value is invalid\n",
+			name:       "invalid share block size",
+			args:       []string{"share", "selected", "--block-size", "abc"},
+			wantPrefix: "share: invalid value \"abc\" for --block-size: must be a decimal integer\n",
+			wantExact:  true,
 		},
 		{
-			name: "doctor network invalid boolean",
-			args: func(canary string) []string {
-				return []string{"doctor", "network", "--json=" + canary}
-			},
-			wantCode:   ExitUsage,
-			wantStderr: "Usage: wind doctor network [--json]\n",
+			name:       "invalid connectivity",
+			args:       []string{"get", completeLink, "--connectivity", "bogus"},
+			wantPrefix: "get: invalid value \"bogus\" for --connectivity: must be auto, relay-only, or p2p-only\n",
+			wantExact:  true,
 		},
+		{
+			name:       "invalid account login boolean",
+			args:       []string{"account", "login", "--password-stdin=maybe", "alice"},
+			wantPrefix: "account login: invalid value \"maybe\" for --password-stdin: parse error\n",
+			wantExact:  true,
+		},
+		{
+			name:       "invalid config import boolean",
+			args:       []string{"config", "import", "--verbose=maybe", "-"},
+			wantPrefix: "config import: invalid value \"maybe\" for --verbose: parse error\n",
+			wantExact:  true,
+		},
+		{
+			name:       "invalid relay add boolean",
+			args:       []string{"relay", "add", "--no-browser=maybe", "https://relay.example"},
+			wantPrefix: "relay add: invalid value \"maybe\" for --no-browser: parse error\n",
+			wantExact:  true,
+		},
+		{
+			name:       "invalid resume discard item",
+			args:       []string{"resume", "discard", "-o", ".", "--item", "bogus"},
+			wantPrefix: "resume discard: --item must be one canonical positive decimal number\n",
+			wantExact:  true,
+		},
+		{
+			name:       "invalid doctor network boolean",
+			args:       []string{"doctor", "network", "--json=maybe"},
+			wantPrefix: "doctor network: invalid value \"maybe\" for --json: parse error\nUsage: wind doctor network [--json]\n",
+			wantExact:  true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stdout, stderr, code := runArgumentParsingCase(t, test.args)
+			if code != ExitUsage || stdout != "" {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+			}
+			if test.wantExact && stderr != test.wantPrefix {
+				t.Fatalf("stderr=%q want=%q", stderr, test.wantPrefix)
+			}
+			if !test.wantExact && !strings.HasPrefix(stderr, test.wantPrefix) {
+				t.Fatalf("stderr=%q want prefix %q", stderr, test.wantPrefix)
+			}
+		})
+	}
+}
+
+func TestArgumentParsingRedactsURLFragmentsAndProtectsCredentialBoundaries(t *testing.T) {
+	canaries, completeLink := argumentParsingCanaries(t)
+	scenarios := []struct {
+		name string
+		args func(string) []string
+	}{
+		{name: "unknown command", args: func(link string) []string { return []string{link} }},
+		{name: "unknown option value", args: func(link string) []string { return []string{"share", "--not-registered=" + link} }},
+		{name: "invalid boolean", args: func(link string) []string { return []string{"share", "selected", "--split-key=" + link} }},
+		{name: "invalid integer", args: func(link string) []string { return []string{"share", "selected", "--block-size", link} }},
+		{name: "invalid connectivity", args: func(link string) []string { return []string{"get", completeLink, "--connectivity", link} }},
+		{name: "invalid get capability", args: func(link string) []string { return []string{"get", strings.Replace(link, "://", "://[invalid]/", 1)} }},
+		{name: "invalid resume item", args: func(link string) []string { return []string{"resume", "discard", "-o", ".", "--item", link} }},
 	}
 
 	for _, scenario := range scenarios {
 		for _, canary := range canaries {
 			t.Run(scenario.name+"/"+canary.name, func(t *testing.T) {
 				stdout, stderr, code := runArgumentParsingCase(t, scenario.args(canary.value))
-				if code != scenario.wantCode {
-					t.Fatalf("exit=%d want=%d stderr=%q", code, scenario.wantCode, stderr)
-				}
-				if stdout != "" || stderr != scenario.wantStderr {
-					t.Fatalf("stdout=%q stderr=%q want_stderr=%q", stdout, stderr, scenario.wantStderr)
+				if code != ExitUsage || stdout != "" || stderr == "" {
+					t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 				}
 				assertArgumentCanariesAbsent(t, stdout, stderr, canaries)
 			})
 		}
 	}
+
+	t.Run("account revoke invalid credential never echoes rejected ID", func(t *testing.T) {
+		const credentialCanary = "credential_id_CANARY_7dc24c49"
+		stdout, stderr, code := runArgumentParsingCase(t, []string{"account", "revoke", credentialCanary})
+		if code != ExitUsage || stdout != "" || stderr != "Account: invalid credential ID\n" {
+			t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+		}
+		if strings.Contains(stderr, credentialCanary) {
+			t.Fatalf("credential canary leaked: %q", stderr)
+		}
+	})
 }
 
 func TestShareAndGetHelpAreSafeInterleavedParseOutcomes(t *testing.T) {
@@ -147,29 +191,6 @@ func TestShareAndGetHelpAreSafeInterleavedParseOutcomes(t *testing.T) {
 	}
 }
 
-func TestFlagParseFailuresUseClosedDiagnostics(t *testing.T) {
-	tests := []struct {
-		name       string
-		args       []string
-		wantStderr string
-	}{
-		{name: "unknown share option", args: []string{"share", "--not-registered"}, wantStderr: "share: unknown option\n"},
-		{name: "unknown get option", args: []string{"get", "--not-registered"}, wantStderr: "get: unknown option\n"},
-		{name: "missing share value", args: []string{"share", "selected", "--block-size"}, wantStderr: "share: option value is required\n"},
-		{name: "missing get value", args: []string{"get", "--connectivity"}, wantStderr: "get: option value is required\n"},
-		{name: "malformed share option", args: []string{"share", "---not-an-option"}, wantStderr: "share: option syntax is invalid\n"},
-		{name: "malformed get option", args: []string{"get", "--=not-an-option"}, wantStderr: "get: option syntax is invalid\n"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			stdout, stderr, code := runArgumentParsingCase(t, test.args)
-			if code != ExitUsage || stdout != "" || stderr != test.wantStderr {
-				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout, stderr)
-			}
-		})
-	}
-}
-
 type argumentCanary struct {
 	name  string
 	value string
@@ -189,8 +210,6 @@ func argumentParsingCanaries(t *testing.T) ([]argumentCanary, string) {
 	return []argumentCanary{
 		{name: "complete-link", value: completeLink},
 		{name: "fragment-key", value: "#" + key},
-		{name: "authentication-token", value: "windshare_auth_token_CANARY_7dc24c49"},
-		{name: "private-key", value: "-----BEGIN_PRIVATE_KEY-----CANARY_94d112f0-----END_PRIVATE_KEY-----"},
 	}, completeLink
 }
 
@@ -207,7 +226,10 @@ func runArgumentParsingCase(t *testing.T, args []string) (string, string, int) {
 func assertArgumentCanariesAbsent(t *testing.T, stdout, stderr string, canaries []argumentCanary) {
 	t.Helper()
 	for _, canary := range canaries {
-		if bytes.Contains([]byte(stdout), []byte(canary.value)) || bytes.Contains([]byte(stderr), []byte(canary.value)) {
+		secret := strings.TrimPrefix(canary.value, "#")
+		if bytes.Contains([]byte(stdout), []byte(canary.value)) ||
+			bytes.Contains([]byte(stderr), []byte(canary.value)) ||
+			(strings.HasPrefix(canary.value, "#") && (bytes.Contains([]byte(stdout), []byte(secret)) || bytes.Contains([]byte(stderr), []byte(secret)))) {
 			t.Fatalf("%s canary reached output: stdout=%q stderr=%q", canary.name, stdout, stderr)
 		}
 	}

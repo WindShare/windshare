@@ -5,6 +5,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -174,9 +175,7 @@ func (a *App) Run(ctx context.Context, args []string) int {
 	case "resume":
 		return a.runResume(ctx, args[1:])
 	default:
-		// A command token is untrusted input and can itself be a capability or
-		// private credential accidentally pasted in the wrong position.
-		a.writeCompleteLine("%s: unknown command", command.Name)
+		a.writeCompleteLine("%s: unknown command %q", command.Name, command.RedactToken(args[0]))
 		a.usage()
 		return ExitUsage
 	}
@@ -356,19 +355,18 @@ func (a *App) projectFlagParse(
 	name string,
 	fs *flag.FlagSet,
 	synopsis string,
-	outcome command.ParseOutcome,
+	err error,
 ) requestParseOutcome {
-	switch outcome {
-	case command.ParseReady:
+	if err == nil {
 		return requestParseReady
-	case command.ParseHelp:
+	}
+	if errors.Is(err, command.ErrHelp) {
 		command.WriteFlagHelp(a.stderrLines(), fs, synopsis)
 		return requestParseHelp
-	case command.ParseInternalFailure:
-		a.writeCompleteLine("%s: command arguments could not be parsed", name)
-		return requestParseInternalFailure
-	default:
-		a.writeCompleteLine("%s: %s", name, outcome.Diagnostic())
-		return requestParseUsageFailure
 	}
+	a.writeCompleteLine("%s: %v", name, err)
+	if errors.Is(err, command.ErrInternal) {
+		return requestParseInternalFailure
+	}
+	return requestParseUsageFailure
 }

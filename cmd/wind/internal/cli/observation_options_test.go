@@ -29,11 +29,11 @@ func TestObservationOptionsAliasesAndInterleavedFlags(t *testing.T) {
 			if err := bindObservationOptions(flags, &options); err != nil {
 				t.Fatal(err)
 			}
-			positionals, parse := command.ParseInterleaved(flags, []string{
+			positionals, err := command.ParseInterleaved(flags, []string{
 				"capability", alias, "--trace", "trace.ndjson", "selection",
 			})
-			if parse != command.ParseReady {
-				t.Fatalf("parse=%d", parse)
+			if err != nil {
+				t.Fatalf("err=%v", err)
 			}
 			target, targetErr := options.traceTarget()
 			expected, _ := diaglog.ExactFile("trace.ndjson")
@@ -82,11 +82,11 @@ func TestObservationOptionsModelOneMutuallyExclusiveTraceTarget(t *testing.T) {
 	if err := bindObservationOptions(flags, &directory); err != nil {
 		t.Fatal(err)
 	}
-	positionals, parse := command.ParseInterleaved(flags, []string{"source", "--trace-dir", "traces", "second"})
+	positionals, err := command.ParseInterleaved(flags, []string{"source", "--trace-dir", "traces", "second"})
 	target, targetErr := directory.traceTarget()
 	expected, _ := diaglog.RunDirectory("traces")
-	if parse != command.ParseReady || targetErr != nil || target != expected ||
+	if err != nil || targetErr != nil || target != expected ||
 		!reflect.DeepEqual(positionals, []string{"source", "second"}) {
-		t.Fatalf("parse=%d options=%+v positionals=%q", parse, directory, positionals)
+		t.Fatalf("err=%v options=%+v positionals=%q", err, directory, positionals)
 	}
 }

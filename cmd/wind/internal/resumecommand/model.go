@@ -5,7 +5,6 @@ import (
 	"errors"
 
 	"github.com/windshare/windshare/adapters/filesystem"
-	"github.com/windshare/windshare/cmd/wind/internal/command"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/output"
@@ -127,8 +126,8 @@ type resumeConfirmationTerminal interface {
 }
 
 type resumeRequestParser interface {
-	ParseRoot(string, []string) (resumeRootRequest, command.ParseOutcome)
-	ParseDiscard([]string) (resumeDiscardRequest, command.ParseOutcome)
+	ParseRoot(string, []string) (resumeRootRequest, error)
+	ParseDiscard([]string) (resumeDiscardRequest, error)
 }
 
 type resumeRenderer interface {

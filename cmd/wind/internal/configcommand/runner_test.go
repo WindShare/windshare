@@ -66,11 +66,11 @@ func TestImportFailureDoesNotSaveOrExposePrivateInput(t *testing.T) {
 		want        command.ExitCode
 		saves       int
 	}{
-		{name: "unknown action", args: []string{"secret-canary"}, want: command.ExitUsage},
+		{name: "unknown action", args: []string{"unknown-action"}, want: command.ExitUsage},
 		{name: "missing action", want: command.ExitUsage},
 		{name: "missing file", args: []string{"import"}, want: command.ExitUsage},
 		{name: "multiple files", args: []string{"import", "-", "secret-canary"}, want: command.ExitUsage},
-		{name: "unknown option", args: []string{"import", "--secret-canary"}, want: command.ExitUsage},
+		{name: "unknown option", args: []string{"import", "--unknown-option"}, want: command.ExitUsage},
 		{name: "unreadable file", args: []string{"import", filepath.Join(t.TempDir(), "secret-canary")}, want: command.ExitFailure},
 		{name: "invalid input", args: []string{"import", "-"}, input: "secret-canary", want: command.ExitUsage},
 		{name: "empty set", args: []string{"import", "-"}, input: `{"profiles":null}`, want: command.ExitUsage},
@@ -144,12 +144,12 @@ func TestImportReportsTheRejectedRelayField(t *testing.T) {
 
 func TestImportParsePreservesFrontendValidationCause(t *testing.T) {
 	for _, raw := range []string{"", "https://front.example/app\u00a0", "https://front.example/app\u0085", "wss://front.example"} {
-		if _, outcome, err := parse([]string{"import", "-", "--front-url", raw}); outcome != command.ParseReady || !errors.Is(err, relayconfig.ErrFrontURL) {
-			t.Fatalf("parse lost frontend validation cause for %q: outcome=%v err=%v", raw, outcome, err)
+		if _, err := parse([]string{"import", "-", "--front-url", raw}); !errors.Is(err, relayconfig.ErrFrontURL) {
+			t.Fatalf("parse lost frontend validation cause for %q: err=%v", raw, err)
 		}
 	}
-	if _, outcome, err := parse([]string{"import", "-"}); outcome != command.ParseReady || err != nil {
-		t.Fatalf("omitted frontend override was rejected: outcome=%v err=%v", outcome, err)
+	if _, err := parse([]string{"import", "-"}); err != nil {
+		t.Fatalf("omitted frontend override was rejected: err=%v", err)
 	}
 }
 
@@ -240,8 +240,8 @@ func TestImportParseKeepsTerminatorAndInterleavedSemantics(t *testing.T) {
 		{"import", "--front-url", "--", "relay.json", "-v"},
 		{"import", "--front-url=--", "relay.json", "-v"},
 	} {
-		if _, outcome, err := parse(args); outcome != command.ParseReady || !errors.Is(err, relayconfig.ErrFrontURL) {
-			t.Fatalf("parse(%q) = outcome=%v err=%v, want frontend URL error", args[1:], outcome, err)
+		if _, err := parse(args); !errors.Is(err, relayconfig.ErrFrontURL) {
+			t.Fatalf("parse(%q) = err=%v, want frontend URL error", args[1:], err)
 		}
 	}
 	for _, tc := range []struct {
@@ -257,15 +257,15 @@ func TestImportParseKeepsTerminatorAndInterleavedSemantics(t *testing.T) {
 		{[]string{"import", "--", "-"}, "-", false, ""},
 		{[]string{"import", "--", "--verbose"}, "--verbose", false, ""},
 	} {
-		request, outcome, err := parse(tc.args)
-		if outcome != command.ParseReady || err != nil || request.source != tc.source || request.verbose != tc.verbose || request.frontURL != tc.frontURL {
-			t.Fatalf("parse(%q) = %+v outcome=%v err=%v", tc.args[1:], request, outcome, err)
+		request, err := parse(tc.args)
+		if err != nil || request.source != tc.source || request.verbose != tc.verbose || request.frontURL != tc.frontURL {
+			t.Fatalf("parse(%q) = %+v err=%v", tc.args[1:], request, err)
 		}
 	}
-	if _, outcome, err := parse([]string{"import", "--", "relay.json", "--verbose"}); outcome == command.ParseReady && err == nil {
+	if _, err := parse([]string{"import", "--", "relay.json", "--verbose"}); err == nil {
 		t.Fatal("parse accepted extra arguments after --")
 	}
-	if _, outcome, err := parse([]string{"import", "--help"}); outcome != command.ParseHelp || err != nil {
-		t.Fatalf("parse(import --help) = outcome=%v err=%v", outcome, err)
+	if _, err := parse([]string{"import", "--help"}); !errors.Is(err, command.ErrHelp) {
+		t.Fatalf("parse(import --help) = err=%v, want ErrHelp", err)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/windshare/windshare/cmd/wind/internal/command"
@@ -124,5 +125,33 @@ func TestCIAndRedirectedStreamsNeverAuthorizeElevation(t *testing.T) {
 	t.Setenv("CI", "false")
 	if IsInteractive(&bytes.Buffer{}, &bytes.Buffer{}) {
 		t.Fatal("redirected streams were interactive")
+	}
+}
+
+func TestNetworkCommandReportsActionableParseDiagnostics(t *testing.T) {
+	tests := []struct {
+		name string
+		cmd  string
+		args []string
+		want string
+	}{
+		{"unknown target", "doctor", []string{"firewall"}, `doctor: unknown target "firewall"`},
+		{"unknown option", "doctor", []string{"network", "--skip"}, `doctor network: unknown option "--skip"`},
+		{"unexpected positional", "doctor", []string{"network", "extra"}, `doctor network: unexpected positional argument "extra"`},
+		{"conflicting setup flags", "setup", []string{"network", "--skip", "--remove"}, "setup network: --skip and --remove cannot be used together"},
+		{"invalid json flag", "doctor", []string{"network", "--json=maybe"}, `doctor network: invalid value "maybe" for --json: parse error`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var lines recordedLines
+			runner := Runner{Service: &fakeService{}, Output: &lines}
+			if code := runner.Run(t.Context(), tc.cmd, tc.args); code != command.ExitUsage {
+				t.Fatalf("code=%d lines=%q", code, lines)
+			}
+			joined := strings.Join(lines, "\n")
+			if !strings.Contains(joined, tc.want) || !strings.Contains(joined, "Usage:") {
+				t.Fatalf("output=%q want=%q", joined, tc.want)
+			}
+		})
 	}
 }

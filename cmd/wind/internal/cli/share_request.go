@@ -29,13 +29,13 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 	var relayURLs []string
 	flags.Func("relay", "override saved relay selection; repeat to use multiple relays", func(value string) error {
 		if value == "" {
-			return errors.New("relay URL is empty")
+			return errors.New("--relay URL must not be empty")
 		}
 		if slices.Contains(relayURLs, value) {
 			return nil
 		}
 		if len(relayURLs) >= relayprofile.MaximumEndpoints {
-			return errors.New("too many relay endpoints")
+			return errors.New("too many --relay endpoints")
 		}
 		relayURLs = append(relayURLs, value)
 		return nil
@@ -47,7 +47,7 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 		catalog.MinChunkSize, catalog.MaxChunkSize), func(value string) error {
 		parsed, err := strconv.ParseInt(value, 10, 64)
 		if err != nil {
-			return err
+			return errors.New("must be a decimal integer")
 		}
 		blockSize = parsed
 		return nil
@@ -61,8 +61,8 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 		a.writeCompleteLine("share: observation options are unavailable")
 		return shareRequest{}, requestParseInternalFailure
 	}
-	paths, flagParse := command.ParseInterleaved(flags, args)
-	if parse := a.projectFlagParse("share", flags, "share <path...> [options]", flagParse); parse != requestParseReady {
+	paths, err := command.ParseInterleaved(flags, args)
+	if parse := a.projectFlagParse("share", flags, "share <path...> [options]", err); parse != requestParseReady {
 		return shareRequest{}, parse
 	}
 	if err := observation.validate(); err != nil {

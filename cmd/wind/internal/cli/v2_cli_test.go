@@ -26,9 +26,9 @@ import (
 func TestParseInterleavedV2Flags(t *testing.T) {
 	flags := command.NewFlagSet("share")
 	relay := flags.String("relay", "", "")
-	positionals, outcome := command.ParseInterleaved(flags, []string{"first", "--relay", "ws://relay.example", "second"})
-	if outcome != command.ParseReady || *relay != "ws://relay.example" || strings.Join(positionals, ",") != "first,second" {
-		t.Fatalf("parse result = %v %q %v", positionals, *relay, outcome)
+	positionals, err := command.ParseInterleaved(flags, []string{"first", "--relay", "ws://relay.example", "second"})
+	if err != nil || *relay != "ws://relay.example" || strings.Join(positionals, ",") != "first,second" {
+		t.Fatalf("parse result = %v %q %v", positionals, *relay, err)
 	}
 }
 
