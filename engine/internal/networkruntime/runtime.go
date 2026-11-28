@@ -147,6 +147,13 @@ func (r *Runtime) Plan(ctx context.Context, intent relayprofile.Intent, frontend
 	}
 	only := intent.Mode() != relayprofile.Planned
 	front := r.frontend(frontend)
+	if front.primary != "" {
+		// Validate before deriving community scope or bootstrapping so malformed
+		// explicit overrides cannot latch r.communityOrigin or wake background probes.
+		if err := relayconfig.ValidateFrontURL(front.primary); err != nil {
+			return Selection{}, err
+		}
+	}
 	scope := r.scope(front.primary)
 	var allowed bool
 	var settings relayconfig.Config
@@ -179,11 +186,6 @@ func (r *Runtime) Plan(ctx context.Context, intent relayprofile.Intent, frontend
 	result.Frontend, result.AlternateFrontend, result.Decision.FrontendReason = front.primary, front.alternate, front.reason
 	// Only these release frontends are built against this directory's trust roots.
 	result.useAliases = result.Frontend != "" && (result.Frontend == r.config.LinkHost || result.Frontend == r.config.BackupEntry)
-	if result.Frontend != "" {
-		if err := relayconfig.ValidateFrontURL(result.Frontend); err != nil {
-			return Selection{}, err
-		}
-	}
 	for _, candidate := range plan.Configured {
 		result.Decision.Candidates = append(result.Decision.Candidates, decisionCandidate(candidate))
 	}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/windshare/windshare/connectivity/networkstate"
 	"github.com/windshare/windshare/core/diagnostics"
+	"github.com/windshare/windshare/core/urlhost"
 )
 
 const frontendTimeout = 3 * time.Second
@@ -58,8 +59,12 @@ func sameFrontendBase(left, right string) bool {
 	if firstErr != nil || secondErr != nil {
 		return left == right
 	}
-	return strings.EqualFold(first.Scheme, second.Scheme) &&
-		strings.EqualFold(first.Host, second.Host) &&
+	firstOrigin, firstOriginErr := urlhost.Origin(first)
+	secondOrigin, secondOriginErr := urlhost.Origin(second)
+	if firstOriginErr != nil || secondOriginErr != nil {
+		return left == right
+	}
+	return firstOrigin == secondOrigin &&
 		strings.TrimSuffix(first.Path, "/") == strings.TrimSuffix(second.Path, "/")
 }
 
