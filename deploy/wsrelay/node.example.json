@@ -1,15 +1,18 @@
 {
-  "listen": "0.0.0.0:8484",
+  "listen": "127.0.0.1:8484",
   "database": "relay.sqlite",
   "identity_file": "identity.json",
   "endpoint": "wss://relay.example.com/v2/ws",
-  "origins": { "kind": "allowlist", "origins": ["https://ws.ourworld.top", "https://windshare.cc", "https://app.example.com"] },
+  "origins": { "kind": "public" },
+  "proxy": { "peers": ["127.0.0.1"], "header": "X-Windshare-Source-Ip" },
   "node": {
     "zone": "global",
-    "region": "",
     "services": { "relay": true, "stun": true },
-    "capacity_bytes_per_second": 12500000,
-    "contribution": { "daily_bytes": 10737418240, "bytes_per_second": 3125000 },
-    "access": { "anonymous": true }
+    "access": { "anonymous": true },
+    "bootstrap_nodes": [
+      "https://cn1.ourworld.top",
+      "https://us1.windshare.cc",
+      "https://eu1.windshare.cc"
+    ]
   }
 }

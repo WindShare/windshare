@@ -451,7 +451,7 @@ async fn direct_upgrade_uses_socket_ip_without_port_or_forwarded_header_bypass()
 
 #[tokio::test]
 async fn exhausted_public_budget_refuses_unowned_upgrades() {
-    use crate::node::{ContributionLimits, Settings};
+    use crate::node::{Ceiling, Settings};
     let ingress = ingress(16);
     let directory = tempfile::tempdir().unwrap();
     let store = crate::Database::open(
@@ -460,7 +460,7 @@ async fn exhausted_public_budget_refuses_unowned_upgrades() {
     )
     .unwrap();
     let settings = Settings {
-        contribution: ContributionLimits {
+        ceiling: Ceiling {
             daily_bytes: Some(0),
             ..Default::default()
         },
@@ -479,4 +479,123 @@ async fn exhausted_public_budget_refuses_unowned_upgrades() {
     assert!(response.starts_with("HTTP/1.1 503 "), "{response}");
     assert!(response.contains("retry-after: 30\r\n"), "{response}");
     assert!(unknown.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn console_contribution_post_updates_discovery_synchronously_without_retaining_lease() {
+    use crate::node::{Ceiling, Identity, Settings};
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+
+    let directory = tempfile::tempdir().unwrap();
+    let db_path = directory.path().join("node.sqlite");
+    let ingress = Ingress {
+        endpoint: Endpoint::parse("wss://relay.test/v2/ws").unwrap(),
+        ..ingress(32)
+    };
+    let identity = Identity::generate().unwrap();
+    let token = identity.initialization_token();
+    let store = crate::Database::open(&db_path, ingress.endpoint.identity).unwrap();
+    ingress.node.identify(identity).unwrap();
+    ingress
+        .node
+        .configure(
+            Settings {
+                ceiling: Ceiling {
+                    bytes_per_second: Some(4_000_000),
+                    connections: Some(12),
+                    ..Default::default()
+                },
+                ..Settings::default()
+            },
+            store.clone(),
+        )
+        .unwrap();
+    ingress
+        .node
+        .open_console(&ingress.endpoint, &store)
+        .unwrap();
+    drop(store);
+
+    let init_body = serde_json::json!({
+        "token": token,
+        "password": "development-password",
+    })
+    .to_string();
+    let init_request = format!(
+        "POST /api/initialize HTTP/1.1\r\nHost: relay.test\r\nOrigin: https://relay.test\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{init_body}",
+        init_body.len()
+    );
+    let (init_response, upgraded) = exchange(&ingress, &init_request).await;
+    assert!(
+        init_response.starts_with("HTTP/1.1 200 "),
+        "{init_response}"
+    );
+    assert!(upgraded.unwrap().is_none());
+    let cookie = init_response
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("set-cookie")
+                .then(|| value.trim().split(';').next().unwrap().to_owned())
+        })
+        .expect("admin session cookie");
+
+    let (session_response, _) = exchange(
+        &ingress,
+        &format!("GET /api/session HTTP/1.1\r\nHost: relay.test\r\nCookie: {cookie}\r\n\r\n"),
+    )
+    .await;
+    assert!(
+        session_response.starts_with("HTTP/1.1 200 "),
+        "{session_response}"
+    );
+    let session_body: serde_json::Value =
+        serde_json::from_str(session_response.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    assert_eq!(session_body["capabilities"]["contribution"], true);
+
+    let update_body = serde_json::json!({
+        "enabled": false,
+        "daily_bytes": 1_048_576,
+        "bytes_per_second": 2_000_000,
+        "connections": 64,
+        "host_uplink": 20_000_000,
+    })
+    .to_string();
+    let update_request = format!(
+        "POST /api/contribution HTTP/1.1\r\nHost: relay.test\r\nOrigin: https://relay.test\r\nCookie: {cookie}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{update_body}",
+        update_body.len()
+    );
+    let (update_response, _) = exchange(&ingress, &update_request).await;
+    assert!(
+        update_response.starts_with("HTTP/1.1 200 "),
+        "{update_response}"
+    );
+    let receipt: serde_json::Value =
+        serde_json::from_str(update_response.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    assert_eq!(receipt["disabled_notice"], true);
+
+    // Without running Runtime::maintain, discovery must reflect the update immediately.
+    let (discovery_response, _) = exchange(
+        &ingress,
+        "GET /.well-known/windshare HTTP/1.1\r\nHost: relay.test\r\n\r\n",
+    )
+    .await;
+    assert!(
+        discovery_response.starts_with("HTTP/1.1 200 "),
+        "{discovery_response}"
+    );
+    let envelope: serde_json::Value =
+        serde_json::from_str(discovery_response.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    let payload = URL_SAFE_NO_PAD
+        .decode(envelope["descriptor"].as_str().unwrap())
+        .unwrap();
+    let descriptor: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+    assert_eq!(descriptor["public_relay"]["state"], "disabled");
+    assert_eq!(descriptor["public_capacity_bytes_per_second"], 4_000_000);
+    assert_eq!(ingress.node.access.public_connections(), 12);
+
+    // Dropping Ingress must release Runtime and Console cleanly with no Arc cycle leaking the DB lease.
+    let identity = ingress.endpoint.identity;
+    drop(ingress);
+    assert!(crate::Database::open(&db_path, identity).is_ok());
 }

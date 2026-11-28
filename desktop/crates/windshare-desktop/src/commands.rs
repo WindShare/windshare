@@ -76,6 +76,14 @@ impl Desktop {
             Action::ConfigureShare(id) => self.configure_share(id, window, cx),
             Action::OpenAccount => self.open_account(window, cx),
             Action::ReloadAccountSelection => self.reload_account_selection(cx),
+            Action::DismissCommunityNotice => {
+                if self.community_notice.dismiss() {
+                    tracing::info!(
+                        event = "desktop.community_notice_dismissed",
+                        session = std::process::id(),
+                    );
+                }
+            }
             Action::ChooseShareRelays(id) => self.open_sharing_setup(Some(id), window, cx),
             Action::SettingsSection(section) => self.select_settings_section(section, window, cx),
             Action::ResumeShare(id) => self.resume_native_share(id, cx),

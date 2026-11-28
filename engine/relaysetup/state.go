@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/windshare/windshare/core/serviceauthority"
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relayprofile"
 )
@@ -24,16 +25,19 @@ const (
 )
 
 type setupIntent struct {
-	ManagedTurn      bool      `json:"managed_turn,omitempty"`
-	SettingsRevision string    `json:"settings_revision"`
-	OperationID      string    `json:"operation_id"`
-	RelayURL         string    `json:"relay_url"`
-	ConsoleURL       string    `json:"console_url"`
-	OfferedFrontend  string    `json:"offered_frontend,omitempty"`
-	AccountLoginPage string    `json:"account_login_page,omitempty"`
-	DeviceName       string    `json:"device_name"`
-	ClaimSecret      string    `json:"claim_secret"`
-	Operation        Operation `json:"operation"`
+	Node             relayprofile.NodeIdentity    `json:"node,omitzero"`
+	GuestAvailable   bool                         `json:"guest_available,omitempty"`
+	PublicRelay      serviceauthority.PublicRelay `json:"public_relay,omitempty"`
+	ManagedTurn      bool                         `json:"managed_turn,omitempty"`
+	SettingsRevision string                       `json:"settings_revision"`
+	OperationID      string                       `json:"operation_id"`
+	RelayURL         string                       `json:"relay_url"`
+	ConsoleURL       string                       `json:"console_url"`
+	OfferedFrontend  string                       `json:"offered_frontend,omitempty"`
+	AccountLoginPage string                       `json:"account_login_page,omitempty"`
+	DeviceName       string                       `json:"device_name"`
+	ClaimSecret      string                       `json:"claim_secret"`
+	Operation        Operation                    `json:"operation"`
 }
 
 type enrollment struct {
@@ -45,8 +49,9 @@ type enrollment struct {
 	AccountInvitation string `json:"account_invitation,omitempty"`
 }
 type credential struct {
-	AccessKey string `json:"access_key"`
-	ID        string `json:"id"`
+	Role      relayprofile.CredentialRole `json:"role,omitempty"`
+	AccessKey string                      `json:"access_key"`
+	ID        string                      `json:"id"`
 }
 
 // The private sum type prevents a caller from combining a cancellation with an
@@ -125,7 +130,7 @@ func (pending *PendingSetup) validate() error {
 	if console.Scheme != "https" && console.Hostname() != "localhost" && !net.ParseIP(console.Hostname()).IsLoopback() {
 		return invalid
 	}
-	candidate := relayprofile.Candidate{PublicURL: pending.RelayURL, AccessKey: pending.credential().AccessKey}
+	candidate := relayprofile.Candidate{PublicURL: pending.RelayURL, Role: pending.credential().Role, AccessKey: pending.credential().AccessKey}
 	if candidate.Validate() != nil {
 		return invalid
 	}

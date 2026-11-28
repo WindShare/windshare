@@ -72,7 +72,7 @@ function setupCommand(target: URL, trust: NodeSetup, { zone, capacityMbps }: Set
     node: {
       zone,
       // Explicit measured egress capacity keeps node-wide fair scheduling active on first boot.
-      capacity_bytes_per_second: capacityMbps * BYTES_PER_MBPS,
+      ceiling: { bytes_per_second: capacityMbps * BYTES_PER_MBPS },
       services: { relay: true, stun: true },
       stun_urls: ['stun:' + target.hostname + ':3478'],
       authority: { url: trust.url, issuer: trust.issuer },

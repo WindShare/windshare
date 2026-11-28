@@ -34,12 +34,12 @@ fn account_contract_vectors_match_go_and_browser() {
         &authority.signing.key,
     ));
     let descriptor = serde_json::to_vec(&serde_json::json!({
-        "version":2,"node_key":URL_SAFE_NO_PAD.encode(node.verifying_key().to_bytes()),
+        "version":2,"platform":"native","node_key":URL_SAFE_NO_PAD.encode(node.verifying_key().to_bytes()),
         "node_id":URL_SAFE_NO_PAD.encode(Sha256::new().chain_update(b"windshare/node-identity/v1\0").chain_update(node.verifying_key().to_bytes()).finalize()),
         "relay_endpoint":"wss://node.example/v2/ws","services":{"relay":true,"stun":false},
-        "stun":[],"zone":"global","region":"test","capacity_bytes_per_second":1_000_000,
+        "stun":[],"zone":"global","region":"test","public_capacity_bytes_per_second":1_000_000,
         "classes":["owner","standard","lowest"],"issued_at":authority.environment.now(),
-        "expires_at":authority.environment.now()+300,"relay_available":true,"anonymous":true
+        "expires_at":authority.environment.now()+300,"public_relay":{"state":"enabled","anonymous":true}
     })).unwrap();
     let signed = trust::sign(b"windshare/node-descriptor/v2\0", &descriptor, &node);
     let data = serde_json::to_vec_pretty(&serde_json::json!({

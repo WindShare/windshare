@@ -381,6 +381,23 @@ impl Desktop {
         }
     }
 
+    pub fn guest_sharing_setup(&mut self, cx: &mut Context<Self>) {
+        let Runtime::Native(session) = &self.runtime else {
+            return;
+        };
+        let store = session.host.read(cx);
+        if store.selection_disabled() {
+            return;
+        }
+        let Some(setup_id) = store.model().setup.context().map(|ctx| ctx.id.clone()) else {
+            return;
+        };
+        let host = session.host.clone();
+        if host.update(cx, |host, cx| host.guest_setup(&setup_id, cx)) {
+            self.network_ui.inline_request_id = Some(setup_id);
+        }
+    }
+
     pub fn approve_relay(&self, cx: &Context<Self>) {
         if let Runtime::Native(session) = &self.runtime
             && let Setup::Running {

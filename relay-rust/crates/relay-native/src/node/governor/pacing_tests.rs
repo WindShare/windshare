@@ -109,11 +109,8 @@ fn public_ceiling_limits_only_public_frames_with_or_without_node_capacity() {
         assert!(scheduler.request(1, head(1, Class::Standard, MAX_FRAME)));
         assert_eq!(serve(&mut scheduler, now), None);
         assert!(scheduler.request(2, head(2, Class::Owner, MAX_FRAME / 2)));
-        if node_rate.is_some() {
-            assert_eq!(serve(&mut scheduler, now), None);
-        }
+        assert_eq!(serve(&mut scheduler, now), Some((2, MAX_FRAME / 2)));
         let later = now + Duration::from_millis(250);
-        assert_eq!(serve(&mut scheduler, later), Some((2, MAX_FRAME / 2)));
         assert_eq!(serve(&mut scheduler, later), None);
         assert_eq!(
             serve(&mut scheduler, now + Duration::from_secs(1)),

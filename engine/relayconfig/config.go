@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/windshare/windshare/connectivity/publicdial"
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/engine/internal/configjson"
 	"github.com/windshare/windshare/engine/internal/statefile"
@@ -18,9 +19,10 @@ import (
 )
 
 const (
-	PathEnvironment = "WINDSHARE_CONFIG"
-	maxConfigBytes  = 64 * 1024
-	MaximumProfiles = 64
+	PathEnvironment       = "WINDSHARE_CONFIG"
+	maxConfigBytes        = 64 * 1024
+	MaximumProfiles       = 64
+	MaximumBootstrapNodes = 16
 )
 
 var (
@@ -31,10 +33,12 @@ var (
 )
 
 type Config struct {
+	BootstrapNodes []string
 	TURNServices   []TURNService
 	FrontURL       string
 	Profiles       []relayprofile.Candidate
 	ActiveRelays   []string
+	CommunityNodes *bool
 	ConfiguredOnly bool
 }
 
@@ -43,18 +47,22 @@ type Config struct {
 func emptyConfig() Config { return Config{Profiles: []relayprofile.Candidate{}} }
 
 type document struct {
+	BootstrapNodes []string      `json:"bootstrap_nodes,omitempty"`
 	TURNServices   []TURNService `json:"turn_services,omitempty"`
 	FrontURL       string        `json:"front_url,omitempty"`
 	Profiles       []savedRelay  `json:"profiles"`
 	ActiveRelays   []string      `json:"active_relays,omitempty"`
+	CommunityNodes *bool         `json:"community_nodes,omitempty"`
 	ConfiguredOnly bool          `json:"configured_relays_only,omitempty"`
 }
 type savedRelay struct {
-	ManagedTurn     bool   `json:"managed_turn,omitempty"`
-	URL             string `json:"url"`
-	ConsoleURL      string `json:"console_url,omitempty"`
-	OfferedFrontend string `json:"offered_frontend,omitempty"`
-	AccessKey       string `json:"access_key,omitempty"`
+	Node            relayprofile.NodeIdentity   `json:"node,omitzero"`
+	Role            relayprofile.CredentialRole `json:"credential_role,omitempty"`
+	ManagedTurn     bool                        `json:"managed_turn,omitempty"`
+	URL             string                      `json:"url"`
+	ConsoleURL      string                      `json:"console_url,omitempty"`
+	OfferedFrontend string                      `json:"offered_frontend,omitempty"`
+	AccessKey       string                      `json:"access_key,omitempty"`
 }
 
 func configurationPath() (path string, explicit bool, err error) {
@@ -113,12 +121,12 @@ func Decode(reader io.Reader) (Config, error) {
 		}
 		return Config{}, ErrConfig
 	}
-	result := Config{TURNServices: disk.TURNServices, FrontURL: disk.FrontURL, ActiveRelays: disk.ActiveRelays, ConfiguredOnly: disk.ConfiguredOnly}
+	result := Config{BootstrapNodes: disk.BootstrapNodes, TURNServices: disk.TURNServices, FrontURL: disk.FrontURL, ActiveRelays: disk.ActiveRelays, CommunityNodes: disk.CommunityNodes, ConfiguredOnly: disk.ConfiguredOnly}
 	if disk.Profiles != nil {
 		result.Profiles = make([]relayprofile.Candidate, 0, len(disk.Profiles))
 	}
 	for _, profile := range disk.Profiles {
-		result.Profiles = append(result.Profiles, relayprofile.Candidate{ManagedTurn: profile.ManagedTurn, PublicURL: profile.URL, AccessKey: profile.AccessKey, ConsoleURL: profile.ConsoleURL, OfferedFrontend: profile.OfferedFrontend})
+		result.Profiles = append(result.Profiles, relayprofile.Candidate{Role: profile.Role, Node: profile.Node, ManagedTurn: profile.ManagedTurn, PublicURL: profile.URL, AccessKey: profile.AccessKey, ConsoleURL: profile.ConsoleURL, OfferedFrontend: profile.OfferedFrontend})
 	}
 	if err := result.Validate(); err != nil {
 		return Config{}, err
@@ -131,7 +139,24 @@ func (config Config) Validate() error {
 	return err
 }
 
+// ValidateBootstrapNodes enforces the shared count ceiling and strict public
+// HTTPS origin rules for both user configuration and embedded release manifests.
+func ValidateBootstrapNodes(nodes []string) error {
+	if len(nodes) > MaximumBootstrapNodes {
+		return fmt.Errorf("%w: too many bootstrap nodes", ErrConfig)
+	}
+	for _, seed := range nodes {
+		if _, err := (publicdial.Policy{}).Origin(seed); err != nil {
+			return fmt.Errorf("%w: invalid bootstrap node", ErrConfig)
+		}
+	}
+	return nil
+}
+
 func (config Config) validateFields() error {
+	if err := ValidateBootstrapNodes(config.BootstrapNodes); err != nil {
+		return err
+	}
 	if err := ValidateTURNServices(config.TURNServices); err != nil {
 		return err
 	}

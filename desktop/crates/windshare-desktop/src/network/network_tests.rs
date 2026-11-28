@@ -1,5 +1,5 @@
 use super::{
-    NetworkSettingsState, SettingsSetupBanner,
+    CommunityNoticeState, NetworkSettingsState, SettingsSetupBanner,
     dialog_host::{
         DialogCloseAction, dialog_close_action, operation_finished, other_running_for_model,
     },
@@ -93,6 +93,7 @@ fn observe_active_setup_tracks_only_settings_visible_unfinished_setups() {
             stage: "discover".into(),
             verification_url: String::new(),
             user_code: String::new(),
+            guest_available: false,
             service_login: None,
         },
         ..Model::default()
@@ -142,6 +143,7 @@ fn observe_active_setup_tracks_only_settings_visible_unfinished_setups() {
             stage: "discover".into(),
             verification_url: String::new(),
             user_code: String::new(),
+            guest_available: false,
             service_login: None,
         },
         ..Model::default()
@@ -280,6 +282,7 @@ fn blocked_share_dialog_does_not_adopt_another_shares_running_setup() {
             stage: "discover".into(),
             verification_url: String::new(),
             user_code: String::new(),
+            guest_available: false,
             service_login: None,
         },
         setup_request: SetupRequest::Pending {
@@ -538,6 +541,7 @@ fn settings_setup_banner_routes_share_scoped_unfinished_setups_to_return_card() 
         stage: "discover".into(),
         verification_url: String::new(),
         user_code: String::new(),
+        guest_available: false,
         service_login: None,
     };
     assert_eq!(
@@ -576,6 +580,7 @@ fn settings_setup_banner_routes_share_scoped_unfinished_setups_to_return_card() 
         stage: "approval".into(),
         verification_url: "https://relay.example/approve".into(),
         user_code: "ABCD-1234".into(),
+        guest_available: false,
         service_login: None,
     };
     assert!(settings_visible_setup(&share_running).is_none());
@@ -600,4 +605,30 @@ fn settings_setup_banner_routes_share_scoped_unfinished_setups_to_return_card() 
             Some(SettingsSetupBanner::ReturnToShare(&share_ctx))
         );
     }
+}
+
+#[test]
+fn community_notice_state_surfaces_initial_latch_and_tracks_dismissal() {
+    let mut state = CommunityNoticeState::default();
+    assert!(!state.visible());
+    assert!(!state.observe(0));
+    assert!(!state.visible());
+
+    // A notice latched in the initial host model before ModelCursor attaches
+    // still transitions from seen=0 -> 1 and becomes visible.
+    assert!(state.observe(1));
+    assert!(state.visible());
+    assert!(!state.observe(1));
+
+    // Dismissing clears visibility without forgetting the seen counter.
+    assert!(state.dismiss());
+    assert!(!state.visible());
+    assert!(!state.dismiss());
+    assert!(!state.observe(1));
+    assert!(!state.visible());
+
+    // A subsequent pause cycle (re-enabled then disabled again) increments the
+    // host counter and surfaces the notice once more.
+    assert!(state.observe(2));
+    assert!(state.visible());
 }

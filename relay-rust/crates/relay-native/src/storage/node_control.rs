@@ -1,5 +1,8 @@
 use super::{Database, access_control::save_authority, budget::BudgetRecords};
-use crate::node::access::{AccessSnapshot, AuthorityState};
+use crate::node::{
+    access::{AccessSnapshot, AuthorityState},
+    contribution::Policy as ContributionPolicy,
+};
 use anyhow::{Result, anyhow, ensure};
 use rusqlite::{OptionalExtension, params};
 use windshare_relay_access::{Issuer, trust::Generation, usage::Batch};
@@ -35,18 +38,23 @@ impl Database {
         &self,
         budgets: BudgetRecords,
         generations: &[Generation],
+        contribution: Option<ContributionPolicy>,
         prepare_access: impl FnOnce(Vec<AuthorityState>) -> Result<T>,
-    ) -> Result<T> {
-        if budgets.is_empty() && generations.is_empty() {
-            return prepare_access(Vec::new());
+    ) -> Result<(T, bool)> {
+        if budgets.is_empty() && generations.is_empty() && contribution.is_none() {
+            return Ok((prepare_access(Vec::new())?, false));
         }
         self.budget_transaction(budgets, |transaction| {
+            let disabled = contribution
+                .map(|policy| super::contribution::write(transaction, policy))
+                .transpose()?
+                .unwrap_or(false);
             let authorities = generations
                 .iter()
                 .map(|&generation| save_authority(transaction, generation.into()))
                 .collect::<Result<_>>()?;
-            // Rejecting the prepared trust cache must roll back both billing periods.
-            prepare_access(authorities)
+            // Rejecting the prepared trust cache must roll back billing periods and contribution.
+            Ok((prepare_access(authorities)?, disabled))
         })
     }
 

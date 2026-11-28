@@ -15,6 +15,8 @@ pub enum Setup {
         #[serde(default)]
         user_code: String,
         service_login: Option<ServiceLogin>,
+        #[serde(default)]
+        guest_available: bool,
     },
     Finished {
         #[serde(flatten)]
@@ -147,6 +149,7 @@ impl Setup {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SetupRequestKind {
     Configure,
+    Guest,
     Cancel { acknowledged: bool },
 }
 
@@ -179,14 +182,36 @@ impl SetupRequest {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct RelayPreferences {
     pub mode: RelayMode,
+    #[serde(default = "enabled_by_default")]
+    pub community_nodes: bool,
+    #[serde(default)]
+    pub community_notice: u64,
     pub frontend: String,
     #[serde(default)]
     pub custom_frontend: bool,
     pub relays: Vec<SavedRelay>,
     pub at_capacity: bool,
+}
+
+impl Default for RelayPreferences {
+    fn default() -> Self {
+        Self {
+            mode: RelayMode::Automatic,
+            community_nodes: true,
+            community_notice: 0,
+            frontend: String::new(),
+            custom_frontend: false,
+            relays: Vec::new(),
+            at_capacity: false,
+        }
+    }
+}
+
+const fn enabled_by_default() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -209,16 +234,28 @@ pub enum RelayMode {
 #[serde(tag = "action", content = "value", rename_all = "snake_case")]
 pub enum PreferenceEdit {
     Mode(RelayMode),
+    #[serde(serialize_with = "serialize_on_off")]
+    CommunityNodes(bool),
     Enable(String),
     Disable(String),
     Remove(String),
     Frontend(String),
 }
 
+// serde's `serialize_with` contract always passes the field by reference.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn serialize_on_off<S: serde::Serializer>(
+    enabled: &bool,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(if *enabled { "on" } else { "off" })
+}
+
 impl PreferenceEdit {
     pub(crate) const fn action(&self) -> &'static str {
         match self {
             Self::Mode(_) => "mode",
+            Self::CommunityNodes(_) => "community_nodes",
             Self::Enable(_) => "enable",
             Self::Disable(_) => "disable",
             Self::Remove(_) => "remove",

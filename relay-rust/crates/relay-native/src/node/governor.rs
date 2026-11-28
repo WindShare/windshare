@@ -1,6 +1,7 @@
 //! Node-wide pacing, with one fair scheduling identity for both session directions.
 mod handoff;
 mod pacing;
+mod preemption;
 mod scheduling;
 
 use crate::connection::{WritePermit, WriteWindow};
@@ -44,6 +45,7 @@ pub struct Governor {
     access: Service,
     wake: Arc<Notify>,
     paced: Arc<AtomicBool>,
+    egress: Arc<preemption::Egress>,
 }
 
 /// Its lifetime is the flow's queue lifetime, not a single packet's wait.
@@ -59,6 +61,7 @@ impl Governor {
             access,
             wake: Arc::default(),
             paced: Arc::default(),
+            egress: Arc::default(),
         }
     }
 
@@ -66,12 +69,20 @@ impl Governor {
         &self,
         bytes_per_second: Option<u64>,
         public_bytes_per_second: Option<u64>,
+        host_uplink: Option<u64>,
         publish_node: impl FnOnce() -> T,
     ) -> T {
         let mut state = self.state.lock().expect("governor");
         let now = Instant::now();
         let node_changed = state.pacing.node.configure(bytes_per_second, now);
-        let public_changed = state.pacing.public.configure(public_bytes_per_second, now);
+        let cap = match (public_bytes_per_second, bytes_per_second) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        let public_changed = state.pacing.preemption.configure(cap, host_uplink);
+        if public_changed {
+            state.pacing.public.configure(cap, now);
+        }
         // A scheduler pass must see the new rate and its admission policy together.
         let result = publish_node();
         let paced = bytes_per_second.is_some() || public_bytes_per_second.is_some();
@@ -86,20 +97,41 @@ impl Governor {
                 self.wake.notify_one();
             }
         }
+        let preemption_mode = state.pacing.preemption.mode_name();
         drop(state);
         if node_changed || public_changed {
             tracing::info!(
                 event = "governor_capacity_changed",
                 ?bytes_per_second,
-                ?public_bytes_per_second
+                ?public_bytes_per_second,
+                ?host_uplink,
+                preemption_mode,
             );
         }
         result
     }
 
     #[cfg(test)]
+    pub(crate) fn exhaust_initial_public_credit(&self) {
+        let mut state = self.state.lock().unwrap();
+        let initial = state.pacing.replenish(Instant::now());
+        let mut remaining = initial;
+        assert!(remaining.reserve(
+            windshare_relay_access::entitlement::Class::Lowest,
+            MAX_FRAME
+        ));
+        state.pacing.charge(&initial, &remaining);
+    }
+
+    #[cfg(test)]
     pub(super) fn capacity(&self) -> Option<u64> {
         self.state.lock().unwrap().pacing.node.capacity()
+    }
+
+    pub(crate) fn record_egress(&self, owner: impl FnOnce() -> bool, bytes: u64) {
+        if self.paced.load(Ordering::Relaxed) {
+            self.egress.record(owner(), bytes);
+        }
     }
 
     pub(crate) fn register(
@@ -140,6 +172,7 @@ impl Governor {
         }
         let mut state = self.state.lock().expect("governor");
         let now = Instant::now();
+        let preemption = state.pacing.observe_wire(&self.egress, now);
         let writer = WriterId::from(window);
         let reclassified = state.refresh_classes(&self.access, super::now().unsigned_abs());
         let was_waiting = state.waiting();
@@ -160,6 +193,7 @@ impl Governor {
             self.wake.notify_one();
         }
         drop(state);
+        log_preemption(preemption);
         log_reclassifications(reclassified);
         grant
     }
@@ -180,11 +214,29 @@ impl Governor {
     fn pump(&self) -> bool {
         let mut state = self.state.lock().expect("governor");
         let reclassified = state.refresh_classes(&self.access, super::now().unsigned_abs());
-        state.grant_pending(&self.access, None, Instant::now());
+        let now = Instant::now();
+        let preemption = state.pacing.observe_wire(&self.egress, now);
+        state.grant_pending(&self.access, None, now);
         let waiting = state.waiting();
         drop(state);
+        log_preemption(preemption);
         log_reclassifications(reclassified);
         waiting
+    }
+}
+
+fn log_preemption(transition: Option<preemption::Transition>) {
+    if let Some(transition) = transition {
+        tracing::debug!(
+            event = "owner_preemption",
+            mode = transition.mode,
+            previous_phase = transition.previous_phase,
+            phase = transition.phase,
+            owner_bytes_per_second = transition.owner_bytes_per_second,
+            public_bytes_per_second = transition.public_bytes_per_second,
+            previous = transition.previous_limit,
+            public_limit = transition.public_limit,
+        );
     }
 }
 

@@ -188,8 +188,8 @@ func (cache *nodePolicyCache) refreshNode(ctx context.Context, address string, p
 		next := nodeState{
 			key:       node.Key,
 			expires:   time.Unix(int64(descriptor.ExpiresAt), 0),
-			anonymous: descriptor.Anonymous,
-			available: descriptor.Available && descriptor.Services.Relay,
+			anonymous: descriptor.PublicRelay == serviceauthority.RelayAnonymous,
+			available: descriptor.Services.Relay,
 		}
 		permits = next.permits(node.Key, now)
 		if permits {

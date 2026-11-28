@@ -117,7 +117,10 @@ fn network(rate: u64) -> (tempfile::TempDir, Runtime, [Attribution; 2]) {
         expires_at: now + DAY_SECONDS,
     };
     let settings = Settings {
-        capacity_bytes_per_second: Some(rate),
+        ceiling: crate::node::Ceiling {
+            bytes_per_second: Some(rate),
+            ..Default::default()
+        },
         access: Policy {
             trusted_issuers: vec![TrustedIssuer {
                 root: URL_SAFE_NO_PAD.encode(generation.issuer),
@@ -164,15 +167,7 @@ fn network(rate: u64) -> (tempfile::TempDir, Runtime, [Attribution; 2]) {
         }
     });
     // Spend startup credit so all competing heads are visible before each two-frame burst.
-    let mut warmup = Stream::new(
-        &node,
-        99,
-        OWNER,
-        OpaqueHeader::MAX_ENCODED_BYTES as usize,
-        1,
-    );
-    warmup.drain();
-    assert_eq!(warmup.sent, OpaqueHeader::MAX_ENCODED_BYTES as usize);
+    node.governor.exhaust_initial_public_credit();
     (directory, node, accounts)
 }
 
@@ -217,17 +212,16 @@ async fn a_full_owner_writer_yields_until_writable_and_small_signaling_can_go_fi
     let mut owner = Stream::new(&node, 1, OWNER, FRAME, 4);
     let mut standard = Stream::new(&node, 2, account, bulk, 4);
     let mut signal = Stream::new(&node, 3, Attribution::Anonymous, FRAME, 2);
-    for stream in [&mut standard, &mut signal, &mut owner] {
+    for stream in [&mut standard, &mut signal] {
         assert!(!stream.submit());
     }
     tokio::time::advance(Duration::from_millis(63)).await;
-    assert!(!signal.submit());
     for _ in 0..SUBMITTED_DATA_FRAMES {
         assert!(owner.submit());
     }
     assert!(!owner.submit());
     tokio::time::advance(Duration::from_secs(1)).await;
-    assert!(!standard.submit());
+    standard.drain();
     assert!(signal.submit());
     assert_eq!(signal.writer.try_recv().unwrap().len(), FRAME);
     assert_eq!(owner.writer.try_recv().unwrap().len(), FRAME);

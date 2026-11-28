@@ -17,6 +17,11 @@ const (
 // Applications can reject a retry during cooldown without claiming admission
 // started; all timing and coalescing still belong to the directory.
 func (r *Runtime) Unavailability() *networkdirectory.UnavailableError {
+	if r.community != nil {
+		if plan, err := r.buildPlan(nil, false); err == nil && len(plan.Network) > 0 {
+			return nil
+		}
+	}
 	if r.directory == nil {
 		return unavailable(r.directoryError, networkdirectory.Unprovisioned)
 	}

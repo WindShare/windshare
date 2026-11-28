@@ -1,0 +1,33 @@
+name: windshare-community
+services:
+  relay:
+    build:
+      context: ../..
+      dockerfile: deploy/wsrelay/Dockerfile
+    # Mount the config directory rather than a single file so atomic edits
+    # (vim, sed -i, mv) remain visible to wsrelay's hot-reload loop.
+    command: ["--config", "/config/node.json"]
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - relay-state:/state
+      - ${WSRELAY_CONFIG_DIR:-./instance}:/config:ro
+  caddy:
+    image: caddy:2.11.9-alpine
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      RELAY_HOST: ${RELAY_HOST:?Set the public relay hostname or IP}
+      RELAY_SNI: ${RELAY_SNI:-${RELAY_HOST}}
+      CERT_POLICY: ${CERT_POLICY:-domain_cert}
+    volumes:
+      # Mount a dedicated config directory rather than a single file so atomic edits
+      # (vim, sed -i, mv, git pull) remain visible to `caddy reload` without exposing
+      # sibling host files such as instance/.env or instance/node.json.
+      - ${WSRELAY_CADDY_DIR:-./caddy}:/etc/caddy:ro
+      - caddy-data:/data
+      - caddy-config:/config
+volumes:
+  relay-state:
+  caddy-data:
+  caddy-config:

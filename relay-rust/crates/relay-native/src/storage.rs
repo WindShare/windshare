@@ -18,6 +18,8 @@ use windshare_relay_core::{
 
 mod access_control;
 pub mod budget;
+mod contribution;
+mod discovery;
 pub mod node_control;
 mod transactions;
 use transactions::read;
@@ -204,6 +206,8 @@ fn initialize(connection: &mut Connection, relay: RelayIdentity) -> Result<NonZe
             relay BLOB NOT NULL CHECK(length(relay) = 32),
             generation INTEGER NOT NULL CHECK(generation > 0)
          ) STRICT;
+         CREATE TABLE IF NOT EXISTS discovery_cache(singleton INTEGER PRIMARY KEY CHECK(singleton=1),records BLOB NOT NULL) STRICT;
+         CREATE TABLE IF NOT EXISTS contribution(singleton INTEGER PRIMARY KEY CHECK(singleton=1),policy TEXT NOT NULL) STRICT;
          CREATE TABLE IF NOT EXISTS shares (
             share BLOB PRIMARY KEY CHECK(length(share) = 12),
             record BLOB NOT NULL,

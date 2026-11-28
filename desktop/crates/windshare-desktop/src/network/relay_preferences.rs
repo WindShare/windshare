@@ -56,6 +56,37 @@ pub(super) fn prompt_remove_relay(
     async move { answer.await == Ok(CONFIRM_RELAY_ACTION) }
 }
 
+pub(super) fn community_toggle<V: 'static>(
+    theme: Theme,
+    prefs: &RelayPreferences,
+    busy: bool,
+    edit: impl Fn(&mut V, PreferenceEdit, &mut Context<V>) + Clone + 'static,
+    cx: &Context<V>,
+) -> Div {
+    let label = language(cx).text(Text::CommunityNodes);
+    let checked = prefs.community_nodes;
+    let next = move || PreferenceEdit::CommunityNodes(!checked);
+    let click = edit.clone();
+    row()
+        .justify_between()
+        .child(theme.label(label, 15.))
+        .child(
+            theme
+                .toggle("community-nodes", checked, !busy)
+                .aria_label(label)
+                .when(!busy, |switch| {
+                    switch
+                        .on_click(cx.listener(move |this, _, _, cx| click(this, next(), cx)))
+                        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                            if matches!(event.keystroke.key.as_str(), "space" | "enter") {
+                                edit(this, next(), cx);
+                                cx.stop_propagation();
+                            }
+                        }))
+                }),
+        )
+}
+
 pub(super) fn relay_actions_toggle<V: 'static>(
     index: usize,
     expanded: bool,
@@ -272,6 +303,7 @@ impl Desktop {
         let prefs = &mut preview.preferences;
         let mut toast = None;
         match edit {
+            PreferenceEdit::CommunityNodes(enabled) => prefs.community_nodes = enabled,
             PreferenceEdit::Mode(mode) => prefs.mode = mode,
             PreferenceEdit::Enable(url) => {
                 if !prefs.at_capacity

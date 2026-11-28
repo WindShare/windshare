@@ -17,6 +17,7 @@ type releaseManifest struct {
 	Network                  string          `json:"network"`
 	LinkHost                 string          `json:"link_host"`
 	BackupEntry              string          `json:"backup_entry"`
+	BootstrapNodes           []string        `json:"bootstrap_nodes,omitempty"`
 	Mirrors                  []string        `json:"mirrors"`
 	NativeFallbackMirrors    []string        `json:"native_fallback_mirrors,omitempty"`
 	Roots                    []publicKey     `json:"roots"`

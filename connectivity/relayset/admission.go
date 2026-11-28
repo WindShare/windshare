@@ -24,21 +24,26 @@ type AttemptPermit interface {
 	ReleaseFailed()
 }
 
-// NetworkAdmissions coordinates only directory candidates. Configured endpoints
-// keep independent lifetimes, and no successful published connection is evicted.
+const targetCommunityRegistrations = 1
+
+// NetworkAdmissions reserves the official pair and one independent community
+// admission within the remaining MaximumEndpoints budget. Explicitly configured
+// endpoints own their own registration lifetimes.
 type NetworkAdmissions struct {
-	mu            sync.Mutex
-	candidates    []relayplan.Candidate
-	policy        relayplan.Policy
-	states        []admissionState
-	changed       chan struct{}
-	primary       int
-	target        int
-	inflight      int
-	active        int
-	clock         Clock
-	serverRetryAt func(string) time.Time
-	observe       func(Admission)
+	mu              sync.Mutex
+	candidates      []relayplan.Candidate
+	policy          relayplan.Policy
+	states          []admissionState
+	changed         chan struct{}
+	primary         int
+	remaining       int
+	target          int
+	inflight        int
+	communityActive int
+	active          int
+	clock           Clock
+	serverRetryAt   func(string) time.Time
+	observe         func(Admission)
 }
 
 const (
@@ -50,11 +55,13 @@ const (
 const (
 	AdmissionReasonPrimary         = "primary"
 	AdmissionReasonBackup          = "backup"
+	AdmissionReasonCommunity       = "community"
 	AdmissionReasonPermitReleased  = "permit_released"
 	AdmissionReasonTargetReached   = "target_reached"
 	AdmissionReasonBackupNotChosen = "backup_not_selected"
 	AdmissionReasonPrimaryLost     = "primary_lost"
 	AdmissionReasonBackupLost      = "backup_lost"
+	AdmissionReasonCommunityLost   = "community_lost"
 )
 
 type Admission struct {
@@ -76,7 +83,7 @@ func (a *NetworkAdmissions) record(index int, state, reason string) {
 	if a.primary >= 0 {
 		primary = a.candidates[a.primary].URL
 	}
-	a.observe(Admission{Endpoint: a.candidates[index].URL, Primary: primary, State: state, Reason: reason, Count: a.active})
+	a.observe(Admission{Endpoint: a.candidates[index].URL, Primary: primary, State: state, Reason: reason, Count: a.totalActive()})
 }
 
 type candidateHealth uint8
@@ -106,9 +113,10 @@ func NewNetworkAdmissions(plan relayplan.Plan, clock Clock, serverRetryAt func(s
 	if clock == nil {
 		clock = SystemClock{}
 	}
-	candidates := plan.DirectoryCandidates()
+	remaining := max(0, MaximumEndpoints-len(plan.Configured))
+	candidates := plan.NetworkCandidates()
 	a := &NetworkAdmissions{clock: clock, serverRetryAt: serverRetryAt, candidates: candidates, policy: plan.Policy,
-		target: min(relayplan.TargetNetworkRegistrations, MaximumEndpoints-len(plan.Configured)),
+		remaining: remaining, target: min(relayplan.TargetNetworkRegistrations, remaining),
 		states: make([]admissionState, len(candidates)), changed: make(chan struct{}), primary: -1}
 	for i, candidate := range a.candidates {
 		at := candidate.ServerRetryAt
@@ -155,8 +163,7 @@ func (c admissionControl) Begin(ctx context.Context) (AttemptPermit, error) {
 			state.eligible = eligible
 			a.notify()
 		}
-		if state.eligible && a.active < a.target && a.inflight < relayplan.MaximumConcurrentAttempts &&
-			(a.primary < 0 || a.backup() == c.index) {
+		if state.eligible && a.canAdmit(c.index) && a.inflight < relayplan.MaximumConcurrentAttempts {
 			a.inflight++
 			a.mu.Unlock()
 			return &admissionPermit{control: c}, nil
@@ -190,6 +197,12 @@ func (c admissionControl) Unavailable() {
 		return
 	}
 	a.states[c.index].admitted = false
+	if a.candidates[c.index].Source == relayplan.Community {
+		a.communityActive--
+		a.record(c.index, AdmissionUnavailable, AdmissionReasonCommunityLost)
+		a.notify()
+		return
+	}
 	a.active--
 	reason := AdmissionReasonBackupLost
 	if a.primary == c.index {
@@ -197,7 +210,7 @@ func (c admissionControl) Unavailable() {
 		a.releaseSoftCooldown()
 		a.primary = -1
 		for i, state := range a.states {
-			if state.admitted {
+			if state.admitted && a.candidates[i].Source != relayplan.Community {
 				a.primary = i
 				break
 			}
@@ -219,7 +232,18 @@ func (p *admissionPermit) Admit() bool {
 	// Completing a handshake proves current reachability before backup ranking,
 	// even if the connection ends up parked.
 	a.states[index].health = candidateHealthCleared
-	if a.active >= a.target {
+	if a.candidates[index].Source == relayplan.Community {
+		if !a.canAdmit(index) {
+			a.record(index, AdmissionParked, AdmissionReasonTargetReached)
+			return false
+		}
+		a.communityActive++
+		a.states[index].admitted = true
+		a.record(index, AdmissionAdmitted, AdmissionReasonCommunity)
+		a.notify()
+		return true
+	}
+	if a.active >= a.target || a.totalActive() >= a.remaining {
 		a.record(index, AdmissionParked, AdmissionReasonTargetReached)
 		return false
 	}
@@ -256,7 +280,11 @@ func (p *admissionPermit) release(failed bool) {
 		if failed && !p.completed {
 			a.states[index].health = candidateHealthFailed
 		}
-		a.releaseSoftCooldown()
+		// Community admissions are isolated from the official pair, so a failed
+		// or parked community attempt must not thaw a soft-cooled official backup.
+		if a.candidates[index].Source != relayplan.Community {
+			a.releaseSoftCooldown()
+		}
 	}
 	a.states[index].eligible = false
 	a.notify()
@@ -276,7 +304,7 @@ func (a *NetworkAdmissions) backup() int {
 	var candidates []relayplan.Candidate
 	var indexes []int
 	for i, state := range a.states {
-		if state.eligible && !state.admitted {
+		if state.eligible && !state.admitted && a.candidates[i].Source != relayplan.Community {
 			candidates = append(candidates, a.candidateForBackup(i))
 			indexes = append(indexes, i)
 		}
@@ -297,6 +325,20 @@ func (a *NetworkAdmissions) candidateForBackup(index int) relayplan.Candidate {
 	default:
 		return candidate
 	}
+}
+
+func (a *NetworkAdmissions) totalActive() int {
+	return a.active + a.communityActive
+}
+
+func (a *NetworkAdmissions) canAdmit(index int) bool {
+	if a.totalActive() >= a.remaining {
+		return false
+	}
+	if a.candidates[index].Source == relayplan.Community {
+		return a.communityActive < targetCommunityRegistrations
+	}
+	return a.active < a.target && (a.primary < 0 || a.backup() == index)
 }
 
 func (a *NetworkAdmissions) notify() { close(a.changed); a.changed = make(chan struct{}) }

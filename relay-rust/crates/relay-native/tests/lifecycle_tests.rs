@@ -67,7 +67,7 @@ const TEST_OWNER_TOKEN: &str = "native-interop-owner";
 
 fn owner_node() -> windshare_relay_native::node::Settings {
     use windshare_relay_access::{Credential, Digest};
-    use windshare_relay_native::node::{ContributionLimits, Identity, Settings};
+    use windshare_relay_native::node::{Ceiling, Identity, Settings};
     let owner = Credential {
         digest: Digest::of(TEST_OWNER_TOKEN.as_bytes()),
         ..Identity::generate().unwrap().owner()
@@ -75,9 +75,10 @@ fn owner_node() -> windshare_relay_native::node::Settings {
     let mut settings = Settings {
         // Only the sender presents its key. Charging JOINs or forwarded frames
         // to the receiver would exhaust this allowance during the exchange.
-        contribution: ContributionLimits {
+        ceiling: Ceiling {
             daily_bytes: Some(8192),
             bytes_per_second: Some(1),
+            ..Ceiling::default()
         },
         ..Settings::default()
     };
@@ -127,7 +128,7 @@ async fn go_runtime_client_drives_native_io_and_process_restart() {
 
     let budget_database = directory.path().join("budget.sqlite");
     let mut exhausted = owner_node();
-    exhausted.contribution.daily_bytes = Some(0);
+    exhausted.ceiling.daily_bytes = Some(0);
     let settings = serde_json::to_string(&exhausted).unwrap();
     let database = directory.path().join("process.sqlite");
     let process_database = database.clone();

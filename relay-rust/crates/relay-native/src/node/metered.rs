@@ -67,6 +67,19 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for Metered<S> {
                 WriteAttempt::Socket(result) => {
                     if let Poll::Ready(Ok(written)) = result {
                         this.node.metrics.wire(written);
+                        this.node.governor.record_egress(
+                            || {
+                                this.node.access.egress_owner(
+                                    this.origin.share,
+                                    this.origin.bearer.as_ref(),
+                                    this.origin
+                                        .usage
+                                        .attribution()
+                                        .or_else(|| this.origin.share_attribution.get().copied()),
+                                ) == Some(true)
+                            },
+                            written as u64,
+                        );
                         if this.node.usage.is_configured() {
                             this.origin.usage.record(
                                 &this.node.usage,

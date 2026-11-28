@@ -84,20 +84,20 @@ async fn paced_bursts_share_one_account_budget_across_eight_writers() {
 
 #[tokio::test(start_paused = true)]
 async fn a_nonresponsive_actor_yields_its_turn_at_the_next_refill() {
-    let (_dir, node, _) = network(8 * FRAME as u64 * 200);
-    let mut owner = Stream::new(&node, 1, OWNER, FRAME, BACKLOG);
+    let (_dir, node, [account, _]) = network(8 * FRAME as u64 * 200);
+    let mut actor = Stream::new(&node, 1, account, FRAME, BACKLOG);
     let mut public = Stream::new(&node, 2, Attribution::Anonymous, FRAME, BACKLOG);
-    assert!(!owner.submit());
+    assert!(!actor.submit());
     assert!(!public.submit());
     tokio::time::advance(TICK).await;
     assert!(!public.submit());
-    assert!(owner.wake.notified().now_or_never().is_some());
+    assert!(actor.wake.notified().now_or_never().is_some());
     // Ignore that wake: other sockets must be able to spend the remaining credit.
     tokio::time::advance(TICK).await;
     public.serve_backlog();
     assert!(public.sent >= 8 * FRAME);
-    assert!(owner.submit());
-    drop((owner, public));
+    assert!(actor.submit());
+    drop((actor, public));
 }
 
 #[tokio::test(start_paused = true)]

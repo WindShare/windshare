@@ -63,6 +63,20 @@ func PublicURLs(candidates []Candidate) ([]string, error) {
 	return urls, nil
 }
 
+func (lifecycle *SenderLifecycle) dialOptions(resume bool, auth Authorization) relayv2.DialOptions {
+	options := registrationDialOptions(lifecycle.config.LifecycleObservationCapacity, resume, auth)
+	if lifecycle.config.HTTPClient != nil {
+		options.HTTPClient = lifecycle.config.HTTPClient
+	}
+	if origin := lifecycle.config.Origin; origin != "" {
+		if options.Header == nil {
+			options.Header = make(http.Header)
+		}
+		options.Header.Set("Origin", origin)
+	}
+	return options
+}
+
 func registrationDialOptions(capacity int, resume bool, authorization Authorization) relayv2.DialOptions {
 	options := relayv2.DialOptions{LifecycleObservationCapacity: capacity}
 	if !resume && authorization.Bearer != "" {

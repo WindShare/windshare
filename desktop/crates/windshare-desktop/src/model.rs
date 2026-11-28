@@ -158,6 +158,7 @@ pub enum Action {
     ChooseShareRelays(usize),
     OpenAccount,
     ReloadAccountSelection,
+    DismissCommunityNotice,
     SettingsSection(SettingsSection),
     ResumeShare(usize),
     UseSavedSettings(usize),

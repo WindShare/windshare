@@ -67,6 +67,7 @@ impl Service {
             }
             statuses.push(status);
         }
+        node.report_stun_ports(listeners.iter().map(|listener| listener.address.port()))?;
         let admin = if statuses.is_empty() {
             None
         } else {

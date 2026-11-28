@@ -1,4 +1,15 @@
 export const en = {
+  initializeAtNode: 'Open the initialization link printed by wsrelay to set the owner password.',
+  contribution: 'Community contribution',
+  dailyBudget: 'Public traffic per day (GiB)',
+  publicRate: 'Public bandwidth (Mbps)',
+  publicConnections: 'Public connections',
+  hostUplink: 'Host uplink (Mbps, optional)',
+  saveLimits: 'Save limits',
+  disabledNotice: 'Community access on your devices pauses when all your native relays have contribution turned off.',
+  ceiling: 'Configured ceiling',
+  limitsSaved: 'Saved',
+  loadingContribution: 'Loading contribution settings…',
   managedTURN: 'Managed TURN',
   managedTURNHint: 'Cloudflare includes 1,000 GB per account each month, shared with Realtime SFU. Additional usage is billed at Cloudflare’s rate. Pausing stops new credentials. Existing credentials expire within 30 minutes.',
   managedTURNBilling: 'View usage in Cloudflare Billing',
@@ -77,4 +88,5 @@ export const en = {
   alreadyCompleted: 'This request has already been completed. Check progress on the device.',
   credentialLimit: 'This node has reached its credential limit.',
   invalidName: 'Enter a short, descriptive name.',
+  invalidValues: 'This node could not accept these values. Check the form and try again.',
 }

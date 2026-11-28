@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
 	"time"
 
 	"github.com/windshare/windshare/core/serviceauthority"
@@ -164,11 +165,14 @@ func releaseAttemptPermit(permit AttemptPermit, cause, dialErr error) {
 func (lifecycle *SenderLifecycle) registrationFailed(event *Attempt, failure error) bool {
 	event.State, event.Failure = AttemptFailed, failure
 	lifecycle.resumeNext, event.Terminal = classifyRegistrationFailure(event.Resume, failure)
-	// A previously admitted route can return 404 during a proxy restart. Only
-	// an initial, unsent registration can retire this ambiguous candidate.
+	// A previously admitted route can return 404 during a proxy restart or 403
+	// during transient proxy/WAF policy reloads. Only an initial, unsent
+	// registration can retire missing routes or Origin-checked 403 refusals.
 	if !lifecycle.mayHaveRegistered {
 		_, missingRoute := errors.AsType[*relayv2.WebSocketRouteError](failure)
-		event.Terminal = event.Terminal || missingRoute
+		upgrade, isUpgrade := errors.AsType[*relayv2.WebSocketDialError](failure)
+		originForbidden := lifecycle.config.Origin != "" && isUpgrade && upgrade.StatusCode == http.StatusForbidden
+		event.Terminal = event.Terminal || missingRoute || originForbidden
 	}
 	if event.Terminal {
 		lifecycle.observeRecoveryAttempt(*event)
@@ -214,7 +218,7 @@ func (lifecycle *SenderLifecycle) connectAttempt(caller, recovery context.Contex
 		descriptor = lifecycle.config.Descriptor
 	}
 	dialContext, cancel := context.WithTimeout(recovery, senderRelayAttemptTimeout)
-	dialOptions := registrationDialOptions(lifecycle.config.LifecycleObservationCapacity, resume, authorization)
+	dialOptions := lifecycle.dialOptions(resume, authorization)
 	stageAttempt := *attempt
 	dialOptions.ObserveStage = func(stage relayv2.DialStage) {
 		event := stageAttempt

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestRecoveryCompletesSettingsAndOperationRemovalBeforeImport(t *testing.T) {
@@ -195,5 +196,86 @@ func TestOrdinarySettingsReadRequiresNoWritableState(t *testing.T) {
 	}
 	if _, err := os.Stat(StateDirectory(path)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("read created runtime state", err)
+	}
+}
+
+func TestReadIsLockFreeReadOnlyAndHonorsCancelDuringRecovery(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := Write(t.Context(), path, []byte("settings")); err != nil {
+		t.Fatal(err)
+	}
+	if err := Read(t.Context(), path, func(tx *Transaction) error {
+		if err := tx.Put(Settings, []byte("mutated")); err == nil {
+			t.Fatal("read transaction admitted Put")
+		}
+		if err := tx.Delete(CommunityEligibility); err == nil {
+			t.Fatal("read transaction admitted Delete")
+		}
+		data, err := tx.Read(Settings)
+		if err != nil || string(data) != "settings" {
+			t.Fatalf("read=%q err=%v", data, err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path + ".lock"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("lock-free read created lock file", err)
+	}
+
+	// Lock-free read must not block while another writer holds the lock.
+	locked := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- WithLock(t.Context(), path, func() error {
+			close(locked)
+			<-release
+			return nil
+		})
+	}()
+	<-locked
+	if err := Read(t.Context(), path, func(tx *Transaction) error {
+		data, err := tx.Read(Settings)
+		if err != nil || string(data) != "settings" {
+			t.Fatalf("contended read=%q err=%v", data, err)
+		}
+		return nil
+	}); err != nil {
+		close(release)
+		t.Fatal(err)
+	}
+
+	// When commit.json recovery is pending, Read enters Transact and honors caller cancellation.
+	changes := []mutation{{Name: Settings, Data: []byte("recovered")}, {Name: CommunityEligibility, Data: []byte("{}")}}
+	commitData, _ := json.Marshal(changes)
+	if err := Write(t.Context(), filepath.Join(StateDirectory(path), commitName), commitData); err != nil {
+		close(release)
+		t.Fatal(err)
+	}
+	waitCtx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
+	defer cancel()
+	if err := Read(waitCtx, path, func(*Transaction) error {
+		t.Fatal("timed-out recovery read ran callback")
+		return nil
+	}); !errors.Is(err, context.DeadlineExceeded) {
+		close(release)
+		t.Fatalf("contended recovery err=%v, want context.DeadlineExceeded", err)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if err := Read(t.Context(), path, func(tx *Transaction) error {
+		if err := tx.Put(Settings, []byte("mutated")); err == nil {
+			t.Fatal("recovery read transaction admitted Put")
+		}
+		data, err := tx.Read(Settings)
+		if err != nil || string(data) != "recovered" {
+			t.Fatalf("recovered read=%q err=%v", data, err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }

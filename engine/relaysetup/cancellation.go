@@ -37,8 +37,12 @@ func (service *Service) Cancel(ctx context.Context, address string) error {
 	if !sameRelay(saved.Pending.RelayURL, address) {
 		return ErrPendingSetup
 	}
-	saved, err = service.dependencies.Store.Update(ctx, func(current *Snapshot) error {
-		if err := ownsPending(*current, saved.Pending); err != nil {
+	return service.cancelPending(ctx, saved.Pending)
+}
+
+func (service *workflow) cancelPending(ctx context.Context, pending *PendingSetup) error {
+	saved, err := service.dependencies.Store.Update(ctx, func(current *Snapshot) error {
+		if err := ownsPending(*current, pending); err != nil {
 			return err
 		}
 		// Commit the cancellation fence before contacting the server so another

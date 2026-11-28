@@ -53,7 +53,7 @@ func normalizeICEHost(parsed *url.URL) (string, error) {
 		host = ip.Unmap().String()
 	} else if strings.HasPrefix(parsed.Host, "[") {
 		return "", fmt.Errorf("%w: bracketed STUN host must be an IP literal", ErrInvalid)
-	} else if err := validateDNSHost(host); err != nil {
+	} else if err := ValidateDNSHost(host); err != nil {
 		return "", err
 	}
 	if strings.ContainsRune(host, ':') {

@@ -176,7 +176,12 @@ impl Console {
                 }
                 response
             }
-            "/api/enrollments/claim" => into_anyhow(access::claim(&mut store, body, now))?.body,
+            "/api/enrollments/claim" => {
+                let mut outcome = into_anyhow(access::claim(&mut store, body, now))?;
+                let bound = database::binding(&store.tx.db, &outcome.credential_id)?.is_some();
+                outcome.body["role"] = if bound { "account" } else { "owner" }.into();
+                outcome.body
+            }
             "/api/enrollments/installed" => {
                 let outcome = into_anyhow(access::installed(&mut store, body, now))?;
                 if outcome.newly_installed {
@@ -189,7 +194,13 @@ impl Console {
                 json!({"ok": true})
             }
             "/api/enrollments/cancel" => {
-                into_anyhow(access::cancel(&mut store, body, now))?;
+                let outcome = into_anyhow(access::cancel(&mut store, body, now))?;
+                if outcome.found {
+                    tracing::info!(
+                        event = "enrollment_cancelled",
+                        enrollment_id = %text_id(&outcome.enrollment_id)
+                    );
+                }
                 json!({"ok": true})
             }
             _ => return Err(ConsoleError::bad_request("invalid_request").into()),

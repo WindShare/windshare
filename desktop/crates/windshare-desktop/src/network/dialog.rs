@@ -215,6 +215,16 @@ impl SetupDialog {
         }
     }
 
+    pub(super) fn guest_disabled(&self, cx: &App) -> bool {
+        match &self.source {
+            SetupSource::Native { host, .. } => {
+                let store = host.read(cx);
+                store.selection_disabled() || !store.model().can_guest_current_setup()
+            }
+            SetupSource::Preview { .. } => true,
+        }
+    }
+
     pub(super) fn waits_official(&self, cx: &App) -> bool {
         match &self.source {
             SetupSource::Native { host, operation_id } => host

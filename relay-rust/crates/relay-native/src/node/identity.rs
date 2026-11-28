@@ -4,9 +4,10 @@ use ed25519_dalek::SigningKey;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use std::{fs::OpenOptions, io::Write, path::Path};
-use windshare_relay_access::{Credential, CredentialState, Digest};
+use windshare_relay_access::{
+    Credential, CredentialState, Digest, descriptor::NODE_IDENTITY_DOMAIN,
+};
 
-const NODE_ID_DOMAIN: &[u8] = b"windshare/node-identity/v1\0";
 const IDENTITY_FORMAT: u8 = 1;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -35,6 +36,12 @@ impl Identity {
     /// # Errors
     /// Fails on invalid identity data or unavailable persistent storage.
     pub fn open(path: &Path) -> Result<Self> {
+        Self::open_for_endpoint(path, false)
+    }
+
+    /// # Errors
+    /// Fails when the persisted identity cannot be read or created.
+    pub fn open_for_endpoint(path: &Path, https: bool) -> Result<Self> {
         match std::fs::read(path) {
             Ok(bytes) => {
                 let identity: Self = serde_json::from_slice(&bytes)?;
@@ -74,7 +81,7 @@ impl Identity {
                 match std::fs::hard_link(&temporary.0, path) {
                     Ok(()) => {}
                     Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                        return Self::open(path);
+                        return Self::open_for_endpoint(path, https);
                     }
                     Err(error) => return Err(error).context("publish node identity"),
                 }
@@ -85,14 +92,12 @@ impl Identity {
                         .unwrap_or_else(|| Path::new(".")),
                 )?
                 .sync_all()?;
-                println!(
-                    "{}",
-                    serde_json::json!({
-                        "event":"node_initialized", "node_id":identity.id(),
-                        "node_key":URL_SAFE_NO_PAD.encode(identity.key().verifying_key().to_bytes()),
-                        "owner_access_key": identity.owner_token, "identity_file":path
-                    })
-                );
+                let mut event = serde_json::json!({"event":"node_initialized","node_id":identity.id(),"node_key":URL_SAFE_NO_PAD.encode(identity.key().verifying_key().to_bytes()),"identity_file":path});
+                if !https {
+                    event["owner_access_key"] =
+                        serde_json::Value::String(identity.owner_token.clone());
+                }
+                println!("{event}");
                 Ok(identity)
             }
             Err(error) => Err(error).context("read node identity"),
@@ -144,7 +149,7 @@ mod tests;
 pub(super) fn node_id(verifying_key: &[u8; 32]) -> String {
     URL_SAFE_NO_PAD.encode(
         Sha256::new()
-            .chain_update(NODE_ID_DOMAIN)
+            .chain_update(NODE_IDENTITY_DOMAIN)
             .chain_update(verifying_key)
             .finalize(),
     )

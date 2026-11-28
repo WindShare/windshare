@@ -1,6 +1,6 @@
 # P4 — Community nodes
 
-Part of the [Global Network Plan](global-network.md#6-phases).
+Part of the [Global Network Plan](../../plans/global-service/global-network.md#6-phases).
 
 Volunteers join by running a native node, and discovery keeps working without the official operator.
 

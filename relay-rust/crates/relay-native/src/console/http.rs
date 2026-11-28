@@ -52,7 +52,11 @@ impl Console {
         res
     }
 
-    pub(crate) async fn handle(&self, request: Request<Incoming>) -> HttpResponse {
+    pub(crate) async fn handle(
+        &self,
+        request: Request<Incoming>,
+        node: &crate::node::Runtime,
+    ) -> HttpResponse {
         let (parts, body) = request.into_parts();
         let path = parts.uri.path();
         if parts.method == Method::GET
@@ -100,6 +104,7 @@ impl Console {
             .unwrap_or("")
             .to_owned();
         let console = self.clone();
+        let node = node.clone();
         let path_and_query = parts
             .uri
             .path_and_query()
@@ -116,6 +121,7 @@ impl Console {
                         .duration_since(std::time::UNIX_EPOCH)?
                         .as_millis(),
                 )?,
+                Some(&node),
             )
         })
         .await

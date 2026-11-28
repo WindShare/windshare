@@ -9,6 +9,7 @@ import (
 	"net/url"
 
 	"github.com/windshare/windshare/engine/relayconfig"
+	"github.com/windshare/windshare/engine/relayprofile"
 )
 
 type enrollmentResponse struct {
@@ -20,8 +21,9 @@ type enrollmentResponse struct {
 	AccountInvitation string `json:"account_invitation,omitempty"`
 }
 type credentialResponse struct {
-	AccessKey string `json:"access_key"`
-	ID        string `json:"credential_id"`
+	Role      relayprofile.CredentialRole `json:"role"`
+	AccessKey string                      `json:"access_key"`
+	ID        string                      `json:"credential_id"`
 }
 
 func encode(bytes []byte) string { return base64.RawURLEncoding.EncodeToString(bytes) }
@@ -60,7 +62,7 @@ func (run *workflow) enroll(ctx context.Context, saved Snapshot, progress func(P
 	if run.dependencies.Now().UnixMilli() >= pending.enrollment().ExpiresAt {
 		return Result{}, ErrExpired
 	}
-	event := Progress{Stage: "approval_required", OperationID: pending.OperationID, EnrollmentID: pending.enrollment().ID,
+	event := Progress{GuestAvailable: pending.GuestAvailable, Stage: "approval_required", OperationID: pending.OperationID, EnrollmentID: pending.enrollment().ID,
 		VerificationURL: pending.enrollment().VerificationURL, UserCode: pending.enrollment().UserCode}
 	login, err := pending.serviceLogin(pending.enrollment().AccountInvitation)
 	if err != nil {

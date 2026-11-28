@@ -83,7 +83,7 @@ fn service_approval_installs_an_account_key_and_node_revocation_survives_restart
     let console = setup();
     let post = |path, body: &Value| {
         console
-            .dispatch(&Method::POST, path, body, "", 10000)
+            .dispatch(&Method::POST, path, body, "", 10000, None)
             .unwrap()
     };
     let secret = [9; 32];
@@ -120,6 +120,7 @@ fn service_approval_installs_an_account_key_and_node_revocation_survives_restart
     }
     let claim = json!({"enrollment_id":req.body["enrollment_id"],"claim_secret":text_id(&secret)});
     let claimed = post("/api/enrollments/claim", &claim);
+    assert_eq!(claimed.body["role"], "account");
     let key = Bearer::new(claimed.body["access_key"].as_str().unwrap());
     assert_eq!(
         post("/api/enrollments/installed", &claim).status,
@@ -142,6 +143,7 @@ fn service_approval_installs_an_account_key_and_node_revocation_survives_restart
             &json!({"token":identity.initialization_token(),"password":"owner-only-password"}),
             "",
             11000,
+            None,
         )
         .unwrap()
         .cookie
@@ -153,6 +155,7 @@ fn service_approval_installs_an_account_key_and_node_revocation_survives_restart
             &json!({"credential_id":text_id(&invite.enrollment)}),
             &admin,
             11000,
+            None,
         )
         .unwrap();
     assert!(!restored.0.access.allowed(share, attribution));

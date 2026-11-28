@@ -1,6 +1,8 @@
 use super::{
     MAX_ACTIVE_RELAYS, SetupPage,
-    relay_preferences::{relay_actions_drawer, relay_actions_toggle, relay_mode_option},
+    relay_preferences::{
+        community_toggle, relay_actions_drawer, relay_actions_toggle, relay_mode_option,
+    },
 };
 use crate::{
     desktop::Desktop,
@@ -142,6 +144,15 @@ impl Desktop {
                         cx,
                     )),
             )
+            .when(prefs.mode == RelayMode::Automatic, |card| {
+                card.child(community_toggle(
+                    theme,
+                    prefs,
+                    busy,
+                    Self::apply_preference,
+                    cx,
+                ))
+            })
     }
 
     fn custom_relays_card(

@@ -51,6 +51,14 @@ pub struct ContributionLimits {
     pub bytes_per_second: Option<u64>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Ceiling {
+    pub daily_bytes: Option<u64>,
+    pub bytes_per_second: Option<u64>,
+    pub connections: Option<usize>,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
@@ -61,14 +69,22 @@ pub struct Settings {
     #[serde(default)]
     pub region: String,
     #[serde(default)]
+    pub operator: String,
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
+    pub bootstrap_nodes: Vec<String>,
+    #[serde(default)]
+    pub ceiling: Ceiling,
+    #[serde(skip)]
+    pub host_uplink: Option<u64>,
+    #[serde(default)]
     pub stun_urls: Vec<String>,
     #[serde(default)]
     pub access: super::access::Policy,
-    #[serde(default)]
-    pub capacity_bytes_per_second: Option<u64>,
     pub services: Services,
     pub relay_budget: Option<MonthlyBudget>,
-    #[serde(default)]
+    #[serde(skip)]
     pub contribution: ContributionLimits,
 }
 
@@ -95,9 +111,13 @@ impl Default for Settings {
             authority: None,
             zone: global_zone(),
             region: String::new(),
+            operator: String::new(),
+            provider: String::new(),
+            bootstrap_nodes: Vec::new(),
+            ceiling: Ceiling::default(),
+            host_uplink: None,
             stun_urls: Vec::new(),
             access: super::access::Policy::default(),
-            capacity_bytes_per_second: None,
             services: Services::default(),
             relay_budget: None,
             contribution: ContributionLimits::default(),
@@ -114,6 +134,20 @@ impl Settings {
 
     pub(super) fn validate(&self) -> Result<Vec<Generation>> {
         ensure!(
+            self.ceiling.bytes_per_second != Some(0)
+                && self.ceiling.connections != Some(0)
+                && self
+                    .ceiling
+                    .daily_bytes
+                    .is_none_or(|n| i64::try_from(n).is_ok()),
+            "invalid public contribution ceiling"
+        );
+        ensure!(
+            self.stun_urls.len() <= windshare_relay_access::descriptor::MAX_STUN_URLS,
+            "too many advertised STUN URLs"
+        );
+        crate::discovery::Discovery::validate(&self.bootstrap_nodes)?;
+        ensure!(
             matches!(self.zone.as_str(), "global" | "cn"),
             "invalid node zone"
         );
@@ -127,10 +161,6 @@ impl Settings {
                 "reporting authority must be a trusted issuer"
             );
         }
-        ensure!(
-            self.capacity_bytes_per_second != Some(0),
-            "relay capacity must be positive"
-        );
         ensure!(
             self.contribution.bytes_per_second != Some(0),
             "public relay bandwidth must be positive"

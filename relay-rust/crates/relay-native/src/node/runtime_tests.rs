@@ -14,12 +14,16 @@ fn runtime(bytes: u64) -> (tempfile::TempDir, Runtime) {
     let store = Database::open(&directory.path().join("node.sqlite"), endpoint.identity).unwrap();
     let settings = Settings {
         authority: None,
+        operator: String::new(),
+        provider: String::new(),
+        bootstrap_nodes: Vec::new(),
+        ceiling: crate::node::Ceiling::default(),
+        host_uplink: None,
         zone: "global".into(),
         region: String::new(),
         stun_urls: Vec::new(),
         access: super::access::Policy::default(),
         contribution: ContributionLimits::default(),
-        capacity_bytes_per_second: None,
         services: Services::default(),
         relay_budget: Some(MonthlyBudget {
             bytes,
@@ -64,18 +68,11 @@ async fn service_revocation_is_not_lost_when_immediately_reenabled() {
     let epoch = node.epoch();
     node.update(
         Settings {
-            authority: None,
-            zone: "global".into(),
-            region: String::new(),
-            stun_urls: Vec::new(),
-            access: super::access::Policy::default(),
-            contribution: ContributionLimits::default(),
-            capacity_bytes_per_second: None,
             services: Services {
                 relay: false,
                 stun: true,
             },
-            relay_budget: None,
+            ..Settings::default()
         },
         now(),
     )
@@ -111,6 +108,15 @@ async fn disabling_service_closes_active_websockets_and_rejects_new_upgrades() {
     .configure(Settings::default(), None)
     .unwrap();
     let node = server.node();
+    let _stun = crate::stun::Service::bind_with_node(
+        crate::stun::Config {
+            udp_addresses: vec!["127.0.0.1:0".parse().unwrap()],
+            admin_address: None,
+            ..crate::stun::Config::default()
+        },
+        node.clone(),
+    )
+    .unwrap();
     node.identify(Identity::generate().unwrap()).unwrap();
     let (stop, stopped) = tokio::sync::oneshot::channel();
     let task = tokio::spawn(async move {
@@ -134,18 +140,11 @@ async fn disabling_service_closes_active_websockets_and_rejects_new_upgrades() {
         .unwrap();
     node.update(
         Settings {
-            authority: None,
-            zone: "global".into(),
-            region: String::new(),
-            stun_urls: Vec::new(),
-            access: super::access::Policy::default(),
-            contribution: ContributionLimits::default(),
-            capacity_bytes_per_second: None,
             services: Services {
                 relay: false,
                 stun: true,
             },
-            relay_budget: None,
+            ..Settings::default()
         },
         now(),
     )

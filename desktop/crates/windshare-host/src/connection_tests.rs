@@ -310,3 +310,242 @@ fn cancel_setup_same_revision_reply_settles_against_authoritative_setup() {
         assert!(!model.has_unfinished_work(), "{label}");
     }
 }
+
+#[test]
+fn guest_setup_errors_route_through_setup_request_without_sticky_command_error() {
+    let (shared, mut pending) = pending_create();
+    let running = serde_json::json!({
+        "version": 1,
+        "snapshot": {
+            "session_id": "session",
+            "revision": 1,
+            "shares": [],
+            "setup": {
+                "state": "running",
+                "id": "setup:1",
+                "relay_url": "https://relay.example",
+                "verification_url": "https://console.example/approve",
+                "guest_available": true
+            }
+        }
+    });
+    receive(&shared, &mut pending, &running.to_string()).unwrap();
+    shared.update(|draft| {
+        draft.write().setup_request = crate::SetupRequest::Pending {
+            id: "setup:1".into(),
+            operation_id: String::new(),
+            kind: crate::SetupRequestKind::Guest,
+        };
+    });
+    pending.insert(
+        2,
+        Request {
+            id: "2".into(),
+            command: Command::GuestSetup {
+                setup_id: "setup:1".into(),
+            },
+        },
+    );
+    let rejection = serde_json::json!({
+        "version": 1,
+        "id": "2",
+        "error": { "code": "request_rejected", "message": "no guest approval is pending" }
+    });
+    receive(&shared, &mut pending, &rejection.to_string()).unwrap();
+    {
+        let model = shared.model.lock().unwrap();
+        assert_eq!(model.command_error, None);
+        assert_eq!(
+            model.setup_request,
+            crate::SetupRequest::Rejected {
+                id: "setup:1".into(),
+                error: crate::Failure::new("request_rejected", "no guest approval is pending"),
+            }
+        );
+        assert_eq!(model.setup_settlement("setup:1"), None);
+    }
+
+    // A late GuestSetup error after Cancel took ownership must neither clobber Cancel nor set command_error.
+    shared.update(|draft| {
+        draft.write().setup_request = crate::SetupRequest::Pending {
+            id: "setup:1".into(),
+            operation_id: String::new(),
+            kind: crate::SetupRequestKind::Cancel {
+                acknowledged: false,
+            },
+        };
+    });
+    pending.insert(
+        3,
+        Request {
+            id: "3".into(),
+            command: Command::GuestSetup {
+                setup_id: "setup:1".into(),
+            },
+        },
+    );
+    let late_error = serde_json::json!({
+        "version": 1,
+        "id": "3",
+        "error": { "code": "request_rejected", "message": "no guest approval is pending" }
+    });
+    receive(&shared, &mut pending, &late_error.to_string()).unwrap();
+    let model = shared.model.lock().unwrap();
+    assert_eq!(model.command_error, None);
+    assert_eq!(
+        model.setup_request,
+        crate::SetupRequest::Pending {
+            id: "setup:1".into(),
+            operation_id: String::new(),
+            kind: crate::SetupRequestKind::Cancel {
+                acknowledged: false,
+            },
+        }
+    );
+}
+
+#[test]
+fn guest_setup_pending_clears_when_approval_clears_or_setup_is_superseded() {
+    let (shared, mut pending) = pending_create();
+    let open = serde_json::json!({
+        "version": 1,
+        "snapshot": {
+            "session_id": "session",
+            "revision": 1,
+            "shares": [],
+            "setup": {
+                "state": "running",
+                "id": "setup:1",
+                "relay_url": "https://relay.example",
+                "verification_url": "https://console.example/approve",
+                "guest_available": true
+            }
+        }
+    });
+    receive(&shared, &mut pending, &open.to_string()).unwrap();
+    shared.update(|draft| {
+        draft.write().setup_request = crate::SetupRequest::Pending {
+            id: "setup:1".into(),
+            operation_id: String::new(),
+            kind: crate::SetupRequestKind::Guest,
+        };
+    });
+
+    // Unrelated snapshot while guest_available is still true keeps Pending(Guest).
+    let still_open = serde_json::json!({
+        "version": 1,
+        "snapshot": {
+            "session_id": "session",
+            "revision": 2,
+            "shares": [],
+            "setup": {
+                "state": "running",
+                "id": "setup:1",
+                "stage": "slow_down",
+                "relay_url": "https://relay.example",
+                "verification_url": "https://console.example/approve",
+                "guest_available": true
+            }
+        }
+    });
+    receive(&shared, &mut pending, &still_open.to_string()).unwrap();
+    assert!(shared.model.lock().unwrap().setup_pending());
+
+    // Once host clears approval (guest_available: false), Pending(Guest) clears cleanly.
+    let cleared = serde_json::json!({
+        "version": 1,
+        "snapshot": {
+            "session_id": "session",
+            "revision": 3,
+            "shares": [],
+            "setup": {
+                "state": "running",
+                "id": "setup:1",
+                "stage": "guest",
+                "relay_url": "https://relay.example",
+                "guest_available": false
+            }
+        }
+    });
+    receive(&shared, &mut pending, &cleared.to_string()).unwrap();
+    assert_eq!(
+        shared.model.lock().unwrap().setup_request,
+        crate::SetupRequest::Idle
+    );
+
+    // Superseded setup ID also clears Pending(Guest) immediately.
+    shared.update(|draft| {
+        draft.write().setup_request = crate::SetupRequest::Pending {
+            id: "setup:1".into(),
+            operation_id: String::new(),
+            kind: crate::SetupRequestKind::Guest,
+        };
+    });
+    let superseded = serde_json::json!({
+        "version": 1,
+        "snapshot": {
+            "session_id": "session",
+            "revision": 4,
+            "shares": [],
+            "setup": { "state": "finished", "id": "setup:2", "relay_saved": true }
+        }
+    });
+    receive(&shared, &mut pending, &superseded.to_string()).unwrap();
+    assert_eq!(
+        shared.model.lock().unwrap().setup_request,
+        crate::SetupRequest::Idle
+    );
+}
+
+#[test]
+fn guest_setup_same_revision_reply_clears_pending_state() {
+    let shared = Shared {
+        model: Mutex::new(Arc::new(Model::default())),
+        closing: AtomicBool::new(false),
+        account_view_visible: AtomicBool::new(false),
+        updates: async_channel::bounded(1).0,
+        wake: polling::Poller::new().unwrap(),
+    };
+    let mut pending = BTreeMap::new();
+    let finished = serde_json::json!({
+        "version": 1,
+        "snapshot": {
+            "session_id": "session",
+            "revision": 4,
+            "shares": [],
+            "setup": { "state": "finished", "id": "setup:1", "relay_saved": true }
+        }
+    });
+    receive(&shared, &mut pending, &finished.to_string()).unwrap();
+    shared.update(|draft| {
+        draft.write().setup_request = crate::SetupRequest::Pending {
+            id: "setup:1".into(),
+            operation_id: String::new(),
+            kind: crate::SetupRequestKind::Guest,
+        };
+    });
+    pending.insert(
+        4,
+        Request {
+            id: "4".into(),
+            command: Command::GuestSetup {
+                setup_id: "setup:1".into(),
+            },
+        },
+    );
+    let same_rev_reply = serde_json::json!({
+        "version": 1,
+        "id": "4",
+        "snapshot": {
+            "session_id": "session",
+            "revision": 4,
+            "shares": [],
+            "setup": { "state": "finished", "id": "setup:1", "relay_saved": true }
+        }
+    });
+    receive(&shared, &mut pending, &same_rev_reply.to_string()).unwrap();
+    let model = Arc::clone(&shared.model.lock().unwrap());
+    assert_eq!(model.setup_request, crate::SetupRequest::Idle);
+    assert!(!model.setup_pending());
+    assert!(!model.has_unfinished_work());
+}

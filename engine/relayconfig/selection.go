@@ -28,6 +28,9 @@ func ShareIntent(config Config, override []string) (relayprofile.Intent, error) 
 	default:
 		intent = relayprofile.Plan(candidates)
 	}
+	if !config.CommunityEnabled() {
+		intent = intent.WithoutCommunity()
+	}
 	if err := intent.Validate(); err != nil {
 		return relayprofile.Intent{}, errors.Join(ErrConfig, err)
 	}

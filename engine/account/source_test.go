@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -479,4 +480,130 @@ func TestPersistentStoreReadErrorEscalatesToUserActionAndRecovers(t *testing.T) 
 		}
 		requireBearer(t, source, issued.Ticket)
 	})
+}
+
+type blockingLoadStore struct {
+	MemoryStore
+	block   atomic.Bool
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (store *blockingLoadStore) Load(ctx context.Context) (Record, error) {
+	if store.block.Load() {
+		store.once.Do(func() { close(store.entered) })
+		<-ctx.Done()
+		return Record{}, ctx.Err()
+	}
+	return store.MemoryStore.Load(ctx)
+}
+
+func TestPrepareShareAuthorizationAfterCloseFailsClosed(t *testing.T) {
+	config, _ := accountFixture(t)
+	service, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.nodes.put("primary", &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now().Add(time.Hour)})
+	service.Close()
+
+	share := service.PrepareShareAuthorization(t.Context())
+	if share == nil {
+		t.Fatal("PrepareShareAuthorization on closed service returned nil")
+	}
+	defer share.Close()
+	if share.loading != nil || share.attribution != attributionClosed {
+		t.Fatalf("closed PrepareShareAuthorization state = (loading=%v, attribution=%d), want closed without loading",
+			share.loading != nil, share.attribution)
+	}
+	got := share.Source("primary").ReserveRegistrationAuthorization()
+	if got.State != serviceauthority.AdmissionDenied || got.Bearer != "" {
+		t.Fatalf("authorization after service close = %+v, want denied", got)
+	}
+}
+
+func TestPrepareShareAuthorizationCloseCancelsInFlightLoadImmediately(t *testing.T) {
+	config, _ := accountFixture(t)
+	synctest.Test(t, func(t *testing.T) {
+		store := &blockingLoadStore{entered: make(chan struct{})}
+		config.Store = store
+		service, err := New(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer service.Close()
+		service.nodes.put("primary", &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now().Add(time.Hour)})
+
+		store.block.Store(true)
+		share := service.PrepareShareAuthorization(context.Background())
+		defer share.Close()
+		<-store.entered
+
+		source := share.Source("primary")
+		waiting := source.ReserveRegistrationAuthorization()
+		if waiting.State != serviceauthority.AdmissionPendingSetup || waiting.Changed == nil {
+			t.Fatalf("in-flight PrepareShareAuthorization = %+v, want pending_setup with signal", waiting)
+		}
+
+		closed := make(chan struct{})
+		go func() {
+			service.Close()
+			close(closed)
+		}()
+		synctest.Wait()
+		select {
+		case <-closed:
+		default:
+			t.Fatal("Service.Close waited for CacheLoadTimeout instead of canceling PrepareShareAuthorization load")
+		}
+		select {
+		case <-waiting.Changed:
+		default:
+			t.Fatal("Service.Close did not unblock waiters on share.loading")
+		}
+		got := source.ReserveRegistrationAuthorization()
+		if got.State != serviceauthority.AdmissionDenied || got.Bearer != "" {
+			t.Fatalf("authorization after canceled PrepareShareAuthorization = %+v, want denied", got)
+		}
+	})
+}
+
+func TestPrepareShareAuthorizationConcurrentWithServiceClose(t *testing.T) {
+	config, issued := accountFixture(t)
+	for range 64 {
+		iterationConfig := config
+		iterationConfig.Store = &MemoryStore{record: cachedRecord(issued)}
+		service, err := New(iterationConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		start := make(chan struct{})
+		var group sync.WaitGroup
+		group.Go(func() {
+			<-start
+			share := service.PrepareShareAuthorization(t.Context())
+			defer share.Close()
+			source := share.Source("primary")
+			got := source.ReserveRegistrationAuthorization()
+			if got.State == serviceauthority.AdmissionPendingSetup && got.Changed != nil {
+				<-got.Changed
+				got = source.ReserveRegistrationAuthorization()
+			}
+			switch got.State {
+			case serviceauthority.AdmissionReady:
+				if got.Bearer != issued.Ticket {
+					t.Errorf("ready bearer = %q, want issued ticket", got.Bearer)
+				}
+			case serviceauthority.AdmissionDenied:
+			default:
+				t.Errorf("unexpected authorization state during concurrent close: %+v", got)
+			}
+		})
+		group.Go(func() {
+			<-start
+			service.Close()
+		})
+		close(start)
+		group.Wait()
+	}
 }

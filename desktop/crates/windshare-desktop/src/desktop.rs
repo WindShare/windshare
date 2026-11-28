@@ -35,6 +35,7 @@ pub struct Desktop {
     pub share_flow: ShareFlow,
     pub runtime: Runtime,
     pub network_ui: crate::network::NetworkSettingsState,
+    pub community_notice: crate::network::CommunityNoticeState,
     pub account_ui: crate::account::AccountSettingsState,
     pub share_reveal_wakeup: Option<gpui::Task<()>>,
     pub intro_anchors: IntroAnchors,
@@ -131,6 +132,7 @@ impl Desktop {
             search,
             link_input,
             share_flow: ShareFlow::Choose,
+            community_notice: Self::initial_community_notice(&runtime, cx),
             runtime,
             network_ui: crate::network::NetworkSettingsState::default(),
             account_ui: crate::account::AccountSettingsState::default(),
@@ -488,6 +490,9 @@ impl Desktop {
                             .when_some(self.runtime.setup_cancellation_error(cx), |el, error| {
                                 el.child(self.setup_cancellation_notice(theme, error, cx))
                             })
+                            .when_some(self.community_paused_notice(theme, cx), |el, notice| {
+                                el.child(notice)
+                            })
                             .when_some(self.account_notice(theme, cx), |el, notice| {
                                 el.child(notice)
                             })
@@ -548,6 +553,9 @@ impl Desktop {
                         })
                         .when_some(self.runtime.setup_cancellation_error(cx), |el, error| {
                             el.child(self.setup_cancellation_notice(theme, error, cx))
+                        })
+                        .when_some(self.community_paused_notice(theme, cx), |el, notice| {
+                            el.child(notice)
                         })
                         .when_some(self.account_notice(theme, cx), |el, notice| {
                             el.child(notice)

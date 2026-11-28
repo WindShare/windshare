@@ -8,6 +8,7 @@ mod metrics;
 pub(crate) mod usage;
 pub use identity::Identity;
 mod configuration;
+pub(crate) mod contribution;
 mod descriptor;
 mod reload;
 mod settings;
@@ -15,10 +16,11 @@ mod trace;
 pub use configuration::Configuration;
 
 pub(crate) use budget::WriteOrigin;
+pub(crate) use descriptor::{GossipDescriptor, GossipEnvelope};
 pub(crate) use metered::Metered;
 pub(crate) use metrics::Metrics;
 pub use metrics::Snapshot;
-pub use settings::{ContributionLimits, MonthlyBudget, Services, Settings};
+pub use settings::{Ceiling, ContributionLimits, MonthlyBudget, Services, Settings};
 pub(crate) use trace::NodeTrace;
 
 use crate::storage::Database;
@@ -38,6 +40,7 @@ pub(crate) const SERVICE_RETRY_AFTER: windshare_relay_core::error_frame::RetryAf
         .expect("service retry must fit a WS2E frame");
 
 struct State {
+    bound_stun_ports: Option<Vec<u16>>,
     settings: Settings,
     control: Option<Database>,
     budgets: budget::Budgets,
@@ -53,8 +56,12 @@ pub struct Runtime {
     pub(crate) governor: governor::Governor,
     identity: Arc<OnceLock<descriptor::InstalledIdentity>>,
     state: Arc<Mutex<State>>,
+    pub(crate) local_contribution: Arc<OnceLock<contribution::Control>>,
     control_writer: Arc<Mutex<()>>,
     reporting_authority: Arc<OnceLock<Option<usage::Authority>>>,
+    bootstrap_nodes: watch::Sender<Arc<[String]>>,
+    gossip_cache: Arc<Mutex<Option<descriptor::CachedGossip>>>,
+    descriptor_revision: Arc<AtomicU64>,
     revocations: watch::Sender<u64>,
     epoch: Arc<AtomicU64>,
     services: Arc<AtomicU8>,
@@ -76,6 +83,7 @@ impl Default for Runtime {
             console: Arc::default(),
             identity: Arc::default(),
             state: Arc::new(Mutex::new(State {
+                bound_stun_ports: None,
                 settings: Settings::default(),
                 control: None,
                 budgets: budget::Budgets::default(),
@@ -83,8 +91,12 @@ impl Default for Runtime {
                 storage_failed: false,
                 unpaced_relay_warned: false,
             })),
+            local_contribution: Arc::default(),
             control_writer: Arc::default(),
             reporting_authority: Arc::default(),
+            bootstrap_nodes: watch::channel(Arc::from([])).0,
+            gossip_cache: Arc::default(),
+            descriptor_revision: Arc::new(AtomicU64::new(0)),
             revocations: watch::channel(0).0,
             epoch: Arc::new(AtomicU64::new(0)),
             services: Arc::new(AtomicU8::new(default_services.to_bits())),
@@ -102,11 +114,19 @@ impl Runtime {
     #[cfg(test)]
     pub(crate) fn new(settings: Settings, store: Database) -> Result<Self> {
         let runtime = Self::default();
-        runtime.configure(settings, store)?;
+        runtime.install_settings(settings, store)?;
         Ok(runtime)
     }
 
     pub(crate) fn configure(&self, settings: Settings, store: Database) -> Result<()> {
+        if settings.authority.is_none() {
+            self.local_contribution
+                .get_or_init(|| contribution::Control::new(store.clone()));
+        }
+        self.install_settings(settings, store)
+    }
+
+    fn install_settings(&self, settings: Settings, store: Database) -> Result<()> {
         let generations = settings.validate()?;
         let writer = self.lock_control()?;
         let timestamp = now();
@@ -151,6 +171,14 @@ impl Runtime {
         self.epoch.load(Ordering::Acquire)
     }
 
+    pub(crate) fn subscribe_bootstrap_nodes(&self) -> watch::Receiver<Arc<[String]>> {
+        self.bootstrap_nodes.subscribe()
+    }
+
+    pub(super) fn bump_descriptor_revision(&self) {
+        self.descriptor_revision.fetch_add(1, Ordering::Release);
+    }
+
     pub(crate) async fn revoked(&self, epoch: u64) {
         let mut changes = self.revocations.subscribe();
         while *changes.borrow_and_update() == epoch {
@@ -164,6 +192,7 @@ impl Runtime {
         if !state.unavailable {
             state.unavailable = true;
             self.unavailable.store(true, Ordering::Release);
+            self.bump_descriptor_revision();
             self.epoch.fetch_add(1, Ordering::Release);
             self.revocations.send_modify(|epoch| *epoch += 1);
             tracing::warn!(event = "relay_service_unavailable", reason);
@@ -171,7 +200,7 @@ impl Runtime {
     }
 }
 
-fn now() -> i64 {
+pub(crate) fn now() -> i64 {
     i64::try_from(
         SystemTime::now()
             .duration_since(UNIX_EPOCH)

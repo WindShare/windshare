@@ -31,6 +31,25 @@ fn preference_commands_log_the_action_and_keep_the_address_on_the_wire() {
             serde_json::json!({ "action": action, "value": address })
         );
     }
+
+    for (enabled, expected_value) in [(true, "on"), (false, "off")] {
+        let command = Command::Configure {
+            operation_id: "share-operation".into(),
+            setup: SetupInput {
+                id: "preference-setup".into(),
+                preference: Some(PreferenceEdit::CommunityNodes(enabled)),
+                ..SetupInput::default()
+            },
+        };
+        let fields = command.log_fields();
+        assert_eq!(fields.command, "configure");
+        assert_eq!(fields.action, Some("community_nodes"));
+        let wire = serde_json::to_value(&command).unwrap();
+        assert_eq!(
+            wire["setup"]["preference"],
+            serde_json::json!({ "action": "community_nodes", "value": expected_value })
+        );
+    }
 }
 
 #[test]

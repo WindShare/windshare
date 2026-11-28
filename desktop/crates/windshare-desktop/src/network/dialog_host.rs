@@ -146,6 +146,24 @@ impl SetupDialog {
         cx.notify();
     }
 
+    pub(super) fn guest_setup(&mut self, cx: &mut Context<Self>) {
+        let SetupSource::Native { host, .. } = &self.source else {
+            return;
+        };
+        let store = host.read(cx);
+        if store.selection_disabled() {
+            return;
+        }
+        let Some(setup_id) = store.model().setup.context().map(|ctx| ctx.id.clone()) else {
+            return;
+        };
+        let host = host.clone();
+        if host.update(cx, |host, cx| host.guest_setup(&setup_id, cx)) {
+            self.in_flight_id = Some(setup_id);
+        }
+        cx.notify();
+    }
+
     pub(super) fn approve_relay(&self, cx: &App) {
         if let Setup::Running {
             verification_url, ..

@@ -13,6 +13,7 @@ const FRAME_CREDIT: u128 = MAX_FRAME as u128 * CREDIT_PER_BYTE;
 pub(super) struct Bandwidth {
     pub(super) node: Pacing,
     pub(super) public: Pacing,
+    pub(super) preemption: super::preemption::Preemption,
 }
 
 #[derive(Clone, Copy)]
@@ -22,6 +23,15 @@ pub(super) struct Credit {
 }
 
 impl Bandwidth {
+    pub(super) fn observe_wire(
+        &mut self,
+        wire: &super::preemption::Egress,
+        now: Instant,
+    ) -> Option<super::preemption::Transition> {
+        let outcome = self.preemption.sample(wire, now);
+        self.public.configure(outcome.public_limit, now);
+        outcome.transition
+    }
     pub(super) fn replenish(&mut self, now: Instant) -> Credit {
         Credit {
             node: self.node.replenish(now),
@@ -37,13 +47,14 @@ impl Bandwidth {
 
 impl Credit {
     pub(super) fn reserve(&mut self, class: Class, bytes: u64) -> bool {
-        if bytes > self.node || (class != Class::Owner && bytes > self.public) {
+        if class == Class::Owner {
+            return true;
+        }
+        if bytes > self.node || bytes > self.public {
             return false;
         }
         self.node -= bytes;
-        if class != Class::Owner {
-            self.public -= bytes;
-        }
+        self.public -= bytes;
         true
     }
 }

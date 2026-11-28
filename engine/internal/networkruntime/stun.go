@@ -3,10 +3,14 @@ package networkruntime
 import "github.com/windshare/windshare/connectivity/icepolicy"
 
 func (r *Runtime) ICEPool() icepolicy.ICEEndpointPool {
+	pool := icepolicy.DefaultPool()
 	if r.directory != nil {
 		if snapshot, usable := r.directory.Snapshot(); usable {
-			return icepolicy.DirectoryPool(snapshot.Payload())
+			pool = icepolicy.DirectoryPool(snapshot.Payload())
 		}
 	}
-	return icepolicy.DefaultPool()
+	if _, allowed := r.communitySettings(r.ctx); allowed {
+		pool = pool.WithCommunity(r.community.STUN(r.generation()))
+	}
+	return pool
 }

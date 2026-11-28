@@ -49,7 +49,7 @@ func TestSignedNodeDiscoveryBindsFullWebSocketEndpointWithoutAppendingTwice(t *t
 	})
 	service := testService(t, config)
 	descriptor, err := service.nodes.discover(t.Context(), "https://node.example", key)
-	if err != nil || !descriptor.Anonymous {
+	if err != nil || descriptor.PublicRelay != serviceauthority.RelayAnonymous {
 		t.Fatal(descriptor, err)
 	}
 	if _, err := service.nodes.discover(t.Context(), "https://node.example/another-base", key); err == nil {

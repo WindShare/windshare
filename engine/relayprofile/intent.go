@@ -18,8 +18,9 @@ const (
 // Intent separates a user's complete explicit set from configured candidates
 // supplemented by the application network. The zero value requests planning.
 type Intent struct {
-	mode       IntentMode
-	candidates []Candidate
+	communityOff bool
+	mode         IntentMode
+	candidates   []Candidate
 }
 
 func Plan(candidates []Candidate) Intent {
@@ -31,8 +32,10 @@ func OnlyConfigured(candidates []Candidate) Intent {
 func UseExplicit(candidates []Candidate) Intent {
 	return Intent{mode: Explicit, candidates: slices.Clone(candidates)}
 }
-func (i Intent) Mode() IntentMode        { return i.mode }
-func (i Intent) Candidates() []Candidate { return slices.Clone(i.candidates) }
+func (i Intent) WithoutCommunity() Intent { i.communityOff = true; return i }
+func (i Intent) CommunityAllowed() bool   { return !i.communityOff && i.mode == Planned }
+func (i Intent) Mode() IntentMode         { return i.mode }
+func (i Intent) Candidates() []Candidate  { return slices.Clone(i.candidates) }
 
 // Validate distinguishes an impossible selection from unavailable infrastructure:
 // retrying cannot supply candidates when the caller excludes the built-in network.

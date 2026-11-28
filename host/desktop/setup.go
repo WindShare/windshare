@@ -13,6 +13,7 @@ import (
 )
 
 type SetupInput struct {
+	Anonymous      bool                        `json:"anonymous,omitempty"`
 	ID             string                      `json:"id"`
 	RelayURL       string                      `json:"relay_url"`
 	FrontURL       string                      `json:"front_url"`
@@ -48,6 +49,8 @@ func (result SetupResult) affectsAdmission(explicitRelays []string) bool {
 }
 
 type SetupView struct {
+	GuestAvailable  bool `json:"guest_available,omitempty"`
+	guestRequested  bool
 	State           string                    `json:"state"`
 	ID              string                    `json:"id,omitempty"`
 	OperationID     string                    `json:"operation_id,omitempty"`
@@ -67,6 +70,7 @@ type SetupView struct {
 func (view SetupView) busy() bool { return view.State == "running" || view.State == "cancelling" }
 
 func (view *SetupView) clearApproval() {
+	view.GuestAvailable = false
 	view.VerificationURL = ""
 	view.UserCode = ""
 	view.ServiceLogin = nil
@@ -128,7 +132,7 @@ func (a *Application) configure(request Request) error {
 }
 
 func (input SetupInput) validate() error {
-	if input.Preference != nil && (input.RelayURL != "" || input.FrontURL != "") {
+	if input.Preference != nil && (input.RelayURL != "" || input.FrontURL != "" || input.Anonymous) {
 		return errors.New("invalid sharing settings request")
 	}
 	if input.RelayURL == "" {
@@ -137,6 +141,9 @@ func (input SetupInput) validate() error {
 		}
 	} else if input.RelayOperation != relaysetup.AddProfile && input.RelayOperation != relaysetup.AuthorizeDevice {
 		return errors.New("invalid relay setup operation")
+	}
+	if input.Anonymous && (input.RelayURL == "" || input.AccessKey != "" || input.RelayOperation != relaysetup.AddProfile) {
+		return errors.New("guest access requires adding a relay without a key")
 	}
 	if input.Preference == nil && input.RelayURL == "" && input.FrontURL == "" {
 		return errors.New("enter a relay or frontend URL")
@@ -167,9 +174,10 @@ func (a *Application) runSetup(ctx context.Context, input SetupInput) {
 		if progress.Stage == "frontend_saved" {
 			a.setup.FrontendSaved = true
 		}
-		if a.setup.State == "running" {
+		if a.setup.State == "running" && !a.setup.guestRequested {
 			a.setup.Stage = progress.Stage
 			if progress.VerificationURL != "" {
+				a.setup.GuestAvailable = progress.GuestAvailable
 				a.setup.VerificationURL, a.setup.UserCode, a.setup.ServiceLogin = progress.VerificationURL, progress.UserCode, progress.ServiceLogin
 			}
 		}
@@ -177,12 +185,30 @@ func (a *Application) runSetup(ctx context.Context, input SetupInput) {
 	})
 	preferences, preferencesErr := a.deps.load()
 	a.mu.Lock()
+	guestRequested := a.setup.guestRequested
+	a.setup.guestRequested = false
+	ownerCommitted := err == nil && result.RelaySaved
+	if guestRequested && !ownerCommitted && !a.closing {
+		a.setup.State, a.setup.Stage = "running", "guest"
+		next, cancel := context.WithCancel(context.Background())
+		a.interruptSetup = cancel
+		a.work.Add(1)
+		input.Anonymous = true
+		input.FrontURL = ""
+		a.mu.Unlock()
+		go a.runSetup(next, input)
+		return
+	}
 	if preferencesErr == nil {
 		a.preferences = preferences.Preferences(a.deps.defaultFrontend)
 	}
-	a.setup.FrontendSaved, a.setup.RelaySaved, a.setup.RelayRemoved = result.FrontendSaved, result.RelaySaved, result.RelayRemoved
+	a.setup.FrontendSaved, a.setup.RelaySaved, a.setup.RelayRemoved = a.setup.FrontendSaved || result.FrontendSaved, result.RelaySaved, result.RelayRemoved
 	a.setup.RelayURL = result.RelayURL
-	cancelled := ctx.Err() != nil || a.closing
+	// guestSetup interrupts ctx to switch to anonymous access, not to cancel
+	// setup. If owner approval already committed before the interrupt took
+	// effect, keep the saved owner credential and finish normally.
+	guestSuperseded := guestRequested && ownerCommitted
+	cancelled := (ctx.Err() != nil && !guestSuperseded) || a.closing
 	a.interruptSetup()
 	a.interruptSetup = nil
 	a.setup.clearApproval()
@@ -195,6 +221,13 @@ func (a *Application) runSetup(ctx context.Context, input SetupInput) {
 		return
 	}
 	defer a.mu.Unlock()
+	if guestSuperseded {
+		a.deps.log("host.setup_guest_superseded", map[string]any{
+			"setup_id":     a.setup.ID,
+			"operation_id": a.setup.OperationID,
+			"relay_origin": endpointOrigin(result.RelayURL),
+		})
+	}
 	if err != nil {
 		a.setup.State = "failed"
 		a.setup.Recovery = setupRecovery(result, err)
