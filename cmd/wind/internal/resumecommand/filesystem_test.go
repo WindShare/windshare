@@ -139,7 +139,7 @@ func TestFilesystemResumeDiscardRaceOmitsMalformedStageAndNativeClass(t *testing
 						return "discard 1", nil
 					},
 				},
-				parser:   flagRequestParser{logger: logger},
+				parser:   flagRequestParser{},
 				renderer: textRenderer{},
 				output:   streamResumeOutput{result: stdout, usage: testDiagnosticOutput{writer: stderr}},
 				logger:   logger,

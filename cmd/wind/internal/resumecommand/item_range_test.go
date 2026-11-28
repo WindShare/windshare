@@ -16,9 +16,9 @@ func TestResumeDiscardRejectsItemsBeyondIntRange(t *testing.T) {
 	root := t.TempDir()
 	maxInt := strconv.FormatUint(uint64(^uint(0)>>1), 10)
 	app, _, _ := newResumeTestApp()
-	request, parse := app.parser().ParseDiscard([]string{"-o", root, "--item", maxInt})
-	if parse != command.ParseReady || strconv.Itoa(request.itemNumber) != maxInt {
-		t.Fatalf("largest int item request=%+v parse=%d", request, parse)
+	request, err := app.parser().ParseDiscard([]string{"-o", root, "--item", maxInt})
+	if err != nil || strconv.Itoa(request.itemNumber) != maxInt {
+		t.Fatalf("largest int item request=%+v err=%v", request, err)
 	}
 
 	for _, item := range []string{
@@ -26,9 +26,9 @@ func TestResumeDiscardRejectsItemsBeyondIntRange(t *testing.T) {
 		strconv.FormatUint(uint64(^uint(0)), 10),
 	} {
 		t.Run(item, func(t *testing.T) {
-			request, parse := app.parser().ParseDiscard([]string{"-o", root, "--item", item})
-			if parse.ExitCode() != command.ExitUsage {
-				t.Fatalf("out-of-range item was accepted as %d (parse=%d)", request.itemNumber, parse)
+			request, err := app.parser().ParseDiscard([]string{"-o", root, "--item", item})
+			if command.ParseExitCode(err) != command.ExitUsage {
+				t.Fatalf("out-of-range item was accepted as %d (err=%v)", request.itemNumber, err)
 			}
 
 			snapshot, err := newResumeInventorySnapshot([]resumeOperation{

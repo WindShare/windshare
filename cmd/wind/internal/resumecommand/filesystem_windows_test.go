@@ -61,7 +61,7 @@ func TestWindowsCLIResumeDiscardRetriesAfterPartHandleReleased(t *testing.T) {
 		runner := newRunner(resumeDependencies{
 			inventories:  filesystemResumeStateInventoryOpener{recovery: application},
 			confirmation: &fakeResumeConfirmationTerminal{interactive: true, line: confirmLine},
-			parser:       flagRequestParser{logger: logger},
+			parser:       flagRequestParser{},
 			renderer:     textRenderer{},
 			output:       streamResumeOutput{result: stdout, usage: testDiagnosticOutput{writer: stderr}},
 			logger:       logger,
@@ -155,7 +155,7 @@ func TestWindowsCLIResumeDiscardRetriesAfterOpDirHandleReleased(t *testing.T) {
 		runner := newRunner(resumeDependencies{
 			inventories:  filesystemResumeStateInventoryOpener{recovery: application},
 			confirmation: &fakeResumeConfirmationTerminal{interactive: true, line: confirmLine},
-			parser:       flagRequestParser{logger: logger},
+			parser:       flagRequestParser{},
 			renderer:     textRenderer{},
 			output:       streamResumeOutput{result: stdout, usage: testDiagnosticOutput{writer: stderr}},
 			logger:       logger,

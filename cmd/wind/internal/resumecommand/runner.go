@@ -17,7 +17,7 @@ func Parse(args []string, output command.LineOutput) (Request, command.ExitCode,
 	})
 	return parseRequest(
 		args,
-		flagRequestParser{logger: logger},
+		flagRequestParser{},
 		textRenderer{}.Usage,
 		func(usage string) { command.WriteLines(output, usage) },
 		logger,
@@ -77,19 +77,19 @@ func parseRequest(
 	}
 	switch args[0] {
 	case "list":
-		parsed, outcome := parser.ParseRoot("resume list", args[1:])
-		if outcome != command.ParseReady {
-			return Request{}, unreadyRequest(outcome, usage, writeUsage), false
+		parsed, err := parser.ParseRoot("resume list", args[1:])
+		if err != nil {
+			return Request{}, unreadyRequest("resume list", err, usage, writeUsage, logger), false
 		}
 		return Request{action: "list", rootPath: parsed.rootPath}, command.ExitOK, true
 	case "discard":
-		parsed, outcome := parser.ParseDiscard(args[1:])
-		if outcome != command.ParseReady {
-			return Request{}, unreadyRequest(outcome, usage, writeUsage), false
+		parsed, err := parser.ParseDiscard(args[1:])
+		if err != nil {
+			return Request{}, unreadyRequest("resume discard", err, usage, writeUsage, logger), false
 		}
 		return Request{action: "discard", rootPath: parsed.rootPath, itemNumber: parsed.itemNumber}, command.ExitOK, true
 	default:
-		logger.Logf("resume: unknown action")
+		logger.Logf("resume: unknown action %q", command.RedactToken(args[0]))
 		writeUsage(usage())
 		return Request{}, command.ExitUsage, false
 	}
@@ -98,12 +98,19 @@ func parseRequest(
 // unreadyRequest answers a request that cannot run. Help is answered before any
 // inventory is opened, so it can never touch destination state even when it
 // follows otherwise valid discard arguments.
-func unreadyRequest(outcome command.ParseOutcome, usage func() string, writeUsage func(string)) command.ExitCode {
-	if outcome == command.ParseHelp {
+func unreadyRequest(
+	action string,
+	err error,
+	usage func() string,
+	writeUsage func(string),
+	logger resumeLogger,
+) command.ExitCode {
+	if errors.Is(err, command.ErrHelp) {
 		writeUsage(usage())
 		return command.ExitOK
 	}
-	return outcome.ExitCode()
+	logger.Logf("%s: %v", action, err)
+	return command.ParseExitCode(err)
 }
 
 func (runner Runner) executeList(ctx context.Context, rootPath string) command.ExitCode {

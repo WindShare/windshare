@@ -1,5 +1,5 @@
 // Package command provides the shared identity, exit-code contract, and
-// privacy-safe flag parsing primitives used by wind and its subcommands.
+// interleaved flag-parsing primitives used by wind and its subcommands.
 package command
 
 import "fmt"

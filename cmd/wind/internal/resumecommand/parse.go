@@ -10,63 +10,48 @@ import (
 
 // List and discard accept no positional arguments. ParseNoPositionals stops at
 // the first positional or "--" so later tokens cannot be reinterpreted as help.
-type flagRequestParser struct {
-	logger resumeLogger
-}
+type flagRequestParser struct{}
 
-func (parser flagRequestParser) ParseRoot(
+func (flagRequestParser) ParseRoot(
 	action string,
 	args []string,
-) (resumeRootRequest, command.ParseOutcome) {
+) (resumeRootRequest, error) {
 	flags := command.NewFlagSet(action)
 	var rootPath resumeRootPathFlag
 	flags.Var(&rootPath, "o", "output directory (required)")
-	outcome := command.ParseNoPositionals(flags, args)
-	if outcome != command.ParseReady {
-		if outcome != command.ParseHelp {
-			parser.logger.Logf("%s: %s", action, outcome.Diagnostic())
-		}
-		return resumeRootRequest{}, outcome
+	if err := command.ParseNoPositionals(flags, args); err != nil {
+		return resumeRootRequest{}, err
 	}
 	if !rootPath.set {
-		parser.logger.Logf("%s: -o is required", action)
-		return resumeRootRequest{}, command.ParseMissingOptionValue
+		return resumeRootRequest{}, errors.New("-o is required")
 	}
 	absolute, err := absoluteResumeRoot(rootPath.value)
 	if err != nil {
-		parser.logger.Logf("%s: output directory is invalid", action)
-		return resumeRootRequest{}, command.ParseInvalidOptionValue
+		return resumeRootRequest{}, errors.New("output directory is invalid")
 	}
-	return resumeRootRequest{rootPath: absolute}, command.ParseReady
+	return resumeRootRequest{rootPath: absolute}, nil
 }
 
-func (parser flagRequestParser) ParseDiscard(args []string) (resumeDiscardRequest, command.ParseOutcome) {
+func (flagRequestParser) ParseDiscard(args []string) (resumeDiscardRequest, error) {
 	flags := command.NewFlagSet("resume discard")
 	var rootPath resumeRootPathFlag
 	flags.Var(&rootPath, "o", "output directory (required)")
 	var item resumeItemNumberFlag
 	flags.Var(&item, "item", "one current inventory item number (required)")
-	outcome := command.ParseNoPositionals(flags, args)
-	if outcome != command.ParseReady {
-		if outcome != command.ParseHelp {
-			parser.logger.Logf("resume discard: %s", outcome.Diagnostic())
-		}
-		return resumeDiscardRequest{}, outcome
+	if err := command.ParseNoPositionals(flags, args); err != nil {
+		return resumeDiscardRequest{}, err
 	}
 	if !rootPath.set {
-		parser.logger.Logf("resume discard: -o is required")
-		return resumeDiscardRequest{}, command.ParseMissingOptionValue
+		return resumeDiscardRequest{}, errors.New("-o is required")
 	}
 	if !item.set {
-		parser.logger.Logf("resume discard: --item is required")
-		return resumeDiscardRequest{}, command.ParseMissingOptionValue
+		return resumeDiscardRequest{}, errors.New("--item is required")
 	}
 	absolute, err := absoluteResumeRoot(rootPath.value)
 	if err != nil {
-		parser.logger.Logf("resume discard: output directory is invalid")
-		return resumeDiscardRequest{}, command.ParseInvalidOptionValue
+		return resumeDiscardRequest{}, errors.New("output directory is invalid")
 	}
-	return resumeDiscardRequest{rootPath: absolute, itemNumber: item.value}, command.ParseReady
+	return resumeDiscardRequest{rootPath: absolute, itemNumber: item.value}, nil
 }
 
 type resumeRootPathFlag struct {
@@ -83,10 +68,10 @@ func (root *resumeRootPathFlag) String() string {
 
 func (root *resumeRootPathFlag) Set(value string) error {
 	if root == nil || root.set {
-		return errors.New("exactly one -o is allowed")
+		return command.OptionError("exactly one -o is allowed")
 	}
 	if value == "" {
-		return errors.New("-o must name an output directory")
+		return command.OptionError("-o must name an output directory")
 	}
 	root.set = true
 	root.value = value
@@ -107,13 +92,13 @@ func (item *resumeItemNumberFlag) String() string {
 
 func (item *resumeItemNumberFlag) Set(value string) error {
 	if item == nil || item.set {
-		return errors.New("exactly one --item is allowed")
+		return command.OptionError("exactly one --item is allowed")
 	}
 	// IntSize-1 bits keeps the ordinal within int, so it cannot wrap to a
 	// non-positive or different item number when converted below.
 	parsed, err := strconv.ParseUint(value, 10, strconv.IntSize-1)
 	if err != nil || parsed == 0 || strconv.FormatUint(parsed, 10) != value {
-		return errors.New("--item must be one canonical positive decimal number")
+		return command.OptionError("--item must be one canonical positive decimal number")
 	}
 	item.set = true
 	item.value = int(parsed)

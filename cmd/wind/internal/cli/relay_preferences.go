@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 
 	"github.com/windshare/windshare/cmd/wind/internal/command"
 	"github.com/windshare/windshare/engine/relayconfig"
@@ -26,25 +27,25 @@ func (app *App) parseRelayPreferenceArgs(args []string) (string, string, int, bo
 	action := args[0]
 	flags := command.NewFlagSet("relay " + action)
 	if action == "list" {
-		outcome := command.ParseNoPositionals(flags, args[1:])
-		if outcome == command.ParseHelp {
+		err := command.ParseNoPositionals(flags, args[1:])
+		if errors.Is(err, command.ErrHelp) {
 			app.writeCompleteLine("%s", relayUsage)
 			return "", "", ExitOK, false
 		}
-		if outcome != command.ParseReady {
-			app.writeCompleteLine("relay list: %s", outcome.Diagnostic())
-			return "", "", outcome.ExitCode().Int(), false
+		if err != nil {
+			app.writeCompleteLine("relay list: %v", err)
+			return "", "", command.ParseExitCode(err).Int(), false
 		}
 		return action, "", ExitOK, true
 	}
-	positionals, outcome := command.ParseInterleaved(flags, args[1:])
-	if outcome == command.ParseHelp {
+	positionals, err := command.ParseInterleaved(flags, args[1:])
+	if errors.Is(err, command.ErrHelp) {
 		app.writeCompleteLine("%s", relayUsage)
 		return "", "", ExitOK, false
 	}
-	if outcome != command.ParseReady {
-		app.writeCompleteLine("relay %s: %s", action, outcome.Diagnostic())
-		return "", "", outcome.ExitCode().Int(), false
+	if err != nil {
+		app.writeCompleteLine("relay %s: %v", action, err)
+		return "", "", command.ParseExitCode(err).Int(), false
 	}
 	if len(positionals) != 1 || positionals[0] == "" {
 		app.writeCompleteLine("%s", relayUsage)

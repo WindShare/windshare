@@ -46,13 +46,13 @@ func TestResumeParsersPreserveOptionValuesBeforeTerminator(t *testing.T) {
 				t.Fatal(err)
 			}
 			app, _, _ := newResumeTestApp()
-			request, parse := app.parser().ParseRoot("resume list", []string{"-o", value, "--"})
-			if parse != command.ParseReady || request.rootPath != root {
-				t.Fatalf("list request=%+v parse=%d", request, parse)
+			request, err := app.parser().ParseRoot("resume list", []string{"-o", value, "--"})
+			if err != nil || request.rootPath != root {
+				t.Fatalf("list request=%+v err=%v", request, err)
 			}
-			discard, parse := app.parser().ParseDiscard([]string{"--item", "1", "-o", value, "--"})
-			if parse != command.ParseReady || discard.rootPath != root || discard.itemNumber != 1 {
-				t.Fatalf("discard request=%+v parse=%d", discard, parse)
+			discard, err := app.parser().ParseDiscard([]string{"--item", "1", "-o", value, "--"})
+			if err != nil || discard.rootPath != root || discard.itemNumber != 1 {
+				t.Fatalf("discard request=%+v err=%v", discard, err)
 			}
 		})
 	}

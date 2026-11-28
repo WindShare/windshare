@@ -209,13 +209,13 @@ func TestShareRequestValidationPreservesSuiteBoundaries(t *testing.T) {
 			wantStderr string
 		}{
 			{"010000", "--block-size"},
-			{"0x1000", "option value is invalid"},
-			{"0X10000", "option value is invalid"},
-			{"0x0", "option value is invalid"},
-			{"0b1000000000000", "option value is invalid"},
-			{"0o10000", "option value is invalid"},
-			{"65_536", "option value is invalid"},
-			{"0_0", "option value is invalid"},
+			{"0x1000", "must be a decimal integer"},
+			{"0X10000", "must be a decimal integer"},
+			{"0x0", "must be a decimal integer"},
+			{"0b1000000000000", "must be a decimal integer"},
+			{"0o10000", "must be a decimal integer"},
+			{"65_536", "must be a decimal integer"},
+			{"0_0", "must be a decimal integer"},
 		} {
 			app, _, stderr := newSemanticTestApp(strings.NewReader(""))
 			request, parse := app.parseShareRequest([]string{
@@ -243,7 +243,7 @@ func TestShareRequestValidationPreservesSuiteBoundaries(t *testing.T) {
 		wantStderr string
 	}{
 		{name: "missing roots", wantStderr: "at least one path"},
-		{name: "empty relay", args: []string{"root", "--relay", ""}, wantStderr: "option value is invalid"},
+		{name: "empty relay", args: []string{"root", "--relay", ""}, wantStderr: "--relay URL must not be empty"},
 		{name: "empty frontend", args: []string{"root", "--front-url", ""}, wantStderr: "frontend URL"},
 		{
 			name:       "negative block size",

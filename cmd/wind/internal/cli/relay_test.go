@@ -152,26 +152,25 @@ func TestRelaySetupOptionsAreInterleaved(t *testing.T) {
 }
 
 func TestRelayArgumentErrorsCompleteBeforeOperation(t *testing.T) {
-	const rejectedValue = "relay_argument_CANARY"
-	for _, args := range [][]string{
-		{"add"},
-		{"onboard", ""},
-		{"cancel"},
-		{"cancel", "https://relay.example", "extra"},
-		{"add", "--name"},
-		{"add", "--no-browser=" + rejectedValue},
-		{"onboard", "--" + rejectedValue},
-		{"cancel", "--no-browser"},
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"add"}, "exactly one relay URL is required"},
+		{[]string{"onboard", ""}, "exactly one relay URL is required"},
+		{[]string{"cancel"}, "exactly one relay URL is required"},
+		{[]string{"cancel", "https://relay.example", "extra"}, "exactly one relay URL is required"},
+		{[]string{"add", "--name"}, "--name requires a value"},
+		{[]string{"add", "--no-browser=maybe"}, `--no-browser requires a boolean value (true or false)`},
+		{[]string{"onboard", "--unknown-flag"}, `unknown option "--unknown-flag"`},
+		{[]string{"cancel", "--no-browser"}, `unknown option "--no-browser"`},
 	} {
-		t.Run(strings.Join(args, " "), func(t *testing.T) {
+		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
 			var stderr bytes.Buffer
 			app := &App{Stderr: &stderr}
 			t.Cleanup(app.closeTerminalOutput)
-			if code := app.runRelay(t.Context(), args); code != ExitUsage || stderr.Len() == 0 {
-				t.Fatalf("exit=%d stderr=%q", code, stderr.String())
-			}
-			if strings.Contains(stderr.String(), rejectedValue) {
-				t.Fatalf("parser projected a rejected value: %q", stderr.String())
+			if code := app.runRelay(t.Context(), tc.args); code != ExitUsage || !strings.Contains(stderr.String(), tc.want) {
+				t.Fatalf("exit=%d stderr=%q want=%q", code, stderr.String(), tc.want)
 			}
 		})
 	}

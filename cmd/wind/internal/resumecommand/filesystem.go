@@ -31,7 +31,7 @@ func NewFilesystemRunner(config FilesystemConfig) Runner {
 		confirmation: newStdioResumeConfirmationTerminal(
 			config.Input, config.RawTerminalOutput, config.DiagnosticOutput,
 		),
-		parser:   flagRequestParser{logger: logger},
+		parser:   flagRequestParser{},
 		renderer: textRenderer{},
 		output:   streamResumeOutput{result: config.Output, usage: config.DiagnosticOutput},
 		logger:   logger,

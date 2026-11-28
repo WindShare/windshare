@@ -20,13 +20,13 @@ func TestResumeParsersRequireOneExplicitOutputRootAndOrdinal(t *testing.T) {
 	root := t.TempDir()
 	app, _, _ := newResumeTestApp()
 
-	request, parse := app.parser().ParseRoot("resume list", []string{"-o", root})
-	if parse != command.ParseReady || request.rootPath != root {
-		t.Fatalf("list request=%+v parse=%d", request, parse)
+	request, err := app.parser().ParseRoot("resume list", []string{"-o", root})
+	if err != nil || request.rootPath != root {
+		t.Fatalf("list request=%+v err=%v", request, err)
 	}
-	discard, parse := app.parser().ParseDiscard([]string{"--item", "2", "-o", root})
-	if parse != command.ParseReady || discard.rootPath != root || discard.itemNumber != 2 {
-		t.Fatalf("discard request=%+v parse=%d", discard, parse)
+	discard, err := app.parser().ParseDiscard([]string{"--item", "2", "-o", root})
+	if err != nil || discard.rootPath != root || discard.itemNumber != 2 {
+		t.Fatalf("discard request=%+v err=%v", discard, err)
 	}
 
 	for name, args := range map[string][]string{
@@ -41,8 +41,8 @@ func TestResumeParsersRequireOneExplicitOutputRootAndOrdinal(t *testing.T) {
 		"positional path":    {"-o", root, "--item", "1", "records/one"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, parse := app.parser().ParseDiscard(args); parse.ExitCode() != command.ExitUsage {
-				t.Fatalf("invalid discard request was accepted: parse=%v", parse)
+			if _, err := app.parser().ParseDiscard(args); command.ParseExitCode(err) != command.ExitUsage {
+				t.Fatalf("invalid discard request was accepted: err=%v", err)
 			}
 		})
 	}
@@ -53,8 +53,8 @@ func TestResumeParsersRequireOneExplicitOutputRootAndOrdinal(t *testing.T) {
 		"positional":    {"-o", root, "records/one"},
 	} {
 		t.Run("list "+name, func(t *testing.T) {
-			if _, parse := app.parser().ParseRoot("resume list", args); parse.ExitCode() != command.ExitUsage {
-				t.Fatalf("invalid list request was accepted: parse=%v", parse)
+			if _, err := app.parser().ParseRoot("resume list", args); command.ParseExitCode(err) != command.ExitUsage {
+				t.Fatalf("invalid list request was accepted: err=%v", err)
 			}
 		})
 	}
@@ -94,7 +94,7 @@ func TestResumeActionHelpSucceedsWithoutOpeningDestinationState(t *testing.T) {
 	}
 }
 
-func TestResumeArgumentFailuresNeverReflectRejectedValues(t *testing.T) {
+func TestResumeArgumentFailuresReportCauseAndRedactFragments(t *testing.T) {
 	const accidentalCapability = "windshare://relay.example/#private-capability"
 	app, _, stderr := newResumeTestApp()
 	if result := app.Run(context.Background(), []string{
@@ -102,8 +102,8 @@ func TestResumeArgumentFailuresNeverReflectRejectedValues(t *testing.T) {
 	}); result != command.ExitUsage {
 		t.Fatalf("result=%d", result)
 	}
-	if strings.Contains(stderr.String(), accidentalCapability) ||
-		!strings.Contains(stderr.String(), "option value is invalid") {
+	if strings.Contains(stderr.String(), "private-capability") ||
+		!strings.Contains(stderr.String(), "--item must be one canonical positive decimal number") {
 		t.Fatalf("stderr=%q", stderr.String())
 	}
 
@@ -111,8 +111,8 @@ func TestResumeArgumentFailuresNeverReflectRejectedValues(t *testing.T) {
 	if result := app.Run(context.Background(), []string{"resume", accidentalCapability}); result != command.ExitUsage {
 		t.Fatalf("result=%d", result)
 	}
-	if strings.Contains(stderr.String(), accidentalCapability) ||
-		!strings.Contains(stderr.String(), "unknown action") {
+	if strings.Contains(stderr.String(), "private-capability") ||
+		!strings.Contains(stderr.String(), `unknown action "windshare://relay.example/#<redacted>"`) {
 		t.Fatalf("stderr=%q", stderr.String())
 	}
 }
@@ -521,9 +521,7 @@ func (app *resumeTestApp) Run(ctx context.Context, args []string) command.ExitCo
 }
 
 func (app *resumeTestApp) parser() flagRequestParser {
-	return flagRequestParser{
-		logger: testDiagnosticOutput{writer: app.stderr},
-	}
+	return flagRequestParser{}
 }
 
 func (app *resumeTestApp) runner() Runner {
