@@ -226,9 +226,19 @@ func TestWindowsResolveSelectedLinkCloudAndSafetyPolicy(t *testing.T) {
 		hasCloudState:    true,
 	}
 
+	junctionAudit := sourceEntryAudit{
+		attributes: windows.FILE_ATTRIBUTE_DIRECTORY | windows.FILE_ATTRIBUTE_REPARSE_POINT,
+		reparseTag: windows.IO_REPARSE_TAG_MOUNT_POINT,
+	}
+	symlinkAudit := sourceEntryAudit{
+		attributes: windows.FILE_ATTRIBUTE_REPARSE_POINT,
+		reparseTag: windows.IO_REPARSE_TAG_SYMLINK,
+	}
+
 	// 1. Hydrated cloud directory and regular file targets remain admitted.
 	got, err := resolveWindowsSelectedLinkWith(
 		`C:\work\link`,
+		junctionAudit,
 		func(string) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, string, error) {
 			return dirID, sourceEntryDirectory, hydratedDirAudit, `C:\Users\me\OneDrive\Docs`, nil
 		},
@@ -242,6 +252,7 @@ func TestWindowsResolveSelectedLinkCloudAndSafetyPolicy(t *testing.T) {
 	}
 	got, err = resolveWindowsSelectedLinkWith(
 		`C:\work\file-link`,
+		symlinkAudit,
 		func(string) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, string, error) {
 			return fileID, sourceEntryRegularFile, hydratedFileAudit, `C:\Users\me\OneDrive\report.pdf`, nil
 		},
@@ -257,6 +268,7 @@ func TestWindowsResolveSelectedLinkCloudAndSafetyPolicy(t *testing.T) {
 	// 2. Dehydrated cloud placeholder target returns explicit rejection without recall.
 	got, err = resolveWindowsSelectedLinkWith(
 		`C:\work\link`,
+		junctionAudit,
 		func(string) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, string, error) {
 			return dirID, sourceEntryCloudPlaceholder, placeholderAudit, "", nil
 		},
@@ -273,6 +285,7 @@ func TestWindowsResolveSelectedLinkCloudAndSafetyPolicy(t *testing.T) {
 	// while a swapped foreign object reports ErrDirectoryStale.
 	got, err = resolveWindowsSelectedLinkWith(
 		`C:\work\link`,
+		junctionAudit,
 		func(string) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, string, error) {
 			return dirID, sourceEntryDirectory, hydratedDirAudit, `C:\Users\me\OneDrive\Docs`, nil
 		},
@@ -285,6 +298,7 @@ func TestWindowsResolveSelectedLinkCloudAndSafetyPolicy(t *testing.T) {
 	}
 	if _, err := resolveWindowsSelectedLinkWith(
 		`C:\work\link`,
+		junctionAudit,
 		func(string) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, string, error) {
 			return dirID, sourceEntryDirectory, hydratedDirAudit, `C:\Users\me\OneDrive\Docs`, nil
 		},
@@ -295,10 +309,13 @@ func TestWindowsResolveSelectedLinkCloudAndSafetyPolicy(t *testing.T) {
 		t.Fatalf("swapped foreign cloud placeholder err = %v, want ErrDirectoryStale", err)
 	}
 
-	// 4. Unknown reparse target stays rejected as reparse point; special file stays unsupported.
+	// 4. Unknown reparse target keeps target audit, unresolvable link falls back
+	// to leaf audit (for both junctions and symlinks), and special file stays
+	// classified as special_file without a misleading rejected_reparse audit.
 	unknownAudit := sourceEntryAudit{attributes: windows.FILE_ATTRIBUTE_REPARSE_POINT, reparseTag: testReparseTagUnknown}
 	got, err = resolveWindowsSelectedLinkWith(
 		`C:\work\link`,
+		junctionAudit,
 		func(string) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, string, error) {
 			return dirID, sourceEntryReparsePoint, unknownAudit, "", nil
 		},
@@ -306,24 +323,52 @@ func TestWindowsResolveSelectedLinkCloudAndSafetyPolicy(t *testing.T) {
 			return sourceObjectIdentity{}, 0, sourceEntryAudit{}, nil
 		},
 	)
-	if err != nil || got.disposition != selectedLinkRejected || got.kind != sourceEntryReparsePoint {
+	if err != nil || got.disposition != selectedLinkRejected || got.kind != sourceEntryReparsePoint ||
+		got.audit.reparseTag != testReparseTagUnknown {
 		t.Fatalf("unknown reparse target = (%+v, %v)", got, err)
 	}
-	if _, err := resolveWindowsSelectedLinkWith(
+	for _, leaf := range []struct {
+		name  string
+		audit sourceEntryAudit
+	}{
+		{name: "unresolvable junction", audit: junctionAudit},
+		{name: "unresolvable symlink", audit: symlinkAudit},
+	} {
+		got, err = resolveWindowsSelectedLinkWith(
+			`C:\work\loop`,
+			leaf.audit,
+			func(string) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, string, error) {
+				return sourceObjectIdentity{}, sourceEntryReparsePoint, sourceEntryAudit{}, "", nil
+			},
+			func(string) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, error) {
+				t.Fatal("inspect should not run for an unresolvable link")
+				return sourceObjectIdentity{}, 0, sourceEntryAudit{}, nil
+			},
+		)
+		if err != nil || got.disposition != selectedLinkRejected || got.kind != sourceEntryReparsePoint ||
+			got.audit != leaf.audit {
+			t.Fatalf("%s = (%+v, %v), want leaf audit %+v", leaf.name, got, err, leaf.audit)
+		}
+	}
+	got, err = resolveWindowsSelectedLinkWith(
 		`C:\work\link`,
+		junctionAudit,
 		func(string) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, string, error) {
 			return sourceObjectIdentity{}, sourceEntrySpecialFile, sourceEntryAudit{}, "", nil
 		},
 		func(string) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, error) {
+			t.Fatal("inspect should not run for a special file target")
 			return sourceObjectIdentity{}, 0, sourceEntryAudit{}, nil
 		},
-	); !errors.Is(err, content.ErrUnsupportedStability) {
-		t.Fatalf("special file target err = %v, want ErrUnsupportedStability", err)
+	)
+	if err != nil || got.disposition != selectedLinkRejected || got.kind != sourceEntrySpecialFile || got.audit.present() {
+		t.Fatalf("special file target = (%+v, %v), want selectedLinkRejected/special_file without reparse audit", got, err)
 	}
 
 	// 5. Identity mismatch between follow and inspect reports ErrDirectoryStale.
 	if _, err := resolveWindowsSelectedLinkWith(
 		`C:\work\link`,
+		junctionAudit,
 		func(string) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, string, error) {
 			return dirID, sourceEntryDirectory, sourceEntryAudit{}, `C:\target`, nil
 		},
@@ -334,7 +379,28 @@ func TestWindowsResolveSelectedLinkCloudAndSafetyPolicy(t *testing.T) {
 		t.Fatalf("identity mismatch err = %v, want ErrDirectoryStale", err)
 	}
 
-	// 6. Real dangling junction and mutual junction loop (including rejected_reparse audit).
+	// 6. Final-path capability errors map to SourceFailureUnsupported, while
+	// permission and generic I/O errors preserve filesystem classification.
+	for _, capErr := range []error{
+		windows.ERROR_NOT_SUPPORTED,
+		windows.ERROR_INVALID_FUNCTION,
+		windows.ERROR_CALL_NOT_IMPLEMENTED,
+		windows.ERROR_INVALID_PARAMETER,
+	} {
+		classifiedErr := classifyWindowsFinalPathError(`C:\work\link`, capErr)
+		failure, ok := errors.AsType[*catalog.SourceError](classifySourceError("acquire selected root", catalog.SourceReference{}, classifiedErr))
+		if !errors.Is(classifiedErr, content.ErrUnsupportedStability) || !ok || failure.Failure != catalog.SourceFailureUnsupported {
+			t.Fatalf("classifyWindowsFinalPathError(%v) = (%v, %+v), want SourceFailureUnsupported", capErr, classifiedErr, failure)
+		}
+	}
+	deniedErr := classifyWindowsFinalPathError(`C:\work\link`, windows.ERROR_ACCESS_DENIED)
+	deniedFailure, deniedOK := errors.AsType[*catalog.SourceError](classifySourceError("acquire selected root", catalog.SourceReference{}, deniedErr))
+	if !errors.Is(deniedErr, fs.ErrPermission) || !deniedOK || deniedFailure.Failure != catalog.SourceFailureAccessDenied {
+		t.Fatalf("classifyWindowsFinalPathError(ACCESS_DENIED) = (%v, %+v), want SourceFailureAccessDenied", deniedErr, deniedFailure)
+	}
+
+	// 7. Real dangling junction, mutual junction loop, and mutual symlink loop
+	// emit consistent rejected_reparse traces with the leaf link's reparse_tag.
 	base := t.TempDir()
 	dangling := filepath.Join(base, "dangling")
 	createTestWindowsJunction(t, dangling, filepath.Join(base, "missing"))
@@ -344,22 +410,36 @@ func TestWindowsResolveSelectedLinkCloudAndSafetyPolicy(t *testing.T) {
 	loopB := filepath.Join(base, "loopB")
 	createTestWindowsJunction(t, loopA, loopB)
 	createTestWindowsJunction(t, loopB, loopA)
+	assertRejectedReparseLoop(t, loopA, "0xa0000003")
+
+	symLoopA := filepath.Join(base, "symLoopA")
+	symLoopB := filepath.Join(base, "symLoopB")
+	if err := os.Symlink(symLoopB, symLoopA); err == nil {
+		if err := os.Symlink(symLoopA, symLoopB); err != nil {
+			t.Fatal(err)
+		}
+		assertRejectedReparseLoop(t, symLoopA, "0xa000000c")
+	}
+}
+
+func assertRejectedReparseLoop(t *testing.T, path, wantTag string) {
+	t.Helper()
 	stream, err := diag.NewStream(16, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := openLinkedTestSource(t, []string{loopA}, stream.Sink(), nil); !errors.Is(err, content.ErrUnsupportedStability) {
-		t.Fatalf("looping junction err = %v, want ErrUnsupportedStability", err)
+	if _, err := openLinkedTestSource(t, []string{path}, stream.Sink(), nil); !errors.Is(err, content.ErrUnsupportedStability) {
+		t.Fatalf("looping link %q err = %v, want ErrUnsupportedStability", path, err)
 	}
 	stream.Close()
 	foundRejected := false
 	for rec := range stream.Records() {
 		if rec.Name() == "catalog_source_policy" && rec.Payload().Get("decision").Text() == "rejected_reparse" &&
-			rec.Payload().Get("reparse_tag").Text() == "0xa0000003" {
+			rec.Payload().Get("reparse_tag").Text() == wantTag {
 			foundRejected = true
 		}
 	}
 	if !foundRejected {
-		t.Fatal("missing catalog_source_policy rejected_reparse diagnostic trace for looping junction")
+		t.Fatalf("missing catalog_source_policy rejected_reparse trace with reparse_tag=%s for %q", wantTag, path)
 	}
 }

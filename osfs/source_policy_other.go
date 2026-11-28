@@ -75,7 +75,7 @@ func isSelectedRootLink(kind sourceEntryKind, _ sourceEntryAudit) bool {
 // link once through the kernel (honoring Linux fs.protected_symlinks) so the
 // real regular file or directory can be pinned inside os.Root while keeping all
 // descendants strictly no-follow.
-func resolveSelectedRootLink(absolute string) (selectedLinkResolution, error) {
+func resolveSelectedRootLink(absolute string, _ sourceEntryAudit) (selectedLinkResolution, error) {
 	return resolveSelectedRootLinkWith(absolute, linkresolve.POSIXOps{})
 }
 
@@ -89,7 +89,11 @@ func resolveSelectedRootLinkWith(
 	}
 	kind := classifyPOSIXFileInfo(target)
 	if kind != sourceEntryDirectory && kind != sourceEntryRegularFile {
-		return selectedLinkResolution{}, fmt.Errorf("osfs: selected root %q is not a stable file or directory: %w", absolute, content.ErrUnsupportedStability)
+		return selectedLinkResolution{
+			disposition: selectedLinkRejected,
+			identity:    sourceObjectIdentity{info: target},
+			kind:        kind,
+		}, nil
 	}
 	return selectedLinkResolution{
 		disposition: selectedLinkResolved,

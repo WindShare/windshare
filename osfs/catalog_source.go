@@ -133,7 +133,7 @@ func (source *SelectedCatalogSource) openSelectedRoot(
 	if err != nil {
 		return catalog.NodeRecord{}, selectedRoot{}, pathfailure.Filesystem("inspect selected root", absolute, err)
 	}
-	target, err := source.resolveSelectedRootTarget(absolute, slot, before, kind, beforeAudit)
+	target, err := resolveSelectedRootTarget(absolute, before, kind, beforeAudit)
 	if err != nil {
 		return catalog.NodeRecord{}, selectedRoot{}, err
 	}
@@ -190,9 +190,8 @@ type preparedRootTarget struct {
 	resolvedLink bool
 }
 
-func (source *SelectedCatalogSource) resolveSelectedRootTarget(
+func resolveSelectedRootTarget(
 	absolute string,
-	slot RootSlot,
 	before sourceObjectIdentity,
 	kind sourceEntryKind,
 	beforeAudit sourceEntryAudit,
@@ -207,11 +206,8 @@ func (source *SelectedCatalogSource) resolveSelectedRootTarget(
 	if !isSelectedRootLink(kind, beforeAudit) {
 		return target, nil
 	}
-	resolved, err := resolveSelectedRootLink(absolute)
+	resolved, err := resolveSelectedRootLink(absolute, beforeAudit)
 	if err != nil {
-		if kind == sourceEntryReparsePoint && errors.Is(err, content.ErrUnsupportedStability) {
-			source.traceSelectedRootPolicy(slot, "rejected_reparse", beforeAudit)
-		}
 		return preparedRootTarget{}, err
 	}
 	switch resolved.disposition {
