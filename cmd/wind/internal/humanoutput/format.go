@@ -288,7 +288,7 @@ func sourceFailureMessage(failure engine.Failure) string {
 	case engine.FailureSourceAccessDenied:
 		return "Permission denied while opening the source. Check read access to the source and its parent directory."
 	case engine.FailureSourceUnsupported:
-		return "This source cannot be shared safely. Select a regular file or directory on a supported filesystem; symbolic links are not supported."
+		return "This source cannot be shared safely. Select a regular file or directory on a supported filesystem; symbolic links and junctions are not followed when named directly."
 	case engine.FailureSourceCloudPlaceholder:
 		return "This item is stored in the cloud and not fully available on this device. Make this item available on this device, then share it again."
 	case engine.FailureSourceOmitted:

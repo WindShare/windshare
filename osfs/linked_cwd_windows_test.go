@@ -16,6 +16,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	diag "github.com/windshare/windshare/core/diagnostics"
+	"github.com/windshare/windshare/osfs/internal/linkresolve"
 	"golang.org/x/sys/windows"
 )
 
@@ -139,6 +140,9 @@ func TestWindowsDotTraversalThroughJunctionSharesTarget(t *testing.T) {
 			foundDecision := false
 			for rec := range stream.Records() {
 				if rec.Name() == "catalog_source_policy" && rec.Payload().Get("decision").Text() == "resolved_linked_cwd" {
+					if rec.Payload().Get("reparse_tag").Text() != "0xa0000003" {
+						t.Fatalf("resolved_linked_cwd lost mount-point reparse_tag: %+v", rec.Payload())
+					}
 					foundDecision = true
 				}
 			}
@@ -190,7 +194,7 @@ func TestWindowsLinkedWorkingDirectorySupportsLongPathTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	shortLink := filepath.Join(base, "short-to-long")
-	createTestWindowsJunction(t, shortLink, windowsExtendedPrefix+longTarget)
+	createTestWindowsJunction(t, shortLink, linkresolve.WindowsExtendedPrefix+longTarget)
 
 	t.Chdir(shortLink)
 	source, err := openLinkedTestSource(t, []string{"."}, diag.Sink{}, nil)
@@ -239,11 +243,12 @@ func TestWindowsResolveLinkedDirectoryCloudAndSafetyPolicy(t *testing.T) {
 			return dirID, sourceEntryDirectory, hydratedAudit, nil
 		},
 	)
-	if err != nil || got.kind != sourceEntryDirectory || !got.audit.hydratedCloud || got.openPath != `C:\Users\me\OneDrive\Docs` {
+	if err != nil || got.disposition != linkedDirectoryResolved || got.kind != sourceEntryDirectory ||
+		!got.audit.hydratedCloud || got.openPath != `C:\Users\me\OneDrive\Docs` {
 		t.Fatalf("hydrated cloud target = (%+v, %v)", got, err)
 	}
 
-	// 2. Dehydrated cloud placeholder target returns cloud placeholder classification without recall.
+	// 2. Dehydrated cloud placeholder target returns explicit rejection without recall.
 	got, err = resolveWindowsLinkedDirectoryWith(
 		`C:\work\link`,
 		func(string) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, string, error) {
@@ -254,7 +259,7 @@ func TestWindowsResolveLinkedDirectoryCloudAndSafetyPolicy(t *testing.T) {
 			return sourceObjectIdentity{}, 0, sourceEntryAudit{}, nil
 		},
 	)
-	if err != nil || got.kind != sourceEntryCloudPlaceholder || got.openPath != "" {
+	if err != nil || got.disposition != linkedDirectoryRejected || got.kind != sourceEntryCloudPlaceholder || got.openPath != "" {
 		t.Fatalf("dehydrated cloud target = (%+v, %v)", got, err)
 	}
 
@@ -269,7 +274,7 @@ func TestWindowsResolveLinkedDirectoryCloudAndSafetyPolicy(t *testing.T) {
 			return dirID, sourceEntryCloudPlaceholder, placeholderAudit, nil
 		},
 	)
-	if err != nil || got.kind != sourceEntryCloudPlaceholder || got.openPath != "" {
+	if err != nil || got.disposition != linkedDirectoryRejected || got.kind != sourceEntryCloudPlaceholder || got.openPath != "" {
 		t.Fatalf("mid-resolve dehydration = (%+v, %v)", got, err)
 	}
 	if _, err := resolveWindowsLinkedDirectoryWith(
@@ -295,7 +300,7 @@ func TestWindowsResolveLinkedDirectoryCloudAndSafetyPolicy(t *testing.T) {
 			return sourceObjectIdentity{}, 0, sourceEntryAudit{}, nil
 		},
 	)
-	if err != nil || got.kind != sourceEntryReparsePoint {
+	if err != nil || got.disposition != linkedDirectoryRejected || got.kind != sourceEntryReparsePoint {
 		t.Fatalf("unknown reparse target = (%+v, %v)", got, err)
 	}
 
@@ -323,7 +328,7 @@ func TestWindowsResolveLinkedDirectoryCloudAndSafetyPolicy(t *testing.T) {
 		t.Fatalf("identity mismatch err = %v, want ErrUnsupportedStability", err)
 	}
 
-	// 6. Real dangling junction and mutual junction loop.
+	// 6. Real dangling junction and mutual junction loop (including rejected_reparse audit).
 	base := t.TempDir()
 	dangling := filepath.Join(base, "dangling")
 	createTestWindowsJunction(t, dangling, filepath.Join(base, "missing"))
@@ -337,23 +342,80 @@ func TestWindowsResolveLinkedDirectoryCloudAndSafetyPolicy(t *testing.T) {
 	if _, err := resolveLinkedWorkingDirectory(".", loopA); !errors.Is(err, content.ErrUnsupportedStability) {
 		t.Fatalf("junction loop err = %v, want ErrUnsupportedStability", err)
 	}
+
+	// Verify openSelectedRoot preserves rejected_reparse policy audit when a
+	// dot traversal lands on a Windows junction whose resolution fails closed.
+	realDir := filepath.Join(base, "real-dir")
+	realSub := filepath.Join(realDir, "sub")
+	if err := os.MkdirAll(realSub, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	retargeted := filepath.Join(base, "retargeted")
+	loopPartner := filepath.Join(base, "retargeted-loop")
+	createTestWindowsJunction(t, retargeted, realDir)
+	t.Chdir(filepath.Join(retargeted, "sub"))
+	if err := os.Remove(retargeted); err != nil {
+		t.Fatal(err)
+	}
+	createTestWindowsJunction(t, retargeted, loopPartner)
+	createTestWindowsJunction(t, loopPartner, retargeted)
+	stream, err := diag.NewStream(16, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := openLinkedTestSource(t, []string{".."}, stream.Sink(), nil); !errors.Is(err, content.ErrUnsupportedStability) {
+		t.Fatalf("dot traversal to looping junction err = %v, want ErrUnsupportedStability", err)
+	}
+	stream.Close()
+	foundRejected := false
+	for rec := range stream.Records() {
+		if rec.Name() == "catalog_source_policy" && rec.Payload().Get("decision").Text() == "rejected_reparse" &&
+			rec.Payload().Get("reparse_tag").Text() == "0xa0000003" {
+			foundRejected = true
+		}
+	}
+	if !foundRejected {
+		t.Fatal("missing catalog_source_policy rejected_reparse diagnostic trace for dot-traversal junction loop")
+	}
 }
 
-func TestNormalizeWindowsFinalPath(t *testing.T) {
-	longSeg := strings.Repeat("a", 70)
-	longDrive := filepath.Join(`C:\base`, longSeg, longSeg, longSeg, longSeg)
-	volumeGUID := `\\?\Volume{11111111-1111-1111-1111-111111111111}\dir`
-	for _, tc := range []struct {
-		in   string
-		want string
-	}{
-		{`\\?\C:\dir`, `C:\dir`},
-		{windowsExtendedPrefix + longDrive, longDrive},
-		{`\\?\UNC\server\share\dir`, `\\server\share\dir`},
-		{volumeGUID, volumeGUID},
-	} {
-		if got := normalizeWindowsFinalPath(tc.in); got != tc.want {
-			t.Fatalf("normalizeWindowsFinalPath(%q) = %q, want %q", tc.in, got, tc.want)
-		}
+func TestWindowsParentTraversalFromRealParentThroughNestedJunctionKeepsLogicalParent(t *testing.T) {
+	base := t.TempDir()
+	realParent := filepath.Join(base, "real-parent")
+	elsewhere := filepath.Join(base, "elsewhere", "child")
+	if err := os.MkdirAll(realParent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(elsewhere, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(realParent, "logical.txt"), []byte("logical"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "elsewhere", "physical.txt"), []byte("physical"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	jump := filepath.Join(realParent, "jump")
+	createTestWindowsJunction(t, jump, elsewhere)
+
+	// Win32 resolves ".." lexically against GetCurrentDirectoryW, so real-parent
+	// matches the directory Windows opens from real-parent\jump.
+	t.Chdir(jump)
+	source, err := openLinkedTestSource(t, []string{".."}, diag.Sink{}, nil)
+	if err != nil {
+		t.Fatalf("sharing .. from realParent\\jump failed: %v", err)
+	}
+	root := source.SelectedRoots()[0]
+	if root.Entry().Name() != "real-parent" {
+		t.Fatalf("root name = %q, want real-parent", root.Entry().Name())
+	}
+	children := &collectingScanChildren{}
+	if _, err := source.ScanDirectory(context.Background(), catalog.ScanRequest{
+		Directory: root, Work: &countingScanWork{}, Children: children,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(children.items) != 1 || children.items[0].Name != "logical.txt" {
+		t.Fatalf("children = %+v, want only logical.txt from logical parent", children.items)
 	}
 }

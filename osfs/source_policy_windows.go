@@ -16,6 +16,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/osfs/internal/linkresolve"
 	"github.com/windshare/windshare/osfs/internal/pathfailure"
 	"golang.org/x/sys/windows"
 )
@@ -45,14 +46,6 @@ const (
 	cfPlaceholderStateInvalid uint32 = 0xFFFFFFFF
 
 	windowsShareAll = windows.FILE_SHARE_READ | windows.FILE_SHARE_WRITE | windows.FILE_SHARE_DELETE
-
-	initialFinalPathUnits               = 512
-	windowsExtendedPrefix               = `\\?\`
-	windowsExtendedUNCPrefix            = `\\?\UNC\`
-	windowsNTNamespacePrefix            = `\??\`
-	windowsDeviceNamespacePrefix        = `\\.\`
-	windowsVolumeNameDOS         uint32 = 0x0
-	windowsVolumeNameGUID        uint32 = 0x1
 )
 
 var (
@@ -280,25 +273,18 @@ func windowsFileInfoAttributes(info fs.FileInfo) (uint32, bool) {
 }
 
 func windowsExtendedPath(path string) string {
-	if path == "" {
-		return ""
-	}
-	if strings.HasPrefix(path, windowsExtendedPrefix) ||
-		strings.HasPrefix(path, windowsNTNamespacePrefix) ||
-		strings.HasPrefix(path, windowsDeviceNamespacePrefix) {
+	if path == "" || linkresolve.HasWindowsExtendedOrDevicePrefix(path) {
 		return path
 	}
 	clean := filepath.Clean(path)
-	if strings.HasPrefix(clean, windowsExtendedPrefix) ||
-		strings.HasPrefix(clean, windowsNTNamespacePrefix) ||
-		strings.HasPrefix(clean, windowsDeviceNamespacePrefix) {
+	if linkresolve.HasWindowsExtendedOrDevicePrefix(clean) {
 		return clean
 	}
 	if rest, ok := strings.CutPrefix(clean, `\\`); ok {
-		return windowsExtendedUNCPrefix + rest
+		return linkresolve.WindowsExtendedUNCPrefix + rest
 	}
 	if len(clean) >= 3 && clean[1] == ':' && clean[2] == '\\' {
-		return windowsExtendedPrefix + clean
+		return linkresolve.WindowsExtendedPrefix + clean
 	}
 	return path
 }
@@ -487,41 +473,56 @@ func isLinkedDirectoryLeaf(kind sourceEntryKind, audit sourceEntryAudit) bool {
 // cloud hydration; target admission still uses classifyWindowsOpenHandle so
 // hydrated cloud directories remain allowed and dehydrated placeholders stay
 // rejected.
-func resolveLinkedWorkingDirectory(_, absolute string) (resolvedLinkedDirectory, error) {
+func resolveLinkedWorkingDirectory(_, absolute string) (linkedDirectoryResolution, error) {
 	return resolveWindowsLinkedDirectoryWith(absolute, openWindowsFollowedTarget, inspectSelectedRootKind)
 }
+
+// Win32 canonicalizes relative ".." lexically against GetCurrentDirectoryW, so
+// filepath.Abs already matches the directory the system opens on Windows.
+func verifyParentDotTraversal(_, _ string, _ sourceObjectIdentity) error { return nil }
 
 func resolveWindowsLinkedDirectoryWith(
 	absolute string,
 	follow func(string) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, string, error),
 	inspect func(string) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, error),
-) (resolvedLinkedDirectory, error) {
+) (linkedDirectoryResolution, error) {
 	identity, kind, audit, resolved, err := follow(absolute)
 	if err != nil {
-		return resolvedLinkedDirectory{}, err
+		return linkedDirectoryResolution{}, err
 	}
 	switch kind {
 	case sourceEntryDirectory:
 	case sourceEntryCloudPlaceholder, sourceEntryReparsePoint:
-		return resolvedLinkedDirectory{identity: identity, kind: kind, audit: audit}, nil
+		return linkedDirectoryResolution{
+			disposition: linkedDirectoryRejected,
+			identity:    identity,
+			kind:        kind,
+			audit:       audit,
+		}, nil
 	default:
-		return resolvedLinkedDirectory{}, fmt.Errorf("osfs: selected root %q is not a stable file or directory: %w", absolute, content.ErrUnsupportedStability)
+		return linkedDirectoryResolution{}, fmt.Errorf("osfs: selected root %q is not a stable file or directory: %w", absolute, content.ErrUnsupportedStability)
 	}
 	targetID, targetKind, targetAudit, err := inspect(resolved)
 	if err != nil {
-		return resolvedLinkedDirectory{}, pathfailure.Filesystem("inspect selected root link target", absolute, err)
+		return linkedDirectoryResolution{}, pathfailure.Filesystem("inspect selected root link target", absolute, err)
 	}
 	if targetKind == sourceEntryCloudPlaceholder && identity.sameObject(targetID) {
-		return resolvedLinkedDirectory{identity: targetID, kind: targetKind, audit: targetAudit}, nil
+		return linkedDirectoryResolution{
+			disposition: linkedDirectoryRejected,
+			identity:    targetID,
+			kind:        targetKind,
+			audit:       targetAudit,
+		}, nil
 	}
 	if targetKind != sourceEntryDirectory || !identity.sameObject(targetID) {
-		return resolvedLinkedDirectory{}, fmt.Errorf("osfs: selected root %q does not resolve to the directory the system opens: %w", absolute, content.ErrUnsupportedStability)
+		return linkedDirectoryResolution{}, fmt.Errorf("osfs: selected root %q does not resolve to the directory the system opens: %w", absolute, content.ErrUnsupportedStability)
 	}
-	return resolvedLinkedDirectory{
-		openPath: resolved,
-		identity: targetID,
-		kind:     targetKind,
-		audit:    targetAudit,
+	return linkedDirectoryResolution{
+		disposition: linkedDirectoryResolved,
+		openPath:    resolved,
+		identity:    targetID,
+		kind:        targetKind,
+		audit:       targetAudit,
 	}, nil
 }
 
@@ -540,7 +541,7 @@ func openWindowsFollowedTarget(absolute string) (sourceObjectIdentity, sourceEnt
 		flags,
 		0,
 	)
-	if errors.Is(err, windows.ERROR_CANT_RESOLVE_FILENAME) {
+	if linkresolve.IsWindowsUnresolvableLinkError(err) {
 		return sourceObjectIdentity{}, 0, sourceEntryAudit{}, "", fmt.Errorf("osfs: selected root %q is not a stable file or directory: %w", absolute, content.ErrUnsupportedStability)
 	}
 	if err != nil {
@@ -555,49 +556,11 @@ func openWindowsFollowedTarget(absolute string) (sourceObjectIdentity, sourceEnt
 	if kind != sourceEntryDirectory {
 		return identity, kind, audit, "", nil
 	}
-	resolved, err := windowsFinalPathByHandle(handle)
+	resolved, err := linkresolve.WindowsFinalPathByHandle(handle)
 	if err != nil {
 		return sourceObjectIdentity{}, 0, sourceEntryAudit{}, "", pathfailure.Filesystem("resolve selected root link", absolute, err)
 	}
 	return identity, kind, audit, resolved, nil
-}
-
-func windowsFinalPathByHandle(handle windows.Handle) (string, error) {
-	resolved, err := queryWindowsFinalPath(handle, windowsVolumeNameDOS)
-	if errors.Is(err, windows.ERROR_PATH_NOT_FOUND) {
-		// Volumes mounted at a junction without an assigned drive letter have no
-		// DOS path; fall back to their stable volume GUID path.
-		resolved, err = queryWindowsFinalPath(handle, windowsVolumeNameGUID)
-	}
-	if err != nil {
-		return "", err
-	}
-	return normalizeWindowsFinalPath(resolved), nil
-}
-
-func queryWindowsFinalPath(handle windows.Handle, flags uint32) (string, error) {
-	buffer := make([]uint16, initialFinalPathUnits)
-	for {
-		length, err := windows.GetFinalPathNameByHandle(handle, &buffer[0], uint32(len(buffer)), flags)
-		if err != nil {
-			return "", err
-		}
-		if length < uint32(len(buffer)) {
-			return windows.UTF16ToString(buffer[:length]), nil
-		}
-		buffer = make([]uint16, length+1)
-	}
-}
-
-func normalizeWindowsFinalPath(path string) string {
-	if rest, ok := strings.CutPrefix(path, windowsExtendedUNCPrefix); ok {
-		return `\\` + rest
-	}
-	if rest, ok := strings.CutPrefix(path, windowsExtendedPrefix); ok &&
-		len(rest) >= 3 && rest[1] == ':' && rest[2] == '\\' {
-		return rest
-	}
-	return path
 }
 
 func inspectDirEntryPreflight(entry fs.DirEntry) (sourceEntryKind, sourceEntryAudit, bool, bool) {

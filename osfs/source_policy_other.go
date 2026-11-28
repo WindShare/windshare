@@ -7,11 +7,9 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"path/filepath"
-	"strings"
-	"syscall"
 
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/osfs/internal/linkresolve"
 	"github.com/windshare/windshare/osfs/internal/pathfailure"
 )
 
@@ -72,63 +70,55 @@ func isLinkedDirectoryLeaf(kind sourceEntryKind, _ sourceEntryAudit) bool {
 	return kind == sourceEntrySymbolicLink
 }
 
-func resolveLinkedWorkingDirectory(selectedPath, absolute string) (resolvedLinkedDirectory, error) {
-	return resolveLinkedWorkingDirectoryWith(selectedPath, absolute, os.Stat)
+func resolveLinkedWorkingDirectory(selectedPath, absolute string) (linkedDirectoryResolution, error) {
+	return resolveLinkedWorkingDirectoryWith(selectedPath, absolute, linkresolve.POSIXOps{})
 }
 
-func isPOSIXSymlinkLoop(err error) bool {
-	return errors.Is(err, syscall.ELOOP) || (err != nil && strings.Contains(err.Error(), "too many links"))
-}
-
-// resolveLinkedWorkingDirectoryWith resolves a "." / ".." traversal whose
-// logical working directory ends in a symlink. The kernel stat of selectedPath
-// honors fs.protected_symlinks and physical ".." traversal, while kernel stat
-// of absolute plus EvalSymlinks, Lstat, and SameFile confirm that the logical
-// path reaches the exact same real directory before opening os.Root.
 func resolveLinkedWorkingDirectoryWith(
 	selectedPath string,
 	absolute string,
-	follow func(string) (fs.FileInfo, error),
-) (resolvedLinkedDirectory, error) {
-	followed, err := follow(selectedPath)
-	if isPOSIXSymlinkLoop(err) {
-		return resolvedLinkedDirectory{}, fmt.Errorf("osfs: selected root %q is not a stable file or directory: %w", absolute, content.ErrUnsupportedStability)
-	}
+	ops linkresolve.POSIXOps,
+) (linkedDirectoryResolution, error) {
+	resolved, followed, err := linkresolve.ResolvePOSIXDirectory(selectedPath, absolute, ops)
 	if err != nil {
-		return resolvedLinkedDirectory{}, pathfailure.Filesystem("follow selected root", absolute, err)
+		return linkedDirectoryResolution{}, classifyPOSIXLinkResolveError("resolve selected root link", absolute, err)
 	}
-	if !followed.IsDir() {
-		return resolvedLinkedDirectory{}, fmt.Errorf("osfs: selected root %q is not a stable file or directory: %w", absolute, content.ErrUnsupportedStability)
-	}
-	logicalTarget, err := os.Stat(absolute)
-	if isPOSIXSymlinkLoop(err) {
-		return resolvedLinkedDirectory{}, fmt.Errorf("osfs: selected root %q is not a stable file or directory: %w", absolute, content.ErrUnsupportedStability)
-	}
-	if err != nil {
-		return resolvedLinkedDirectory{}, pathfailure.Filesystem("resolve selected root link", absolute, err)
-	}
-	if !logicalTarget.IsDir() || !os.SameFile(followed, logicalTarget) {
-		return resolvedLinkedDirectory{}, fmt.Errorf("osfs: selected root %q does not resolve to the directory the system opens: %w", absolute, content.ErrUnsupportedStability)
-	}
-	resolved, err := filepath.EvalSymlinks(absolute)
-	if isPOSIXSymlinkLoop(err) {
-		return resolvedLinkedDirectory{}, fmt.Errorf("osfs: selected root %q is not a stable file or directory: %w", absolute, content.ErrUnsupportedStability)
-	}
-	if err != nil {
-		return resolvedLinkedDirectory{}, pathfailure.Filesystem("resolve selected root link", absolute, err)
-	}
-	target, err := os.Lstat(resolved)
-	if err != nil {
-		return resolvedLinkedDirectory{}, pathfailure.Filesystem("inspect selected root link target", absolute, err)
-	}
-	if !target.IsDir() || target.Mode()&fs.ModeSymlink != 0 || !os.SameFile(followed, target) {
-		return resolvedLinkedDirectory{}, fmt.Errorf("osfs: selected root %q does not resolve to the directory the system opens: %w", absolute, content.ErrUnsupportedStability)
-	}
-	return resolvedLinkedDirectory{
-		openPath: resolved,
-		identity: sourceObjectIdentity{info: followed},
-		kind:     sourceEntryDirectory,
+	return linkedDirectoryResolution{
+		disposition: linkedDirectoryResolved,
+		openPath:    resolved,
+		identity:    sourceObjectIdentity{info: followed},
+		kind:        sourceEntryDirectory,
 	}, nil
+}
+
+// verifyParentDotTraversal ensures a pure ".." traversal whose logical parent
+// is a real directory still agrees with the physical directory the POSIX kernel
+// opens, preventing silent divergence when $PWD traverses an intermediate link.
+func verifyParentDotTraversal(selectedPath, absolute string, expected sourceObjectIdentity) error {
+	return verifyParentDotTraversalWith(selectedPath, absolute, expected, os.Stat)
+}
+
+func verifyParentDotTraversalWith(
+	selectedPath string,
+	absolute string,
+	expected sourceObjectIdentity,
+	follow func(string) (fs.FileInfo, error),
+) error {
+	if err := linkresolve.VerifyPOSIXDirectoryAgreement(selectedPath, expected.info, follow); err != nil {
+		return classifyPOSIXLinkResolveError("follow selected root", absolute, err)
+	}
+	return nil
+}
+
+func classifyPOSIXLinkResolveError(operation, absolute string, err error) error {
+	switch {
+	case errors.Is(err, linkresolve.ErrSymlinkLoop), errors.Is(err, linkresolve.ErrNotDirectory):
+		return fmt.Errorf("osfs: selected root %q is not a stable file or directory: %w", absolute, content.ErrUnsupportedStability)
+	case errors.Is(err, linkresolve.ErrDirectoryMismatch):
+		return fmt.Errorf("osfs: selected root %q does not resolve to the directory the system opens: %w", absolute, content.ErrUnsupportedStability)
+	default:
+		return pathfailure.Filesystem(operation, absolute, err)
+	}
 }
 
 func inspectRootChildKind(

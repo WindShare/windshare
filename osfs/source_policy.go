@@ -60,23 +60,32 @@ func omissionForEntryKind(kind sourceEntryKind) catalog.SourceOmissionReason {
 	}
 }
 
-type resolvedLinkedDirectory struct {
-	openPath string
-	identity sourceObjectIdentity
-	kind     sourceEntryKind
-	audit    sourceEntryAudit
+type linkedDirectoryDisposition uint8
+
+const (
+	linkedDirectoryResolved linkedDirectoryDisposition = iota + 1
+	linkedDirectoryRejected
+)
+
+// linkedDirectoryResolution makes the outcome of linked working-directory
+// resolution explicit instead of using an empty openPath as an implicit sentinel.
+type linkedDirectoryResolution struct {
+	disposition linkedDirectoryDisposition
+	openPath    string
+	identity    sourceObjectIdentity
+	kind        sourceEntryKind
+	audit       sourceEntryAudit
 }
 
-// isPureDotTraversal reports whether selectedPath consists solely of "." and
-// ".." relative components separated by path separators. Only these spellings
-// ask for the working directory or its ancestors without naming a link
-// component; named links (including "link/." or glob-expanded "dir/*/.") stay
-// outside this allowance.
-func isPureDotTraversal(selectedPath string) bool {
+// classifyPureDotTraversal reports whether selectedPath consists solely of "."
+// and ".." relative components separated by path separators, and whether any
+// component is "..". Only pure dot spellings ask for the working directory or
+// its ancestors without naming a link component; named links (including
+// "link/." or glob-expanded "dir/*/.") stay outside this allowance.
+func classifyPureDotTraversal(selectedPath string) (pure bool, hasParent bool) {
 	if selectedPath == "" || os.IsPathSeparator(selectedPath[0]) {
-		return false
+		return false, false
 	}
-	hasComponent := false
 	start := 0
 	for index := 0; index <= len(selectedPath); index++ {
 		if index < len(selectedPath) && !os.IsPathSeparator(selectedPath[index]) {
@@ -87,10 +96,15 @@ func isPureDotTraversal(selectedPath string) bool {
 		if component == "" {
 			continue
 		}
-		if component != "." && component != ".." {
-			return false
+		switch component {
+		case ".":
+			pure = true
+		case "..":
+			pure = true
+			hasParent = true
+		default:
+			return false, false
 		}
-		hasComponent = true
 	}
-	return hasComponent
+	return pure, hasParent
 }

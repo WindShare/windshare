@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -44,13 +45,17 @@ type SelectedCatalogSourceConfig struct {
 	Omissions     catalog.SourceOmissionObserver
 }
 
+type selectedRoot struct {
+	authority   *os.Root
+	displayPath string
+}
+
 // SelectedCatalogSource opens only the explicitly selected roots during share
 // preparation. Descendants are enumerated through ScanDirectory after relay
 // registration, preserving the user-visible ready-before-traversal contract.
 type SelectedCatalogSource struct {
 	mu                   sync.RWMutex
-	roots                []*os.Root
-	rootDisplayPaths     []string
+	roots                []selectedRoot
 	selected             []catalog.NodeRecord
 	identities           CatalogIdentitySource
 	diagnostics          diagnostics.Sink
@@ -87,7 +92,7 @@ func newSelectedCatalogSource(ctx context.Context, config SelectedCatalogSourceC
 		if err := ctx.Err(); err != nil {
 			return fail(err)
 		}
-		record, root, displayPath, err := source.openSelectedRoot(selectedPath, RootSlot(index), config.SyntheticRoot)
+		record, root, err := source.openSelectedRoot(selectedPath, RootSlot(index), config.SyntheticRoot)
 		if err != nil {
 			return fail(&catalog.SelectionError{
 				Label: selectedPath, Cause: classifySourceError("acquire selected root", catalog.SourceReference{}, err),
@@ -100,11 +105,10 @@ func newSelectedCatalogSource(ctx context.Context, config SelectedCatalogSourceC
 			collision := &catalog.SelectionNameCollisionError{
 				FirstLabel: config.Paths[position], SecondLabel: selectedPath,
 			}
-			return fail(errors.Join(collision, root.Close()))
+			return fail(errors.Join(collision, root.authority.Close()))
 		}
 		selectedNames[nameKey] = index
 		source.roots = append(source.roots, root)
-		source.rootDisplayPaths = append(source.rootDisplayPaths, displayPath)
 		source.selected = append(source.selected, record)
 	}
 	return source, nil
@@ -114,56 +118,51 @@ func (source *SelectedCatalogSource) openSelectedRoot(
 	selectedPath string,
 	slot RootSlot,
 	parent catalog.DirectoryID,
-) (catalog.NodeRecord, *os.Root, string, error) {
+) (catalog.NodeRecord, selectedRoot, error) {
 	if selectedPath == "" {
 		// filepath.Abs("") is the working directory; an empty selection (typically an
 		// unset variable) must not silently publish it. Report it as any other
 		// missing root.
-		return catalog.NodeRecord{}, nil, "", pathfailure.Filesystem("resolve selected root", selectedPath, fs.ErrNotExist)
+		return catalog.NodeRecord{}, selectedRoot{}, pathfailure.Filesystem("resolve selected root", selectedPath, fs.ErrNotExist)
 	}
 	absolute, err := filepath.Abs(selectedPath)
 	if err != nil {
-		return catalog.NodeRecord{}, nil, "", pathfailure.Filesystem("resolve selected root", selectedPath, err)
+		return catalog.NodeRecord{}, selectedRoot{}, pathfailure.Filesystem("resolve selected root", selectedPath, err)
 	}
 	before, kind, beforeAudit, err := inspectSelectedRootKind(absolute)
 	if err != nil {
-		return catalog.NodeRecord{}, nil, "", pathfailure.Filesystem("inspect selected root", absolute, err)
+		return catalog.NodeRecord{}, selectedRoot{}, pathfailure.Filesystem("inspect selected root", absolute, err)
 	}
-	openTarget := absolute
-	resolvedLinkedCWD := false
-	if isPureDotTraversal(selectedPath) && isLinkedDirectoryLeaf(kind, beforeAudit) {
-		resolved, resolveErr := resolveLinkedWorkingDirectory(selectedPath, absolute)
-		if resolveErr != nil {
-			return catalog.NodeRecord{}, nil, "", resolveErr
-		}
-		before, kind, beforeAudit = resolved.identity, resolved.kind, resolved.audit
-		if resolved.openPath != "" {
-			openTarget = resolved.openPath
-			resolvedLinkedCWD = true
-		}
+	target, err := source.prepareSelectedRootTarget(selectedPath, absolute, slot, before, kind, beforeAudit)
+	if err != nil {
+		return catalog.NodeRecord{}, selectedRoot{}, err
 	}
-	switch kind {
+	switch target.kind {
 	case sourceEntryDirectory, sourceEntryRegularFile:
 	case sourceEntryCloudPlaceholder:
-		source.traceSelectedRootPolicy(slot, "cloud_placeholder", beforeAudit)
-		return catalog.NodeRecord{}, nil, "", fmt.Errorf("osfs: selected root %q is not fully available on this device: %w", absolute, errSourceCloudPlaceholder)
+		source.traceSelectedRootPolicy(slot, "cloud_placeholder", target.audit)
+		return catalog.NodeRecord{}, selectedRoot{}, fmt.Errorf("osfs: selected root %q is not fully available on this device: %w", absolute, errSourceCloudPlaceholder)
 	default:
-		if kind == sourceEntryReparsePoint {
-			source.traceSelectedRootPolicy(slot, "rejected_reparse", beforeAudit)
+		if target.kind == sourceEntryReparsePoint {
+			source.traceSelectedRootPolicy(slot, "rejected_reparse", target.audit)
 		}
-		return catalog.NodeRecord{}, nil, "", fmt.Errorf("osfs: selected root %q is not a stable file or directory: %w", absolute, content.ErrUnsupportedStability)
+		return catalog.NodeRecord{}, selectedRoot{}, fmt.Errorf("osfs: selected root %q is not a stable file or directory: %w", absolute, content.ErrUnsupportedStability)
 	}
-	rootPath, relative := filepath.Dir(openTarget), filepath.Base(openTarget)
-	if kind == sourceEntryDirectory {
-		rootPath, relative = openTarget, ""
+	var rootPath, relative string
+	if target.kind == sourceEntryDirectory {
+		rootPath, relative = target.openTarget, ""
+	} else {
+		// Regular files never undergo linked-CWD substitution, so their root
+		// authority and relative name always come from the logical absolute path.
+		rootPath, relative = filepath.Dir(absolute), filepath.Base(absolute)
 	}
 	root, err := os.OpenRoot(rootPath)
 	if err != nil {
 		openErrPath := rootPath
-		if resolvedLinkedCWD {
+		if target.resolvedLinkedCWD {
 			openErrPath = absolute
 		}
-		return catalog.NodeRecord{}, nil, "", pathfailure.Filesystem("open selected root authority", openErrPath, err)
+		return catalog.NodeRecord{}, selectedRoot{}, pathfailure.Filesystem("open selected root authority", openErrPath, err)
 	}
 	ownedRoot := false
 	defer func() {
@@ -171,19 +170,83 @@ func (source *SelectedCatalogSource) openSelectedRoot(
 			_ = root.Close()
 		}
 	}()
-	opened, identity, candidate, err := source.openSelectedRootBaseline(root, absolute, relative, slot, before, kind)
+	opened, identity, candidate, err := source.openSelectedRootBaseline(root, absolute, relative, slot, target.before, target.kind)
 	if err != nil {
-		return catalog.NodeRecord{}, nil, "", err
+		return catalog.NodeRecord{}, selectedRoot{}, err
 	}
-	record, err := source.buildSelectedRootRecord(absolute, relative, slot, parent, kind, opened, identity, candidate)
+	record, err := source.buildSelectedRootRecord(absolute, relative, slot, parent, target.kind, opened, identity, candidate)
 	if err != nil {
-		return catalog.NodeRecord{}, nil, "", err
+		return catalog.NodeRecord{}, selectedRoot{}, err
 	}
-	if resolvedLinkedCWD {
-		source.traceSelectedRootLinkedCWD(slot)
+	if target.resolvedLinkedCWD {
+		source.traceSelectedRootLinkedCWD(slot, target.leafAudit)
 	}
 	ownedRoot = true
-	return record, root, absolute, nil
+	return record, selectedRoot{authority: root, displayPath: absolute}, nil
+}
+
+type preparedRootTarget struct {
+	openTarget        string
+	before            sourceObjectIdentity
+	kind              sourceEntryKind
+	audit             sourceEntryAudit
+	leafAudit         sourceEntryAudit
+	resolvedLinkedCWD bool
+}
+
+func (source *SelectedCatalogSource) prepareSelectedRootTarget(
+	selectedPath string,
+	absolute string,
+	slot RootSlot,
+	before sourceObjectIdentity,
+	kind sourceEntryKind,
+	beforeAudit sourceEntryAudit,
+) (preparedRootTarget, error) {
+	target := preparedRootTarget{
+		openTarget: absolute,
+		before:     before,
+		kind:       kind,
+		audit:      beforeAudit,
+		leafAudit:  beforeAudit,
+	}
+	pureDot, hasParentDot := classifyPureDotTraversal(selectedPath)
+	if !pureDot {
+		return target, nil
+	}
+	if !isLinkedDirectoryLeaf(kind, beforeAudit) {
+		if hasParentDot && kind == sourceEntryDirectory {
+			if err := verifyParentDotTraversal(selectedPath, absolute, before); err != nil {
+				return preparedRootTarget{}, err
+			}
+		}
+		return target, nil
+	}
+	resolved, err := resolveLinkedWorkingDirectory(selectedPath, absolute)
+	if err != nil {
+		if kind == sourceEntryReparsePoint && errors.Is(err, content.ErrUnsupportedStability) {
+			source.traceSelectedRootPolicy(slot, "rejected_reparse", beforeAudit)
+		}
+		return preparedRootTarget{}, err
+	}
+	switch resolved.disposition {
+	case linkedDirectoryResolved:
+		if resolved.openPath == "" || resolved.kind != sourceEntryDirectory {
+			return preparedRootTarget{}, fmt.Errorf("osfs: selected root %q is not a stable file or directory: %w", absolute, content.ErrUnsupportedStability)
+		}
+		target.openTarget = resolved.openPath
+		target.before = resolved.identity
+		target.kind = resolved.kind
+		target.audit = resolved.audit
+		target.resolvedLinkedCWD = true
+		return target, nil
+	case linkedDirectoryRejected:
+		target.before = resolved.identity
+		target.kind = resolved.kind
+		target.audit = resolved.audit
+		return target, nil
+	default:
+		return preparedRootTarget{}, fmt.Errorf("osfs: selected root %q is not a stable file or directory: %w", absolute, content.ErrUnsupportedStability)
+	}
 }
 
 func (source *SelectedCatalogSource) openSelectedRootBaseline(
@@ -273,7 +336,11 @@ func (source *SelectedCatalogSource) RevisionSource() (*RootedRevisionSource, er
 	}
 	// File lookup must retain the same root authority as discovery. Reopening
 	// names here could bind a replaced directory outside the selected scope.
-	return newPlatformRootedRevisionSource(source.roots, source.diagnostics)
+	authorities := make([]*os.Root, len(source.roots))
+	for index, root := range source.roots {
+		authorities[index] = root.authority
+	}
+	return newPlatformRootedRevisionSource(authorities, source.diagnostics)
 }
 
 func (source *SelectedCatalogSource) ScanDirectory(ctx context.Context, request catalog.ScanRequest) (catalog.ScanResult, error) {
@@ -293,14 +360,13 @@ func (source *SelectedCatalogSource) ScanDirectory(ctx context.Context, request 
 		source.mu.RUnlock()
 		return catalog.ScanResult{}, catalog.NewPermanentScanError(content.ErrRevisionStoreClosed)
 	}
-	root := source.roots[locator.RootSlot()]
-	displayRoot := source.rootDisplayPaths[locator.RootSlot()]
+	selected := source.roots[locator.RootSlot()]
 	source.mu.RUnlock()
 	path := filepath.FromSlash(locator.RelativePath())
 	if path == "" {
 		path = "."
 	}
-	directory, err := root.OpenRoot(path)
+	directory, err := selected.authority.OpenRoot(path)
 	if err != nil {
 		return catalog.ScanResult{}, catalog.NewPermanentScanError(errors.Join(catalog.ErrDirectoryStale, err))
 	}
@@ -335,7 +401,7 @@ func (source *SelectedCatalogSource) ScanDirectory(ctx context.Context, request 
 	}
 	return catalog.ScanResult{
 		OmittedCount: result.count,
-		Omissions:    source.newScanOmissionReporter(request, locator, filepath.Join(displayRoot, path), result),
+		Omissions:    source.newScanOmissionReporter(request, locator, filepath.Join(selected.displayPath, path), result),
 	}, nil
 }
 
@@ -577,7 +643,14 @@ func (source *SelectedCatalogSource) Close() error {
 	source.closed = true
 	roots := source.roots
 	source.roots = nil
-	source.rootDisplayPaths = nil
 	source.mu.Unlock()
-	return closeRoots(roots)
+	return closeSelectedRoots(roots)
+}
+
+func closeSelectedRoots(roots []selectedRoot) error {
+	var result error
+	for index := range slices.Backward(roots) {
+		result = errors.Join(result, roots[index].authority.Close())
+	}
+	return result
 }

@@ -14,19 +14,22 @@ import (
 	diag "github.com/windshare/windshare/core/diagnostics"
 )
 
-func TestIsPureDotTraversal(t *testing.T) {
-	allowed := []string{
-		".",
-		"./",
-		".//",
-		"./.",
-		"././",
-		"..",
-		"../",
-		"../..",
-		"../../",
-		"./..",
-		"../.",
+func TestClassifyPureDotTraversal(t *testing.T) {
+	allowed := []struct {
+		path      string
+		hasParent bool
+	}{
+		{".", false},
+		{"./", false},
+		{".//", false},
+		{"./.", false},
+		{"././", false},
+		{"..", true},
+		{"../", true},
+		{"../..", true},
+		{"../../", true},
+		{"./..", true},
+		{"../.", true},
 	}
 	rejected := []string{
 		"",
@@ -50,19 +53,50 @@ func TestIsPureDotTraversal(t *testing.T) {
 		"C:..",
 	}
 	if runtime.GOOS == "windows" {
-		allowed = append(allowed, `.\`, `..\`, `..\..`, `..\..\`, `.\..`, `..\.`, `../.\`)
+		allowed = append(allowed,
+			struct {
+				path      string
+				hasParent bool
+			}{`.\`, false},
+			struct {
+				path      string
+				hasParent bool
+			}{`..\`, true},
+			struct {
+				path      string
+				hasParent bool
+			}{`..\..`, true},
+			struct {
+				path      string
+				hasParent bool
+			}{`..\..\`, true},
+			struct {
+				path      string
+				hasParent bool
+			}{`.\..`, true},
+			struct {
+				path      string
+				hasParent bool
+			}{`..\.`, true},
+			struct {
+				path      string
+				hasParent bool
+			}{`../.\`, true},
+		)
 		rejected = append(rejected, `\`, `\.`, `\..`, `link\`, `link\.`, `link\.\`, `inner\..`, `dir\link\.`)
 	} else {
 		rejected = append(rejected, `.\`, `..\`)
 	}
-	for _, path := range allowed {
-		if !isPureDotTraversal(path) {
-			t.Fatalf("isPureDotTraversal(%q) = false, want true", path)
+	for _, tc := range allowed {
+		pure, hasParent := classifyPureDotTraversal(tc.path)
+		if !pure || hasParent != tc.hasParent {
+			t.Fatalf("classifyPureDotTraversal(%q) = (%v, %v), want (true, %v)", tc.path, pure, hasParent, tc.hasParent)
 		}
 	}
 	for _, path := range rejected {
-		if isPureDotTraversal(path) {
-			t.Fatalf("isPureDotTraversal(%q) = true, want false", path)
+		pure, hasParent := classifyPureDotTraversal(path)
+		if pure || hasParent {
+			t.Fatalf("classifyPureDotTraversal(%q) = (%v, %v), want (false, false)", path, pure, hasParent)
 		}
 	}
 }
@@ -312,35 +346,31 @@ func TestNamedSymlinkSelectionsStayRefusedIncludingDotSuffixes(t *testing.T) {
 	}
 }
 
-func TestParentTraversalFromRealParentThroughNestedJumpKeepsLogicalParent(t *testing.T) {
+func TestParentTraversalWithinLinkedTreeSharesAgreeingSubdirectory(t *testing.T) {
 	base := t.TempDir()
-	realParent := filepath.Join(base, "real-parent")
-	elsewhere := filepath.Join(base, "elsewhere", "child")
-	if err := os.MkdirAll(realParent, 0o700); err != nil {
+	target := filepath.Join(base, "real-target")
+	nested := filepath.Join(target, "sub", "nested")
+	if err := os.MkdirAll(nested, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(elsewhere, 0o700); err != nil {
+	if err := os.WriteFile(filepath.Join(target, "sub", "in-sub.txt"), []byte("sub"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(realParent, "logical.txt"), []byte("logical"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(base, "elsewhere", "physical.txt"), []byte("physical"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	jump := filepath.Join(realParent, "jump")
-	if err := os.Symlink(elsewhere, jump); err != nil {
+	link := filepath.Join(base, "my-link")
+	if err := os.Symlink(target, link); err != nil {
 		t.Skipf("symbolic links unavailable: %v", err)
 	}
 
-	t.Chdir(jump)
+	// Both logical ".." (my-link/sub) and physical ".." (real-target/sub) point
+	// to the exact same real directory, so sharing ".." succeeds on all OSes.
+	t.Chdir(filepath.Join(link, "sub", "nested"))
 	source, err := openLinkedTestSource(t, []string{".."}, diag.Sink{}, nil)
 	if err != nil {
-		t.Fatalf("sharing .. from realParent/jump failed: %v", err)
+		t.Fatalf("sharing .. from my-link/sub/nested failed: %v", err)
 	}
 	root := source.SelectedRoots()[0]
-	if root.Entry().Name() != "real-parent" {
-		t.Fatalf("root name = %q, want real-parent", root.Entry().Name())
+	if root.Entry().Name() != "sub" {
+		t.Fatalf("root name = %q, want sub", root.Entry().Name())
 	}
 	children := &collectingScanChildren{}
 	if _, err := source.ScanDirectory(context.Background(), catalog.ScanRequest{
@@ -348,7 +378,7 @@ func TestParentTraversalFromRealParentThroughNestedJumpKeepsLogicalParent(t *tes
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if len(children.items) != 1 || children.items[0].Name != "logical.txt" {
-		t.Fatalf("children = %+v, want only logical.txt from logical parent", children.items)
+	if len(children.items) != 2 {
+		t.Fatalf("children = %+v, want in-sub.txt and nested", children.items)
 	}
 }

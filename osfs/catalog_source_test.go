@@ -345,7 +345,7 @@ func TestEnumerateCatalogChildrenStopsAtWidthLimitBeforeExtraScanWork(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	dirRoot, err := source.roots[locator.RootSlot()].OpenRoot(".")
+	dirRoot, err := source.roots[locator.RootSlot()].authority.OpenRoot(".")
 	if err != nil {
 		t.Fatal(err)
 	}

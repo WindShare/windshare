@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"syscall"
 
+	"github.com/windshare/windshare/osfs/internal/linkresolve"
 	"golang.org/x/sys/unix"
 )
 
@@ -30,16 +31,10 @@ func resolveContainerTarget(
 		}
 		return path, info, nil
 	}
-	followed, err := follow(path)
-	if err != nil || !followed.IsDir() {
-		return "", nil, errors.Join(ErrUnsafeNamespace, err)
-	}
-	resolved, err := filepath.EvalSymlinks(path)
+	resolved, followed, err := linkresolve.ResolvePOSIXDirectory(path, path, linkresolve.POSIXOps{
+		FollowSelected: follow,
+	})
 	if err != nil {
-		return "", nil, errors.Join(ErrUnsafeNamespace, err)
-	}
-	target, err := os.Lstat(resolved)
-	if err != nil || !target.IsDir() || target.Mode()&os.ModeSymlink != 0 || !os.SameFile(followed, target) {
 		return "", nil, errors.Join(ErrUnsafeNamespace, err)
 	}
 	return resolved, followed, nil

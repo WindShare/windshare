@@ -127,7 +127,7 @@ func TestSelectedCatalogSourceClassifiesFilesystemAndIdentityFailures(t *testing
 
 	root := t.TempDir()
 	source, selected := selectedDirectorySource(t, root, 34)
-	if err := source.roots[0].Close(); err != nil {
+	if err := source.roots[0].authority.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := source.ScanDirectory(context.Background(), catalog.ScanRequest{
