@@ -7,13 +7,13 @@ import (
 
 func formatSourceOmissions(summary catalog.SourceOmissions, symbols Symbols) []terminalcanvas.Line {
 	lines := []terminalcanvas.Line{
-		statusLine(symbols.Warning, "Sharing skipped "+formatCount(summary.Count)+" source items in "+escapedDisplay(summary.DirectoryPath), terminalcanvas.StyleWarning),
+		statusLine(symbols.Warning, "Sharing skipped "+exactCountedNoun(summary.Count, "source item", "source items")+" in "+escapedDisplay(summary.DirectoryPath), terminalcanvas.StyleWarning),
 	}
 	for _, sample := range summary.Samples {
 		lines = append(lines, terminalcanvas.Plain("  "+escapedDisplay(sample.Name)+": "+sourceOmissionReason(sample)))
 	}
 	if unsampled := summary.Count - uint64(len(summary.Samples)); unsampled != 0 {
-		lines = append(lines, terminalcanvas.Plain("  "+formatCount(unsampled)+" more skipped items; examples above are limited."))
+		lines = append(lines, terminalcanvas.Plain("  "+exactCountedNoun(unsampled, "more skipped item", "more skipped items")+"; examples above are limited."))
 	}
 	lines = append(lines, terminalcanvas.Plain("  A skipped directory counts as one item; none of its contents are shared. Fix the source and share again to include it."))
 	return lines
