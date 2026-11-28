@@ -58,3 +58,21 @@ func omissionForEntryKind(kind sourceEntryKind) catalog.SourceOmissionReason {
 		return catalog.SourceOmissionSpecialFile
 	}
 }
+
+type selectedLinkDisposition uint8
+
+const (
+	selectedLinkResolved selectedLinkDisposition = iota + 1
+	selectedLinkRejected
+)
+
+// selectedLinkResolution records the explicit outcome of resolving a caller-
+// selected top-level symbolic link or Windows directory junction once through
+// the kernel before pinning its canonical target with os.Root.
+type selectedLinkResolution struct {
+	disposition selectedLinkDisposition
+	openPath    string
+	identity    sourceObjectIdentity
+	kind        sourceEntryKind
+	audit       sourceEntryAudit
+}

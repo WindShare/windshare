@@ -4,10 +4,13 @@ package osfs
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 
+	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/osfs/internal/linkresolve"
 	"github.com/windshare/windshare/osfs/internal/pathfailure"
 )
 
@@ -62,6 +65,53 @@ func inspectSelectedRootKind(absolute string) (sourceObjectIdentity, sourceEntry
 		return sourceObjectIdentity{}, 0, sourceEntryAudit{}, err
 	}
 	return sourceObjectIdentity{info: before}, classifyPOSIXFileInfo(before), sourceEntryAudit{}, nil
+}
+
+func isSelectedRootLink(kind sourceEntryKind, _ sourceEntryAudit) bool {
+	return kind == sourceEntrySymbolicLink
+}
+
+// resolveSelectedRootLink resolves an explicitly selected top-level symbolic
+// link once through the kernel (honoring Linux fs.protected_symlinks) so the
+// real regular file or directory can be pinned inside os.Root while keeping all
+// descendants strictly no-follow.
+func resolveSelectedRootLink(absolute string, _ sourceEntryAudit) (selectedLinkResolution, error) {
+	return resolveSelectedRootLinkWith(absolute, linkresolve.POSIXOps{})
+}
+
+func resolveSelectedRootLinkWith(
+	absolute string,
+	ops linkresolve.POSIXOps,
+) (selectedLinkResolution, error) {
+	resolved, target, err := linkresolve.ResolvePOSIXTarget(absolute, ops)
+	if err != nil {
+		return selectedLinkResolution{}, classifyPOSIXLinkResolveError("resolve selected root link", absolute, err)
+	}
+	kind := classifyPOSIXFileInfo(target)
+	if kind != sourceEntryDirectory && kind != sourceEntryRegularFile {
+		return selectedLinkResolution{
+			disposition: selectedLinkRejected,
+			identity:    sourceObjectIdentity{info: target},
+			kind:        kind,
+		}, nil
+	}
+	return selectedLinkResolution{
+		disposition: selectedLinkResolved,
+		openPath:    resolved,
+		identity:    sourceObjectIdentity{info: target},
+		kind:        kind,
+	}, nil
+}
+
+func classifyPOSIXLinkResolveError(operation, absolute string, err error) error {
+	switch {
+	case errors.Is(err, linkresolve.ErrSymlinkLoop):
+		return fmt.Errorf("osfs: selected root %q is not a stable file or directory: %w", absolute, content.ErrUnsupportedStability)
+	case errors.Is(err, linkresolve.ErrTargetMismatch):
+		return fmt.Errorf("osfs: selected root %q changed during link resolution: %w", absolute, catalog.ErrDirectoryStale)
+	default:
+		return pathfailure.Filesystem(operation, absolute, err)
+	}
 }
 
 func inspectRootChildKind(

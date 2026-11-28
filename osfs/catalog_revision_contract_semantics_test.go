@@ -127,7 +127,7 @@ func TestSelectedCatalogSourceClassifiesFilesystemAndIdentityFailures(t *testing
 
 	root := t.TempDir()
 	source, selected := selectedDirectorySource(t, root, 34)
-	if err := source.roots[0].Close(); err != nil {
+	if err := source.roots[0].authority.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := source.ScanDirectory(context.Background(), catalog.ScanRequest{
@@ -215,11 +215,15 @@ func TestSelectedCatalogSourceOmitsSymlinksWithoutPublishingAuthority(t *testing
 	}
 
 	synthetic, _ := catalog.DirectoryIDFromBytes(identity16(36))
+	loop := filepath.Join(root, "loop.bin")
+	if err := os.Symlink(loop, loop); err != nil {
+		t.Fatal(err)
+	}
 	if leaked, err := NewSelectedCatalogSource(SelectedCatalogSourceConfig{
-		Paths: []string{filepath.Join(root, "link.bin")}, SyntheticRoot: synthetic,
+		Paths: []string{loop}, SyntheticRoot: synthetic,
 	}); err == nil {
 		_ = leaked.Close()
-		t.Fatal("selected symlink acquired catalog authority")
+		t.Fatal("selected unresolvable symlink acquired catalog authority")
 	}
 }
 

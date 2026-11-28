@@ -166,7 +166,8 @@ impl Provenance {
             "non_durable_target_attributes",
         )?;
         // Expand 8.3 short aliases for clean display names while leaving any leaf
-        // symlink intact so Go osfs enforces one uniform no-follow boundary.
+        // symlink intact so Go osfs enforces one uniform top-level link and
+        // descendant no-follow boundary.
         let handoff = long_path(&raw_path).unwrap_or_else(|| raw_path.clone());
         if let Some(root) = self.ephemeral_kind(&canonical) {
             return Err(reject(

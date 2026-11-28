@@ -17,6 +17,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/osfs/internal/linkresolve"
 	"golang.org/x/sys/windows"
 )
 
@@ -143,21 +144,7 @@ func (nativeWindowsRevisionMetadata) Filesystem(handle windows.Handle) (string, 
 }
 
 func (nativeWindowsRevisionMetadata) FinalPath(handle windows.Handle) (string, error) {
-	return finalWindowsHandlePath(handle)
-}
-
-func finalWindowsHandlePath(handle windows.Handle) (string, error) {
-	buffer := make([]uint16, 512)
-	for {
-		length, err := windows.GetFinalPathNameByHandle(handle, &buffer[0], uint32(len(buffer)), 0)
-		if err != nil {
-			return "", err
-		}
-		if length < uint32(len(buffer)) {
-			return windows.UTF16ToString(buffer[:length]), nil
-		}
-		buffer = make([]uint16, length+1)
-	}
+	return linkresolve.WindowsFinalPathByHandle(handle)
 }
 
 type windowsMutationToken struct {

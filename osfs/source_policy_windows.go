@@ -4,17 +4,18 @@ package osfs
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
-	"strings"
 	"syscall"
 	"unsafe"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/osfs/internal/linkresolve"
 	"github.com/windshare/windshare/osfs/internal/pathfailure"
 	"golang.org/x/sys/windows"
 )
@@ -271,23 +272,10 @@ func windowsFileInfoAttributes(info fs.FileInfo) (uint32, bool) {
 }
 
 func windowsExtendedPath(path string) string {
-	if path == "" {
-		return ""
-	}
-	if strings.HasPrefix(path, `\\?\`) || strings.HasPrefix(path, `\??\`) || strings.HasPrefix(path, `\\.\`) {
+	if path == "" || linkresolve.HasWindowsExtendedOrDevicePrefix(path) {
 		return path
 	}
-	clean := filepath.Clean(path)
-	if strings.HasPrefix(clean, `\\?\`) || strings.HasPrefix(clean, `\??\`) || strings.HasPrefix(clean, `\\.\`) {
-		return clean
-	}
-	if rest, ok := strings.CutPrefix(clean, `\\`); ok {
-		return `\\?\UNC\` + rest
-	}
-	if len(clean) >= 3 && clean[1] == ':' && clean[2] == '\\' {
-		return `\\?\` + clean
-	}
-	return path
+	return linkresolve.AddWindowsExtendedPrefix(filepath.Clean(path))
 }
 
 func queryWindowsHandleAttributeTag(handle windows.Handle) (windowsAttributeTagInfo, error) {
@@ -460,6 +448,116 @@ func inspectSelectedRootKind(absolute string) (sourceObjectIdentity, sourceEntry
 	defer windows.CloseHandle(handle)
 	identity, kind, audit, _, err := classifyWindowsOpenHandle(handle, false, true)
 	return identity, kind, audit, err
+}
+
+func isSelectedRootLink(kind sourceEntryKind, audit sourceEntryAudit) bool {
+	return kind == sourceEntrySymbolicLink ||
+		(kind == sourceEntryReparsePoint && audit.reparseTag == windows.IO_REPARSE_TAG_MOUNT_POINT)
+}
+
+// resolveSelectedRootLink resolves an explicitly selected top-level Windows
+// symbolic link or directory junction once through the kernel. Opening without
+// FILE_FLAG_OPEN_REPARSE_POINT follows symlinks and mount points while
+// FILE_FLAG_OPEN_NO_RECALL prevents implicit cloud hydration; target admission
+// still uses classifyWindowsOpenHandle so hydrated cloud targets remain allowed
+// and dehydrated placeholders stay rejected.
+func resolveSelectedRootLink(absolute string, leafAudit sourceEntryAudit) (selectedLinkResolution, error) {
+	return resolveWindowsSelectedLinkWith(absolute, leafAudit, openWindowsFollowedTarget, inspectSelectedRootKind)
+}
+
+func resolveWindowsSelectedLinkWith(
+	absolute string,
+	leafAudit sourceEntryAudit,
+	follow func(string) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, string, error),
+	inspect func(string) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, error),
+) (selectedLinkResolution, error) {
+	identity, kind, audit, resolved, err := follow(absolute)
+	if err != nil {
+		return selectedLinkResolution{}, err
+	}
+	switch kind {
+	case sourceEntryDirectory, sourceEntryRegularFile:
+	case sourceEntryCloudPlaceholder, sourceEntryReparsePoint, sourceEntrySpecialFile:
+		if kind == sourceEntryReparsePoint && !audit.present() {
+			audit = leafAudit
+		}
+		return selectedLinkResolution{
+			disposition: selectedLinkRejected,
+			identity:    identity,
+			kind:        kind,
+			audit:       audit,
+		}, nil
+	default:
+		return selectedLinkResolution{}, fmt.Errorf("osfs: selected root %q is not a stable file or directory: %w", absolute, content.ErrUnsupportedStability)
+	}
+	targetID, targetKind, targetAudit, err := inspect(resolved)
+	if err != nil {
+		return selectedLinkResolution{}, pathfailure.Filesystem("inspect selected root link target", absolute, err)
+	}
+	if targetKind == sourceEntryCloudPlaceholder && identity.sameObject(targetID) {
+		return selectedLinkResolution{
+			disposition: selectedLinkRejected,
+			identity:    targetID,
+			kind:        targetKind,
+			audit:       targetAudit,
+		}, nil
+	}
+	if targetKind != kind || !identity.sameObject(targetID) {
+		return selectedLinkResolution{}, fmt.Errorf("osfs: selected root %q changed during link resolution: %w", absolute, catalog.ErrDirectoryStale)
+	}
+	return selectedLinkResolution{
+		disposition: selectedLinkResolved,
+		openPath:    resolved,
+		identity:    targetID,
+		kind:        targetKind,
+		audit:       targetAudit,
+	}, nil
+}
+
+func openWindowsFollowedTarget(absolute string) (sourceObjectIdentity, sourceEntryKind, sourceEntryAudit, string, error) {
+	path16, err := windows.UTF16PtrFromString(windowsExtendedPath(absolute))
+	if err != nil {
+		return sourceObjectIdentity{}, 0, sourceEntryAudit{}, "", pathfailure.Filesystem("follow selected root", absolute, err)
+	}
+	flags := uint32(windows.FILE_FLAG_BACKUP_SEMANTICS | windows.FILE_FLAG_OPEN_NO_RECALL)
+	handle, err := windows.CreateFile(
+		path16,
+		windows.FILE_READ_ATTRIBUTES,
+		windowsShareAll,
+		nil,
+		windows.OPEN_EXISTING,
+		flags,
+		0,
+	)
+	if linkresolve.IsWindowsUnresolvableLinkError(err) {
+		// Unresolvable/looping links fail closed as rejected reparse points so
+		// policy tracing stays uniform across Windows symlinks and junctions.
+		return sourceObjectIdentity{}, sourceEntryReparsePoint, sourceEntryAudit{}, "", nil
+	}
+	if err != nil {
+		return sourceObjectIdentity{}, 0, sourceEntryAudit{}, "", pathfailure.Filesystem("follow selected root", absolute, err)
+	}
+	defer windows.CloseHandle(handle)
+
+	identity, kind, audit, _, err := classifyWindowsOpenHandle(handle, false, true)
+	if err != nil {
+		return sourceObjectIdentity{}, 0, sourceEntryAudit{}, "", pathfailure.Filesystem("inspect selected root link target", absolute, err)
+	}
+	if kind != sourceEntryDirectory && kind != sourceEntryRegularFile {
+		return identity, kind, audit, "", nil
+	}
+	resolved, err := linkresolve.WindowsFinalPathByHandle(handle)
+	if err != nil {
+		return sourceObjectIdentity{}, 0, sourceEntryAudit{}, "", classifyWindowsFinalPathError(absolute, err)
+	}
+	return identity, kind, audit, resolved, nil
+}
+
+func classifyWindowsFinalPathError(absolute string, err error) error {
+	if isWindowsCapabilityUnavailable(err) {
+		return fmt.Errorf("osfs: selected root %q is not on a supported filesystem: %w", absolute, errors.Join(content.ErrUnsupportedStability, err))
+	}
+	return pathfailure.Filesystem("resolve selected root link", absolute, err)
 }
 
 func inspectDirEntryPreflight(entry fs.DirEntry) (sourceEntryKind, sourceEntryAudit, bool, bool) {

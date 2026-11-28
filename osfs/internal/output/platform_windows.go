@@ -17,16 +17,13 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/windshare/windshare/osfs/internal/linkresolve"
 	"github.com/windshare/windshare/osfs/internal/pathfailure"
 	"golang.org/x/sys/windows"
 )
 
 const (
-	windowsExtendedPrefix       = `\\?\`
-	windowsExtendedUNCPrefix    = `\\?\UNC\`
-	windowsNTNamespacePrefix    = `\??\`
 	windowsMaxShortDirPath      = 248
-	initialResolvedPathUnits    = 512
 	windowsDirLockPrefix        = `Local\windshare-output-dir-`
 	windowsDirLockPathHashBytes = 16
 
@@ -106,24 +103,13 @@ func isWindowsContainerLink(path string, info os.FileInfo) (bool, error) {
 	return tag == windows.IO_REPARSE_TAG_SYMLINK || tag == windows.IO_REPARSE_TAG_MOUNT_POINT, nil
 }
 
-func hasWindowsExtendedOrDevicePrefix(path string) bool {
-	if len(path) < 4 {
-		return false
-	}
-	if strings.HasPrefix(path, windowsNTNamespacePrefix) {
-		return true
-	}
-	isSep := func(c byte) bool { return c == '\\' || c == '/' }
-	return isSep(path[0]) && isSep(path[1]) && (path[2] == '?' || path[2] == '.') && isSep(path[3])
-}
-
 // windowsCreateFilePath mirrors Go's os.fixLongPath before raw windows.CreateFile
 // calls so OpenContainer matches os.Lstat and os.MkdirAll on standard Windows
 // (LongPathsEnabled == 0): short paths (< 248 bytes) stay unmodified to preserve
 // native Win32 normalization, while long paths are canonicalized via FullPath
 // before prepending \\?\ or \\?\UNC\.
 func windowsCreateFilePath(path string) (string, error) {
-	if path == "" || hasWindowsExtendedOrDevicePrefix(path) {
+	if path == "" || linkresolve.HasWindowsExtendedOrDevicePrefix(path) {
 		return path, nil
 	}
 	pathLen := len(path)
@@ -139,16 +125,7 @@ func windowsCreateFilePath(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if hasWindowsExtendedOrDevicePrefix(full) {
-		return full, nil
-	}
-	if rest, ok := strings.CutPrefix(full, `\\`); ok {
-		return windowsExtendedUNCPrefix + rest, nil
-	}
-	if len(full) >= 3 && full[1] == ':' && full[2] == '\\' {
-		return windowsExtendedPrefix + full, nil
-	}
-	return full, nil
+	return linkresolve.AddWindowsExtendedPrefix(full), nil
 }
 
 func windowsCreateFileUTF16(path string) (*uint16, error) {
@@ -201,36 +178,7 @@ func windowsResolvedContainerPath(path string) (string, error) {
 		info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
 		return "", ErrUnsafeNamespace
 	}
-	resolved, err := finalPathByHandle(handle)
-	if err != nil {
-		return "", err
-	}
-	return normalizeWindowsFinalPath(resolved), nil
-}
-
-func finalPathByHandle(handle windows.Handle) (string, error) {
-	buffer := make([]uint16, initialResolvedPathUnits)
-	for {
-		length, err := windows.GetFinalPathNameByHandle(handle, &buffer[0], uint32(len(buffer)), 0)
-		if err != nil {
-			return "", err
-		}
-		if length < uint32(len(buffer)) {
-			return windows.UTF16ToString(buffer[:length]), nil
-		}
-		buffer = make([]uint16, length+1)
-	}
-}
-
-func normalizeWindowsFinalPath(path string) string {
-	if rest, ok := strings.CutPrefix(path, windowsExtendedUNCPrefix); ok {
-		return `\\` + rest
-	}
-	if rest, ok := strings.CutPrefix(path, windowsExtendedPrefix); ok &&
-		len(rest) >= 3 && rest[1] == ':' && rest[2] == '\\' {
-		return rest
-	}
-	return path
+	return linkresolve.WindowsFinalPathByHandle(handle)
 }
 
 func openDirHandle(path string) (*Dir, error) {
@@ -583,7 +531,7 @@ func entryMatchesSpelling(parent *Dir, name string) (exact bool, resultErr error
 	if info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
 		return false, ErrUnsafeNamespace
 	}
-	actual, err := finalPathByHandle(handle)
+	actual, err := linkresolve.WindowsFinalPathByHandle(handle)
 	if err != nil {
 		return false, err
 	}
@@ -661,7 +609,7 @@ func windowsDirLockName(root *Dir) (string, error) {
 		), nil
 	}
 	// Fallback for virtual filesystems that report zero volume and file indices.
-	finalPath, err := finalPathByHandle(windows.Handle(root.handle.Fd()))
+	finalPath, err := linkresolve.WindowsFinalPathByHandle(windows.Handle(root.handle.Fd()))
 	runtime.KeepAlive(root.handle)
 	if err != nil {
 		return "", err

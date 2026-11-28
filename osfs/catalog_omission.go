@@ -140,6 +140,21 @@ func (source *SelectedCatalogSource) traceSelectedRootPolicy(slot RootSlot, deci
 	source.diagnostics.Emit(diag.New("catalog_source_policy", fields))
 }
 
+func (source *SelectedCatalogSource) traceSelectedRootLink(slot RootSlot, audit sourceEntryAudit) {
+	if !source.diagnostics.Enabled() {
+		return
+	}
+	fields := diag.Fields{
+		"root_slot": diag.Uint(uint64(slot)),
+		"decision":  diag.Text("resolved_selected_link"),
+	}
+	if audit.present() {
+		fields["attributes"] = diag.Text(fmt.Sprintf("0x%08x", audit.attributes))
+		fields["reparse_tag"] = diag.Text(fmt.Sprintf("0x%08x", audit.reparseTag))
+	}
+	source.diagnostics.Emit(diag.New("catalog_source_policy", fields))
+}
+
 func (source *SelectedCatalogSource) traceCatalogOmissionSummary(request catalog.ScanRequest, count uint64) {
 	if count == 0 || !source.diagnostics.Enabled() {
 		return

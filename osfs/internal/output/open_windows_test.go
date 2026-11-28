@@ -14,6 +14,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
+	"github.com/windshare/windshare/osfs/internal/linkresolve"
 	"golang.org/x/sys/windows"
 )
 
@@ -37,16 +38,16 @@ func TestWindowsCreateFilePathAndNormalizeFinalPath(t *testing.T) {
 		{name: "short drive unchanged", in: `C:\tmp\dest`, want: `C:\tmp\dest`},
 		{name: "short trailing dot unchanged", in: `C:\tmp\dest.`, want: `C:\tmp\dest.`},
 		{name: "short UNC unchanged", in: `\\server\share\dest`, want: `\\server\share\dest`},
-		{name: "already extended drive unchanged", in: windowsExtendedPrefix + longDrive, want: windowsExtendedPrefix + longDrive},
+		{name: "already extended drive unchanged", in: linkresolve.WindowsExtendedPrefix + longDrive, want: linkresolve.WindowsExtendedPrefix + longDrive},
 		{name: "already extended forward slash unchanged", in: `//?/C:/already/extended`, want: `//?/C:/already/extended`},
-		{name: "already NT namespace unchanged", in: windowsNTNamespacePrefix + longDrive, want: windowsNTNamespacePrefix + longDrive},
+		{name: "already NT namespace unchanged", in: linkresolve.WindowsNTNamespacePrefix + longDrive, want: linkresolve.WindowsNTNamespacePrefix + longDrive},
 		{name: "already volume GUID unchanged", in: longVolume, want: longVolume},
 		{name: "short device path unchanged", in: `\\.\NUL`, want: `\\.\NUL`},
 		{name: "long device path unchanged", in: longDevice, want: longDevice},
-		{name: "long drive gains extended prefix", in: longDrive, want: windowsExtendedPrefix + longDrive},
-		{name: "long drive trailing dot canonicalized", in: longDrive + ".", want: windowsExtendedPrefix + longDrive},
-		{name: "long UNC gains extended UNC prefix", in: longUNC, want: windowsExtendedUNCPrefix + strings.TrimPrefix(longUNC, `\\`)},
-		{name: "long forward slash UNC normalized", in: longUNCSlash, want: windowsExtendedUNCPrefix + strings.TrimPrefix(longUNC, `\\`)},
+		{name: "long drive gains extended prefix", in: longDrive, want: linkresolve.WindowsExtendedPrefix + longDrive},
+		{name: "long drive trailing dot canonicalized", in: longDrive + ".", want: linkresolve.WindowsExtendedPrefix + longDrive},
+		{name: "long UNC gains extended UNC prefix", in: longUNC, want: linkresolve.WindowsExtendedUNCPrefix + strings.TrimPrefix(longUNC, `\\`)},
+		{name: "long forward slash UNC normalized", in: longUNCSlash, want: linkresolve.WindowsExtendedUNCPrefix + strings.TrimPrefix(longUNC, `\\`)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := windowsCreateFilePath(tc.in)
@@ -65,14 +66,14 @@ func TestWindowsCreateFilePathAndNormalizeFinalPath(t *testing.T) {
 		want string
 	}{
 		{name: "short drive", in: `\\?\C:\dir`, want: `C:\dir`},
-		{name: "long drive", in: windowsExtendedPrefix + longDrive, want: longDrive},
+		{name: "long drive", in: linkresolve.WindowsExtendedPrefix + longDrive, want: longDrive},
 		{name: "short UNC", in: `\\?\UNC\server\share\dir`, want: `\\server\share\dir`},
-		{name: "long UNC", in: windowsExtendedUNCPrefix + strings.TrimPrefix(longUNC, `\\`), want: longUNC},
+		{name: "long UNC", in: linkresolve.WindowsExtendedUNCPrefix + strings.TrimPrefix(longUNC, `\\`), want: longUNC},
 		{name: "volume GUID preserved", in: longVolume, want: longVolume},
 	} {
 		t.Run("normalize/"+tc.name, func(t *testing.T) {
-			if got := normalizeWindowsFinalPath(tc.in); got != tc.want {
-				t.Fatalf("normalizeWindowsFinalPath(%q) = %q, want %q", tc.in, got, tc.want)
+			if got := linkresolve.NormalizeWindowsFinalPath(tc.in); got != tc.want {
+				t.Fatalf("NormalizeWindowsFinalPath(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
 	}
@@ -166,12 +167,12 @@ func TestWindowsOpenContainerAndRecoverySupportLongPathsBeyondMaxPath(t *testing
 		t.Fatal(err)
 	}
 	shortLink := filepath.Join(base, "short-to-long-junction")
-	createWindowsJunction(t, shortLink, windowsExtendedPrefix+longDest)
+	createWindowsJunction(t, shortLink, linkresolve.WindowsExtendedPrefix+longDest)
 	viaShort, _, err := OpenContainer(shortLink, false)
 	if err != nil {
 		t.Fatalf("OpenContainer(shortLink -> longDest) failed: %v", err)
 	}
-	if strings.HasPrefix(viaShort.Path(), windowsExtendedPrefix) {
+	if strings.HasPrefix(viaShort.Path(), linkresolve.WindowsExtendedPrefix) {
 		_ = viaShort.Close()
 		t.Fatalf("viaShort.Path() leaked extended prefix: %q", viaShort.Path())
 	}
@@ -185,13 +186,13 @@ func TestWindowsOpenContainerAndRecoverySupportLongPathsBeyondMaxPath(t *testing
 	if len(longLink) <= 260 {
 		t.Fatalf("expected longLink > 260 chars, got len=%d", len(longLink))
 	}
-	createWindowsJunction(t, windowsExtendedPrefix+longLink, windowsExtendedPrefix+longDest)
+	createWindowsJunction(t, linkresolve.WindowsExtendedPrefix+longLink, linkresolve.WindowsExtendedPrefix+longDest)
 	tag, err := windowsReparseTag(longLink)
 	if err != nil || tag != windows.IO_REPARSE_TAG_MOUNT_POINT {
 		t.Fatalf("windowsReparseTag(longLink) = (0x%x, %v), want IO_REPARSE_TAG_MOUNT_POINT", tag, err)
 	}
 	resolved, err := windowsResolvedContainerPath(longLink)
-	if err != nil || strings.HasPrefix(resolved, windowsExtendedPrefix) {
+	if err != nil || strings.HasPrefix(resolved, linkresolve.WindowsExtendedPrefix) {
 		t.Fatalf("windowsResolvedContainerPath(longLink) = (%q, %v)", resolved, err)
 	}
 	viaLong, _, err := OpenContainer(longLink, false)
@@ -200,7 +201,7 @@ func TestWindowsOpenContainerAndRecoverySupportLongPathsBeyondMaxPath(t *testing
 	}
 	viaLongInfo, err := os.Stat(viaLong.Path())
 	_ = viaLong.Close()
-	if err != nil || !os.SameFile(targetInfo, viaLongInfo) || strings.HasPrefix(viaLong.Path(), windowsExtendedPrefix) {
+	if err != nil || !os.SameFile(targetInfo, viaLongInfo) || strings.HasPrefix(viaLong.Path(), linkresolve.WindowsExtendedPrefix) {
 		t.Fatalf("viaLong target mismatch: err=%v path=%q", err, viaLong.Path())
 	}
 }
