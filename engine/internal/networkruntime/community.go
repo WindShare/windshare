@@ -16,6 +16,7 @@ import (
 	"github.com/windshare/windshare/core/networkendpoint"
 	"github.com/windshare/windshare/core/nodedirectory"
 	"github.com/windshare/windshare/core/serviceauthority"
+	"github.com/windshare/windshare/core/urlhost"
 	"github.com/windshare/windshare/engine/internal/community"
 	"github.com/windshare/windshare/engine/internal/statefile"
 	"github.com/windshare/windshare/engine/networkdirectory"
@@ -453,9 +454,12 @@ func (r *Runtime) bootstrap(ctx context.Context, scope community.Scope, settings
 	return build()
 }
 
+// frontendOrigin returns the Origin a browser sends from frontend. Browsers
+// serialize internationalized hosts as Punycode, and relays reject non-ASCII
+// Origin values, so a Unicode frontend host must not reach the header as typed.
 func frontendOrigin(frontend string) string {
 	u, err := url.Parse(frontend)
-	if err != nil || u.Host == "" {
+	if err != nil || u.Host == "" || urlhost.Normalize(u) != nil {
 		return ""
 	}
 	return u.Scheme + "://" + u.Host
