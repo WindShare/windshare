@@ -1,6 +1,10 @@
 package desktop
 
-import "net/url"
+import (
+	"net/url"
+
+	"github.com/windshare/windshare/core/urlhost"
+)
 
 type requestResultLog struct {
 	RequestID         string `json:"request_id"`
@@ -98,14 +102,13 @@ func (a *Application) logSetupResult(event string) {
 
 func endpointOrigin(raw string) string {
 	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Hostname() == "" {
+	if err != nil {
 		return ""
 	}
-	switch parsed.Scheme {
-	case "http", "https", "ws", "wss":
-		// User-supplied URLs can carry credentials outside their origin.
-		return parsed.Scheme + "://" + parsed.Host
-	default:
+	// User-supplied URLs can carry credentials outside their origin.
+	origin, err := urlhost.Origin(parsed)
+	if err != nil {
 		return ""
 	}
+	return origin
 }

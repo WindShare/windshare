@@ -16,6 +16,7 @@ import (
 	"github.com/windshare/windshare/core/networkendpoint"
 	"github.com/windshare/windshare/core/nodedirectory"
 	"github.com/windshare/windshare/core/serviceauthority"
+	"github.com/windshare/windshare/core/urlhost"
 	"github.com/windshare/windshare/engine/internal/community"
 	"github.com/windshare/windshare/engine/internal/statefile"
 	"github.com/windshare/windshare/engine/networkdirectory"
@@ -399,22 +400,14 @@ func (r *Runtime) seeds(settings relayconfig.Config) community.Seeds {
 
 func seedOriginKey(raw string) string {
 	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || u.Scheme == "" || u.Host == "" {
+	if err != nil {
 		return raw
 	}
-	scheme := strings.ToLower(u.Scheme)
-	host := strings.ToLower(u.Hostname())
-	port := u.Port()
-	if scheme == "https" && port == "443" {
-		port = ""
+	origin, err := urlhost.Origin(u)
+	if err != nil {
+		return raw
 	}
-	if strings.ContainsRune(host, ':') {
-		host = "[" + host + "]"
-	}
-	if port != "" {
-		return scheme + "://" + host + ":" + port
-	}
-	return scheme + "://" + host
+	return origin
 }
 
 // Empty-cache startup races the two independent discovery paths. Once a plan
@@ -453,12 +446,20 @@ func (r *Runtime) bootstrap(ctx context.Context, scope community.Scope, settings
 	return build()
 }
 
+// frontendOrigin returns the canonical browser ASCII Origin for an HTTP(S)
+// frontend URL (Punycode host, lowercase ASCII, WHATWG IPv6, and default ports
+// omitted). Relays require ASCII Origin values, and community scopes key cache
+// and backoff entries on this exact string.
 func frontendOrigin(frontend string) string {
 	u, err := url.Parse(frontend)
-	if err != nil || u.Host == "" {
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 		return ""
 	}
-	return u.Scheme + "://" + u.Host
+	origin, err := urlhost.Origin(u)
+	if err != nil {
+		return ""
+	}
+	return origin
 }
 
 func (r *Runtime) scope(frontend string) community.Scope {

@@ -28,6 +28,7 @@ func TestPreferenceRequestLogsUseOnlyDiagnosticFields(t *testing.T) {
 		{"disable", relayconfig.PreferenceEdit{Action: "disable", Value: relay}, "disable", "wss://relay.example:8443", ""},
 		{"remove", relayconfig.PreferenceEdit{Action: "remove", Value: relay}, "remove", "wss://relay.example:8443", ""},
 		{"frontend", relayconfig.PreferenceEdit{Action: "frontend", Value: frontend}, "frontend", "", "https://frontend.example"},
+		{"unicode frontend", relayconfig.PreferenceEdit{Action: "frontend", Value: "https://user:password@文件.EXAMPLE:443/private?token=t#frag"}, "frontend", "", "https://xn--5nqy36c.example"},
 		{"invalid address", relayconfig.PreferenceEdit{Action: "frontend", Value: "private text"}, "frontend", "", ""},
 		{"restore default", relayconfig.PreferenceEdit{Action: "frontend"}, "frontend", "", ""},
 		{"mode", relayconfig.PreferenceEdit{Action: "mode", Value: "selected"}, "mode", "", ""},

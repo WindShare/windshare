@@ -3,7 +3,6 @@ package link
 import (
 	"net/url"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/windshare/windshare/core/nodedirectory"
@@ -11,8 +10,6 @@ import (
 )
 
 const (
-	httpDefaultPort   = "80"
-	httpsDefaultPort  = "443"
 	nodeParam         = "n"
 	MaximumRelayHints = 8
 )
@@ -101,32 +98,32 @@ func explicitRelays(page *url.URL, relays []string) []string {
 	default:
 		return relays
 	}
-	if err := urlhost.Normalize(relay); err != nil {
+	relayOrigin, err := urlhost.Origin(relay)
+	if err != nil {
+		return relays
+	}
+	pageOrigin, err := urlhost.Origin(page)
+	if err != nil {
 		return relays
 	}
 	// Only the root endpoint is implicit. Paths and query credentials can select
 	// a different service even when its host and port match the frontend.
-	if urlOrigin(relay) == urlOrigin(page) {
+	if relayOrigin == pageOrigin {
 		return nil
 	}
 	return relays
 }
 
 func urlOrigin(u *url.URL) string {
+	if origin, err := urlhost.Origin(u); err == nil {
+		return origin
+	}
 	scheme := strings.ToLower(u.Scheme)
 	host := strings.ToLower(u.Hostname())
 	if strings.ContainsRune(host, ':') {
 		host = "[" + host + "]"
 	}
-	port := u.Port()
-	if value, err := strconv.ParseUint(port, 10, 16); err == nil {
-		port = strconv.FormatUint(value, 10)
-	}
-	if (scheme == "http" || scheme == "ws") && port == httpDefaultPort ||
-		(scheme == "https" || scheme == "wss") && port == httpsDefaultPort {
-		port = ""
-	}
-	if port != "" {
+	if port := u.Port(); port != "" {
 		host += ":" + port
 	}
 	origin := url.URL{Scheme: scheme, Host: host}

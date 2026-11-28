@@ -15,9 +15,11 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/windshare/windshare/core/session/turngrant"
+	"github.com/windshare/windshare/core/urlhost"
 
 	p "github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/engine/relayconfig"
@@ -34,19 +36,23 @@ func managedOrigin(address string) (string, bool) {
 	if err != nil || u.User != nil || u.Host == "" {
 		return "", false
 	}
-	switch u.Scheme {
+	switch strings.ToLower(u.Scheme) {
 	case "wss", "https":
 		u.Scheme = "https"
 	case "ws", "http":
 		ip, _ := netip.ParseAddr(u.Hostname())
-		if u.Hostname() != "localhost" && !ip.IsLoopback() {
+		if !strings.EqualFold(u.Hostname(), "localhost") && !ip.IsLoopback() {
 			return "", false
 		}
 		u.Scheme = "http"
 	default:
 		return "", false
 	}
-	return u.Scheme + "://" + u.Host, true
+	origin, err := urlhost.Origin(u)
+	if err != nil {
+		return "", false
+	}
+	return origin, true
 }
 
 func (r *Resolver) request(ctx context.Context, method, address, token string, body, out any) error {
